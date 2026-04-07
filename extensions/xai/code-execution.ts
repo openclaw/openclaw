@@ -1,21 +1,15 @@
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "@openclaw/plugin-sdk/config-runtime";
+import { jsonResult, readStringParam } from "@openclaw/plugin-sdk/provider-web-search";
 import { Type } from "@sinclair/typebox";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  jsonResult,
-  readConfiguredSecretString,
-  readProviderEnvValue,
-  readStringParam,
-  resolveProviderWebSearchPluginConfig,
-} from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiCodeExecutionPayload,
   requestXaiCodeExecution,
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 
-type XaiPluginConfig = NonNullable<
+type _XaiPluginConfig = NonNullable<
   NonNullable<OpenClawConfig["plugins"]>["entries"]
 >["xai"] extends {
   config?: infer Config;
@@ -34,18 +28,6 @@ function readCodeExecutionConfigRecord(
   config?: CodeExecutionConfig,
 ): Record<string, unknown> | undefined {
   return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
-}
-
-function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredSecretString(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
-  );
 }
 
 function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfig | undefined {
@@ -68,29 +50,16 @@ function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfi
   return codeExecution as CodeExecutionConfig;
 }
 
-function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  return (
-    readConfiguredSecretString(
-      resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")
-        ?.apiKey,
-      "plugins.entries.xai.config.webSearch.apiKey",
-    ) ?? readLegacyGrokApiKey(cfg)
-  );
-}
-
 function resolveCodeExecutionEnabled(params: {
   sourceConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
 }): boolean {
-  if (readCodeExecutionConfigRecord(params.config)?.enabled === false) {
-    return false;
-  }
-  return Boolean(
-    resolveFallbackXaiApiKey(params.runtimeConfig) ??
-    resolveFallbackXaiApiKey(params.sourceConfig) ??
-    readProviderEnvValue(["XAI_API_KEY"]),
-  );
+  return isXaiToolEnabled({
+    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.sourceConfig,
+  });
 }
 
 export function createCodeExecutionTool(options?: {
@@ -123,10 +92,10 @@ export function createCodeExecutionTool(options?: {
       }),
     }),
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
-      const apiKey =
-        resolveFallbackXaiApiKey(runtimeConfig ?? undefined) ??
-        resolveFallbackXaiApiKey(options?.config) ??
-        readProviderEnvValue(["XAI_API_KEY"]);
+      const apiKey = resolveXaiToolApiKey({
+        runtimeConfig: runtimeConfig ?? undefined,
+        sourceConfig: options?.config,
+      });
       if (!apiKey) {
         return jsonResult({
           error: "missing_xai_api_key",

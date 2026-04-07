@@ -1,1 +1,1 @@
-export * from "../../packages/memory-host-sdk/src/query.js";
+export * from "../memory-host-sdk/query.js";

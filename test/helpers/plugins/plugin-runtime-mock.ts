@@ -1,7 +1,10 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "openclaw/plugin-sdk/agent-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
-import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
+import {
+  removeAckReactionAfterReply,
+  shouldAckReaction,
+} from "../../../src/channels/ack-reactions.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -158,6 +161,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     imageGeneration: {
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
       listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
+    },
+    musicGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["musicGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["musicGeneration"]["listProviders"],
+    },
+    videoGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["videoGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["videoGeneration"]["listProviders"],
     },
     webSearch: {
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
@@ -333,12 +344,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         setMaxAgeBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
-      discord: {} as PluginRuntime["channel"]["discord"],
       activity: {} as PluginRuntime["channel"]["activity"],
-      line: {} as PluginRuntime["channel"]["line"],
-      slack: {} as PluginRuntime["channel"]["slack"],
-      matrix: {} as PluginRuntime["channel"]["matrix"],
-      signal: {} as PluginRuntime["channel"]["signal"],
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],

@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
-import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import {
   jsonResult,
   readNumberParam,
@@ -9,9 +8,9 @@ import {
   readStringOrNumberParam,
   readStringParam,
   resolvePollMaxSelections,
-  type OpenClawConfig,
-  type TelegramActionConfig,
-} from "openclaw/plugin-sdk/telegram-core";
+  resolveReactionMessageId,
+} from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import {
   fitsTelegramCallbackData,
@@ -23,6 +22,7 @@ import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
+import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
   createForumTopicTelegram,
@@ -94,22 +94,6 @@ function readTelegramForumTopicIconColor(
   }
   return iconColor as TelegramForumTopicIconColor;
 }
-function resolveTelegramPollVisibility(params: {
-  pollAnonymous?: boolean;
-  pollPublic?: boolean;
-}): boolean | undefined {
-  if (params.pollAnonymous && params.pollPublic) {
-    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
-  }
-  if (params.pollAnonymous) {
-    return true;
-  }
-  if (params.pollPublic) {
-    return false;
-  }
-  return undefined;
-}
-
 export function readTelegramButtons(
   params: Record<string, unknown>,
 ): TelegramInlineButtons | undefined {
@@ -652,5 +636,5 @@ export async function handleTelegramAction(
     return jsonResult(result);
   }
 
-  throw new Error(`Unsupported Telegram action: ${action}`);
+  throw new Error(`Unsupported Telegram action: ${String(action)}`);
 }

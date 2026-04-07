@@ -169,7 +169,6 @@ class OpenShellSandboxBackendImpl {
   ) {}
 
   asHandle(): OpenShellSandboxBackend {
-    const self = this;
     return {
       id: "openshell",
       runtimeId: this.params.execContext.sandboxName,
@@ -182,7 +181,7 @@ class OpenShellSandboxBackendImpl {
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
-        const pending = await self.prepareExec({ command, workdir, env, usePty });
+        const pending = await this.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
           env: buildOpenShellSshExecEnv(),
@@ -191,22 +190,22 @@ class OpenShellSandboxBackendImpl {
         };
       },
       finalizeExec: async ({ token }) => {
-        await self.finalizeExec(token as PendingExec | undefined);
+        await this.finalizeExec(token as PendingExec | undefined);
       },
-      runShellCommand: async (command) => await self.runRemoteShellScript(command),
+      runShellCommand: async (command) => await this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({
               sandbox,
-              runtime: self.asHandle(),
+              runtime: this.asHandle(),
             })
           : createOpenShellFsBridge({
               sandbox,
-              backend: self.asHandle(),
+              backend: this.asHandle(),
             }),
-      runRemoteShellScript: async (command) => await self.runRemoteShellScript(command),
+      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
       syncLocalPathToRemote: async (localPath, remotePath) =>
-        await self.syncLocalPathToRemote(localPath, remotePath),
+        await this.syncLocalPathToRemote(localPath, remotePath),
     };
   }
 

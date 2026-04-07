@@ -48,6 +48,21 @@ export type MSTeamsMessageHandlerDeps = {
   log: MSTeamsMonitorLogger;
 };
 
+function serializeAdaptiveCardActionValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (value === undefined) {
+    return null;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
 async function isFeedbackInvokeAuthorized(
   context: MSTeamsTurnContext,
   deps: MSTeamsMessageHandlerDeps,
@@ -387,6 +402,22 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         if (handled) {
           return;
         }
+      }
+
+      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
+        const text = serializeAdaptiveCardActionValue(ctx.activity?.value);
+        if (text) {
+          await handleTeamsMessage({
+            ...ctx,
+            activity: {
+              ...ctx.activity,
+              type: "message",
+              text,
+            },
+          });
+          return;
+        }
+        deps.log.debug?.("skipping adaptive card action invoke without value payload");
       }
 
       return originalRun.call(handler, context);

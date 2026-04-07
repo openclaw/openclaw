@@ -4,11 +4,7 @@ import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
-import {
-  DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-  isInboundPathAllowed,
-  mergeInboundPathRoots,
-} from "../media/inbound-path-policy.js";
+import { isInboundPathAllowed, mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
@@ -48,10 +44,7 @@ type AttachmentCacheEntry = {
 let defaultLocalPathRoots: readonly string[] | undefined;
 
 function getDefaultLocalPathRoots(): readonly string[] {
-  defaultLocalPathRoots ??= mergeInboundPathRoots(
-    getDefaultMediaLocalRoots(),
-    DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-  );
+  defaultLocalPathRoots ??= mergeInboundPathRoots(getDefaultMediaLocalRoots());
   return defaultLocalPathRoots;
 }
 
@@ -237,10 +230,10 @@ export class MediaAttachmentCache {
   }
 
   async cleanup(): Promise<void> {
-    const cleanups: Array<Promise<void> | void> = [];
+    const cleanups: Promise<void>[] = [];
     for (const entry of this.entries.values()) {
       if (entry.tempCleanup) {
-        cleanups.push(Promise.resolve(entry.tempCleanup()));
+        cleanups.push(entry.tempCleanup());
         entry.tempCleanup = undefined;
       }
     }

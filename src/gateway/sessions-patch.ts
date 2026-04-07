@@ -376,6 +376,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
       const trimmed = String(raw).trim();
@@ -409,6 +410,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        markLiveSwitchPending: true,
       });
     }
   }

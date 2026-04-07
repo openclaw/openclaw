@@ -18,10 +18,10 @@ import {
   toLocationContext,
   type getChildLogger,
   type getReplyFromConfig,
-  type loadConfig,
+  type LoadConfigFn,
   type ReplyPayload,
   type resolveAgentRoute,
-} from "./runtime-api.js";
+} from "./inbound-dispatch.runtime.js";
 
 type ReplyLifecycleKind = "tool" | "block" | "final";
 type ChannelReplyOnModelSelected = NonNullable<
@@ -46,8 +46,28 @@ type SenderContext = {
   e164?: string;
 };
 
+function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
+  if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
+    return undefined;
+  }
+  return !cfg.channels.whatsapp.blockStreaming;
+}
+
+function shouldSuppressWhatsAppPayload(
+  payload: ReplyPayload,
+  info: { kind: ReplyLifecycleKind },
+): boolean {
+  if (info.kind === "tool") {
+    return true;
+  }
+  if (payload.isReasoning === true || payload.isCompactionNotice === true) {
+    return true;
+  }
+  return false;
+}
+
 export function resolveWhatsAppResponsePrefix(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   agentId: string;
   isSelfChat: boolean;
   pipelineResponsePrefix?: string;
@@ -139,13 +159,13 @@ export function resolveWhatsAppDmRouteTarget(params: {
 
 export function updateWhatsAppMainLastRoute(params: {
   backgroundTasks: Set<Promise<unknown>>;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   ctx: Record<string, unknown>;
   dmRouteTarget?: string;
   pinnedMainDmRecipient: string | null;
   route: ReturnType<typeof resolveAgentRoute>;
   updateLastRoute: (params: {
-    cfg: ReturnType<typeof loadConfig>;
+    cfg: ReturnType<LoadConfigFn>;
     backgroundTasks: Set<Promise<unknown>>;
     storeAgentId: string;
     sessionKey: string;
@@ -195,7 +215,7 @@ export function updateWhatsAppMainLastRoute(params: {
 }
 
 export async function dispatchWhatsAppBufferedReply(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   connectionId: string;
   context: Record<string, unknown>;
   conversationId: string;
@@ -239,10 +259,11 @@ export async function dispatchWhatsAppBufferedReply(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
+  const disableBlockStreaming = resolveWhatsAppDisableBlockStreaming(params.cfg);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 
-  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+  const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.context,
     cfg: params.cfg,
     replyResolver: params.replyResolver,
@@ -255,7 +276,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
-        if (info.kind !== "final") {
+        if (shouldSuppressWhatsAppPayload(payload, info)) {
           return;
         }
         await params.deliverReply({
@@ -288,12 +309,13 @@ export async function dispatchWhatsAppBufferedReply(params: {
       onReplyStart: params.msg.sendComposing,
     },
     replyOptions: {
-      disableBlockStreaming: true,
+      disableBlockStreaming,
       onModelSelected: params.onModelSelected,
     },
   });
 
-  if (!queuedFinal) {
+  const didQueueVisibleReply = queuedFinal || counts.block > 0 || counts.final > 0;
+  if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }

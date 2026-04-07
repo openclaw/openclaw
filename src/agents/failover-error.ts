@@ -132,6 +132,22 @@ function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
 }
 
+function readDirectProvider(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const provider = (err as { provider?: unknown }).provider;
+  if (typeof provider !== "string") {
+    return undefined;
+  }
+  const trimmed = provider.trim();
+  return trimmed || undefined;
+}
+
+function getProvider(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectProvider);
+}
+
 function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
     return err.message || undefined;
@@ -207,6 +223,7 @@ function normalizeErrorSignal(err: unknown): FailoverSignal {
     status: getStatusCode(err),
     code: getErrorCode(err),
     message: message || undefined,
+    provider: getProvider(err),
   };
 }
 

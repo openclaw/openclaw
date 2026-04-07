@@ -28,6 +28,8 @@ enum HostEnvSecurityPolicy {
         "CC",
         "CXX",
         "CARGO_BUILD_RUSTC",
+        "CARGO_BUILD_RUSTC_WRAPPER",
+        "RUSTC_WRAPPER",
         "CMAKE_C_COMPILER",
         "CMAKE_CXX_COMPILER",
         "SHELL",
@@ -44,9 +46,12 @@ enum HostEnvSecurityPolicy {
         "DOTNET_ADDITIONAL_DEPS",
         "GLIBC_TUNABLES",
         "MAVEN_OPTS",
+        "MAKEFLAGS",
+        "MFLAGS",
         "SBT_OPTS",
         "GRADLE_OPTS",
-        "ANT_OPTS"
+        "ANT_OPTS",
+        "HGRCPATH"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
@@ -83,6 +88,8 @@ enum HostEnvSecurityPolicy {
         "CGO_CFLAGS",
         "CGO_LDFLAGS",
         "GOFLAGS",
+        "MAKEFLAGS",
+        "MFLAGS",
         "CORECLR_PROFILER_PATH",
         "PHPRC",
         "PHP_INI_SCAN_DIR",
@@ -110,6 +117,7 @@ enum HostEnvSecurityPolicy {
         "PIP_TRUSTED_HOST",
         "UV_INDEX",
         "UV_INDEX_URL",
+        "UV_PYTHON",
         "UV_EXTRA_INDEX_URL",
         "UV_DEFAULT_INDEX",
         "DOCKER_HOST",
@@ -133,7 +141,9 @@ enum HostEnvSecurityPolicy {
         "GOPRIVATE",
         "GOENV",
         "GOPATH",
+        "HGRCPATH",
         "PYTHONUSERBASE",
+        "RUSTC_WRAPPER",
         "VIRTUAL_ENV",
         "LUA_PATH",
         "LUA_CPATH",
@@ -141,6 +151,7 @@ enum HostEnvSecurityPolicy {
         "GEM_PATH",
         "BUNDLE_GEMFILE",
         "COMPOSER_HOME",
+        "CARGO_BUILD_RUSTC_WRAPPER",
         "XDG_CONFIG_HOME",
         "AWS_CONFIG_FILE"
     ]

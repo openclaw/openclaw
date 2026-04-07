@@ -43,11 +43,13 @@ describe("tsdown config", () => {
     expect(entryKeys(distGraphs[0])).toEqual(
       expect.arrayContaining([
         "agents/auth-profiles.runtime",
+        "agents/model-catalog.runtime",
+        "agents/models-config.runtime",
         "agents/pi-model-discovery-runtime",
         "index",
         "commands/status.summary.runtime",
+        "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
-        "plugins/runtime/runtime-line.contract",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",

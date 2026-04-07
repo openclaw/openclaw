@@ -1,32 +1,34 @@
 import { randomUUID } from "node:crypto";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
-import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
-import { loadConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import { registerApnsRegistration } from "../infra/push-apns.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { deleteMediaBuffer } from "../media/store.js";
-import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import { defaultRuntime } from "../runtime.js";
-import { parseMessageWithAttachments } from "./chat-attachments.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
+  agentCommandFromIngress,
+  buildOutboundSessionContext,
+  createOutboundSendDeps,
+  defaultRuntime,
+  deleteMediaBuffer,
+  deliverOutboundPayloads,
+  enqueueSystemEvent,
+  formatForLog,
+  loadConfig,
+  loadOrCreateDeviceIdentity,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  normalizeChannelId,
+  normalizeMainKey,
+  normalizeRpcAttachmentsToChatAttachments,
+  parseMessageWithAttachments,
+  registerApnsRegistration,
+  requestHeartbeatNow,
   resolveGatewayModelSupportsImages,
+  resolveOutboundTarget,
+  resolveSessionAgentId,
   resolveSessionModelRef,
-} from "./session-utils.js";
-import { formatForLog } from "./ws-log.js";
+  sanitizeInboundSystemTags,
+  scopedHeartbeatWakeOptions,
+  updateSessionStore,
+} from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -407,7 +409,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
                   await deleteMediaBuffer(ref.id);
                 } catch (cleanupErr) {
                   ctx.logGateway.warn(
-                    `Failed to cleanup orphaned media ${ref.id}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+                    `Failed to cleanup orphaned media ${ref.id}: ${formatErrorMessage(cleanupErr)}`,
                   );
                 }
               }
@@ -415,9 +417,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             return;
           }
         } catch (err) {
-          ctx.logGateway.warn(
-            `agent.request attachment parse failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          ctx.logGateway.warn(`agent.request attachment parse failed: ${formatErrorMessage(err)}`);
           return;
         }
       }

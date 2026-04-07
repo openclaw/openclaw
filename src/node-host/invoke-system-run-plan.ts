@@ -19,6 +19,7 @@ import {
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { normalizeNullableString } from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ApprovedCwdSnapshot = {
@@ -194,14 +195,6 @@ type FileOperandCollection = {
   hits: number[];
   sawOptionValueFile: boolean;
 };
-
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 function pathComponentsFromRootSync(targetPath: string): string[] {
   const absolute = path.resolve(targetPath);
@@ -1178,7 +1171,7 @@ export function buildSystemRunApprovalPlan(params: {
     approvedByAsk: true,
     argv: command.argv,
     shellCommand: command.shellPayload,
-    cwd: normalizeString(params.cwd) ?? undefined,
+    cwd: normalizeNullableString(params.cwd) ?? undefined,
   });
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
@@ -1203,8 +1196,8 @@ export function buildSystemRunApprovalPlan(params: {
       cwd: hardening.cwd ?? null,
       commandText,
       commandPreview,
-      agentId: normalizeString(params.agentId),
-      sessionKey: normalizeString(params.sessionKey),
+      agentId: normalizeNullableString(params.agentId),
+      sessionKey: normalizeNullableString(params.sessionKey),
       mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
     },
   };

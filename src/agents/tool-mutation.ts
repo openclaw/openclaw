@@ -1,3 +1,5 @@
+import { asRecord } from "./tool-display-record.js";
+
 const MUTATING_TOOL_NAMES = new Set([
   "write",
   "edit",
@@ -55,10 +57,6 @@ export type ToolActionRef = {
   meta?: string;
   actionFingerprint?: string;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
 
 function normalizeActionName(value: unknown): string | undefined {
   if (typeof value !== "string") {

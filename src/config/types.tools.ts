@@ -2,6 +2,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
+import type { ConfiguredProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -44,6 +45,8 @@ type MediaProviderRequestConfig = {
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
+  /** Optional request transport overrides for provider HTTP calls. */
+  request?: ConfiguredProviderRequest;
 };
 
 export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
@@ -135,6 +138,13 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
+  asyncCompletion?: {
+    /**
+     * Enable direct channel sends for completed async media generation tasks.
+     * Default: false.
+     */
+    directSend?: boolean;
+  };
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
@@ -274,7 +284,7 @@ export type ExecToolConfig = {
     workspaceOnly?: boolean;
     /**
      * Optional allowlist of model ids that can use apply_patch.
-     * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+     * Accepts either raw ids (e.g. "gpt-5.4") or full ids (e.g. "openai/gpt-5.4").
      */
     allowModels?: string[];
   };
@@ -623,5 +633,10 @@ export type ToolsConfig = {
       alsoAllow?: string[];
       deny?: string[];
     };
+  };
+  /** Experimental tool flags. Default off unless explicitly enabled. */
+  experimental?: {
+    /** Enable the structured `update_plan` tool for all providers. OpenAI-family runs auto-enable it. */
+    planTool?: boolean;
   };
 };

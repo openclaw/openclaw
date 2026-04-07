@@ -6,6 +6,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -79,8 +80,7 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-function extractTextFromToolResult(result: any): string | null {
+function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
     return null;
   }
@@ -193,6 +193,7 @@ export async function handleInlineActions(params: {
         ? (await import("../skill-commands.runtime.js")).listSkillCommandsForWorkspace({
             workspaceDir,
             cfg,
+            agentId,
             skillFilter,
           })
         : [];
@@ -245,17 +246,17 @@ export async function handleInlineActions(params: {
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
       try {
-        const result = await tool.execute(toolCallId, {
+        const toolArgs: Parameters<NonNullable<typeof tool.execute>>[1] = {
           command: rawArgs,
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
+        };
+        const result = await tool.execute(toolCallId, toolArgs);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ ${message}` } };
       }
