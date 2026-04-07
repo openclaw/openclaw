@@ -11,6 +11,8 @@ type ReplayDiagnosticType =
 type ToolResultReplayPolicyMeta = {
   transient: true;
   diagnosticType: ReplayDiagnosticType;
+  /** Command string (exec/bash) or file path (read) used to identify the specific target. */
+  diagnosticTarget?: string;
   taggedAt: number;
   persistedAt?: number;
   sourceTool: string;
@@ -20,6 +22,7 @@ type OpenClawReplayMetaEnvelope = {
   __openclaw?: Record<string, unknown> & {
     transient?: boolean;
     diagnosticType?: string;
+    diagnosticTarget?: string;
     taggedAt?: number;
     persistedAt?: number;
     sourceTool?: string;
@@ -107,6 +110,7 @@ export function detectToolResultReplayPolicyMeta(params: {
     return {
       transient: true,
       diagnosticType,
+      diagnosticTarget: command,
       taggedAt,
       sourceTool: toolName,
     };
@@ -124,6 +128,7 @@ export function detectToolResultReplayPolicyMeta(params: {
     return {
       transient: true,
       diagnosticType,
+      diagnosticTarget: filePath,
       taggedAt,
       sourceTool: toolName,
     };
@@ -186,6 +191,7 @@ export function applyToolResultReplayMetadata(
       ...next.__openclaw,
       transient: true,
       diagnosticType: meta.diagnosticType,
+      diagnosticTarget: meta.diagnosticTarget,
       taggedAt: meta.taggedAt,
       sourceTool: meta.sourceTool,
     },
@@ -205,6 +211,7 @@ export function getToolResultReplayMetadata(
   return {
     transient: true,
     diagnosticType: meta.diagnosticType as ReplayDiagnosticType,
+    diagnosticTarget: typeof meta.diagnosticTarget === "string" ? meta.diagnosticTarget : undefined,
     taggedAt: typeof meta.taggedAt === "number" ? meta.taggedAt : 0,
     persistedAt: typeof meta.persistedAt === "number" ? meta.persistedAt : undefined,
     sourceTool: typeof meta.sourceTool === "string" ? meta.sourceTool : "unknown",
@@ -232,6 +239,7 @@ export function stampPersistedToolResultReplayMetadata(
       ...next.__openclaw,
       transient: true,
       diagnosticType: meta.diagnosticType,
+      diagnosticTarget: meta.diagnosticTarget,
       taggedAt: meta.taggedAt,
       persistedAt,
       sourceTool: meta.sourceTool,

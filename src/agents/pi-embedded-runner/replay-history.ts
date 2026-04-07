@@ -303,16 +303,17 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
 }
 
 function omitStaleTransientDiagnosticToolResults(messages: AgentMessage[]): AgentMessage[] {
-  const latestByDiagnosticType = new Map<string, number>();
+  const latestByDiagnosticKey = new Map<string, number>();
   for (let i = 0; i < messages.length; i += 1) {
     const meta = getToolResultReplayMetadata(messages[i]);
     if (!meta) {
       continue;
     }
-    latestByDiagnosticType.set(meta.diagnosticType, i);
+    const key = `${meta.diagnosticType}:${meta.diagnosticTarget ?? ""}`;
+    latestByDiagnosticKey.set(key, i);
   }
 
-  if (latestByDiagnosticType.size === 0) {
+  if (latestByDiagnosticKey.size === 0) {
     return messages;
   }
 
@@ -325,7 +326,8 @@ function omitStaleTransientDiagnosticToolResults(messages: AgentMessage[]): Agen
     if (!meta) {
       continue;
     }
-    const latestIndex = latestByDiagnosticType.get(meta.diagnosticType) ?? i;
+    const key = `${meta.diagnosticType}:${meta.diagnosticTarget ?? ""}`;
+    const latestIndex = latestByDiagnosticKey.get(key) ?? i;
     const messageTimestamp = parseMessageTimestamp((message as { timestamp?: unknown }).timestamp);
     const persistedTimestamp = parseMessageTimestamp(meta.persistedAt ?? null);
     const timestamp = messageTimestamp ?? persistedTimestamp;
