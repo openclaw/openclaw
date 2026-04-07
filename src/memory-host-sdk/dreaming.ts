@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import {
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
@@ -231,7 +232,7 @@ function normalizeStringArray<T extends string>(
   const allowedSet = new Set(allowed);
   const normalized: T[] = [];
   for (const entry of value) {
-    const normalizedEntry = normalizeTrimmedString(entry)?.toLowerCase();
+    const normalizedEntry = normalizeOptionalLowercaseString(entry);
     if (!normalizedEntry || !allowedSet.has(normalizedEntry as T)) {
       continue;
     }
@@ -243,7 +244,7 @@ function normalizeStringArray<T extends string>(
 }
 
 function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
     return normalized;
   }
@@ -251,7 +252,7 @@ function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
 }
 
 function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "fast" || normalized === "balanced" || normalized === "slow") {
     return normalized;
   }
@@ -259,7 +260,7 @@ function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
 }
 
 function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -267,7 +268,7 @@ function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
 }
 
 function normalizeBudget(value: unknown): MemoryDreamingBudget | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "cheap" || normalized === "medium" || normalized === "expensive") {
     return normalized;
   }
@@ -302,7 +303,7 @@ function resolveExecutionConfig(
 
 function normalizePathForComparison(input: string): string {
   const normalized = path.resolve(input);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {
@@ -320,7 +321,7 @@ export function resolveMemoryDreamingPluginId(
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
   const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
+  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;

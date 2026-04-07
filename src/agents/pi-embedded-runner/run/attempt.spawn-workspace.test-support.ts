@@ -13,7 +13,10 @@ import type {
   IngestResult,
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -477,10 +480,18 @@ vi.mock("../cache-ttl.js", () => ({
             modelId?: string;
           }
         | undefined;
-      if (context?.provider && entry?.provider?.toLowerCase() !== context.provider.toLowerCase()) {
+      if (
+        context?.provider &&
+        normalizeOptionalLowercaseString(entry?.provider) !==
+          normalizeOptionalLowercaseString(context.provider)
+      ) {
         continue;
       }
-      if (context?.modelId && entry?.modelId?.toLowerCase() !== context.modelId.toLowerCase()) {
+      if (
+        context?.modelId &&
+        normalizeOptionalLowercaseString(entry?.modelId) !==
+          normalizeOptionalLowercaseString(context.modelId)
+      ) {
         continue;
       }
       const timestamp = entry?.timestamp;

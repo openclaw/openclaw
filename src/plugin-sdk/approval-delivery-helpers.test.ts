@@ -422,7 +422,11 @@ describe("createChannelApprovalCapability", () => {
         deliverPending: vi.fn(),
       },
     };
-    const render = { buildPendingReplyPayload: vi.fn() };
+    const render = {
+      exec: {
+        buildPendingPayload: vi.fn(),
+      },
+    };
     const native = { describeDeliveryCapabilities: vi.fn() };
 
     expect(

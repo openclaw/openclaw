@@ -5,8 +5,11 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
+import {
+  CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+  createLazyChannelApprovalNativeRuntimeAdapter,
+} from "./approval-handler-adapter-runtime.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import {
   createChannelNativeApprovalRuntime,
@@ -46,10 +49,13 @@ export type {
   ResolvedApprovalView,
 } from "./approval-view-model.js";
 export { resolveApprovalOverGateway };
+export {
+  CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+  createLazyChannelApprovalNativeRuntimeAdapter,
+};
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 
 export type ChannelApprovalHandler<
   TRequest extends ApprovalRequest = ApprovalRequest,
@@ -216,13 +222,24 @@ export type ChannelApprovalNativeObserveAdapter<
   ) => void;
 };
 
-export type ChannelApprovalNativeRuntimeAdapter = {
+export type ChannelApprovalNativeRuntimeAdapter<
+  TPendingPayload = unknown,
+  TPreparedTarget = unknown,
+  TPendingEntry = unknown,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+> = {
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
-  presentation: ChannelApprovalNativePresentationAdapter;
-  transport: ChannelApprovalNativeTransportAdapter;
-  interactions?: ChannelApprovalNativeInteractionAdapter;
+  presentation: ChannelApprovalNativePresentationAdapter<TPendingPayload, TFinalPayload>;
+  transport: ChannelApprovalNativeTransportAdapter<
+    TPreparedTarget,
+    TPendingEntry,
+    TPendingPayload,
+    TFinalPayload
+  >;
+  interactions?: ChannelApprovalNativeInteractionAdapter<TPendingEntry, TBinding>;
   observe?: ChannelApprovalNativeObserveAdapter;
 };
 
@@ -231,6 +248,7 @@ export type ChannelApprovalNativeRuntimeSpec<
   TPreparedTarget,
   TPendingEntry,
   TBinding = unknown,
+  TFinalPayload = unknown,
   TPendingView extends PendingApprovalView = PendingApprovalView,
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
@@ -255,8 +273,8 @@ export type ChannelApprovalNativeRuntimeSpec<
         entry: TPendingEntry;
       },
     ) =>
-      | ChannelApprovalNativeFinalAction<unknown>
-      | Promise<ChannelApprovalNativeFinalAction<unknown>>;
+      | ChannelApprovalNativeFinalAction<TFinalPayload>
+      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
     buildExpiredResult: (
       params: ChannelApprovalCapabilityHandlerContext & {
         request: ApprovalRequest;
@@ -264,8 +282,8 @@ export type ChannelApprovalNativeRuntimeSpec<
         entry: TPendingEntry;
       },
     ) =>
-      | ChannelApprovalNativeFinalAction<unknown>
-      | Promise<ChannelApprovalNativeFinalAction<unknown>>;
+      | ChannelApprovalNativeFinalAction<TFinalPayload>
+      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
   };
   transport: {
     prepareTarget: (
@@ -293,7 +311,7 @@ export type ChannelApprovalNativeRuntimeSpec<
     updateEntry?: (
       params: ChannelApprovalCapabilityHandlerContext & {
         entry: TPendingEntry;
-        payload: unknown;
+        payload: TFinalPayload;
         phase: "resolved" | "expired";
       },
     ) => Promise<void>;
@@ -481,6 +499,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
   TPreparedTarget,
   TPendingEntry,
   TBinding = unknown,
+  TFinalPayload = unknown,
   TPendingView extends PendingApprovalView = PendingApprovalView,
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
@@ -490,11 +509,18 @@ export function createChannelApprovalNativeRuntimeAdapter<
     TPreparedTarget,
     TPendingEntry,
     TBinding,
+    TFinalPayload,
     TPendingView,
     TResolvedView,
     TExpiredView
   >,
-): ChannelApprovalNativeRuntimeAdapter {
+): ChannelApprovalNativeRuntimeAdapter<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding,
+  TFinalPayload
+> {
   return {
     ...(spec.eventKinds ? { eventKinds: spec.eventKinds } : {}),
     ...(spec.resolveApprovalKind ? { resolveApprovalKind: spec.resolveApprovalKind } : {}),
@@ -541,7 +567,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
             ...(spec.interactions.bindPending
               ? {
                   bindPending: async (params) =>
-                    await spec.interactions?.bindPending?.(params as never),
+                    (await spec.interactions!.bindPending!(params as never)) ?? null,
                 }
               : {}),
             ...(spec.interactions.unbindPending
@@ -581,83 +607,6 @@ export function createChannelApprovalNativeRuntimeAdapter<
           },
         }
       : {}),
-  };
-}
-
-type LazyChannelApprovalNativeRuntimeParams = {
-  load: () => Promise<ChannelApprovalNativeRuntimeAdapter>;
-  isConfigured: ChannelApprovalNativeAvailabilityAdapter["isConfigured"];
-  shouldHandle: ChannelApprovalNativeAvailabilityAdapter["shouldHandle"];
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
-  resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
-};
-
-export function createLazyChannelApprovalNativeRuntimeAdapter(
-  params: LazyChannelApprovalNativeRuntimeParams,
-): ChannelApprovalNativeRuntimeAdapter {
-  const loadRuntime = createLazyRuntimeModule(params.load);
-  let loadedRuntime: ChannelApprovalNativeRuntimeAdapter | null = null;
-  const loadResolvedRuntime = async (): Promise<ChannelApprovalNativeRuntimeAdapter> => {
-    const runtime = await loadRuntime();
-    loadedRuntime = runtime;
-    return runtime;
-  };
-  const loadRequired = async <TResult>(
-    select: (runtime: ChannelApprovalNativeRuntimeAdapter) => TResult,
-  ): Promise<TResult> => select(await loadResolvedRuntime());
-  const loadOptional = async <TResult>(
-    select: (runtime: ChannelApprovalNativeRuntimeAdapter) => TResult | undefined,
-  ): Promise<TResult | undefined> => select(await loadResolvedRuntime());
-
-  return {
-    ...(params.eventKinds ? { eventKinds: params.eventKinds } : {}),
-    ...(params.resolveApprovalKind ? { resolveApprovalKind: params.resolveApprovalKind } : {}),
-    availability: {
-      isConfigured: params.isConfigured,
-      shouldHandle: params.shouldHandle,
-    },
-    presentation: {
-      buildPendingPayload: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.presentation.buildPendingPayload))(runtimeParams),
-      buildResolvedResult: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.presentation.buildResolvedResult))(runtimeParams),
-      buildExpiredResult: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.presentation.buildExpiredResult))(runtimeParams),
-    },
-    transport: {
-      prepareTarget: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.transport.prepareTarget))(runtimeParams),
-      deliverPending: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.transport.deliverPending))(runtimeParams),
-      updateEntry: async (runtimeParams) =>
-        await (
-          await loadOptional((runtime) => runtime.transport.updateEntry)
-        )?.(runtimeParams),
-      deleteEntry: async (runtimeParams) =>
-        await (
-          await loadOptional((runtime) => runtime.transport.deleteEntry)
-        )?.(runtimeParams),
-    },
-    interactions: {
-      bindPending: async (runtimeParams) =>
-        (await loadOptional((runtime) => runtime.interactions?.bindPending))?.(runtimeParams),
-      unbindPending: async (runtimeParams) =>
-        await (
-          await loadOptional((runtime) => runtime.interactions?.unbindPending)
-        )?.(runtimeParams),
-      clearPendingActions: async (runtimeParams) =>
-        await (
-          await loadOptional((runtime) => runtime.interactions?.clearPendingActions)
-        )?.(runtimeParams),
-    },
-    observe: {
-      // Observe hooks are fire-and-forget at call sites. Reuse the already
-      // loaded runtime instead of introducing unawaited lazy-load promises.
-      onDeliveryError: (runtimeParams) => loadedRuntime?.observe?.onDeliveryError?.(runtimeParams),
-      onDuplicateSkipped: (runtimeParams) =>
-        loadedRuntime?.observe?.onDuplicateSkipped?.(runtimeParams),
-      onDelivered: (runtimeParams) => loadedRuntime?.observe?.onDelivered?.(runtimeParams),
-    },
   };
 }
 

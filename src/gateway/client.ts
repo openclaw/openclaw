@@ -14,7 +14,10 @@ import {
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -298,7 +301,7 @@ export class GatewayClient {
       // not erase a valid cached device token.
       if (
         code === 1008 &&
-        reasonText.toLowerCase().includes("device token mismatch") &&
+        normalizeLowercaseStringOrEmpty(reasonText).includes("device token mismatch") &&
         !this.opts.token &&
         !this.opts.password &&
         this.opts.deviceIdentity

@@ -377,6 +377,20 @@ describe("exec approval handlers", () => {
     });
   }
 
+  async function listExecApprovals(params: {
+    handlers: ExecApprovalHandlers;
+    respond: ReturnType<typeof vi.fn>;
+  }) {
+    return params.handlers["exec.approval.list"]({
+      params: {} as never,
+      respond: params.respond as never,
+      context: {} as never,
+      client: null,
+      req: { id: "req-list", type: "req", method: "exec.approval.list" },
+      isWebchatConnect: execApprovalNoop,
+    });
+  }
+
   async function requestExecApproval(params: {
     handlers: ExecApprovalHandlers;
     respond: ReturnType<typeof vi.fn>;
@@ -601,6 +615,47 @@ describe("exec approval handlers", () => {
     await resolveExecApproval({
       handlers,
       id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
+  it("lists pending exec approvals", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-list-1",
+        twoPhase: true,
+        host: "gateway",
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond });
+
+    expect(listRespond).toHaveBeenCalledWith(
+      true,
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "approval-list-1",
+          request: expect.objectContaining({
+            command: "echo ok",
+          }),
+        }),
+      ]),
+      undefined,
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-list-1",
       respond: resolveRespond,
       context,
     });

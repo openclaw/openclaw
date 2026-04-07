@@ -3,6 +3,7 @@ import {
   createChannelApprovalHandlerFromCapability,
   createLazyChannelApprovalNativeRuntimeAdapter,
 } from "./approval-handler-runtime.js";
+import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 describe("createChannelApprovalHandlerFromCapability", () => {
   it("returns null when the capability does not expose a native runtime", async () => {
@@ -113,7 +114,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     );
   });
 
-  it("unbinds and finalizes every prior pending delivery when the same approval id is requested again", async () => {
+  it("ignores duplicate pending request ids before finalization", async () => {
     const unbindPending = vi.fn();
     const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
     const runtime = await createChannelApprovalHandlerFromCapability({
@@ -183,27 +184,18 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       resolvedBy: "operator",
     } as never);
 
-    expect(unbindPending).toHaveBeenCalledTimes(2);
-    expect(unbindPending).toHaveBeenNthCalledWith(
-      1,
+    expect(unbindPending).toHaveBeenCalledTimes(1);
+    expect(unbindPending).toHaveBeenCalledWith(
       expect.objectContaining({
         entry: { messageId: "1" },
         binding: { bindingId: "bound-1" },
         request,
       }),
     );
-    expect(unbindPending).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        entry: { messageId: "2" },
-        binding: { bindingId: "bound-2" },
-        request,
-      }),
-    );
-    expect(buildResolvedResult).toHaveBeenCalledTimes(2);
+    expect(buildResolvedResult).toHaveBeenCalledTimes(1);
   });
 
-  it("continues finalizing later entries when one resolved entry cleanup throws", async () => {
+  it("continues finalization cleanup after one resolved entry unbind failure", async () => {
     const unbindPending = vi
       .fn()
       .mockRejectedValueOnce(new Error("unbind failed"))
@@ -214,12 +206,13 @@ describe("createChannelApprovalHandlerFromCapability", () => {
         native: {
           describeDeliveryCapabilities: vi.fn().mockReturnValue({
             enabled: true,
-            preferredSurface: "origin",
+            preferredSurface: "both",
             supportsOriginSurface: true,
-            supportsApproverDmSurface: false,
+            supportsApproverDmSurface: true,
             notifyOriginWhenDmOnly: false,
           }),
           resolveOriginTarget: vi.fn().mockReturnValue({ to: "origin-chat" }),
+          resolveApproverDmTargets: vi.fn().mockResolvedValue([{ to: "approver-dm" }]),
         },
         nativeRuntime: {
           availability: {
@@ -232,10 +225,10 @@ describe("createChannelApprovalHandlerFromCapability", () => {
             buildExpiredResult: vi.fn(),
           },
           transport: {
-            prepareTarget: vi.fn().mockResolvedValue({
-              dedupeKey: "origin-chat",
-              target: { to: "origin-chat" },
-            }),
+            prepareTarget: vi.fn().mockImplementation(async ({ plannedTarget }) => ({
+              dedupeKey: String(plannedTarget.target.to),
+              target: { to: plannedTarget.target.to },
+            })),
             deliverPending: vi
               .fn()
               .mockResolvedValueOnce({ messageId: "1" })
@@ -267,7 +260,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       },
     } as never;
 
-    await runtime?.handleRequested(request);
     await runtime?.handleRequested(request);
     await expect(
       runtime?.handleResolved({
@@ -339,7 +331,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       cfg: { channels: {} } as never,
     });
 
-    const request = {
+    const request: ExecApprovalRequest = {
       id: "exec:stop-1",
       expiresAtMs: Date.now() + 60_000,
       request: {
@@ -347,7 +339,8 @@ describe("createChannelApprovalHandlerFromCapability", () => {
         turnSourceChannel: "test",
         turnSourceTo: "origin-chat",
       },
-    } as never;
+      createdAtMs: Date.now(),
+    };
 
     await runtime?.handleRequested(request);
     await runtime?.handleRequested({

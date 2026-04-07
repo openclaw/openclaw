@@ -3,7 +3,6 @@ export {
   createChannelApprovalNativeRuntimeAdapter,
   createChannelApprovalHandlerFromCapability,
   createLazyChannelApprovalNativeRuntimeAdapter,
-  resolveApprovalOverGateway,
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   type ApprovalActionView,
   type ApprovalMetadataView,
@@ -29,3 +28,4 @@ export {
   type PluginApprovalResolvedView,
   type ResolvedApprovalView,
 } from "../infra/approval-handler-runtime.js";
+export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";

@@ -19,7 +19,10 @@ import {
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import { normalizeNullableString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ApprovedCwdSnapshot = {
@@ -137,6 +140,10 @@ const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
 
 const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
 const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
+
+function normalizeOptionFlag(token: string): string {
+  return normalizeLowercaseStringOrEmpty(token.split("=", 1)[0]);
+}
 
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
@@ -353,7 +360,7 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
       }
       return null;
     }
-    const [flag] = token.toLowerCase().split("=", 2);
+    const flag = normalizeOptionFlag(token);
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
@@ -384,7 +391,7 @@ function unwrapPnpmDlxInvocation(argv: string[]): string[] | null {
       // package binary pnpm will execute inside the temporary environment.
       return argv.slice(idx);
     }
-    const [flag] = token.toLowerCase().split("=", 2);
+    const flag = normalizeOptionFlag(token);
     if (flag === "-c" || flag === "--shell-mode") {
       return null;
     }
@@ -412,7 +419,7 @@ function unwrapDirectPackageExecInvocation(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(idx);
     }
-    const [flag] = token.toLowerCase().split("=", 2);
+    const flag = normalizeOptionFlag(token);
     if (flag === "-c" || flag === "--call") {
       return null;
     }
@@ -488,7 +495,7 @@ function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
       return null;
     }
     if (!afterDoubleDash && token.startsWith("-")) {
-      const [flag] = token.toLowerCase().split("=", 2);
+      const flag = normalizeOptionFlag(token);
       if (POSIX_SHELL_OPTIONS_WITH_VALUE.has(flag)) {
         if (!token.includes("=")) {
           i += 1;
@@ -595,7 +602,7 @@ function collectExistingFileOperandIndexes(params: {
     }
     if (token.startsWith("-")) {
       const [flag, inlineValue] = token.split("=", 2);
-      if (params.optionsWithFileValue?.has(flag.toLowerCase())) {
+      if (params.optionsWithFileValue?.has(normalizeLowercaseStringOrEmpty(flag))) {
         if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
           hits.push(i);
           return { hits, sawOptionValueFile: true };
@@ -697,7 +704,7 @@ function hasRubyUnsafeApprovalFlag(argv: string[]): boolean {
     if (token.startsWith("-I") || token.startsWith("-r")) {
       return true;
     }
-    if (RUBY_UNSAFE_APPROVAL_FLAGS.has(token.toLowerCase())) {
+    if (RUBY_UNSAFE_APPROVAL_FLAGS.has(normalizeLowercaseStringOrEmpty(token))) {
       return true;
     }
   }
@@ -851,7 +858,7 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
       }
       return pnpmDlxTailNeedsFailClosedBinding(argv.slice(idx + 1), cwd);
     }
-    const [flag] = token.toLowerCase().split("=", 2);
+    const flag = normalizeOptionFlag(token);
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
@@ -880,7 +887,7 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
     if (!token.startsWith("-")) {
       return pnpmDlxTailMayNeedStableBinding(argv.slice(idx), cwd);
     }
-    const [flag] = token.toLowerCase().split("=", 2);
+    const flag = normalizeOptionFlag(token);
     if (flag === "-c" || flag === "--shell-mode") {
       return false;
     }

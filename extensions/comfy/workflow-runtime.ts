@@ -226,7 +226,7 @@ function resolveComfyNetworkPolicy(params: {
     return {};
   }
 
-  const hostname = normalizeOptionalString(parsed.hostname)?.toLowerCase() ?? "";
+  const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
   if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
     return {};
   }

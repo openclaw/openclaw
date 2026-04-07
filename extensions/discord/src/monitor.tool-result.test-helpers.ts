@@ -307,7 +307,7 @@ export function createMentionRequiredGuildConfig(overrides?: Partial<Config>): C
       },
     },
     ...overrides,
-  } as Config;
+  };
 }
 
 export function captureNextDispatchCtx<

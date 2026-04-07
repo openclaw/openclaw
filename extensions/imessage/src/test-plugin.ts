@@ -21,7 +21,7 @@ function normalizeIMessageTestHandle(raw: string): string {
   }
   if (/^(chat_id:|chat_guid:|chat_identifier:)/i.test(trimmed)) {
     return trimmed.replace(/^(chat_id:|chat_guid:|chat_identifier:)/i, (match) =>
-      match.toLowerCase(),
+      normalizeLowercaseStringOrEmpty(match),
     );
   }
   if (trimmed.includes("@")) {

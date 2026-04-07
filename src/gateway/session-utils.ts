@@ -56,6 +56,7 @@ import {
 } from "../shared/avatar-policy.js";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
@@ -464,10 +465,10 @@ export function findStoreKeysIgnoreCase(
   store: Record<string, unknown>,
   targetKey: string,
 ): string[] {
-  const lowered = targetKey.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
   const matches: string[] = [];
   for (const key of Object.keys(store)) {
-    if (key.toLowerCase() === lowered) {
+    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
       matches.push(key);
     }
   }
@@ -612,7 +613,7 @@ function normalizeFallbackList(values: readonly string[]): string[] {
     if (!trimmed) {
       continue;
     }
-    const key = trimmed.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(key)) {
       continue;
     }
@@ -701,7 +702,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
 }
 
 function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  const lowered = key.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(key);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
@@ -723,7 +724,7 @@ export function resolveSessionStoreKey(params: {
   if (!raw) {
     return raw;
   }
-  const rawLower = raw.toLowerCase();
+  const rawLower = normalizeLowercaseStringOrEmpty(raw);
   if (rawLower === "global" || rawLower === "unknown") {
     return rawLower;
   }
@@ -731,7 +732,7 @@ export function resolveSessionStoreKey(params: {
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
     const agentId = normalizeAgentId(parsed.agentId);
-    const lowered = raw.toLowerCase();
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
     const canonical = canonicalizeMainSessionAlias({
       cfg: params.cfg,
       agentId,
@@ -743,7 +744,7 @@ export function resolveSessionStoreKey(params: {
     return lowered;
   }
 
-  const lowered = raw.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
   if (lowered === "main" || lowered === rawMainKey) {
     return resolveMainSessionKey(params.cfg);
@@ -772,13 +773,13 @@ export function canonicalizeSpawnedByForAgent(
   if (!raw) {
     return undefined;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   if (lower === "global" || lower === "unknown") {
     return lower;
   }
   let result: string;
-  if (raw.toLowerCase().startsWith("agent:")) {
-    result = raw.toLowerCase();
+  if (lower.startsWith("agent:")) {
+    result = lower;
   } else {
     result = `agent:${normalizeAgentId(agentId)}:${lower}`;
   }
@@ -1077,7 +1078,7 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
-    const normalizedProvider = normalizeOptionalString(params.provider)?.toLowerCase();
+    const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
     const normalizedCandidates = [
       normalizeLowercaseStringOrEmpty(params.model),
       normalizeLowercaseStringOrEmpty(modelEntry?.name),
@@ -1479,7 +1480,9 @@ export function listSessionsFromStore(params: {
   if (search) {
     sessions = sessions.filter((s) => {
       const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
-      return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
+      return fields.some(
+        (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
+      );
     });
   }
 

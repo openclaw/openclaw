@@ -351,7 +351,7 @@ function filterRunLogEntries(
     if (!opts.query) {
       return true;
     }
-    return opts.queryTextForEntry(entry).toLowerCase().includes(opts.query);
+    return normalizeLowercaseStringOrEmpty(opts.queryTextForEntry(entry)).includes(opts.query);
   });
 }
 

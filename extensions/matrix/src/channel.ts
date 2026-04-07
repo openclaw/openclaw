@@ -25,7 +25,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
@@ -100,7 +103,7 @@ const listMatrixDirectoryPeersFromConfig =
       if (!raw || raw === "*") {
         return null;
       }
-      const lowered = raw.toLowerCase();
+      const lowered = normalizeLowercaseStringOrEmpty(raw);
       const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
       return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
     },
@@ -116,7 +119,7 @@ const listMatrixDirectoryGroupsFromConfig =
       if (!raw || raw === "*") {
         return null;
       }
-      const lowered = raw.toLowerCase();
+      const lowered = normalizeLowercaseStringOrEmpty(raw);
       if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
         return raw;
       }

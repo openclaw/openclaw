@@ -25,7 +25,10 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -788,7 +791,7 @@ export async function prepareSlackMessage(params: {
             pinnedMainDmOwner && message.user
               ? {
                   ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: message.user.toLowerCase(),
+                  senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
                   onSkip: ({ ownerRecipient, senderRecipient }) => {
                     logVerbose(
                       `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,

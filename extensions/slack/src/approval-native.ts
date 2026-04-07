@@ -2,7 +2,8 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -34,7 +35,8 @@ function extractSlackSessionKind(
     return null;
   }
   const match = sessionKey.match(/slack:(direct|channel|group):/i);
-  return match?.[1] ? (match[1].toLowerCase() as "direct" | "channel" | "group") : null;
+  const kind = normalizeLowercaseStringOrEmpty(match?.[1]);
+  return kind ? (kind as "direct" | "channel" | "group") : null;
 }
 
 function normalizeComparableTarget(value: string): string {
@@ -183,7 +185,9 @@ export const slackApprovalCapability = createApproverRestrictedNativeApprovalCap
         accountId,
         request,
       }),
-    load: async () => (await import("./approval-handler.runtime.js")).slackApprovalNativeRuntime,
+    load: async () =>
+      (await import("./approval-handler.runtime.js"))
+        .slackApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
   }),
 });
 

@@ -113,7 +113,9 @@ export function searchQaBusMessages(params: {
     .filter((message) =>
       params.input.threadId ? message.threadId === params.input.threadId : true,
     )
-    .filter((message) => (query ? message.text.toLowerCase().includes(query) : true))
+    .filter((message) =>
+      query ? normalizeOptionalLowercaseString(message.text)?.includes(query) === true : true,
+    )
     .slice(-limit)
     .map((message) => cloneMessage(message));
 }

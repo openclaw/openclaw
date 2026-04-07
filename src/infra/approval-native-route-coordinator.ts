@@ -1,5 +1,8 @@
 import type { ChannelApprovalKind } from "../channels/plugins/types.adapters.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
@@ -61,7 +64,7 @@ let approvalRouteRuntimeSeq = 0;
 const MAX_APPROVAL_ROUTE_NOTICE_TTL_MS = 5 * 60_000;
 
 function normalizeChannel(value?: string | null): string {
-  return value?.trim().toLowerCase() || "";
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function clearPendingApprovalRouteNotice(approvalId: string): void {

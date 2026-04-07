@@ -93,6 +93,18 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
+    "exec.approval.list": async ({ respond }) => {
+      respond(
+        true,
+        manager.listPendingRecords().map((record) => ({
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        })),
+        undefined,
+      );
+    },
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
         respond(

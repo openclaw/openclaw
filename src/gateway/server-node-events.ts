@@ -212,7 +212,7 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
     return null;
   }
   const obj = payload as Record<string, unknown>;
-  const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
   return sessionKey.length > 0 ? sessionKey : null;
 }
 
@@ -270,14 +270,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const text = typeof obj.text === "string" ? obj.text.trim() : "";
+      const text = normalizeOptionalString(obj.text) ?? "";
       if (!text) {
         return;
       }
       if (text.length > 20_000) {
         return;
       }
-      const sessionKeyRaw = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? "";
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
@@ -422,7 +422,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
 
-      const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
+      const channelRaw = normalizeOptionalString(link?.channel) ?? "";
       let channel = normalizeChannelId(channelRaw) ?? undefined;
       let to = normalizeOptionalString(link?.to);
       const deliverRequested = Boolean(link?.deliver);
@@ -440,7 +440,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           typeof entry?.lastChannel === "string"
             ? normalizeChannelId(entry.lastChannel)
             : undefined;
-        const entryTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
+        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }
@@ -577,8 +577,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const sessionKeyRaw =
-        typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
+      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       if (!sessionKeyRaw) {
         return;
       }
@@ -595,15 +594,15 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
 
-      const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
-      const command = typeof obj.command === "string" ? obj.command.trim() : "";
+      const runId = normalizeOptionalString(obj.runId) ?? "";
+      const command = normalizeOptionalString(obj.command) ?? "";
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = typeof obj.output === "string" ? obj.output.trim() : "";
-      const reason = typeof obj.reason === "string" ? obj.reason.trim() : "";
+      const output = normalizeOptionalString(obj.output) ?? "";
+      const reason = normalizeOptionalString(obj.reason) ?? "";
 
       let text = "";
       if (evt.event === "exec.started") {
@@ -646,8 +645,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const environment = obj.environment;
       try {
         if (transport === "relay") {
-          const gatewayDeviceId =
-            typeof obj.gatewayDeviceId === "string" ? obj.gatewayDeviceId.trim() : "";
+          const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
           const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
           if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
             ctx.logGateway.warn(

@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -114,7 +115,7 @@ function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: s
       return { ok: false, error: "URL must use https:// protocol" };
     }
 
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
 
     if (isBlockedHostnameOrIp(hostname)) {
       return { ok: false, error: "URL must not point to private/internal addresses" };
@@ -197,7 +198,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
     return false;
   }
 
-  const ipLower = remoteAddress.toLowerCase().replace(/^\[|\]$/g, "");
+  const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
   // IPv6 loopback
   if (ipLower === "::1") {
@@ -221,7 +222,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
     return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   } catch {
     return false;

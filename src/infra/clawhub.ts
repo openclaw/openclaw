@@ -450,7 +450,7 @@ export function normalizeClawHubSha256Hex(value: string): string | null {
   if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
     return null;
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 export function parseClawHubPluginSpec(raw: string): {

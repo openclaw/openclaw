@@ -220,7 +220,7 @@ async function waitForFalQueueResult(params: {
       throw new Error(
         payload.detail?.trim() ||
           payload.error?.message?.trim() ||
-          `fal video generation ${status.toLowerCase()}`,
+          `fal video generation ${normalizeLowercaseStringOrEmpty(status)}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));

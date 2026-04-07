@@ -3,7 +3,8 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
@@ -42,7 +43,7 @@ function normalizeComparableTarget(value: string): string {
   if (target.kind === "user") {
     return `user:${normalizeMatrixUserId(target.id)}`;
   }
-  return `${target.kind.toLowerCase()}:${target.id}`;
+  return `${normalizeLowercaseStringOrEmpty(target.kind)}:${target.id}`;
 }
 
 function resolveMatrixNativeTarget(raw: string): string | null {
@@ -237,7 +238,9 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
         accountId,
         request,
       }),
-    load: async () => (await import("./approval-handler.runtime.js")).matrixApprovalNativeRuntime,
+    load: async () =>
+      (await import("./approval-handler.runtime.js"))
+        .matrixApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
   }),
 });
 

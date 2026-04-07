@@ -80,7 +80,7 @@ function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
     }
     return {
       normalizedKey: normalized,
-      channel: parts[0]?.toLowerCase(),
+      channel: normalizeOptionalLowercaseString(parts[0]),
       chatType: chatType ?? "direct",
     };
   }
@@ -102,7 +102,7 @@ function normalizeQmdSessionKey(key?: string): string | undefined {
     return undefined;
   }
   const parsed = parseAgentSessionKey(trimmed);
-  const normalized = (parsed?.rest ?? trimmed).toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? trimmed);
   if (normalized.startsWith("subagent:")) {
     return undefined;
   }

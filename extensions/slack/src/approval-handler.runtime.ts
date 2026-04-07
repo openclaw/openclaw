@@ -229,7 +229,8 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
   SlackPendingDelivery,
   { to: string; threadTs?: string },
   SlackPendingApproval,
-  never
+  never,
+  SlackPendingDelivery
 >({
   eventKinds: ["exec"],
   availability: {
@@ -313,7 +314,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       if (!resolved) {
         return;
       }
-      const nextPayload = payload as SlackPendingDelivery;
+      const nextPayload = payload;
       await updateMessage({
         app: resolved.context.app,
         channelId: entry.channelId,
