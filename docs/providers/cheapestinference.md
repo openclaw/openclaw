@@ -31,6 +31,7 @@ export CHEAPESTINFERENCE_API_KEY="sk-..."
         baseUrl: "https://api.cheapestinference.com/v1",
         apiKey: "${CHEAPESTINFERENCE_API_KEY}",
         api: "openai-completions",
+        models: [{ id: "claude-opus-4-6", name: "Claude Opus 4.6" }],
       },
     },
   },
