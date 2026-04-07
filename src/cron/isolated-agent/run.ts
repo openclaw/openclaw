@@ -493,6 +493,11 @@ export async function runCronIsolatedAgentTurn(params: {
           trigger: "cron",
           messageChannel,
           agentAccountId: resolvedDelivery.accountId,
+          // When delivery target is resolved, pass it as the default channel target
+          // so the message tool can infer the target without requiring the AI to
+          // explicitly specify it. Without this, cron sessions have no inbound
+          // message context and message(action:'send') fails with "requires a target".
+          currentChannelId: resolvedDelivery.ok ? resolvedDelivery.to : undefined,
           sessionFile,
           agentDir,
           workspaceDir,
