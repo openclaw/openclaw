@@ -1611,10 +1611,14 @@ export async function startGatewayServer(
                   resolveSharedGatewaySessionGenerationForConfig(prepared.config);
                 const restartQueued = requestGatewayRestart(plan, nextConfig);
                 if (!restartQueued) {
-                  const runtimeSharedGatewaySessionGeneration =
-                    resolveSharedGatewaySessionGenerationForRuntimeSnapshot();
-                  requiredSharedGatewaySessionGeneration = runtimeSharedGatewaySessionGeneration;
-                  disconnectStaleSharedGatewayAuthClients(runtimeSharedGatewaySessionGeneration);
+                  if (
+                    previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration
+                  ) {
+                    requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+                    disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+                  } else {
+                    requiredSharedGatewaySessionGeneration = null;
+                  }
                   return;
                 }
                 if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
