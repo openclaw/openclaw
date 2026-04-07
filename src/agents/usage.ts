@@ -1,3 +1,5 @@
+import { asFiniteNumber } from "../shared/number-coercion.js";
+
 export type UsageLike = {
   input?: number;
   output?: number;
@@ -17,6 +19,8 @@ export type UsageLike = {
   cache_creation_input_tokens?: number;
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
+  // OpenAI Responses reports cached prompt reuse here.
+  input_tokens_details?: { cached_tokens?: number };
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
   prompt_tokens_details?: { cached_tokens?: number };
   // Some agents/logs emit alternate naming.
@@ -66,16 +70,6 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
-const asFiniteNumber = (value: unknown): number | undefined => {
-  if (typeof value !== "number") {
-    return undefined;
-  }
-  if (!Number.isFinite(value)) {
-    return undefined;
-  }
-  return value;
-};
-
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
@@ -90,26 +84,40 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
-  // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
-  // negative, which is nonsensical.  Clamp to 0.
-  const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+  const cacheRead = asFiniteNumber(
+    raw.cacheRead ??
+      raw.cache_read ??
+      raw.cache_read_input_tokens ??
+      raw.cached_tokens ??
+      raw.input_tokens_details?.cached_tokens ??
+      raw.prompt_tokens_details?.cached_tokens,
   );
-  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
+
+  const rawInputValue =
+    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens;
+
+  const usesOpenAIStylePromptTotals =
+    raw.cached_tokens !== undefined ||
+    raw.input_tokens_details?.cached_tokens !== undefined ||
+    raw.prompt_tokens_details?.cached_tokens !== undefined;
+
+  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
+  // prompt/input totals upstream, while OpenAI-style prompt/input aliases
+  // include cached tokens in the reported prompt total. Normalize both cases
+  // to uncached input tokens so downstream prompt-token math does not double-
+  // count cache reads.
+  const rawInput = asFiniteNumber(rawInputValue);
+  const normalizedInput =
+    rawInput !== undefined && usesOpenAIStylePromptTotals && cacheRead !== undefined
+      ? rawInput - cacheRead
+      : rawInput;
+  const input = normalizedInput !== undefined && normalizedInput < 0 ? 0 : normalizedInput;
   const output = asFiniteNumber(
     raw.output ??
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
       raw.completion_tokens,
-  );
-  const cacheRead = asFiniteNumber(
-    raw.cacheRead ??
-      raw.cache_read ??
-      raw.cache_read_input_tokens ??
-      raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
   );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,

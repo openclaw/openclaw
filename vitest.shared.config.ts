@@ -7,11 +7,7 @@ import {
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
-import {
-  detectVitestProcessStats,
-  shouldPrintVitestThrottle,
-  type VitestProcessStats,
-} from "./vitest.system-load.ts";
+import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -61,16 +57,14 @@ export function resolveLocalVitestMaxWorkers(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-  processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): number {
-  return resolveLocalVitestScheduling(env, system, pool, processStats).maxWorkers;
+  return resolveLocalVitestScheduling(env, system, pool).maxWorkers;
 }
 
 export function resolveLocalVitestScheduling(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-  processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): LocalVitestScheduling {
   const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
   if (override !== null) {
@@ -134,14 +128,7 @@ export function resolveLocalVitestScheduling(
     };
   }
 
-  const totalCpuPercentCapacity = Math.max(100, cpuCount * 100);
-  const otherVitestCpuRatio = processStats.otherVitestCpuPercent / totalCpuPercentCapacity;
-  const otherVitestWorkerRatio = processStats.otherVitestWorkerCount / cpuCount;
-
-  const highSystemContention =
-    loadRatio >= 1 || otherVitestWorkerRatio >= 0.75 || otherVitestCpuRatio >= 0.75;
-
-  if (highSystemContention) {
+  if (loadRatio >= 1) {
     const maxWorkers = Math.max(1, Math.floor(inferred / 2));
     return {
       maxWorkers,
@@ -150,10 +137,7 @@ export function resolveLocalVitestScheduling(
     };
   }
 
-  const moderateSystemContention =
-    loadRatio >= 0.75 || otherVitestWorkerRatio >= 0.4 || otherVitestCpuRatio >= 0.4;
-
-  if (moderateSystemContention) {
+  if (loadRatio >= 0.75) {
     const maxWorkers = Math.max(2, Math.ceil(inferred * 0.75));
     return {
       maxWorkers,
@@ -204,6 +188,10 @@ export const sharedVitestConfig = {
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
+      })),
+      ...pluginSdkSubpaths.map((subpath) => ({
+        find: `@openclaw/plugin-sdk/${subpath}`,
+        replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
       })),
       {
         find: "openclaw/plugin-sdk",
@@ -268,6 +256,8 @@ export const sharedVitestConfig = {
       "vitest.media.config.ts",
       "vitest.media-understanding.config.ts",
       "vitest.performance-config.ts",
+      "vitest.unit-fast.config.ts",
+      "vitest.unit-fast-paths.mjs",
       "vitest.scoped-config.ts",
       "vitest.shared-core.config.ts",
       "vitest.shared.config.ts",

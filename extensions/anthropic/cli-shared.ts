@@ -1,6 +1,15 @@
 import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`;
+export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-5`,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-5`,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-haiku-4-5`,
+] as const;
 
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",
@@ -38,7 +47,7 @@ export const CLAUDE_CLI_HOST_MANAGED_ENV = {
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
-// endpoint, token source, or plugin/config tree.
+// endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
@@ -59,6 +68,22 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_FOUNDRY",
   "CLAUDE_CODE_USE_VERTEX",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_SDK_DISABLED",
+  "OTEL_TRACES_EXPORTER",
 ] as const;
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
@@ -68,7 +93,7 @@ const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 
 export function isClaudeCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID;
+  return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
 export function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {

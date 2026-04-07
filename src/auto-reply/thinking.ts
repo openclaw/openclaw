@@ -33,6 +33,7 @@ import {
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
 } from "../plugins/provider-thinking.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
   const normalizedProvider = provider?.trim() ? normalizeProviderId(provider) : "";
@@ -54,7 +55,7 @@ export function isBinaryThinkingProvider(provider?: string | null, model?: strin
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = model?.trim().toLowerCase();
+  const modelKey = normalizeOptionalLowercaseString(model);
   if (!modelKey) {
     return false;
   }

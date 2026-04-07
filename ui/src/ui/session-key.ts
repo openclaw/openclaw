@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "./string-coerce.ts";
+
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
@@ -14,7 +19,7 @@ const TRAILING_DASH_RE = /-+$/;
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return null;
   }
@@ -31,8 +36,7 @@ export function parseAgentSessionKey(
 }
 
 export function normalizeMainKey(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  return trimmed ? trimmed.toLowerCase() : DEFAULT_MAIN_KEY;
+  return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
 
 export function normalizeAgentId(value: string | undefined | null): string {
@@ -41,11 +45,10 @@ export function normalizeAgentId(value: string | undefined | null): string {
     return DEFAULT_AGENT_ID;
   }
   if (VALID_ID_RE.test(trimmed)) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return (
-    trimmed
-      .toLowerCase()
+    normalizeLowercaseStringOrEmpty(trimmed)
       .replace(INVALID_CHARS_RE, "-")
       .replace(LEADING_DASH_RE, "")
       .replace(TRAILING_DASH_RE, "")
@@ -72,9 +75,9 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   if (!raw) {
     return false;
   }
-  if (raw.toLowerCase().startsWith("subagent:")) {
+  if (normalizeLowercaseStringOrEmpty(raw).startsWith("subagent:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
+  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("subagent:");
 }

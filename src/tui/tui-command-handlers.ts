@@ -255,9 +255,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }),
         );
         break;
-      case "status":
+      case "gateway-status":
         try {
-          const status = await client.getStatus();
+          const status = await client.getGatewayStatus();
           if (typeof status === "string") {
             chatLog.addSystem(status);
             break;

@@ -49,3 +49,4 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+export { setFeishuRuntime } from "./src/runtime.js";

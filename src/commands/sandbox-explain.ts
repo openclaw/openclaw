@@ -18,6 +18,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -74,7 +75,7 @@ function inferProviderFromSessionKey(params: {
   if (parts[0] === configuredMainKey) {
     return undefined;
   }
-  const candidate = parts[0]?.trim().toLowerCase();
+  const candidate = normalizeOptionalLowercaseString(parts[0]);
   if (!candidate) {
     return undefined;
   }
@@ -108,13 +109,18 @@ function resolveActiveChannel(params: {
     entry?.lastProvider ??
     entry?.provider ??
     ""
-  )
-    .trim()
-    .toLowerCase();
-  if (candidate === INTERNAL_MESSAGE_CHANNEL) {
+  ).trim();
+  const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
+  if (!normalizedCandidate) {
+    return inferProviderFromSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+  }
+  if (normalizedCandidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  const normalized = normalizeAnyChannelId(candidate);
+  const normalized = normalizeAnyChannelId(normalizedCandidate);
   if (normalized) {
     return normalized;
   }

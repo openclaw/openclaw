@@ -14,11 +14,12 @@ import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 function makeAgentExecConfig(home: string) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-6",
@@ -40,7 +41,7 @@ function makeAgentExecConfig(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: sessionStorePath(home) },
-  };
+  });
 }
 
 describe("directive behavior exec agent defaults", () => {
@@ -153,6 +154,57 @@ describe("directive behavior exec agent defaults", () => {
       expect(call?.execOverrides).toEqual({
         host: "auto",
         security: "allowlist",
+        ask: "always",
+        node: "worker-alpha",
+      });
+    });
+  });
+
+  it("replaces a prior deny override with newer exec settings on later turns", async () => {
+    await withTempHome(async (home) => {
+      runEmbeddedPiAgentMock.mockResolvedValue(makeEmbeddedTextResult("done"));
+
+      await getReplyFromConfig(
+        {
+          Body: "/exec host=gateway security=deny ask=off",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        makeAgentExecConfig(home),
+      );
+
+      await getReplyFromConfig(
+        {
+          Body: "/exec host=gateway security=full ask=always",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        makeAgentExecConfig(home),
+      );
+
+      runEmbeddedPiAgentMock.mockClear();
+
+      await getReplyFromConfig(
+        {
+          Body: "run a command",
+          From: "+1004",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1004",
+        },
+        {},
+        makeAgentExecConfig(home),
+      );
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.execOverrides).toEqual({
+        host: "gateway",
+        security: "full",
         ask: "always",
         node: "worker-alpha",
       });

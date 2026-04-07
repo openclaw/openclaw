@@ -12,6 +12,7 @@ import {
 } from "../../../src/gateway/protocol/connect-error-details.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type GatewayEventFrame = {
@@ -82,7 +83,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
-    const host = gatewayUrl.hostname.trim().toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(gatewayUrl.hostname);
     const isLoopbackHost =
       host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
     const isLoopbackIPv4 = host.startsWith("127.");

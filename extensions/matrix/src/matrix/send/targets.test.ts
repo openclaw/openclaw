@@ -24,9 +24,7 @@ describe("resolveMatrixRoomId", () => {
     const roomId = await resolveMatrixRoomId(client, userId);
 
     expect(roomId).toBe("!room:example.org");
-    // oxlint-disable-next-line typescript/unbound-method
     expect(client.getJoinedRooms).not.toHaveBeenCalled();
-    // oxlint-disable-next-line typescript/unbound-method
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
@@ -141,7 +139,6 @@ describe("resolveMatrixRoomId", () => {
     await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
       `No direct room found for ${userId} (m.direct missing)`,
     );
-    // oxlint-disable-next-line typescript/unbound-method
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
@@ -162,7 +159,6 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, `matrix:user:${userId}`);
 
     expect(resolved).toBe(roomId);
-    // oxlint-disable-next-line typescript/unbound-method
     expect(client.resolveRoom).not.toHaveBeenCalled();
   });
 
@@ -192,9 +188,7 @@ describe("resolveMatrixRoomId", () => {
     await expect(resolveMatrixRoomId(clientA, userId)).resolves.toBe("!room-a:example.org");
     await expect(resolveMatrixRoomId(clientB, userId)).resolves.toBe("!room-b:example.org");
 
-    // oxlint-disable-next-line typescript/unbound-method
     expect(clientA.getAccountData).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method
     expect(clientB.getAccountData).toHaveBeenCalledTimes(1);
   });
 

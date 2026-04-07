@@ -8,7 +8,7 @@ import {
   buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "../../extensions/ollama/runtime-api.js";
+} from "../plugin-sdk/ollama-runtime.js";
 import {
   __testing as extraParamsTesting,
   applyExtraParamsToAgent,

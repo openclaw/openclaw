@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
@@ -128,7 +129,7 @@ function scanWrapperInvocation(
       idx += 1;
       break;
     }
-    const directive = params.onToken(token, token.toLowerCase());
+    const directive = params.onToken(token, normalizeLowercaseStringOrEmpty(token));
     if (directive === "stop") {
       break;
     }
@@ -197,7 +198,7 @@ function envInvocationUsesModifiers(argv: string[]): boolean {
     if (!token.startsWith("-") || token === "-") {
       break;
     }
-    const lower = token.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(token);
     const [flag] = lower.split("=", 2);
     if (ENV_FLAG_OPTIONS.has(flag)) {
       return true;

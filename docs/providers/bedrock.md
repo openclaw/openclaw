@@ -271,3 +271,32 @@ grounding checks.
 
 The IAM principal used by the gateway must have the `bedrock:ApplyGuardrail`
 permission in addition to the standard invoke permissions.
+
+## Embeddings for memory search
+
+Bedrock can also serve as the embedding provider for
+[memory search](/concepts/memory-search). This is configured separately from the
+inference provider — set `agents.defaults.memorySearch.provider` to `"bedrock"`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "bedrock",
+        model: "amazon.titan-embed-text-v2:0", // default
+      },
+    },
+  },
+}
+```
+
+Bedrock embeddings use the same AWS SDK credential chain as inference (instance
+roles, SSO, access keys, shared config, and web identity). No API key is
+needed. When `provider` is `"auto"`, Bedrock is auto-detected if that
+credential chain resolves successfully.
+
+Supported embedding models include Amazon Titan Embed (v1, v2), Amazon Nova
+Embed, Cohere Embed (v3, v4), and TwelveLabs Marengo. See
+[Memory configuration reference — Bedrock](/reference/memory-config#bedrock-embedding-config)
+for the full model list and dimension options.

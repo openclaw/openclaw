@@ -1,4 +1,4 @@
-import type { EventSource, MessageEvent, PostbackEvent, StickerEventMessage } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import {
   formatInboundEnvelope,
   formatLocationText,
@@ -22,9 +22,15 @@ import {
   resolveAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
-import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import type { ResolvedLineAccount } from "./types.js";
+
+type EventSource = webhook.Source | undefined;
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+type StickerEventMessage = webhook.StickerMessageContent;
 
 interface MediaRef {
   path: string;
@@ -49,6 +55,9 @@ export type LineSourceInfo = {
 };
 
 export function getLineSourceInfo(source: EventSource): LineSourceInfo {
+  if (!source) {
+    return { userId: undefined, groupId: undefined, roomId: undefined, isGroup: false };
+  }
   const userId =
     source.type === "user"
       ? source.userId
@@ -65,10 +74,12 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
 }
 
 function buildPeerId(source: EventSource): string {
-  const groupKey = resolveLineGroupHistoryKey({
-    groupId: source.type === "group" ? source.groupId : undefined,
-    roomId: source.type === "room" ? source.roomId : undefined,
-  });
+  if (!source) {
+    return "unknown";
+  }
+  const groupKey =
+    normalizeOptionalString(source.type === "group" ? source.groupId : undefined) ??
+    normalizeOptionalString(source.type === "room" ? source.roomId : undefined);
   if (groupKey) {
     return groupKey;
   }
@@ -272,17 +283,6 @@ function resolveLineAddresses(params: {
   return { fromAddress, toAddress, originatingTo };
 }
 
-function resolveLineGroupSystemPrompt(
-  groups: Record<string, LineGroupConfig | undefined> | undefined,
-  source: LineSourceInfoWithPeerId,
-): string | undefined {
-  const entry = resolveLineGroupConfigEntry(groups, {
-    groupId: source.groupId,
-    roomId: source.roomId,
-  });
-  return entry?.systemPrompt?.trim() || undefined;
-}
-
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -369,7 +369,12 @@ async function finalizeLineInboundContext(params: {
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
     GroupSystemPrompt: params.source.isGroup
-      ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
+      ? normalizeOptionalString(
+          resolveLineGroupConfigEntry(params.account.config.groups, {
+            groupId: params.source.groupId,
+            roomId: params.source.roomId,
+          })?.systemPrompt,
+        )
       : undefined,
     InboundHistory: params.inboundHistory,
   });

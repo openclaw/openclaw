@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -27,7 +28,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          if (BLOCKED_NODE_INVOKE_COMMANDS.has(command.toLowerCase())) {
+          if (BLOCKED_NODE_INVOKE_COMMANDS.has(normalizeLowercaseStringOrEmpty(command))) {
             throw new Error(
               `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
             );

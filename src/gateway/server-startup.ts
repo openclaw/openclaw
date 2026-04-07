@@ -12,6 +12,7 @@ import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -214,6 +215,10 @@ export async function startGatewaySidecars(params: {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
   }
+
+  // Same-process SIGUSR1 restarts keep subagent registry memory alive, so
+  // schedule recovery on every startup cycle instead of only cold restore.
+  scheduleSubagentOrphanRecovery();
 
   return { pluginServices };
 }

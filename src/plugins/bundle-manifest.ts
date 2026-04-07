@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
 import type { PluginBundleFormat } from "./types.js";
@@ -30,11 +34,6 @@ export type BundleManifestLoadResult =
 type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
-
-function normalizeString(value: unknown): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed || undefined;
-}
 
 function normalizePathList(value: unknown): string[] {
   if (typeof value === "string") {
@@ -81,7 +80,7 @@ function hasInlineCapabilityValue(value: unknown): boolean {
 
 function slugifyPluginId(raw: string | undefined, rootDir: string): string {
   const fallback = path.basename(rootDir);
-  const source = (raw?.trim() || fallback).toLowerCase();
+  const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
   const slug = source
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
@@ -348,12 +347,12 @@ export function loadBundleManifest(params: {
 
   const raw = loaded.raw;
   const interfaceRecord = isRecord(raw.interface) ? raw.interface : undefined;
-  const name = normalizeString(raw.name);
+  const name = normalizeOptionalString(raw.name);
   const description =
-    normalizeString(raw.description) ??
-    normalizeString(raw.shortDescription) ??
-    normalizeString(interfaceRecord?.shortDescription);
-  const version = normalizeString(raw.version);
+    normalizeOptionalString(raw.description) ??
+    normalizeOptionalString(raw.shortDescription) ??
+    normalizeOptionalString(interfaceRecord?.shortDescription);
+  const version = normalizeOptionalString(raw.version);
 
   if (params.bundleFormat === "codex") {
     const skills = resolveCodexSkillDirs(raw, params.rootDir);

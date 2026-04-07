@@ -6,6 +6,7 @@ import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
+  isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -157,6 +158,12 @@ describe("listMemoryFiles", () => {
   });
 });
 
+describe("isMemoryPath", () => {
+  it("allows explicit access to top-level DREAMS.md", () => {
+    expect(isMemoryPath("DREAMS.md")).toBe(true);
+  });
+});
+
 describe("buildFileEntry", () => {
   const getTmpDir = setupTempDirLifecycle("memory-build-entry-");
   const multimodal: MemoryMultimodalSettings = {
@@ -233,6 +240,17 @@ describe("buildFileEntry", () => {
 
     const entry = await buildFileEntry(target, tmpDir, multimodal);
     await fs.writeFile(target, Buffer.from("gif"));
+
+    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+  });
+
+  it("skips lazy multimodal indexing when the file disappears before loading bytes", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "diagram.png");
+    await fs.writeFile(target, Buffer.from("png"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+    await fs.rm(target);
 
     await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
   });

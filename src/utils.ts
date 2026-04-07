@@ -141,6 +141,10 @@ export function resolveConfigDir(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
+  const configPath = env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath) {
+    return path.dirname(resolveUserPath(configPath, env, homedir));
+  }
   const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
   try {
     const hasNew = fs.existsSync(newDir);

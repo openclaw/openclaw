@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.js";
 
 function resolveDirectoryQuery(query?: string | null): string {
-  return query?.trim().toLowerCase() || "";
+  return normalizeLowercaseStringOrEmpty(query);
 }
 
 function resolveDirectoryLimit(limit?: number | null): number | undefined {

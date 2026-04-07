@@ -1,5 +1,6 @@
-import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
+import { listChannelPlugins } from "../channels/plugins/registry.js";
+import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
@@ -17,7 +18,7 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
 
 function buildDefaultTableModes(): Map<string, MarkdownTableMode> {
   return new Map(
-    listBootstrapChannelPlugins()
+    listChannelPlugins()
       .flatMap((plugin) => {
         const defaultMarkdownTableMode = plugin.messaging?.defaultMarkdownTableMode;
         return defaultMarkdownTableMode ? [[plugin.id, defaultMarkdownTableMode] as const] : [];
@@ -27,9 +28,14 @@ function buildDefaultTableModes(): Map<string, MarkdownTableMode> {
 }
 
 let cachedDefaultTableModes: Map<string, MarkdownTableMode> | null = null;
+let cachedDefaultTableModesRegistryVersion: number | null = null;
 
 function getDefaultTableModes(): Map<string, MarkdownTableMode> {
-  cachedDefaultTableModes ??= buildDefaultTableModes();
+  const registryVersion = getActivePluginChannelRegistryVersion();
+  if (!cachedDefaultTableModes || cachedDefaultTableModesRegistryVersion !== registryVersion) {
+    cachedDefaultTableModes = buildDefaultTableModes();
+    cachedDefaultTableModesRegistryVersion = registryVersion;
+  }
   return cachedDefaultTableModes;
 }
 
