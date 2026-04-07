@@ -76,6 +76,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
 function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
+    clean: true,
     env,
     fixedExtension: false,
     platform: "node",
