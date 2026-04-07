@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
  * that the MCP bridge subprocess connects to for tool execution.
  */
 import net from "node:net";
+import path from "node:path";
 import type { AnyAgentTool } from "../pi-tools.types.js";
 import type { McpIpcRequest, McpIpcResponse, McpToolResult, McpToolSchema } from "./protocol.js";
 
