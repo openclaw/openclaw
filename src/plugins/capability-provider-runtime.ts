@@ -28,7 +28,7 @@ type CapabilityContractKey =
   | "musicGenerationProviders";
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
-  PluginRegistry[K][number] extends { provider: infer T } ? T : never;
+  PluginRegistry[K][number] extends { provider: infer T extends { id: string } } ? T : never;
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   memoryEmbeddingProviders: "memoryEmbeddingProviders",
