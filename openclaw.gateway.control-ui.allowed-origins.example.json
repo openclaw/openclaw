@@ -1,0 +1,9 @@
+{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": [
+        "https://openclaw-production-1cec.up.railway.app"
+      ]
+    }
+  }
+}
