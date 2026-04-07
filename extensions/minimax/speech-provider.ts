@@ -32,6 +32,8 @@ type MinimaxTtsProviderOverrides = {
   pitch?: number;
 };
 
+const ENV_STYLE_API_KEY_NAME_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+
 function resolveEnvStyleApiKey(raw: unknown, path: string): string | undefined {
   const normalized = normalizeResolvedSecretInputString({
     value: raw,
@@ -46,6 +48,9 @@ function resolveEnvStyleApiKey(raw: unknown, path: string): string | undefined {
   }
   const envVarName = trimToUndefined(trimmed.slice(4));
   if (!envVarName) {
+    return undefined;
+  }
+  if (!ENV_STYLE_API_KEY_NAME_RE.test(envVarName)) {
     return undefined;
   }
   return trimToUndefined(process.env[envVarName]);
