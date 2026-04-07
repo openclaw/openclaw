@@ -295,6 +295,17 @@ def derive_digest_bucket_ui_hint(
     }
 
 
+def derive_digest_bucket_ui_hint_compact(
+    digest_bucket_badge_short: object,
+    digest_bucket_percent: object,
+    digest_bucket_leader: object,
+) -> str:
+    badge_short = digest_bucket_badge_short if isinstance(digest_bucket_badge_short, str) else 'UNK'
+    percent = digest_bucket_percent if isinstance(digest_bucket_percent, str) else '0.0%'
+    leader_suffix = ' ★' if digest_bucket_leader is True else ''
+    return f'{badge_short} {percent}{leader_suffix}'
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -705,6 +716,11 @@ def main() -> int:
             item['digest_bucket_leader_count'] = leader_count
             item['digest_bucket_ui_hint'] = derive_digest_bucket_ui_hint(
                 item.get('digest_bucket_badge_tuple'),
+                item.get('digest_bucket_percent'),
+                item.get('digest_bucket_leader'),
+            )
+            item['digest_bucket_ui_hint_compact'] = derive_digest_bucket_ui_hint_compact(
+                item.get('digest_bucket_badge_short'),
                 item.get('digest_bucket_percent'),
                 item.get('digest_bucket_leader'),
             )
