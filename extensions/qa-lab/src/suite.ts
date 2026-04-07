@@ -2372,7 +2372,7 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.toLowerCase().includes("lighthouse"),
+                        normalizeLowercaseStringOrEmpty(candidate.text).includes("lighthouse"),
                     )
                     .at(-1),
                 liveTurnTimeoutMs(env, 45_000),

@@ -1,9 +1,13 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 const REQUIRED_DISCOVERY_REFS = [
   "repo/qa/seed-scenarios.json",
   "repo/qa/QA_KICKOFF_TASK.md",
   "repo/extensions/qa-lab/src/suite.ts",
   "repo/docs/help/testing.md",
 ] as const;
+
+const REQUIRED_DISCOVERY_REFS_LOWER = REQUIRED_DISCOVERY_REFS.map(normalizeLowercaseStringOrEmpty);
 
 const DISCOVERY_SCOPE_LEAK_PHRASES = [
   "all mandatory scenarios",
@@ -15,8 +19,8 @@ const DISCOVERY_SCOPE_LEAK_PHRASES = [
 ] as const;
 
 function confirmsDiscoveryFileRead(text: string) {
-  const lower = text.toLowerCase();
-  const mentionsAllRefs = REQUIRED_DISCOVERY_REFS.every((ref) => lower.includes(ref.toLowerCase()));
+  const lower = normalizeLowercaseStringOrEmpty(text);
+  const mentionsAllRefs = REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref));
   const confirmsRead =
     /(?:read|retrieved|inspected|loaded|accessed|digested)\s+all\s+(?:four|4)\s+(?:(?:requested|required|mandated|seeded)\s+)?files/.test(
       lower,
@@ -29,7 +33,7 @@ function confirmsDiscoveryFileRead(text: string) {
 }
 
 export function hasDiscoveryLabels(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   return (
     lower.includes("worked") &&
     lower.includes("failed") &&
@@ -39,7 +43,7 @@ export function hasDiscoveryLabels(text: string) {
 }
 
 export function reportsMissingDiscoveryFiles(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (confirmsDiscoveryFileRead(text)) {
     return false;
   }
@@ -52,6 +56,6 @@ export function reportsMissingDiscoveryFiles(text: string) {
 }
 
 export function reportsDiscoveryScopeLeak(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   return DISCOVERY_SCOPE_LEAK_PHRASES.some((phrase) => lower.includes(phrase));
 }

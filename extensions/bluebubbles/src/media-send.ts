@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { basenameFromMediaSource, safeFileURLToPath } from "./local-file-access.js";
@@ -73,9 +74,9 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
     ? normalizedRoot
     : normalizedRoot + path.sep;
   if (process.platform === "win32") {
-    const candidateLower = normalizedCandidate.toLowerCase();
-    const rootLower = normalizedRoot.toLowerCase();
-    const rootWithSepLower = rootWithSep.toLowerCase();
+    const candidateLower = lowercasePreservingWhitespace(normalizedCandidate);
+    const rootLower = lowercasePreservingWhitespace(normalizedRoot);
+    const rootWithSepLower = lowercasePreservingWhitespace(rootWithSep);
     return candidateLower === rootLower || candidateLower.startsWith(rootWithSepLower);
   }
   return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootWithSep);

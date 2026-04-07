@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+} from "../../shared/string-coerce.js";
 
 const MEMORY_MULTIMODAL_SPECS = {
   image: {
@@ -79,7 +82,10 @@ export function buildCaseInsensitiveExtensionGlob(extension: string): string {
   if (!normalized) {
     return "*";
   }
-  const parts = Array.from(normalized, (char) => `[${char.toLowerCase()}${char.toUpperCase()}]`);
+  const parts = Array.from(normalized, (char) => {
+    const lower = lowercasePreservingWhitespace(char);
+    return `[${lower}${char.toUpperCase()}]`;
+  });
   return `*.${parts.join("")}`;
 }
 

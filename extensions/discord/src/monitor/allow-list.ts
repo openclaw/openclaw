@@ -7,6 +7,7 @@ import {
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
 import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -84,9 +85,7 @@ export function normalizeDiscordAllowList(raw: string[] | undefined, prefixes: s
 }
 
 export function normalizeDiscordSlug(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(value)
     .replace(/^#/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
