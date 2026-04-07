@@ -32,7 +32,10 @@ function labelForChannel(channel?: string): string {
 
 function hasNativeExecApprovalCapability(channel?: string): boolean {
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel ?? ""));
-  return Boolean(capability?.native && capability.getActionAvailabilityState);
+  return Boolean(
+    capability?.native &&
+    (capability.getExecInitiatingSurfaceState || capability.getActionAvailabilityState),
+  );
 }
 
 export function resolveExecApprovalInitiatingSurfaceState(params: {
@@ -48,13 +51,19 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  const state = resolveChannelApprovalCapability(
-    getChannelPlugin(channel),
-  )?.getActionAvailabilityState?.({
-    cfg,
-    accountId: params.accountId,
-    action: "approve",
-  });
+  const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  const state =
+    capability?.getExecInitiatingSurfaceState?.({
+      cfg,
+      accountId: params.accountId,
+      action: "approve",
+    }) ??
+    capability?.getActionAvailabilityState?.({
+      cfg,
+      accountId: params.accountId,
+      action: "approve",
+      approvalKind: "exec",
+    });
   if (state) {
     return { ...state, channel, channelLabel, accountId };
   }

@@ -285,13 +285,18 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
     return matrixApprovalAuth.authorizeActorAction(params);
   },
   getActionAvailabilityState: (params) =>
-    hasMatrixPluginApprovers({
-      cfg: params.cfg as CoreConfig,
-      accountId: params.accountId,
-    })
-      ? ({ kind: "enabled" } as const)
+    params.approvalKind === "plugin"
+      ? hasMatrixPluginApprovers({
+          cfg: params.cfg as CoreConfig,
+          accountId: params.accountId,
+        })
+        ? ({ kind: "enabled" } as const)
+        : ({ kind: "disabled" } as const)
       : (matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
         ({ kind: "disabled" } as const)),
+  getExecInitiatingSurfaceState: (params) =>
+    matrixNativeApprovalCapability.getExecInitiatingSurfaceState?.(params) ??
+    ({ kind: "disabled" } as const),
   describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
   delivery: matrixDeliveryAdapter,
   nativeRuntime: matrixNativeApprovalCapability.nativeRuntime,
@@ -303,6 +308,7 @@ export const matrixNativeApprovalAdapter = {
   auth: {
     authorizeActorAction: matrixApprovalCapability.authorizeActorAction,
     getActionAvailabilityState: matrixApprovalCapability.getActionAvailabilityState,
+    getExecInitiatingSurfaceState: matrixApprovalCapability.getExecInitiatingSurfaceState,
   },
   delivery: matrixDeliveryAdapter,
   nativeRuntime: matrixApprovalCapability.nativeRuntime,

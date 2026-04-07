@@ -767,6 +767,13 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     cfg: OpenClawConfig;
     accountId?: string | null;
     action: "approve";
+    approvalKind?: ChannelApprovalKind;
+  }) => ChannelActionAvailabilityState;
+  /** Exec-native client availability for the initiating surface; distinct from same-chat auth. */
+  getExecInitiatingSurfaceState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
   }) => ChannelActionAvailabilityState;
   resolveApproveCommandBehavior?: (params: {
     cfg: OpenClawConfig;

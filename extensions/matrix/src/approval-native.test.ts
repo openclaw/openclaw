@@ -245,6 +245,34 @@ describe("matrix native approval adapter", () => {
     });
   });
 
+  it("reports exec initiating-surface availability independently from plugin auth", () => {
+    const cfg = buildConfig({
+      dm: { allowFrom: ["@owner:example.org"] },
+      execApprovals: {
+        enabled: false,
+        approvers: [],
+        target: "both",
+      },
+    });
+
+    expect(
+      matrixApprovalCapability.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ kind: "enabled" });
+
+    expect(
+      matrixApprovalCapability.getExecInitiatingSurfaceState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "disabled" });
+  });
+
   it("enables matrix-native plugin approval delivery when DM approvers are configured", () => {
     const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig({

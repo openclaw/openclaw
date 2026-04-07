@@ -71,8 +71,13 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       resolveApproverDmTargets: () => [{ to: "approver-1" }],
     });
     const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
+    const getExecInitiatingSurfaceState = adapter.auth.getExecInitiatingSurfaceState;
     const hasConfiguredDmRoute = adapter.delivery;
-    if (!getActionAvailabilityState || !hasConfiguredDmRoute?.hasConfiguredDmRoute) {
+    if (
+      !getActionAvailabilityState ||
+      !getExecInitiatingSurfaceState ||
+      !hasConfiguredDmRoute?.hasConfiguredDmRoute
+    ) {
       throw new Error("approval availability helpers unavailable");
     }
     const nativeCapabilities = adapter.native?.describeDeliveryCapabilities({
@@ -108,6 +113,13 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         action: "approve",
       }),
     ).toEqual({ kind: "enabled" });
+    expect(
+      getExecInitiatingSurfaceState({
+        cfg: {} as never,
+        accountId: "disabled",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "disabled" });
     expect(hasConfiguredDmRoute.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
     expect(nativeCapabilities).toEqual({
       enabled: true,
@@ -129,7 +141,8 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       resolveNativeDeliveryMode: () => "both",
     });
     const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
-    if (!getActionAvailabilityState) {
+    const getExecInitiatingSurfaceState = adapter.auth.getExecInitiatingSurfaceState;
+    if (!getActionAvailabilityState || !getExecInitiatingSurfaceState) {
       throw new Error("approval availability helper unavailable");
     }
 
@@ -140,6 +153,13 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         action: "approve",
       }),
     ).toEqual({ kind: "enabled" });
+    expect(
+      getExecInitiatingSurfaceState({
+        cfg: {} as never,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "disabled" });
   });
 
   it("suppresses forwarding fallback only for matching native-delivery surfaces", () => {
@@ -365,6 +385,19 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
         approvalKind: "exec",
       }),
     );
+    expect(
+      split.auth.getExecInitiatingSurfaceState?.({
+        cfg: {} as never,
+        accountId: "work",
+        action: "approve",
+      }),
+    ).toEqual(
+      legacy.auth.getExecInitiatingSurfaceState?.({
+        cfg: {} as never,
+        accountId: "work",
+        action: "approve",
+      }),
+    );
     expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
     expect(split.nativeRuntime).toBe(nativeRuntime);
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
@@ -402,6 +435,7 @@ describe("createChannelApprovalCapability", () => {
     ).toEqual({
       authorizeActorAction: undefined,
       getActionAvailabilityState: undefined,
+      getExecInitiatingSurfaceState: undefined,
       resolveApproveCommandBehavior: undefined,
       describeExecApprovalSetup: undefined,
       delivery,
@@ -421,6 +455,7 @@ describe("createChannelApprovalCapability", () => {
     ).toEqual({
       authorizeActorAction: undefined,
       getActionAvailabilityState: undefined,
+      getExecInitiatingSurfaceState: undefined,
       resolveApproveCommandBehavior: undefined,
       describeExecApprovalSetup: undefined,
       delivery,
