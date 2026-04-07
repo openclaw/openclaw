@@ -69,6 +69,18 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
   const apiPrefix = `${basePath}/api`;
   const uiPath = `${basePath}/ui`;
 
+  // In-memory map: callControlId → { callerPhone, businessPhone }.
+  // Telnyx includes `from`/`to` on call.initiated but OMITS them on many
+  // downstream events (call.recording.saved, call.speak.*). Track them
+  // at call.initiated and backfill on every subsequent event so handlers
+  // downstream don't have to care about the missing fields.
+  // Bounded in practice (a few thousand calls/day max for SMB scale);
+  // never cleaned up in v1 — acceptable memory profile.
+  const callIndex = new Map<
+    string,
+    { callerPhone: string; businessPhone: string }
+  >();
+
   // Resolve the static dashboard HTML location relative to this source file.
   // The runtime serves it from extensions/missed-call-sms/dashboard/index.html.
   const __filename = fileURLToPath(import.meta.url);
@@ -296,8 +308,18 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
     const fromRaw = String(payload.from ?? "");
     const toRaw = String(payload.to ?? "");
     // Telnyx phone numbers are E.164 in the payload already.
-    const callerPhone = normalizeE164(fromRaw);
-    const businessPhone = normalizeE164(toRaw);
+    let callerPhone = normalizeE164(fromRaw);
+    let businessPhone = normalizeE164(toRaw);
+
+    // Backfill from/to from the callIndex if Telnyx omitted them on this
+    // event (it does for call.recording.saved, call.speak.*, and others).
+    if ((!callerPhone || !businessPhone) && callControlId) {
+      const cached = callIndex.get(callControlId);
+      if (cached) {
+        if (!callerPhone) callerPhone = cached.callerPhone;
+        if (!businessPhone) businessPhone = cached.businessPhone;
+      }
+    }
 
     logger.info(
       `[missed-call-sms] voice event ${eventType} ccid=${callControlId} from=${callerPhone} to=${businessPhone}`,
@@ -306,6 +328,9 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
     switch (eventType) {
       case "call.initiated": {
         if (!callControlId || !callerPhone) return;
+        // Remember the caller/business phone for this call so downstream
+        // events that omit from/to can still be resolved.
+        callIndex.set(callControlId, { callerPhone, businessPhone });
         // Open / reuse a conversation for this caller right away so the
         // recording flow has a target. The voicemail is attached when
         // call.recording.saved fires.

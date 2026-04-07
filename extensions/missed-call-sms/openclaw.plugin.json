@@ -147,7 +147,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "ringSeconds": { "type": "integer", "minimum": 5, "maximum": 60 },
+          "ringSeconds": { "type": "integer", "minimum": 0, "maximum": 60 },
           "maxRecordSeconds": { "type": "integer", "minimum": 10, "maximum": 300 }
         }
       },
