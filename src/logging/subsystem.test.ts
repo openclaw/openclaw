@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
+import * as loggerModule from "./logger.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -143,5 +144,28 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("subsystem file logger generation tracking", () => {
+  it("re-creates child file logger when root logger is rebuilt", () => {
+    setLoggerOverride({ level: "debug", consoleLevel: "silent" });
+    const spy = vi.spyOn(loggerModule, "getChildLogger");
+    const log = createSubsystemLogger("test-subsystem");
+
+    log.debug("first message");
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Same subsystem reuses cached child on next call
+    log.debug("second message, same generation");
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Simulate root logger rebuild (e.g. date roll)
+    resetLogger();
+    setLoggerOverride({ level: "debug", consoleLevel: "silent" });
+    log.debug("third message after rebuild");
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    spy.mockRestore();
   });
 });

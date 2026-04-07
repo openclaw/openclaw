@@ -245,8 +245,14 @@ export function getLogger(): TsLogger<LogObj> {
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
+    loggingState.loggerGeneration += 1;
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
+}
+
+/** Read by subsystem loggers to detect when their cached child logger is stale. */
+export function getLoggerGeneration(): number {
+  return loggingState.loggerGeneration;
 }
 
 export function getChildLogger(
@@ -313,6 +319,7 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
+  loggingState.loggerGeneration = 0;
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
