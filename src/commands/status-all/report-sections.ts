@@ -1,4 +1,4 @@
-import type { TableColumn } from "../../terminal/table.js";
+import type { RenderTableOptions, TableColumn } from "../../terminal/table.js";
 import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import {
   buildStatusAgentTableRows,
@@ -8,11 +8,7 @@ import {
 } from "./report-tables.js";
 import type { StatusReportSection } from "./text-report.js";
 
-type TableRenderer = (input: {
-  width: number;
-  columns: Array<Record<string, unknown>>;
-  rows: Array<Record<string, string>>;
-}) => string;
+type TableRenderer = (input: RenderTableOptions) => string;
 
 export function buildStatusOverviewSection(params: {
   width: number;

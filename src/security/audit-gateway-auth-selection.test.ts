@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayProbeAuthSafe, resolveGatewayProbeTarget } from "../gateway/probe-auth.js";
-import { collectDeepProbeFindings } from "./audit.js";
+import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 
 describe("security audit gateway auth selection", () => {
   it("applies gateway auth precedence across local and remote modes", async () => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import type {
   ZaloAuthStatus,
@@ -203,14 +204,17 @@ function normalizeAccountInfoUser(info: AccountInfoResponse): User | null {
     }
     return null;
   }
-  return info as User;
+  return info;
 }
 
 function toInteger(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
   }
-  const parsed = Number.parseInt(String(value ?? ""), 10);
+  const parsed = Number.parseInt(
+    typeof value === "string" ? value : typeof value === "number" ? String(value) : "",
+    10,
+  );
   if (!Number.isFinite(parsed)) {
     return fallback;
   }
@@ -243,7 +247,10 @@ function resolveInboundTimestamp(rawTs: unknown): number {
   if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
     return rawTs > 1_000_000_000_000 ? rawTs : rawTs * 1000;
   }
-  const parsed = Number.parseInt(String(rawTs ?? ""), 10);
+  const parsed = Number.parseInt(
+    typeof rawTs === "string" ? rawTs : typeof rawTs === "number" ? String(rawTs) : "",
+    10,
+  );
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return Date.now();
   }
@@ -494,7 +501,7 @@ function resolveUploadedVoiceAsset(
       continue;
     }
     if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: item.fileName?.trim() || undefined };
+      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
     }
   }
   return undefined;
@@ -617,7 +624,7 @@ async function ensureApi(
   const initPromise = (async () => {
     const stored = readCredentials(profile);
     if (!stored) {
-      throw new Error(`No saved Zalo session for profile \"${profile}\"`);
+      throw new Error(`No saved Zalo session for profile "${profile}"`);
     }
     const zalo = await createZalo({
       logging: false,
@@ -631,7 +638,7 @@ async function ensureApi(
         language: stored.language,
       }),
       timeoutMs,
-      `Timed out restoring Zalo session for profile \"${profile}\"`,
+      `Timed out restoring Zalo session for profile "${profile}"`,
     );
     apiByProfile.set(profile, api);
     touchCredentials(profile);
@@ -776,7 +783,7 @@ function extractGroupMembersFromInfo(
 }
 
 function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMessage | null {
-  const data = message.data as Record<string, unknown>;
+  const data = message.data;
   const isGroup = message.type === ThreadType.Group;
   const senderId = toNumberId(data.uidFrom);
   const threadId = isGroup
@@ -886,7 +893,7 @@ export async function listZaloFriendsMatching(
       return { friend, exact, includes };
     })
     .filter((entry) => entry.includes)
-    .sort((a, b) => Number(b.exact) - Number(a.exact));
+    .toSorted((a, b) => Number(b.exact) - Number(a.exact));
   return scored.map((entry) => entry.friend);
 }
 
@@ -957,7 +964,8 @@ export async function listZaloGroupMembers(
       continue;
     }
     currentById.set(id, {
-      displayName: member.dName?.trim() || member.zaloName?.trim() || undefined,
+      displayName:
+        normalizeOptionalString(member.dName) ?? normalizeOptionalString(member.zaloName),
       avatar: member.avatar || undefined,
     });
   }
@@ -984,7 +992,9 @@ export async function listZaloGroupMembers(
         continue;
       }
       profileMap.set(id, {
-        displayName: profileValue.displayName?.trim() || profileValue.zaloName?.trim() || undefined,
+        displayName:
+          normalizeOptionalString(profileValue.displayName) ??
+          normalizeOptionalString(profileValue.zaloName),
         avatar: profileValue.avatar || undefined,
       });
     }
@@ -1018,7 +1028,7 @@ export async function resolveZaloGroupContext(
     | undefined;
   const context: ZaloGroupContext = {
     groupId: normalizedGroupId,
-    name: groupInfo?.name?.trim() || undefined,
+    name: normalizeOptionalString(groupInfo?.name),
     members: extractGroupMembersFromInfo(groupInfo),
   };
   writeCachedGroupContext(profile, context);
@@ -1503,7 +1513,7 @@ export async function startZaloListener(params: {
   const existing = activeListeners.get(profile);
   if (existing) {
     throw new Error(
-      `Zalo listener already running for profile \"${profile}\" (account \"${existing.accountId}\")`,
+      `Zalo listener already running for profile "${profile}" (account "${existing.accountId}")`,
     );
   }
 

@@ -80,16 +80,16 @@ describe("status-overview-rows", () => {
         memory: { files: 1, chunks: 2, vector: {}, fts: {}, cache: {} },
         memoryPlugin: { enabled: true, slot: "memory" },
         pluginCompatibility: [{ pluginId: "a", severity: "warn", message: "legacy" }],
-        ok: (value) => `ok(${value})`,
-        warn: (value) => `warn(${value})`,
-        muted: (value) => `muted(${value})`,
-        formatTimeAgo: (value) => `${value}ms`,
-        formatKTokens: (value) => `${Math.round(value / 1000)}k`,
+        ok: (value: string) => `ok(${value})`,
+        warn: (value: string) => `warn(${value})`,
+        muted: (value: string) => `muted(${value})`,
+        formatTimeAgo: (value: number) => `${value}ms`,
+        formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
         resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" }),
         resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" }),
         resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" }),
         updateValue: "available · custom update",
-      }),
+      } as unknown as Parameters<typeof buildStatusCommandOverviewRows>[0]),
     ).toEqual(
       expect.arrayContaining([
         { Item: "OS", Value: `macOS · node ${process.versions.node}` },
@@ -148,7 +148,7 @@ describe("status-overview-rows", () => {
           agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
         },
         tailscaleBackendState: "Running",
-      }),
+      } as unknown as Parameters<typeof buildStatusAllOverviewRows>[0]),
     ).toEqual(
       expect.arrayContaining([
         { Item: "Version", Value: expect.any(String) },

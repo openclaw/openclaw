@@ -7,8 +7,8 @@ import {
   createChannelNativeOriginTargetResolver,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { listTelegramAccountIds } from "./accounts.js";
 import {
   getTelegramExecApprovalApprovers,
@@ -111,7 +111,8 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
     resolveTelegramExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+    normalizeOptionalString(target.accountId) ??
+    normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveTelegramOriginTarget,
   resolveApproverDmTargets: resolveTelegramApproverDmTargets,
 });

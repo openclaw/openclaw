@@ -11,7 +11,11 @@ export {
   readReactionParams,
   readStringParam,
 } from "../agents/tools/common.js";
-export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+export {
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+  resolveInboundMentionDecision,
+} from "../channels/mention-gating.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,

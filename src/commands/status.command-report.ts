@@ -1,4 +1,4 @@
-import type { TableColumn } from "../terminal/table.js";
+import type { RenderTableOptions, TableColumn } from "../terminal/table.js";
 import {
   buildStatusChannelsTableSection,
   buildStatusHealthSection,
@@ -12,11 +12,7 @@ import { appendStatusReportSections } from "./status-all/text-report.js";
 export async function buildStatusCommandReportLines(params: {
   heading: (text: string) => string;
   muted: (text: string) => string;
-  renderTable: (input: {
-    width: number;
-    columns: TableColumn[];
-    rows: Array<Record<string, string>>;
-  }) => string;
+  renderTable: (input: RenderTableOptions) => string;
   width: number;
   overviewRows: Array<{ Item: string; Value: string }>;
   showTaskMaintenanceHint: boolean;

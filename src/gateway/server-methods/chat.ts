@@ -15,6 +15,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -23,6 +24,8 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -47,6 +50,7 @@ import {
   parseMessageWithAttachments,
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -665,7 +669,7 @@ function sanitizeChatHistoryMessage(
     const sanitizedBlocks = updated.map((item) => item.block);
     const hasPhaseMetadata = hasAssistantPhaseMetadata(entry);
     if (hasPhaseMetadata) {
-      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry));
+      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry) ?? "");
       const res = truncateChatHistoryText(stripped.text, maxChars);
       const nonTextBlocks = sanitizedBlocks.filter(
         (block) =>
@@ -701,6 +705,36 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return extractAssistantHistoryText(message);
 }
 
+function hasAssistantNonTextContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) => block && typeof block === "object" && (block as { type?: unknown }).type !== "text",
+  );
+}
+
+function shouldDropAssistantHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  if (resolveAssistantMessagePhase(message) === "commentary") {
+    return true;
+  }
+  const text = extractAssistantTextForSilentCheck(message);
+  if (text === undefined || !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    return false;
+  }
+  return !hasAssistantNonTextContent(message);
+}
+
 export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -708,9 +742,9 @@ export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: numbe
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    // Drop assistant messages whose entire visible text is the silent reply token.
-    const text = extractAssistantTextForSilentCheck(message);
-    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    // Drop assistant commentary-only entries and NO_REPLY-only entries, but
+    // keep mixed assistant entries that still carry non-text content.
+    if (shouldDropAssistantHistoryMessage(message)) {
       changed = true;
       continue;
     }
@@ -827,7 +861,7 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
     });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -974,18 +1008,13 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   };
 }
 
-function normalizeOptionalText(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
 function normalizeExplicitChatSendOrigin(
   params: ChatSendExplicitOrigin,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalText(params.originatingChannel);
-  const originatingTo = normalizeOptionalText(params.originatingTo);
-  const accountId = normalizeOptionalText(params.accountId);
-  const messageThreadId = normalizeOptionalText(params.messageThreadId);
+  const originatingChannel = normalizeOptionalString(params.originatingChannel);
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const accountId = normalizeOptionalString(params.accountId);
+  const messageThreadId = normalizeOptionalString(params.messageThreadId);
   const hasAnyExplicitOriginField = Boolean(
     originatingChannel || originatingTo || accountId || messageThreadId,
   );
@@ -1021,8 +1050,8 @@ function resolveChatAbortRequester(
 ): ChatAbortRequester {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return {
-    connId: normalizeOptionalText(client?.connId),
-    deviceId: normalizeOptionalText(client?.connect?.device?.id),
+    connId: normalizeOptionalString(client?.connId),
+    deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
   };
 }
@@ -1034,8 +1063,8 @@ function canRequesterAbortChatRun(
   if (requester.isAdmin) {
     return true;
   }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  const ownerDeviceId = normalizeOptionalString(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalString(entry.ownerConnId);
   if (!ownerDeviceId && !ownerConnId) {
     return true;
   }
@@ -1223,10 +1252,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         : typeof configMaxChars === "number"
           ? configMaxChars
           : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const sessionId = entry?.sessionId;
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    const rawMessages = localMessages;
+    const rawMessages = augmentChatHistoryWithCliSessionImports({
+      entry,
+      provider: resolvedSessionModel.provider,
+      localMessages,
+    });
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -1555,8 +1590,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        ownerConnId: normalizeOptionalString(client?.connId),
+        ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
       });
       const ackPayload = {
         runId: clientRunId,

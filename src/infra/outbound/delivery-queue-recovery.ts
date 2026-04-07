@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../errors.js";
 import {
   ackDelivery,
   failDelivery,
@@ -197,7 +198,7 @@ export async function recoverPendingDeliveries(opts: {
       summary.recovered += 1;
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = formatErrorMessage(err);
       if (isPermanentDeliveryError(errMsg)) {
         opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
         await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);

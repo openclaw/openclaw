@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import type {
   QaBusCreateThreadInput,
@@ -33,7 +34,7 @@ export function writeJson(res: ServerResponse, statusCode: number, body: unknown
 
 export function writeError(res: ServerResponse, statusCode: number, error: unknown) {
   writeJson(res, statusCode, {
-    error: error instanceof Error ? error.message : String(error),
+    error: formatErrorMessage(error),
   });
 }
 

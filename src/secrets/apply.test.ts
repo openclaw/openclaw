@@ -1,16 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
-import { runSecretsApply } from "./apply.js";
 import type { SecretsApplyPlan } from "./plan.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime.js";
+
+let runSecretsApply: typeof import("./apply.js").runSecretsApply;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 
 const OPENAI_API_KEY_ENV_REF = {
   source: "env",
@@ -178,6 +179,11 @@ function createOneWayScrubOptions(): NonNullable<SecretsApplyPlan["options"]> {
 
 describe("secrets apply", () => {
   let fixture: ApplyFixture;
+
+  beforeAll(async () => {
+    ({ runSecretsApply } = await import("./apply.js"));
+    ({ clearSecretsRuntimeSnapshot } = await import("./runtime.js"));
+  });
 
   beforeEach(async () => {
     clearSecretsRuntimeSnapshot();

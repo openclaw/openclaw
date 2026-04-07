@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import * as schedule from "../schedule.js";
 import {
   createAbortAwareIsolatedRunner,
   createDefaultIsolatedRunner,
@@ -12,7 +10,9 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
   writeCronJobs,
-} from "../service.regression-fixtures.js";
+} from "../../../test/helpers/cron/service-regression-fixtures.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import * as schedule from "../schedule.js";
 import type { CronJob } from "../types.js";
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { createCronServiceState, type CronEvent } from "./state.js";

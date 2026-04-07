@@ -184,7 +184,12 @@ describe("gateway e2e", () => {
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "mock openai test complete" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         restore();
         envSnapshot.restore();
       }
@@ -421,6 +426,72 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
+        await fs.rm(tempHome, { recursive: true, force: true });
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
+    "ignores env-driven plugin auto-enable in minimal gateway mode",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const envSnapshot = captureEnv([
+        "HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_SKIP_CHANNELS",
+        "OPENCLAW_SKIP_GMAIL_WATCHER",
+        "OPENCLAW_SKIP_CRON",
+        "OPENCLAW_SKIP_CANVAS_HOST",
+        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        "OPENCLAW_TEST_MINIMAL_GATEWAY",
+        "DISCORD_BOT_TOKEN",
+      ]);
+
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimal-gateway-home-"));
+      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
+      const bundledPluginsDir = path.join(tempHome, "openclaw-test-no-bundled-extensions");
+      process.env.HOME = tempHome;
+      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.OPENCLAW_SKIP_CHANNELS = "1";
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+      process.env.OPENCLAW_SKIP_CRON = "1";
+      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+      process.env.DISCORD_BOT_TOKEN = "discord-test-token";
+
+      const token = nextGatewayId("minimal-token");
+      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.mkdir(bundledPluginsDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { auth: { mode: "token", token } } }, null, 2)}\n`,
+      );
+
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+
+      try {
+        const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+          channels?: Record<string, unknown>;
+          plugins?: { entries?: Record<string, { enabled?: boolean }> };
+        };
+        expect(parsed.plugins?.entries?.discord).toBeUndefined();
+      } finally {
+        await server.close({ reason: "minimal gateway auto-enable verify" });
         await fs.rm(tempHome, { recursive: true, force: true });
         envSnapshot.restore();
       }

@@ -124,10 +124,11 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
 
 function buildMemorySection(params: {
   isMinimal: boolean;
+  includeMemorySection?: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }) {
-  if (params.isMinimal) {
+  if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
   return buildMemoryPromptSection({
@@ -354,6 +355,8 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  /** Whether to include the active memory plugin prompt guidance in the base system prompt. Defaults to true. */
+  includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
@@ -462,6 +465,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const memorySection = buildMemorySection({
     isMinimal,
+    includeMemorySection: params.includeMemorySection,
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
@@ -479,11 +483,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return "You are a personal assistant operating inside OpenClaw.";
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    "You are a personal assistant operating inside OpenClaw.",
     "",
     "## Tooling",
     "Structured tool definitions are the source of truth for tool names, descriptions, and parameters.",

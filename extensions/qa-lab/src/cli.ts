@@ -19,7 +19,6 @@ async function runQaSuite(opts: {
   providerMode?: "mock-openai" | "live-openai";
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -33,6 +32,7 @@ async function runQaUi(opts: {
   controlUiUrl?: string;
   controlUiToken?: string;
   controlUiProxyTarget?: string;
+  uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
@@ -47,6 +47,7 @@ async function runQaDockerScaffold(opts: {
   qaLabPort?: number;
   image?: string;
   usePrebuiltImage?: boolean;
+  bindUiDist?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaDockerScaffoldCommand(opts);
@@ -55,6 +56,20 @@ async function runQaDockerScaffold(opts: {
 async function runQaDockerBuildImage(opts: { image?: string }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaDockerBuildImageCommand(opts);
+}
+
+async function runQaDockerUp(opts: {
+  outputDir?: string;
+  gatewayPort?: number;
+  qaLabPort?: number;
+  providerBaseUrl?: string;
+  image?: string;
+  usePrebuiltImage?: boolean;
+  bindUiDist?: boolean;
+  skipUiBuild?: boolean;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaDockerUpCommand(opts);
 }
 
 async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
@@ -80,21 +95,18 @@ export function registerQaLabCli(program: Command) {
     .option("--provider-mode <mode>", "Provider mode: mock-openai or live-openai", "mock-openai")
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
-    .option("--fast", "Enable provider fast mode where supported", false)
     .action(
       async (opts: {
         outputDir?: string;
         providerMode?: "mock-openai" | "live-openai";
         model?: string;
         altModel?: string;
-        fast?: boolean;
       }) => {
         await runQaSuite({
           outputDir: opts.outputDir,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
           alternateModel: opts.altModel,
-          fastMode: opts.fast,
         });
       },
     );
@@ -113,6 +125,7 @@ export function registerQaLabCli(program: Command) {
       "--control-ui-proxy-target <url>",
       "Optional upstream Control UI target for /control-ui proxying",
     )
+    .option("--ui-dist-dir <path>", "Optional QA Lab UI asset directory override")
     .option("--auto-kickoff-target <kind>", "Kickoff default target (direct or channel)")
     .option("--embedded-gateway <mode>", "Embedded gateway mode hint", "enabled")
     .option(
@@ -129,6 +142,7 @@ export function registerQaLabCli(program: Command) {
         controlUiUrl?: string;
         controlUiToken?: string;
         controlUiProxyTarget?: string;
+        uiDistDir?: string;
         autoKickoffTarget?: string;
         embeddedGateway?: string;
         sendKickoffOnStart?: boolean;
@@ -145,6 +159,11 @@ export function registerQaLabCli(program: Command) {
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Prebaked image name", "openclaw:qa-local-prebaked")
     .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
+    .option(
+      "--bind-ui-dist",
+      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
+      false,
+    )
     .action(
       async (opts: {
         outputDir: string;
@@ -153,6 +172,7 @@ export function registerQaLabCli(program: Command) {
         providerBaseUrl?: string;
         image?: string;
         usePrebuiltImage?: boolean;
+        bindUiDist?: boolean;
       }) => {
         await runQaDockerScaffold(opts);
       },
@@ -164,6 +184,35 @@ export function registerQaLabCli(program: Command) {
     .action(async (opts: { image?: string }) => {
       await runQaDockerBuildImage(opts);
     });
+
+  qa.command("up")
+    .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
+    .option("--output-dir <path>", "Output directory for docker-compose + state files")
+    .option("--gateway-port <port>", "Gateway host port", (value: string) => Number(value))
+    .option("--qa-lab-port <port>", "QA lab host port", (value: string) => Number(value))
+    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
+    .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
+    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
+    .option(
+      "--bind-ui-dist",
+      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
+      false,
+    )
+    .option("--skip-ui-build", "Skip pnpm qa:lab:build before starting Docker", false)
+    .action(
+      async (opts: {
+        outputDir?: string;
+        gatewayPort?: number;
+        qaLabPort?: number;
+        providerBaseUrl?: string;
+        image?: string;
+        usePrebuiltImage?: boolean;
+        bindUiDist?: boolean;
+        skipUiBuild?: boolean;
+      }) => {
+        await runQaDockerUp(opts);
+      },
+    );
 
   qa.command("mock-openai")
     .description("Run the local mock OpenAI Responses API server for QA")

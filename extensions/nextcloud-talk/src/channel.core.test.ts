@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));

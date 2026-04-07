@@ -13,9 +13,11 @@ import { formatTokenK } from "../commands/models/shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
@@ -115,6 +117,17 @@ function normalizeModelKeys(values: string[]): string[] {
   return next;
 }
 
+function resolveModelRouteHint(provider: string): string | undefined {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "openai") {
+    return "API key route";
+  }
+  if (normalized === "openai-codex") {
+    return "ChatGPT OAuth route";
+  }
+  return undefined;
+}
+
 function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -146,6 +159,10 @@ function addModelSelectOption(params: {
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
+  const routeHint = resolveModelRouteHint(params.entry.provider);
+  if (routeHint) {
+    hints.push(routeHint);
+  }
   if (!params.hasAuth(params.entry.provider)) {
     hints.push("auth missing");
   }
@@ -157,14 +174,43 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
-function matchesPreferredProvider(entryProvider: string, preferredProvider: string): boolean {
-  if (preferredProvider === "volcengine") {
-    return entryProvider === "volcengine" || entryProvider === "volcengine-plan";
-  }
-  if (preferredProvider === "byteplus") {
-    return entryProvider === "byteplus" || entryProvider === "byteplus-plan";
-  }
-  return entryProvider === preferredProvider;
+function createPreferredProviderMatcher(params: {
+  preferredProvider: string;
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): (entryProvider: string) => boolean {
+  const normalizedPreferredProvider = normalizeProviderId(params.preferredProvider);
+  const preferredOwnerPluginIds = resolveOwningPluginIdsForProvider({
+    provider: normalizedPreferredProvider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const preferredOwnerPluginIdSet = preferredOwnerPluginIds
+    ? new Set(preferredOwnerPluginIds)
+    : undefined;
+  const entryProviderCache = new Map<string, boolean>();
+  return (entryProvider: string) => {
+    const normalizedEntryProvider = normalizeProviderId(entryProvider);
+    if (normalizedEntryProvider === normalizedPreferredProvider) {
+      return true;
+    }
+    const cached = entryProviderCache.get(normalizedEntryProvider);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const value =
+      !!preferredOwnerPluginIdSet &&
+      !!resolveOwningPluginIdsForProvider({
+        provider: normalizedEntryProvider,
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      })?.some((pluginId) => preferredOwnerPluginIdSet.has(pluginId));
+    entryProviderCache.set(normalizedEntryProvider, value);
+    return value;
+  };
 }
 
 async function promptManualModel(params: {
@@ -176,7 +222,9 @@ async function promptManualModel(params: {
     message: params.allowBlank ? "Default model (blank to keep)" : "Default model",
     initialValue: params.initialValue,
     placeholder: "provider/model",
-    validate: params.allowBlank ? undefined : (value) => (value?.trim() ? undefined : "Required"),
+    validate: params.allowBlank
+      ? undefined
+      : (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
   const model = String(modelInput ?? "").trim();
   if (!model) {
@@ -211,6 +259,9 @@ async function maybeFilterModelsByProvider(params: {
   }>;
   preferredProvider?: string;
   prompter: WizardPrompter;
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<typeof params.models> {
   const providerIds = Array.from(new Set(params.models.map((entry) => entry.provider))).toSorted(
     (a, b) => a.localeCompare(b),
@@ -221,6 +272,14 @@ async function maybeFilterModelsByProvider(params: {
     providerIds.length > 1 &&
     params.models.length > PROVIDER_FILTER_THRESHOLD;
   let next = params.models;
+  const matchesPreferredProvider = params.preferredProvider
+    ? createPreferredProviderMatcher({
+        preferredProvider: params.preferredProvider,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      })
+    : undefined;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
@@ -231,9 +290,7 @@ async function maybeFilterModelsByProvider(params: {
     }
   }
   if (hasPreferredProvider && params.preferredProvider) {
-    const filtered = next.filter((entry) =>
-      matchesPreferredProvider(entry.provider, params.preferredProvider!),
-    );
+    const filtered = next.filter((entry) => matchesPreferredProvider?.(entry.provider));
     if (filtered.length > 0) {
       next = filtered;
     }
@@ -356,8 +413,9 @@ export async function promptDefaultModel(
   const includeManual = params.includeManual ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
-  const preferredProvider = params.preferredProvider?.trim()
-    ? normalizeProviderId(params.preferredProvider)
+  const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const configuredRaw = resolveConfiguredModelRaw(cfg);
   const resolved = resolveConfiguredModelRef({
@@ -403,9 +461,20 @@ export async function promptDefaultModel(
     models,
     preferredProvider,
     prompter: params.prompter,
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
   });
+  const matchesPreferredProvider = preferredProvider
+    ? createPreferredProviderMatcher({
+        preferredProvider,
+        cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      })
+    : undefined;
   const hasPreferredProvider = preferredProvider
-    ? filteredModels.some((entry) => matchesPreferredProvider(entry.provider, preferredProvider))
+    ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
 
@@ -450,7 +519,7 @@ export async function promptDefaultModel(
     allowKeep &&
     hasPreferredProvider &&
     preferredProvider &&
-    !matchesPreferredProvider(resolved.provider, preferredProvider)
+    !matchesPreferredProvider?.(resolved.provider)
   ) {
     const firstModel = filteredModels[0];
     if (firstModel) {
@@ -513,8 +582,9 @@ export async function promptModelAllowlist(params: {
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
-  const preferredProvider = params.preferredProvider?.trim()
-    ? normalizeProviderId(params.preferredProvider)
+  const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -555,6 +625,12 @@ export async function promptModelAllowlist(params: {
     defaultProvider: DEFAULT_PROVIDER,
   });
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const matchesPreferredProvider = preferredProvider
+    ? createPreferredProviderMatcher({
+        preferredProvider,
+        cfg,
+      })
+    : undefined;
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
@@ -562,11 +638,8 @@ export async function promptModelAllowlist(params: {
     ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
     : catalog;
   const filteredCatalog =
-    preferredProvider &&
-    allowedCatalog.some((entry) => matchesPreferredProvider(entry.provider, preferredProvider))
-      ? allowedCatalog.filter((entry) =>
-          matchesPreferredProvider(entry.provider, preferredProvider),
-        )
+    preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
+      ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
 
   for (const entry of filteredCatalog) {

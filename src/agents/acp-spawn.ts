@@ -45,6 +45,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
@@ -233,9 +234,9 @@ function normalizeTelegramConversationIdFallback(params: {
   threadId?: string | number;
   groupId?: string;
 }): string | undefined {
-  const explicitGroupId = params.groupId?.trim();
+  const explicitGroupId = normalizeOptionalString(params.groupId);
   const explicitThreadId =
-    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
   if (
     explicitGroupId &&
     explicitThreadId &&
@@ -824,7 +825,7 @@ async function bindPreparedAcpThread(params: {
 
   let sessionEntry = params.initializedRuntime.sessionEntry;
   if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
-    const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
+    const boundThreadId = normalizeOptionalString(String(binding.conversation.conversationId));
     if (boundThreadId) {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId: params.initializedRuntime.sessionId,
@@ -853,10 +854,12 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   // Child-thread ACP spawns deliver bootstrap output to the new thread; current-conversation
   // binds deliver back to the originating target.
   const boundThreadIdRaw = params.binding?.conversation.conversationId;
-  const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
+  const boundThreadId = boundThreadIdRaw
+    ? normalizeOptionalString(String(boundThreadIdRaw))
+    : undefined;
   const fallbackThreadIdRaw = params.requester.origin?.threadId;
   const fallbackThreadId =
-    fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
+    fallbackThreadIdRaw != null ? normalizeOptionalString(String(fallbackThreadIdRaw)) : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
   const requesterConversationId = resolveConversationIdForThreadBinding({
     channel: params.requester.origin?.channel,

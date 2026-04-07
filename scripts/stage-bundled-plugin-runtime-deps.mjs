@@ -143,25 +143,55 @@ function shouldStageRuntimeDeps(packageJson) {
   return packageJson.openclaw?.bundle?.stageRuntimeDependencies === true;
 }
 
+function removeSanitizedDependencyEntries(entries, shouldRemove) {
+  if (!entries || typeof entries !== "object") {
+    return { changed: false, nextEntries: entries };
+  }
+
+  const nextEntries = Object.fromEntries(
+    Object.entries(entries).filter(([depName, spec]) => !shouldRemove(depName, spec)),
+  );
+  const changed = Object.keys(nextEntries).length !== Object.keys(entries).length;
+  return {
+    changed,
+    nextEntries: changed
+      ? Object.keys(nextEntries).length > 0
+        ? nextEntries
+        : undefined
+      : entries,
+  };
+}
+
+function shouldRemoveLocalWorkspaceDependency(depName, spec) {
+  return depName === "openclaw" || (typeof spec === "string" && spec.startsWith("workspace:"));
+}
+
 function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   const manifestPath = path.join(pluginDir, "package.json");
   const packageJson = readJson(manifestPath);
   let changed = false;
 
-  if (packageJson.peerDependencies?.openclaw) {
-    const nextPeerDependencies = { ...packageJson.peerDependencies };
-    delete nextPeerDependencies.openclaw;
-    if (Object.keys(nextPeerDependencies).length === 0) {
-      delete packageJson.peerDependencies;
-    } else {
+  const { changed: peerDependenciesChanged, nextEntries: nextPeerDependencies } =
+    removeSanitizedDependencyEntries(
+      packageJson.peerDependencies,
+      shouldRemoveLocalWorkspaceDependency,
+    );
+  if (peerDependenciesChanged) {
+    if (nextPeerDependencies) {
       packageJson.peerDependencies = nextPeerDependencies;
+    } else {
+      delete packageJson.peerDependencies;
     }
     changed = true;
   }
 
-  if (packageJson.peerDependenciesMeta?.openclaw) {
-    const nextPeerDependenciesMeta = { ...packageJson.peerDependenciesMeta };
-    delete nextPeerDependenciesMeta.openclaw;
+  if (peerDependenciesChanged && packageJson.peerDependenciesMeta) {
+    const allowedPeerNames = new Set(Object.keys(packageJson.peerDependencies ?? {}));
+    const nextPeerDependenciesMeta = Object.fromEntries(
+      Object.entries(packageJson.peerDependenciesMeta).filter(([depName]) =>
+        allowedPeerNames.has(depName),
+      ),
+    );
     if (Object.keys(nextPeerDependenciesMeta).length === 0) {
       delete packageJson.peerDependenciesMeta;
     } else {
@@ -170,14 +200,8 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
     changed = true;
   }
 
-  if (packageJson.devDependencies?.openclaw) {
-    const nextDevDependencies = { ...packageJson.devDependencies };
-    delete nextDevDependencies.openclaw;
-    if (Object.keys(nextDevDependencies).length === 0) {
-      delete packageJson.devDependencies;
-    } else {
-      packageJson.devDependencies = nextDevDependencies;
-    }
+  if (packageJson.devDependencies) {
+    delete packageJson.devDependencies;
     changed = true;
   }
 

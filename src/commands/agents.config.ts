@@ -13,6 +13,7 @@ import {
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type AgentSummary = {
   id: string;
@@ -44,7 +45,7 @@ function resolveAgentName(cfg: OpenClawConfig, agentId: string) {
   const entry = listAgentEntries(cfg).find(
     (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
   );
-  return entry?.name?.trim() || undefined;
+  return normalizeOptionalString(entry?.name);
 }
 
 function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
@@ -56,7 +57,7 @@ function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
       return entry.model.trim();
     }
     if (typeof entry.model === "object") {
-      const primary = entry.model.primary?.trim();
+      const primary = normalizeOptionalString(entry.model.primary);
       if (primary) {
         return primary;
       }
@@ -66,7 +67,7 @@ function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
   if (typeof raw === "string") {
     return raw;
   }
-  return raw?.primary?.trim() || undefined;
+  return normalizeOptionalString(raw?.primary);
 }
 
 export function parseIdentityMarkdown(content: string): AgentIdentity {

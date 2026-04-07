@@ -7,8 +7,13 @@ export type OnboardMode = "local" | "remote";
  * Auth choices are plugin-owned contract ids plus a few legacy aliases that
  * are normalized elsewhere (for example `oauth` -> `setup-token`).
  */
-export type AuthChoice = string & {};
-export type AuthChoiceGroupId = string & {};
+export type BuiltInAuthChoice =
+  // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
+  "oauth" | "setup-token" | "token" | "apiKey" | "custom-api-key" | "skip";
+export type AuthChoice = BuiltInAuthChoice | (string & {});
+
+/** Auth choice groups are plugin-owned ids plus the core `custom` bucket. */
+export type AuthChoiceGroupId = "custom" | (string & {});
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -48,6 +53,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   tokenExpiresIn?: string;
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
+  arceeaiApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;

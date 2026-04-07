@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 const { resolveStatusSummaryFromOverview, resolveMemoryPluginStatus } = vi.hoisted(() => ({
   resolveStatusSummaryFromOverview: vi.fn(async () => ({ sessions: { count: 1 } })),
   resolveMemoryPluginStatus: vi.fn(() => ({
     enabled: false,
+    slot: null,
     reason: "memorySearch not configured",
   })),
 }));
@@ -44,8 +47,19 @@ describe("executeStatusScanFromOverview", () => {
       },
       agentStatus: { agents: [{ id: "main" }], defaultId: "main" },
       skipColdStartNetworkChecks: false,
-    } as never;
-    const resolveMemory = vi.fn(async () => ({ agentId: "main" }));
+    } as unknown as StatusScanOverviewResult;
+    const resolveMemory = vi.fn<
+      (args: {
+        cfg: unknown;
+        agentStatus: unknown;
+        memoryPlugin: unknown;
+        runtime?: unknown;
+      }) => Promise<MemoryStatusSnapshot>
+    >(async () => ({
+      agentId: "main",
+      backend: "builtin",
+      provider: "memory-core",
+    }));
 
     const result = await executeStatusScanFromOverview({
       overview,
@@ -61,7 +75,7 @@ describe("executeStatusScanFromOverview", () => {
     expect(resolveMemory).toHaveBeenCalledWith({
       cfg: overview.cfg,
       agentStatus: overview.agentStatus,
-      memoryPlugin: { enabled: false, reason: "memorySearch not configured" },
+      memoryPlugin: { enabled: false, slot: null, reason: "memorySearch not configured" },
       runtime: {},
     });
     expect(result).toEqual(
@@ -76,7 +90,7 @@ describe("executeStatusScanFromOverview", () => {
         gatewayReachable: true,
         channels: { rows: [], details: [] },
         summary: { sessions: { count: 1 } },
-        memory: { agentId: "main" },
+        memory: { agentId: "main", backend: "builtin", provider: "memory-core" },
         pluginCompatibility: [],
       }),
     );

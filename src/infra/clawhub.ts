@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -206,20 +207,16 @@ function normalizeBaseUrl(baseUrl?: string): string {
   return value || DEFAULT_CLAWHUB_URL;
 }
 
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function extractTokenFromClawHubConfig(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const record = value as ClawHubConfigLike;
   return (
-    readNonEmptyString(record.accessToken) ??
-    readNonEmptyString(record.authToken) ??
-    readNonEmptyString(record.apiToken) ??
-    readNonEmptyString(record.token) ??
+    normalizeOptionalString(record.accessToken) ??
+    normalizeOptionalString(record.authToken) ??
+    normalizeOptionalString(record.apiToken) ??
+    normalizeOptionalString(record.token) ??
     extractTokenFromClawHubConfig(record.auth) ??
     extractTokenFromClawHubConfig(record.session) ??
     extractTokenFromClawHubConfig(record.credentials) ??

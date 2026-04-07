@@ -1,4 +1,5 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -110,6 +111,6 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     });
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }

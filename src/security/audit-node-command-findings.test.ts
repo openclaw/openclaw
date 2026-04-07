@@ -74,7 +74,12 @@ describe("security audit node command findings", () => {
   });
 
   it("evaluates dangerous gateway.nodes.allowCommands findings", () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity?: "warn" | "critical";
+      expectedAbsent?: boolean;
+    }> = [
       {
         name: "loopback gateway",
         cfg: {
@@ -107,14 +112,14 @@ describe("security audit node command findings", () => {
         } satisfies OpenClawConfig,
         expectedAbsent: true,
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const findings = collectNodeDangerousAllowCommandFindings(testCase.cfg);
       const finding = findings.find(
         (entry) => entry.checkId === "gateway.nodes.allow_commands_dangerous",
       );
-      if ("expectedAbsent" in testCase && testCase.expectedAbsent) {
+      if (testCase.expectedAbsent) {
         expect(finding, testCase.name).toBeUndefined();
         continue;
       }

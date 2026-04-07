@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -36,12 +37,14 @@ function resolveProviderEntry(
   modelByChannel: ChannelModelByChannelConfig | undefined,
   channel: string,
 ): Record<string, string> | undefined {
-  const normalized = normalizeMessageChannel(channel) ?? channel.trim().toLowerCase();
+  const normalized =
+    normalizeMessageChannel(channel) ?? normalizeOptionalString(channel)?.toLowerCase() ?? "";
   return (
     modelByChannel?.[normalized] ??
     modelByChannel?.[
       Object.keys(modelByChannel ?? {}).find((key) => {
-        const normalizedKey = normalizeMessageChannel(key) ?? key.trim().toLowerCase();
+        const normalizedKey =
+          normalizeMessageChannel(key) ?? normalizeOptionalString(key)?.toLowerCase() ?? "";
         return normalizedKey === normalized;
       }) ?? ""
     ]
@@ -55,8 +58,9 @@ function buildChannelCandidates(
   >,
 ): { keys: string[]; parentKeys: string[] } {
   const normalizedChannel =
-    normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
-  const groupId = params.groupId?.trim();
+    normalizeMessageChannel(params.channel ?? "") ??
+    normalizeOptionalString(params.channel)?.toLowerCase();
+  const groupId = normalizeOptionalString(params.groupId);
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
   const feishuParentOverrideFallbacks =
     normalizedChannel === "feishu"
@@ -81,8 +85,8 @@ function buildChannelCandidates(
     kind: groupConversationKind,
     rawId: groupId ?? "",
   });
-  const groupChannel = params.groupChannel?.trim();
-  const groupSubject = params.groupSubject?.trim();
+  const groupChannel = normalizeOptionalString(params.groupChannel);
+  const groupSubject = normalizeOptionalString(params.groupSubject);
   const channelBare = groupChannel ? groupChannel.replace(/^#/, "") : undefined;
   const subjectBare = groupSubject ? groupSubject.replace(/^#/, "") : undefined;
   const channelSlug = channelBare ? normalizeChannelSlug(channelBare) : undefined;
@@ -109,29 +113,29 @@ function buildChannelCandidates(
 }
 
 function buildFeishuParentOverrideCandidates(rawId: string | undefined): string[] {
-  const value = rawId?.trim();
+  const value = normalizeOptionalString(rawId);
   if (!value) {
     return [];
   }
   const topicSenderMatch = value.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
   if (topicSenderMatch) {
-    const chatId = topicSenderMatch[1]?.trim().toLowerCase();
-    const topicId = topicSenderMatch[2]?.trim().toLowerCase();
+    const chatId = normalizeOptionalString(topicSenderMatch[1])?.toLowerCase();
+    const topicId = normalizeOptionalString(topicSenderMatch[2])?.toLowerCase();
     return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
       Boolean(entry),
     );
   }
   const topicMatch = value.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
-    const chatId = topicMatch[1]?.trim().toLowerCase();
-    const topicId = topicMatch[2]?.trim().toLowerCase();
+    const chatId = normalizeOptionalString(topicMatch[1])?.toLowerCase();
+    const topicId = normalizeOptionalString(topicMatch[2])?.toLowerCase();
     return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
       Boolean(entry),
     );
   }
   const senderMatch = value.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
-    const chatId = senderMatch[1]?.trim().toLowerCase();
+    const chatId = normalizeOptionalString(senderMatch[1])?.toLowerCase();
     return chatId ? [chatId] : [];
   }
   return [];
@@ -140,7 +144,7 @@ function buildFeishuParentOverrideCandidates(rawId: string | undefined): string[
 export function resolveChannelModelOverride(
   params: ChannelModelOverrideParams,
 ): ChannelModelOverride | null {
-  const channel = params.channel?.trim();
+  const channel = normalizeOptionalString(params.channel);
   if (!channel) {
     return null;
   }
@@ -170,13 +174,14 @@ export function resolveChannelModelOverride(
   if (typeof raw !== "string") {
     return null;
   }
-  const model = raw.trim();
+  const model = normalizeOptionalString(raw);
   if (!model) {
     return null;
   }
 
   return {
-    channel: normalizeMessageChannel(channel) ?? channel.trim().toLowerCase(),
+    channel:
+      normalizeMessageChannel(channel) ?? normalizeOptionalString(channel)?.toLowerCase() ?? "",
     model,
     matchKey: match.matchKey,
     matchSource: match.matchSource,

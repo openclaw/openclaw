@@ -105,8 +105,9 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts,
       runtime,
-      includeSecurityAudit: true,
+      includeSecurityAudit: opts.all === true,
       includePluginCompatibility: true,
+      suppressHealthErrors: true,
       scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
         await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
           scanStatusJsonFast(scanOpts, runtimeForScan),
@@ -192,6 +193,7 @@ export async function statusCommand(
   const {
     buildStatusUpdateSurface,
     formatCliCommand,
+    formatHealthChannelLines,
     formatKTokens,
     formatPromptCacheCompact,
     formatPluginCompatibilityNotice,

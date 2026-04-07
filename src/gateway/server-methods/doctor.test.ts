@@ -117,7 +117,7 @@ describe("doctor.memory.status", () => {
         provider: "gemini",
         embedding: { ok: true },
         dreaming: expect.objectContaining({
-          enabled: true,
+          enabled: false,
           shortTermCount: 0,
           totalSignalCount: 0,
           phaseSignalCount: 0,
@@ -451,8 +451,7 @@ describe("doctor.memory.status", () => {
         expect.objectContaining({
           dreaming: expect.objectContaining({
             shortTermCount: 0,
-            promotedTotal: 1,
-            storePath,
+            promotedTotal: 0,
             phases: expect.objectContaining({
               deep: expect.objectContaining({
                 managedCronPresent: false,

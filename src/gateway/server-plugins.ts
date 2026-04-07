@@ -396,17 +396,20 @@ export function loadGatewayPlugins(params: {
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
+  const activationAutoEnabled =
+    params.activationSourceConfig !== undefined
+      ? applyPluginAutoEnable({
+          config: params.activationSourceConfig,
+          env: process.env,
+        })
+      : undefined;
   const autoEnabled =
     params.activationSourceConfig !== undefined
       ? {
           config: params.cfg,
-          changes: [],
+          changes: activationAutoEnabled?.changes ?? [],
           autoEnabledReasons:
-            params.autoEnabledReasons ??
-            applyPluginAutoEnable({
-              config: params.activationSourceConfig,
-              env: process.env,
-            }).autoEnabledReasons,
+            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
         }
       : params.autoEnabledReasons !== undefined
         ? {
