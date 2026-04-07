@@ -67,7 +67,7 @@ OpenClaw maps the session **thinking** level to Mistral’s API:
 - **off** / **minimal** → `none`
 - **low** / **medium** / **high** / **xhigh** / **adaptive** → `high`
 
-Other bundled Mistral catalog models do not use this parameter; keep using `magistral-*` models (for example `magistral-small`) when you want Mistral’s native reasoning-first behavior.
+Other bundled Mistral catalog models do not use this parameter; keep using `magistral-*` models when you want Mistral’s native reasoning-first behavior.
 
 ## Notes
 
