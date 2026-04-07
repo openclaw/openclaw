@@ -203,6 +203,21 @@ function stripReadTruncationContentDetails(
   };
 }
 
+const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \((\d+) lines total\)\.?$/;
+
+function parseOffsetBeyondEofTotalLines(err: unknown): number | null {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : null;
+  if (typeof message !== "string") {
+    return null;
+  }
+  const match = OFFSET_BEYOND_EOF_RE.exec(message);
+  if (!match) {
+    return null;
+  }
+  const parsed = parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -214,7 +229,16 @@ async function executeReadWithAdaptivePaging(params: {
   const hasExplicitLimit =
     typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
   if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    try {
+      return await params.base.execute(params.toolCallId, params.args, params.signal);
+    } catch (err) {
+      const totalLines = parseOffsetBeyondEofTotalLines(err);
+      if (totalLines === null || totalLines === 0) {
+        throw err;
+      }
+      const clampedArgs = { ...params.args, offset: totalLines };
+      return await params.base.execute(params.toolCallId, clampedArgs, params.signal);
+    }
   }
 
   const offsetRaw = params.args.offset;
@@ -230,7 +254,23 @@ async function executeReadWithAdaptivePaging(params: {
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    let pageResult: AgentToolResult<unknown>;
+    try {
+      pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    } catch (err) {
+      const totalLines = parseOffsetBeyondEofTotalLines(err);
+      if (totalLines === null || totalLines === 0) {
+        throw err;
+      }
+      if (page === 0) {
+        // User-supplied offset was beyond EOF: clamp to last line and retry once.
+        const clampedArgs = { ...params.args, offset: totalLines };
+        pageResult = await params.base.execute(params.toolCallId, clampedArgs, params.signal);
+      } else {
+        // Mid-pagination hit EOF: return everything aggregated so far.
+        return withToolResultText(firstResult!, aggregatedText);
+      }
+    }
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
