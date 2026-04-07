@@ -394,6 +394,24 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
       }),
     ).toBe(200_000);
   });
+
+  it("prefers agent contextTokens override over the provider configured window", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "provider-b": { models: [{ id: "shared-model", contextWindow: 512_000 }] },
+        },
+      },
+    };
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-b",
+        modelId: "shared-model",
+        agentCfgContextTokens: 100_000,
+      }),
+    ).toBe(100_000);
+  });
 });
 
 describe("incrementCompactionCount", () => {
