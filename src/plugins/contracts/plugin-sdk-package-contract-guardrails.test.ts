@@ -249,7 +249,11 @@ function collectExtensionFiles(dir: string): string[] {
       files.push(...collectExtensionFiles(nextPath));
       continue;
     }
-    if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+    if (
+      !entry.isFile() ||
+      !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name) ||
+      /\.d\.[cm]?ts$/.test(entry.name)
+    ) {
       continue;
     }
     files.push(nextPath);
