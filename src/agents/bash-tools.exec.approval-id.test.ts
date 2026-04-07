@@ -1247,6 +1247,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-ok");
+
     expect(vi.mocked(callGatewayTool)).toHaveBeenCalledWith(
       "exec.approval.request",
       expect.anything(),
