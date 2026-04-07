@@ -1030,6 +1030,54 @@ describe("sanitizeSessionHistory", () => {
     ).not.toBe(true);
   });
 
+  it("falls back to persisted replay time when toolResult timestamp is present but invalid", async () => {
+    setNonGoogleModelApi();
+    const persistedAt = Date.now() - 2 * 60 * 60 * 1000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_old", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: persistedAt - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "exec",
+        content: [{ type: "text", text: "old plugin output" }],
+        isError: false,
+        timestamp: { invalid: true },
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: Date.now(),
+          persistedAt,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: [
+        {
+          type: "text",
+          text: "[Previous environment diagnostic output omitted from replay for accuracy.]",
+        },
+      ],
+      __openclaw: expect.objectContaining({
+        replayOmitted: true,
+        diagnosticType: "openclaw.plugins_list",
+      }),
+    });
+  });
+
   it("preserves latest assistant thinking blocks for github-copilot models", async () => {
     setNonGoogleModelApi();
 
