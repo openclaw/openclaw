@@ -138,4 +138,70 @@ describe("agentCliCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
+
+  it("passes explicit sessionKey through to the gateway path", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:main" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { sessionKey?: string };
+      };
+      expect(request.params?.sessionKey).toBe("agent:main:main");
+    });
+  });
+
+  it("loads event-file automation context for local runs", async () => {
+    await withTempStore(async ({ dir }) => {
+      const eventFile = path.join(dir, "event.json");
+      fs.writeFileSync(
+        eventFile,
+        JSON.stringify({ type: "workflow_step", runId: "run_1" }, null, 2),
+      );
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          local: true,
+          sessionKey: "agent:main:main",
+          threadTitle: "Workflow: Demo",
+          eventFile,
+        },
+        runtime,
+      );
+
+      expect(agentCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          extraSystemPrompt: expect.stringContaining("OpenClaw runtime context (automation):"),
+        }),
+        runtime,
+        undefined,
+      );
+      const call = vi.mocked(agentCommand).mock.calls[0]?.[0];
+      expect(call?.extraSystemPrompt).toContain("Thread title: Workflow: Demo");
+      expect(call?.extraSystemPrompt).toContain('"type": "workflow_step"');
+    });
+  });
+
+  it("rejects event-file without --local", async () => {
+    await withTempStore(async ({ dir }) => {
+      const eventFile = path.join(dir, "event.json");
+      fs.writeFileSync(eventFile, JSON.stringify({ type: "workflow_step" }, null, 2));
+
+      await expect(
+        agentCliCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:main:main",
+            eventFile,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("--event-file is only supported with --local");
+    });
+  });
 });

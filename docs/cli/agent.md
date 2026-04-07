@@ -20,6 +20,7 @@ Related:
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
+openclaw agent --local --session-key agent:main:main --message "Continue" --event-file ./event.json --json
 openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
 ```
 
@@ -27,3 +28,5 @@ openclaw agent --agent ops --message "Generate report" --deliver --reply-channel
 
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
+- `--session-key` is useful for automation callers that already know the target session identity.
+- `--event-file` is supported for embedded (`--local`) automation flows and should point at a JSON file containing runtime-generated context.

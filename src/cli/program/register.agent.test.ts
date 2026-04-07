@@ -100,6 +100,35 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("forwards automation options for embedded agent runs", async () => {
+    await runCli([
+      "agent",
+      "--message",
+      "hi",
+      "--local",
+      "--session-key",
+      "agent:main:main",
+      "--thread-title",
+      "Workflow: Demo",
+      "--event-file",
+      "/tmp/event.json",
+      "--json",
+    ]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        sessionKey: "agent:main:main",
+        threadTitle: "Workflow: Demo",
+        eventFile: "/tmp/event.json",
+        json: true,
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
