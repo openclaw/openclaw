@@ -7,10 +7,13 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HookMessageDispatchPayload,
   type HooksConfigResolved,
+  isSessionKeyAllowedByPrefix,
 } from "../hooks.js";
 import type { RequestFrame } from "../protocol/index.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
@@ -113,6 +116,20 @@ function formatHookMessageLifecycleFields(fields: HookMessageLifecycleFields): s
     `groupId=${fields.groupId}`,
     `status=${fields.status}`,
   ].join(" ");
+}
+
+function isHookMessageSessionKeyAllowed(
+  sessionKey: string,
+  allowedPrefixes: string[] | undefined,
+): boolean {
+  if (!allowedPrefixes) {
+    return true;
+  }
+  if (isSessionKeyAllowedByPrefix(sessionKey, allowedPrefixes)) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return Boolean(parsed && isSessionKeyAllowedByPrefix(parsed.rest, allowedPrefixes));
 }
 
 function logHookMessageLifecycle(
@@ -365,6 +382,15 @@ export function createGatewayHooksRequestHandler(params: {
     const createdPayload = toRecord(createResult.payload);
     const createdKey = toOptionalString(createdPayload?.key);
     targetSessionKey = createdKey ?? targetSessionKey;
+    if (!isHookMessageSessionKeyAllowed(targetSessionKey, value.allowedSessionKeyPrefixes)) {
+      const prefixError = getHookSessionKeyPrefixError(value.allowedSessionKeyPrefixes ?? []);
+      logHookMessageLifecycle(logHooks, "hook.message.failed", {
+        ...receivedFields,
+        sessionKey: targetSessionKey,
+        status: prefixError,
+      });
+      throw Object.assign(new Error(prefixError), { statusCode: 400 });
+    }
 
     const sendParams = {
       sessionKey: targetSessionKey,

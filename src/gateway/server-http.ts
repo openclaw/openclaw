@@ -690,6 +690,7 @@ export function createHooksRequestHandler(
         const dispatched = await dispatchMessageHook({
           ...normalized.value,
           sessionKey: resolvedSessionKey.value,
+          allowedSessionKeyPrefixes: hooksConfig.sessionPolicy.allowedSessionKeyPrefixes,
           idempotencyKey: effectiveIdempotencyKey,
         });
         rememberHookReplayEntry(
@@ -718,6 +719,17 @@ export function createHooksRequestHandler(
           typeof (err as { statusCode?: unknown }).statusCode === "number"
             ? (err as { statusCode: number }).statusCode
             : 500;
+        if (dispatchStatusCode === 400) {
+          const message =
+            typeof err === "object" &&
+            err !== null &&
+            "message" in err &&
+            typeof (err as { message?: unknown }).message === "string"
+              ? (err as { message: string }).message
+              : "invalid hook message request";
+          sendJson(res, 400, { ok: false, error: message });
+          return true;
+        }
         if (dispatchStatusCode === 503) {
           sendJson(res, 503, { ok: false, error: "hook message dispatch unavailable" });
           return true;
