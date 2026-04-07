@@ -1872,4 +1872,53 @@ describe("task-registry", () => {
       );
     });
   });
+
+  it("cancels CLI-tracked tasks in the registry without ACP or subagent teardown", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:main",
+        runId: "run-cancel-cli",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled by operator.",
+        }),
+      });
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "telegram:123",
+            content: "Background task cancelled: Investigate issue (run run-canc).",
+          }),
+        ),
+      );
+    });
+  });
 });

@@ -1749,6 +1749,10 @@ export async function cancelTaskById(params: {
           task: cloneTaskRecord(task),
         };
       }
+    } else if (task.runtime === "cli") {
+      // CLI tasks key `childSessionKey` to the main agent session; there is no separate ACP or
+      // subagent session manager to stop. Record operator cancellation in the registry (same as
+      // after ACP/subagent teardown succeeds).
     } else {
       return {
         found: true,
