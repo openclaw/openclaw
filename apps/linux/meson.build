@@ -46,9 +46,19 @@ sources = [
   'src/notify.c',
   'src/diagnostics.c',
   'src/display_model.c',
+  'src/session_filter.c',
+  'src/markdown_render.c',
+  'src/chat_blocks.c',
+  'src/format_utils.c',
   'src/app_window.c',
+  'src/section_chat.c',
+  'src/section_agents.c',
+  'src/section_usage.c',
   'src/section_channels.c',
   'src/section_skills.c',
+  'src/section_workflows.c',
+  'src/section_control_room.c',
+  'src/section_logs.c',
   'src/section_sessions.c',
   'src/section_cron.c',
   'src/section_instances.c',
@@ -146,3 +156,23 @@ test_rpc_lifecycle_exe = executable('test_rpc_lifecycle',
    'src/gateway_data.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('rpc_lifecycle', test_rpc_lifecycle_exe)
+
+test_session_filter_exe = executable('test_session_filter',
+  ['tests/test_session_filter.c', 'src/session_filter.c', 'src/gateway_data.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('session_filter', test_session_filter_exe)
+
+test_markdown_render_exe = executable('test_markdown_render',
+  ['tests/test_markdown_render.c', 'src/markdown_render.c'],
+  dependencies : [glib_dep])
+test('markdown_render', test_markdown_render_exe)
+
+test_chat_blocks_exe = executable('test_chat_blocks',
+  ['tests/test_chat_blocks.c', 'src/chat_blocks.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('chat_blocks', test_chat_blocks_exe)
+
+test_format_utils_exe = executable('test_format_utils',
+  ['tests/test_format_utils.c', 'src/format_utils.c'],
+  dependencies : [glib_dep])
+test('format_utils', test_format_utils_exe)

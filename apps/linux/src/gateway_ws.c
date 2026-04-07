@@ -48,6 +48,17 @@ static const gchar * const DEFAULT_SCOPES[] = {
 };
 
 typedef struct {
+    guint id;
+    GatewayWsEventCallback callback;
+    gpointer user_data;
+} GatewayWsEventListener;
+
+typedef struct {
+    GatewayWsEventCallback callback;
+    gpointer user_data;
+} GatewayWsDispatchCallback;
+
+typedef struct {
     SoupSession *session;
     SoupWebsocketConnection *ws_conn;
     GatewayWsState state;
@@ -77,9 +88,38 @@ typedef struct {
     guint tick_watchdog_timer_id;
     guint challenge_timeout_id;
     guint connect_timeout_id;
+
+    guint next_event_listener_id;
+    GPtrArray *event_listeners;
 } GatewayWsClient;
 
 static GatewayWsClient *ws_client = NULL;
+
+static void gateway_ws_event_listener_free(gpointer data) {
+    GatewayWsEventListener *listener = data;
+    g_free(listener);
+}
+
+static void ws_dispatch_event(const gchar *event_type, JsonNode *payload) {
+    if (!ws_client || !ws_client->event_listeners || !event_type) return;
+
+    g_autoptr(GArray) listeners_snapshot = g_array_new(FALSE, FALSE, sizeof(GatewayWsDispatchCallback));
+    for (guint i = 0; i < ws_client->event_listeners->len; i++) {
+        GatewayWsEventListener *listener = g_ptr_array_index(ws_client->event_listeners, i);
+        if (!listener || !listener->callback) continue;
+        GatewayWsDispatchCallback cb = {
+            .callback = listener->callback,
+            .user_data = listener->user_data,
+        };
+        g_array_append_val(listeners_snapshot, cb);
+    }
+
+    for (guint i = 0; i < listeners_snapshot->len; i++) {
+        GatewayWsDispatchCallback cb = g_array_index(listeners_snapshot, GatewayWsDispatchCallback, i);
+        if (!cb.callback) continue;
+        cb.callback(event_type, payload, cb.user_data);
+    }
+}
 
 static void ws_publish_status(void);
 static void ws_schedule_reconnect(void);
@@ -284,6 +324,7 @@ static void ws_handle_frame(const gchar *text) {
 
     switch (frame->type) {
     case GATEWAY_FRAME_EVENT:
+        ws_dispatch_event(frame->event_type, frame->payload);
         if (g_strcmp0(frame->event_type, "connect.challenge") == 0) {
             OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws received connect.challenge");
             if (ws_client->challenge_timeout_id) {
@@ -493,6 +534,8 @@ void gateway_ws_init(void) {
     ws_client->backoff_ms = BACKOFF_INITIAL_MS;
     ws_client->tick_interval_ms = DEFAULT_TICK_INTERVAL_MS;
     ws_client->should_reconnect = TRUE;
+    ws_client->next_event_listener_id = 1;
+    ws_client->event_listeners = g_ptr_array_new_with_free_func(gateway_ws_event_listener_free);
 }
 
 void gateway_ws_connect(const gchar *ws_url, const gchar *auth_mode,
@@ -532,6 +575,10 @@ void gateway_ws_shutdown(void) {
     ws_client->callback = NULL;
     gateway_rpc_fail_all_pending("Shutdown");
     ws_cleanup_connection();
+    if (ws_client->event_listeners) {
+        g_ptr_array_free(ws_client->event_listeners, TRUE);
+        ws_client->event_listeners = NULL;
+    }
     g_clear_object(&ws_client->session);
     g_free(ws_client->url);
     g_free(ws_client->auth_mode);
@@ -541,6 +588,30 @@ void gateway_ws_shutdown(void) {
     g_free(ws_client->last_error);
     g_free(ws_client);
     ws_client = NULL;
+}
+
+guint gateway_ws_event_subscribe(GatewayWsEventCallback callback, gpointer user_data) {
+    if (!ws_client) gateway_ws_init();
+    if (!ws_client || !ws_client->event_listeners || !callback) return 0;
+
+    GatewayWsEventListener *listener = g_new0(GatewayWsEventListener, 1);
+    listener->id = ws_client->next_event_listener_id++;
+    listener->callback = callback;
+    listener->user_data = user_data;
+    g_ptr_array_add(ws_client->event_listeners, listener);
+    return listener->id;
+}
+
+void gateway_ws_event_unsubscribe(guint listener_id) {
+    if (!ws_client || !ws_client->event_listeners || listener_id == 0) return;
+
+    for (guint i = 0; i < ws_client->event_listeners->len; i++) {
+        GatewayWsEventListener *listener = g_ptr_array_index(ws_client->event_listeners, i);
+        if (listener && listener->id == listener_id) {
+            g_ptr_array_remove_index(ws_client->event_listeners, i);
+            return;
+        }
+    }
 }
 
 gboolean gateway_ws_send_text(const gchar *text) {

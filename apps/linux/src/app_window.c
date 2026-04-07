@@ -31,6 +31,12 @@
 #include "section_sessions.h"
 #include "section_cron.h"
 #include "section_instances.h"
+#include "section_chat.h"
+#include "section_agents.h"
+#include "section_usage.h"
+#include "section_logs.h"
+#include "section_control_room.h"
+#include "section_workflows.h"
 #include "log.h"
 
 /* ── Section metadata ── */
@@ -43,12 +49,18 @@ typedef struct {
 
 static const SectionMeta section_meta[SECTION_COUNT] = {
     [SECTION_DASHBOARD]    = { "dashboard",    "Dashboard",    "computer-symbolic" },
+    [SECTION_CHAT]         = { "chat",         "Chat",         "chat-bubbles-symbolic" },
+    [SECTION_AGENTS]       = { "agents",       "Agents",       "avatar-default-symbolic" },
+    [SECTION_USAGE]        = { "usage",        "Usage",        "view-statistics-symbolic" },
     [SECTION_GENERAL]      = { "general",      "General",      "preferences-system-symbolic" },
     [SECTION_CONFIG]       = { "config",       "Config",       "document-properties-symbolic" },
     [SECTION_CHANNELS]     = { "channels",     "Channels",     "mail-send-symbolic" },
     [SECTION_SKILLS]       = { "skills",       "Skills",       "applications-science-symbolic" },
+    [SECTION_WORKFLOWS]    = { "workflows",    "Workflows",    "view-list-bullet-symbolic" },
+    [SECTION_CONTROL_ROOM] = { "control-room", "Control Room", "applications-system-symbolic" },
     [SECTION_ENVIRONMENT]  = { "environment",  "Environment",  "system-run-symbolic" },
     [SECTION_DIAGNOSTICS]  = { "diagnostics",  "Diagnostics",  "utilities-system-monitor-symbolic" },
+    [SECTION_LOGS]         = { "logs",         "Logs",         "text-x-log-symbolic" },
     [SECTION_ABOUT]        = { "about",        "About",        "help-about-symbolic" },
     [SECTION_INSTANCES]    = { "instances",    "Instances",    "network-server-symbolic" },
     [SECTION_DEBUG]        = { "debug",        "Debug",        "emblem-system-symbolic" },
@@ -63,6 +75,8 @@ static GtkWidget *content_stack = NULL;
 static GtkWidget *sidebar_list = NULL;
 static guint refresh_timer_id = 0;
 static AppSection active_section = SECTION_DASHBOARD;
+static gboolean last_rpc_ready = FALSE;
+static AppState last_app_state = STATE_NEEDS_SETUP;
 
 /* Section content widgets that need updating */
 static GtkWidget *section_pages[SECTION_COUNT] = {0};
@@ -141,8 +155,14 @@ static GtkWidget* build_content_stack(void) {
     gtk_stack_set_transition_duration(GTK_STACK(content_stack), 150);
 
     /* Register section controllers for RPC-backed sections */
+    section_controllers[SECTION_CHAT]      = section_chat_get();
+    section_controllers[SECTION_AGENTS]    = section_agents_get();
+    section_controllers[SECTION_USAGE]     = section_usage_get();
     section_controllers[SECTION_CHANNELS]  = section_channels_get();
     section_controllers[SECTION_SKILLS]    = section_skills_get();
+    section_controllers[SECTION_WORKFLOWS] = section_workflows_get();
+    section_controllers[SECTION_CONTROL_ROOM] = section_control_room_get();
+    section_controllers[SECTION_LOGS]      = section_logs_get();
     section_controllers[SECTION_SESSIONS]  = section_sessions_get();
     section_controllers[SECTION_CRON]      = section_cron_get();
     section_controllers[SECTION_INSTANCES] = section_instances_get();
@@ -180,6 +200,14 @@ static GtkWidget* build_content_stack(void) {
 static void refresh_active_rpc_section(AppSection section) {
     if (section >= 0 && section < SECTION_COUNT && section_controllers[section]) {
         section_controllers[section]->refresh();
+    }
+}
+
+static void invalidate_all_rpc_sections(void) {
+    for (int i = 0; i < SECTION_COUNT; i++) {
+        if (section_controllers[i] && section_controllers[i]->invalidate) {
+            section_controllers[i]->invalidate();
+        }
     }
 }
 
@@ -1496,6 +1524,14 @@ static void refresh_debug_content(void) {
 static gboolean on_refresh_tick(gpointer user_data) {
     (void)user_data;
     if (main_window) {
+        gboolean rpc_ready = gateway_rpc_is_ready();
+        AppState app_state = state_get_current();
+        if (rpc_ready != last_rpc_ready || app_state != last_app_state) {
+            invalidate_all_rpc_sections();
+            last_rpc_ready = rpc_ready;
+            last_app_state = app_state;
+        }
+
         refresh_dashboard_content();
         refresh_general_content();
         refresh_config_content();
@@ -1599,6 +1635,8 @@ static void on_window_destroy(GtkWindow *window, gpointer user_data) {
     }
 
     active_section = SECTION_DASHBOARD;
+    last_rpc_ready = FALSE;
+    last_app_state = STATE_NEEDS_SETUP;
     memset(section_pages, 0, sizeof(section_pages));
 }
 
@@ -1658,6 +1696,8 @@ void app_window_show(void) {
     refresh_environment_content();
     section_instances_refresh_local();
     refresh_debug_content();
+    last_rpc_ready = gateway_rpc_is_ready();
+    last_app_state = state_get_current();
     /* RPC-backed sections will fetch on first sidebar activation */
     refresh_timer_id = g_timeout_add_seconds(1, on_refresh_tick, NULL);
 
