@@ -2,7 +2,6 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
-import { resolveMemorySearchConfig } from "openclaw/plugin-sdk/memory-core";
 import {
   listSessionFilesForAgent,
   sessionPathForFile,
@@ -878,14 +877,6 @@ async function collectSessionIngestionBatches(params: {
 
   const sessionFiles: Array<{ agentId: string; absolutePath: string; sessionPath: string }> = [];
   for (const agentId of agentIds) {
-    const memorySearch = resolveMemorySearchConfig(params.cfg, agentId);
-    if (
-      !memorySearch?.enabled ||
-      !memorySearch.experimental.sessionMemory ||
-      !memorySearch.sources.includes("sessions")
-    ) {
-      continue;
-    }
     const files = await listSessionFilesForAgent(agentId);
     for (const absolutePath of files) {
       sessionFiles.push({
