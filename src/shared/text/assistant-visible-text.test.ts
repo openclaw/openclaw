@@ -525,12 +525,12 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
   });
 });
 
-describe("stripLeakedReasoningPreamble (via stripAssistantInternalScaffolding)", () => {
+describe("stripLeakedReasoningPreamble (via sanitizeAssistantVisibleText)", () => {
   function expectVisibleText(input: string, expected: string) {
-    expect(stripAssistantInternalScaffolding(input)).toBe(expected);
+    expect(sanitizeAssistantVisibleText(input)).toBe(expected);
   }
   function expectLiteralVisibleText(input: string) {
-    expect(stripAssistantInternalScaffolding(input)).toBe(input);
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
   }
 
   it.each([

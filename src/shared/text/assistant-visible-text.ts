@@ -731,7 +731,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "preserve",
     reasoningTrim: "start",
     stageOrder: "reasoning-first",
-    stripLeakedPreamble: true,
+    stripLeakedPreamble: false,
     stripStructuralContamination: false,
   },
 };
