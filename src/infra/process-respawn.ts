@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
@@ -63,7 +64,7 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     child.unref();
     return { mode: "spawned", pid: child.pid ?? undefined };
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = formatErrorMessage(err);
     return { mode: "failed", detail };
   }
 }

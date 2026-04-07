@@ -7,6 +7,7 @@ import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -2550,7 +2551,7 @@ export async function writeConfigFile(
       } catch {
         // Keep the original refresh failure as the surfaced error.
       }
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = formatErrorMessage(error);
       throw new ConfigRuntimeRefreshError(
         `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
         { cause: error },

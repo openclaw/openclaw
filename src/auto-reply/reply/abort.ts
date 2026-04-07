@@ -20,6 +20,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
@@ -286,7 +287,7 @@ export async function tryFastAbortFromMessage(params: {
         });
       } catch (error) {
         logVerbose(
-          `abort: ACP cancel failed for ${resolvedTargetKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `abort: ACP cancel failed for ${resolvedTargetKey}: ${formatErrorMessage(error)}`,
         );
       }
     }

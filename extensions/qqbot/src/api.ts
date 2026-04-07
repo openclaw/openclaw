@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import os from "node:os";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
@@ -104,10 +105,9 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     });
   } catch (err) {
     debugError(`[qqbot-api:${appId}] <<< Network error:`, err);
-    throw new Error(
-      `Network error getting access_token: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
+      cause: err,
+    });
   }
 
   const responseHeaders: Record<string, string> = {};
@@ -129,10 +129,9 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
   } catch (err) {
     debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
-    throw new Error(
-      `Failed to parse access_token response: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
+      cause: err,
+    });
   }
 
   if (!data.access_token) {
@@ -242,10 +241,7 @@ export async function apiRequest<T = unknown>(
       throw new Error(`Request timeout[${path}]: exceeded ${timeout}ms`, { cause: err });
     }
     debugError(`[qqbot-api] <<< Network error:`, err);
-    throw new Error(
-      `Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    throw new Error(`Network error [${path}]: ${formatErrorMessage(err)}`, { cause: err });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -266,10 +262,9 @@ export async function apiRequest<T = unknown>(
     debugLog(`[qqbot-api] <<< Body:`, rawBody);
     data = JSON.parse(rawBody) as T;
   } catch (err) {
-    throw new Error(
-      `Failed to parse response[${path}]: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    throw new Error(`Failed to parse response[${path}]: ${formatErrorMessage(err)}`, {
+      cause: err,
+    });
   }
 
   if (!res.ok) {

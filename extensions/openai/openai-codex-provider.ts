@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
@@ -182,7 +183,7 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
       displayName: cred.displayName,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     if (
       /extract\s+accountid\s+from\s+token/i.test(message) &&
       typeof cred.access === "string" &&

@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+
 type MemoryEmbeddingTextPart = {
   type: "text";
   text: string;
@@ -111,7 +113,7 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
         throw err;
       }

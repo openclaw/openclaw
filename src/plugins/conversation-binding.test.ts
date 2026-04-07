@@ -108,6 +108,7 @@ vi.mock("../infra/home-dir.js", async () => {
 
 vi.mock("./runtime.js", () => ({
   getActivePluginRegistry: () => pluginRuntimeState.registry,
+  getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
   setActivePluginRegistry: (registry: PluginRegistry) => {
     pluginRuntimeState.registry = registry;
   },
@@ -399,6 +400,7 @@ describe("plugin conversation binding approvals", () => {
     });
     vi.doMock("./runtime.js", () => ({
       getActivePluginRegistry: () => pluginRuntimeState.registry,
+      getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
       setActivePluginRegistry: (registry: PluginRegistry) => {
         pluginRuntimeState.registry = registry;
       },

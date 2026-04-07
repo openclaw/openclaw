@@ -2,6 +2,7 @@ import * as carbonGateway from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as undici from "undici";
@@ -117,7 +118,7 @@ async function fetchDiscordGatewayInfo(params: {
     });
   } catch (error) {
     throw createGatewayMetadataError({
-      detail: error instanceof Error ? error.message : String(error),
+      detail: formatErrorMessage(error),
       transient: true,
       cause: error,
     });
@@ -128,7 +129,7 @@ async function fetchDiscordGatewayInfo(params: {
     body = await response.text();
   } catch (error) {
     throw createGatewayMetadataError({
-      detail: error instanceof Error ? error.message : String(error),
+      detail: formatErrorMessage(error),
       transient: true,
       cause: error,
     });

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
@@ -45,7 +46,7 @@ function loadBundledChannelPublicArtifact(
       });
     } catch (error) {
       if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = formatErrorMessage(error);
         process.stderr.write(
           `[channel-contract-api] failed to load ${channelId} via ${metadata.dirName}/${artifactBasename}: ${detail}\n`,
         );

@@ -1,6 +1,7 @@
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -1291,7 +1292,7 @@ export class AcpSessionManager {
               });
             } catch (recoveryError) {
               logVerbose(
-                `acp close recovery: unable to prepare fresh session for ${sessionKey}: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+                `acp close recovery: unable to prepare fresh session for ${sessionKey}: ${formatErrorMessage(recoveryError)}`,
               );
             }
           }
@@ -1665,7 +1666,7 @@ export class AcpSessionManager {
         });
       } catch (error) {
         logVerbose(
-          `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
         );
         return false;
       }

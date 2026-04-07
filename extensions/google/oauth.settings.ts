@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type OAuthSettingsFs = {
   existsSync: (path: Parameters<typeof existsSync>[0]) => ReturnType<typeof existsSync>;
@@ -28,10 +28,6 @@ type GeminiCliAuthSettings = {
   enforcedAuthType?: unknown;
 };
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readSettingsFile(): GeminiCliAuthSettings | null {
   const settingsPath = join(oauthSettingsFs.homedir(), ".gemini", "settings.json");
   if (!oauthSettingsFs.existsSync(settingsPath)) {
@@ -55,10 +51,10 @@ export function resolveGeminiCliSelectedAuthType(): string | undefined {
     const security = isRecord(settings.security) ? settings.security : undefined;
     const auth = isRecord(security?.auth) ? security.auth : undefined;
     const selectedAuthType =
-      readString(auth?.selectedType) ??
-      readString(auth?.enforcedType) ??
-      readString(settings.selectedAuthType) ??
-      readString(settings.enforcedAuthType);
+      normalizeOptionalString(auth?.selectedType) ??
+      normalizeOptionalString(auth?.enforcedType) ??
+      normalizeOptionalString(settings.selectedAuthType) ??
+      normalizeOptionalString(settings.enforcedAuthType);
     if (selectedAuthType) {
       return selectedAuthType;
     }

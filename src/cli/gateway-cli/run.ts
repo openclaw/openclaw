@@ -21,6 +21,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { resolveControlUiRootSync } from "../../infra/control-ui-assets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
@@ -398,7 +399,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   try {
     passwordRaw = resolveGatewayPasswordOption(opts);
   } catch (err) {
-    defaultRuntime.error(err instanceof Error ? err.message : String(err));
+    defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
     return;
   }

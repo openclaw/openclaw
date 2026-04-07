@@ -1,20 +1,10 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
+import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/text-runtime";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
-export function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | undefined {
-  if (!record) {
-    return undefined;
-  }
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
+export const asRecord = asNullableRecord;
+const readString = readStringField;
 
 function readNumber(record: Record<string, unknown> | null, key: string): number | undefined {
   if (!record) {
