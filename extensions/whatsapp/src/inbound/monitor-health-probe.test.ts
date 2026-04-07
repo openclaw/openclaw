@@ -19,8 +19,7 @@ describe("WA health probe", () => {
   it("exposes getHealthProbeState on the listener", async () => {
     const onMessage = vi.fn();
     const sock = getSock();
-    // fetchStatus must exist on the mock for the probe to work
-    (sock as any).fetchStatus = vi.fn().mockResolvedValue({ status: "Hey there!" });
+    sock.fetchStatus = vi.fn().mockResolvedValue({ status: "Hey there!" });
 
     const { listener } = await startInboxMonitor(onMessage);
 
@@ -38,7 +37,7 @@ describe("WA health probe", () => {
   it("marks probe as failed when fetchStatus rejects", async () => {
     const onMessage = vi.fn();
     const sock = getSock();
-    (sock as any).fetchStatus = vi.fn().mockRejectedValue(new Error("server down"));
+    sock.fetchStatus = vi.fn().mockRejectedValue(new Error("server down"));
 
     const { listener } = await startInboxMonitor(onMessage);
     await vi.advanceTimersByTimeAsync(50);
@@ -54,7 +53,7 @@ describe("WA health probe", () => {
     const onMessage = vi.fn();
     const sock = getSock();
     // Never resolves → triggers timeout
-    (sock as any).fetchStatus = vi.fn().mockReturnValue(new Promise(() => {}));
+    sock.fetchStatus = vi.fn().mockReturnValue(new Promise(() => {}));
 
     const { listener } = await startInboxMonitor(onMessage);
     // Advance past the 10s timeout
@@ -71,7 +70,7 @@ describe("WA health probe", () => {
     const onMessage = vi.fn();
     const sock = getSock();
     const fetchStatus = vi.fn().mockResolvedValue({ status: "ok" });
-    (sock as any).fetchStatus = fetchStatus;
+    sock.fetchStatus = fetchStatus;
 
     const { listener } = await startInboxMonitor(onMessage);
     // Initial probe fires immediately
@@ -93,7 +92,7 @@ describe("WA health probe", () => {
     const onMessage = vi.fn();
     const sock = getSock();
     const fetchStatus = vi.fn().mockResolvedValue({ status: "ok" });
-    (sock as any).fetchStatus = fetchStatus;
+    sock.fetchStatus = fetchStatus;
 
     const { listener } = await startInboxMonitor(onMessage);
     await vi.advanceTimersByTimeAsync(50);

@@ -622,14 +622,33 @@ export async function monitorWebInbox(options: {
   const healthProbeState: HealthProbeState = { lastProbeAt: null, ok: true };
   const selfJid = self.jid ?? sock.user?.id ?? null;
   let healthProbeInterval: ReturnType<typeof setInterval> | null = null;
+  let probeClosed = false;
+  let activeProbeTimeout: ReturnType<typeof setTimeout> | null = null;
+  let probeInFlight = false;
 
   if (selfJid) {
     const doProbe = async () => {
+      if (probeClosed || probeInFlight) {
+        return;
+      }
+      probeInFlight = true;
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       try {
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("probe timeout")), HEALTH_PROBE_TIMEOUT_MS),
-        );
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error("probe timeout")),
+            HEALTH_PROBE_TIMEOUT_MS,
+          );
+          activeProbeTimeout = timeoutHandle;
+        });
         await Promise.race([sock.fetchStatus(selfJid), timeout]);
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          activeProbeTimeout = null;
+        }
+        if (probeClosed) {
+          return;
+        }
         healthProbeState.lastProbeAt = Date.now();
         healthProbeState.ok = true;
         healthProbeState.error = undefined;
@@ -637,10 +656,19 @@ export async function monitorWebInbox(options: {
           logVerbose("WA health probe: ok");
         }
       } catch (err) {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          activeProbeTimeout = null;
+        }
+        if (probeClosed) {
+          return;
+        }
         healthProbeState.lastProbeAt = Date.now();
         healthProbeState.ok = false;
         healthProbeState.error = String(err);
         inboundLogger.warn({ error: String(err) }, "WA health probe failed");
+      } finally {
+        probeInFlight = false;
       }
     };
     void doProbe();
@@ -681,6 +709,11 @@ export async function monitorWebInbox(options: {
         if (healthProbeInterval) {
           clearInterval(healthProbeInterval);
           healthProbeInterval = null;
+        }
+        probeClosed = true;
+        if (activeProbeTimeout) {
+          clearTimeout(activeProbeTimeout);
+          activeProbeTimeout = null;
         }
         detachMessagesUpsert();
         detachConnectionUpdate();
