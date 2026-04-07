@@ -180,9 +180,22 @@ export function resolveExecHostApprovalContext(params: {
     ask: params.ask,
   });
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  // An explicit ask=off policy in exec-approvals.json must be able to suppress
-  // prompts even when tool/runtime defaults are stricter (for example on-miss).
-  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
+  // LOOPFIX-01: Both config and exec-approvals ask=off are authoritative.
+  //
+  // Previously only exec-approvals.json ask=off suppressed prompts — if the
+  // gateway config (tools.exec.ask) set ask=off but exec-approvals.json had
+  // ask=always, maxAsk() picked "always" and every command required approval.
+  // This caused a 65-iteration approval loop that burned through context.
+  //
+  // Now: either source setting ask=off suppresses approval prompts.  The
+  // platform's tools.exec.ask in openclaw.json is the intended system policy;
+  // exec-approvals.json is the per-user/per-agent override layer.  Either
+  // layer saying "off" means "no approval needed" — maxAsk only applies when
+  // both layers want some level of approval.
+  const hostAsk =
+    params.ask === "off" || approvals.agent.ask === "off"
+      ? "off"
+      : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);

@@ -24,12 +24,18 @@ export type LoopDetectionResult =
       warningKey?: string;
     };
 
-export const TOOL_CALL_HISTORY_SIZE = 30;
-export const WARNING_THRESHOLD = 10;
-export const CRITICAL_THRESHOLD = 20;
-export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+// LOOPFIX-01: Lowered thresholds and enabled by default.
+// No legitimate use case requires 10+ identical tool calls with the same args.
+// Engineering agents that genuinely poll (e.g., process/poll) can override via
+// per-agent config at agents[].tools.loopDetection.  The previous defaults
+// (10/20/30, enabled:false) allowed a qwen3 model to retry a single exec call
+// 65 times before context overflow killed the session.
+export const TOOL_CALL_HISTORY_SIZE = 50;
+export const WARNING_THRESHOLD = 5;
+export const CRITICAL_THRESHOLD = 10;
+export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 15;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
-  enabled: false,
+  enabled: true,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
@@ -470,10 +476,32 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: blocks non-poll tools that repeat identical calls.
+  // LOOPFIX-01: Added critical-level blocking.  Previously generic_repeat only
+  // warned, allowing models (especially smaller/quantized ones) to loop
+  // indefinitely.  The critical threshold hard-stops the loop so the model
+  // receives an error and can pivot or report failure.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    recentCount >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(
+      `Blocking ${toolName}: called ${recentCount} times with identical arguments (critical threshold)`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: recentCount,
+      message: `CRITICAL: ${toolName} called ${recentCount} times with identical arguments. Blocking to prevent runaway loop. Stop retrying and either try a different approach or report the task as failed.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
+    };
+  }
 
   if (
     !knownPollTool &&
