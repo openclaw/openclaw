@@ -368,6 +368,80 @@ describe("loadModelCatalog", () => {
     expect(matches[0]?.name).toBe("Kilo Auto");
   });
 
+  it("filters phantom provider entries inferred from aggregator model ID prefixes", async () => {
+    // Simulate what pi-coding-agent's ModelRegistry does: when openrouter has a model
+    // "google/gemini-3-flash-preview", the registry emits both an openrouter entry and
+    // a phantom "google" entry with id "gemini-3-flash-preview".
+    mockPiDiscoveryModels([
+      {
+        id: "google/gemini-3-flash-preview",
+        provider: "openrouter",
+        name: "Google Gemini 3 Flash Preview",
+      },
+      {
+        id: "xiaomi/mimo-v2-pro",
+        provider: "openrouter",
+        name: "Xiaomi Mimo V2 Pro",
+      },
+      {
+        id: "gemini-3-flash-preview",
+        provider: "google",
+        name: "Google Gemini 3 Flash Preview",
+      },
+    ]);
+
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [
+              { id: "google/gemini-3-flash-preview", name: "Google Gemini 3 Flash Preview" },
+              { id: "xiaomi/mimo-v2-pro", name: "Xiaomi Mimo V2 Pro" },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await loadModelCatalog({ config: cfg });
+
+    // The phantom "google" provider entry should be filtered out
+    expect(result).not.toContainEqual(
+      expect.objectContaining({ provider: "google", id: "gemini-3-flash-preview" }),
+    );
+    // The legitimate openrouter entries should remain
+    expect(result).toContainEqual(
+      expect.objectContaining({ provider: "openrouter", id: "google/gemini-3-flash-preview" }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({ provider: "openrouter", id: "xiaomi/mimo-v2-pro" }),
+    );
+  });
+
+  it("keeps entries from explicitly configured providers even with slashed model IDs", async () => {
+    // If "google" is an explicitly configured provider, its entries should not be filtered.
+    mockPiDiscoveryModels([
+      { id: "gemini-3-flash-preview", provider: "google", name: "Gemini 3 Flash" },
+    ]);
+
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            models: [{ id: "gemini-3-flash-preview", name: "Gemini 3 Flash" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await loadModelCatalog({ config: cfg });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({ provider: "google", id: "gemini-3-flash-preview" }),
+    );
+  });
+
   it("matches models across canonical provider aliases", () => {
     expect(
       findModelInCatalog([{ provider: "z.ai", id: "glm-5", name: "GLM-5" }], "z-ai", "glm-5"),
