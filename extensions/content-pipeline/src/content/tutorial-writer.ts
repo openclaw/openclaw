@@ -1,5 +1,5 @@
 import type { VideoContent, PipelineConfig } from "../types.js";
-import { parseModelSpec, generateText, stripCodeFences } from "./llm.js";
+import { generateTextWithFallback, stripCodeFences } from "./llm.js";
 
 const SYSTEM_PROMPT = `You are a tech tutorial video script writer. You create clear, educational scripts for tutorial videos (5-10 minutes).
 
@@ -56,11 +56,11 @@ export async function generateTutorialScript(
   topic: string,
   config: PipelineConfig["content"],
 ): Promise<VideoContent> {
-  const llm = parseModelSpec(config.model);
-  console.log(`🤖 Stage 2: Generating tutorial script with ${llm.provider}/${llm.model}...`);
+  const models = [config.model, ...(config.fallbackModels ?? [])];
+  console.log(`🤖 Stage 2: Generating tutorial script (${models.length} models in chain)...`);
 
   const prompt = buildPrompt(topic, config.tone, config.language);
-  const raw = await generateText(llm, { system: SYSTEM_PROMPT, prompt });
+  const raw = await generateTextWithFallback(models, { system: SYSTEM_PROMPT, prompt });
   const cleaned = stripCodeFences(raw);
 
   const data = JSON.parse(cleaned) as VideoContent;

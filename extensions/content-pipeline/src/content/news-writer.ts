@@ -1,5 +1,5 @@
 import type { Article, VideoContent, PipelineConfig } from "../types.js";
-import { parseModelSpec, generateText, stripCodeFences } from "./llm.js";
+import { generateTextWithFallback, stripCodeFences } from "./llm.js";
 
 const SYSTEM_PROMPT = `You are a tech news video script writer. You create engaging, concise scripts for short-form tech news videos (3-5 minutes).
 
@@ -62,11 +62,11 @@ export async function generateNewsScript(
   articles: Article[],
   config: PipelineConfig["content"],
 ): Promise<VideoContent> {
-  const llm = parseModelSpec(config.model);
-  console.log(`🤖 Stage 2: Generating content with ${llm.provider}/${llm.model}...`);
+  const models = [config.model, ...(config.fallbackModels ?? [])];
+  console.log(`🤖 Stage 2: Generating content (${models.length} models in chain)...`);
 
   const prompt = buildPrompt(articles, config.topStories, config.tone, config.language);
-  const raw = await generateText(llm, { system: SYSTEM_PROMPT, prompt });
+  const raw = await generateTextWithFallback(models, { system: SYSTEM_PROMPT, prompt });
   const cleaned = stripCodeFences(raw);
 
   const data = JSON.parse(cleaned) as VideoContent;

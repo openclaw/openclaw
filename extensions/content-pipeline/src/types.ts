@@ -76,9 +76,21 @@ export interface PipelineConfig {
   sources: SourceConfig[];
   content: {
     model: string;
+    fallbackModels?: string[];
     topStories: number;
     language: string;
     tone: string;
+  };
+  keyManager?: {
+    google?: {
+      serviceAccountPath: string;
+      projectIds: string[];
+      maxKeysPerProject?: number;
+    };
+    openrouter?: {
+      managementKey: string;
+      keyPrefix?: string;
+    };
   };
   slides: {
     width: number;

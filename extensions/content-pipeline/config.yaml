@@ -32,14 +32,26 @@ sources:
 
 # ── Content Generation ──
 # Model format: "provider/model-name"
-#   Google (free):    "google/gemma-4-27b-it"  (default)
-#   Google (free):    "google/gemini-2.0-flash"
-#   Anthropic (paid): "anthropic/claude-sonnet-4-6-20250514"
+# Failover: tries each model in order. On rate limit → next model.
 content:
-  model: "google/gemma-4-27b-it"
+  model: "google/gemini-2.5-flash"
+  fallbackModels:
+    - "groq/llama-3.3-70b-versatile"
+    - "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+    - "cerebras/llama-3.3-70b"
   topStories: 5
   language: "en"
   tone: "energetic"
+
+# ── Auto Key Generation (optional) ──
+keyManager:
+  google:
+    serviceAccountPath: "~/.openclaw/google-service-account.json"
+    projectIds: []
+    maxKeysPerProject: 2
+  openrouter:
+    managementKey: ""
+    keyPrefix: "pipeline-auto"
 
 # ── Slides ──
 slides:
