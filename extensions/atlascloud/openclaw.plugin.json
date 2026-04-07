@@ -1,0 +1,32 @@
+{
+  "id": "atlascloud",
+  "enabledByDefault": true,
+  "providers": ["atlascloud"],
+  "providerAuthEnvVars": {
+    "atlascloud": ["ATLASCLOUD_API_KEY", "ATLAS_CLOUD_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "atlascloud",
+      "method": "api-key",
+      "choiceId": "atlascloud-api-key",
+      "choiceLabel": "Atlas Cloud API key",
+      "groupId": "atlascloud",
+      "groupLabel": "Atlas Cloud",
+      "groupHint": "Video generation",
+      "onboardingScopes": ["video-generation"],
+      "optionKey": "atlascloudApiKey",
+      "cliFlag": "--atlascloud-api-key",
+      "cliOption": "--atlascloud-api-key <key>",
+      "cliDescription": "Atlas Cloud API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["atlascloud"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

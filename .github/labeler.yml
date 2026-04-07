@@ -261,6 +261,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/arcee/**"
+"extensions: atlascloud":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/atlascloud/**"
 "extensions: byteplus":
   - changed-files:
       - any-glob-to-any-file:

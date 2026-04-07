@@ -25,6 +25,7 @@ import {
   requireRegisteredProvider,
 } from "../test/helpers/plugins/provider-registration.js";
 import alibabaPlugin from "./alibaba/index.js";
+import atlascloudPlugin from "./atlascloud/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
@@ -56,6 +57,12 @@ const CASES: LiveProviderCase[] = [
     pluginId: "alibaba",
     pluginName: "Alibaba Model Studio Plugin",
     providerId: "alibaba",
+  },
+  {
+    plugin: atlascloudPlugin,
+    pluginId: "atlascloud",
+    pluginName: "Atlas Cloud Provider",
+    providerId: "atlascloud",
   },
   {
     plugin: byteplusPlugin,
