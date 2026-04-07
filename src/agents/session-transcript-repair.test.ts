@@ -449,6 +449,33 @@ describe("sanitizeToolCallInputs", () => {
     expect(keptPartial).not.toHaveProperty("partialJson");
   });
 
+  it("strips partialJson and still redacts sessions_spawn attachment content", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            arguments: { attachments: [{ content: "secret data" }] },
+            partialJson: '{"attachments":[{"content":"secret data"}]}',
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+    expect(toolCalls).toHaveLength(1);
+    const spawn = toolCalls[0] as { id?: unknown; arguments?: unknown };
+    // partialJson must be stripped
+    expect(spawn).not.toHaveProperty("partialJson");
+    // sessions_spawn attachment content must be redacted
+    const args = spawn.arguments as { attachments?: Array<{ content?: unknown }> };
+    expect(args?.attachments?.[0]?.content).not.toBe("secret data");
+  });
+
   it("keeps valid tool calls and preserves text blocks", () => {
     const input = castAgentMessages([
       {
