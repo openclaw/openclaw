@@ -203,6 +203,19 @@ describe("acp unsupported bridge session setup", () => {
 });
 
 describe("acp session UX bridge behavior", () => {
+  it("uses ACP bridge session keys for new CLI sessions without metadata", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toMatch(/^acp-bridge:/);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("returns initial modes and thought-level config options for new sessions", async () => {
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {

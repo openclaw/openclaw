@@ -98,6 +98,23 @@ function isTerminalTask(task: TaskRecord): boolean {
   return !isActiveTask(task);
 }
 
+function isTerminalSessionEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { endedAt?: unknown; status?: unknown };
+  const status = typeof record.status === "string" ? record.status.trim().toLowerCase() : "";
+  return (
+    Boolean(record.endedAt) ||
+    status === "done" ||
+    status === "timeout" ||
+    status === "killed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "error"
+  );
+}
+
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
   return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
@@ -117,7 +134,12 @@ function hasActiveCliRun(task: TaskRecord): boolean {
 function hasBackingSession(task: TaskRecord): boolean {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
-    return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
+    if (!jobId || !taskRegistryMaintenanceRuntime.isCronJobActive(jobId)) {
+      return false;
+    }
+    if (!task.childSessionKey?.trim()) {
+      return true;
+    }
   }
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
@@ -137,7 +159,7 @@ function hasBackingSession(task: TaskRecord): boolean {
     }
     return Boolean(acpEntry.entry);
   }
-  if (task.runtime === "subagent" || task.runtime === "cli") {
+  if (task.runtime === "subagent" || task.runtime === "cli" || task.runtime === "cron") {
     if (task.runtime === "cli") {
       const chatType = deriveSessionChatType(childSessionKey);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
@@ -147,7 +169,8 @@ function hasBackingSession(task: TaskRecord): boolean {
     const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
     const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
-    return Boolean(findSessionEntryByKey(store, childSessionKey));
+    const entry = findSessionEntryByKey(store, childSessionKey);
+    return Boolean(entry) && !isTerminalSessionEntry(entry);
   }
 
   return true;
