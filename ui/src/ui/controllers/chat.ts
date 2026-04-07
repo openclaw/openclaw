@@ -68,20 +68,64 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
+let _chatHistoryFreshnessToken = 0;
+
 export async function loadChatHistory(state: ChatState) {
+  const currentFreshness = ++_chatHistoryFreshnessToken;
   if (!state.client || !state.connected) {
     return;
   }
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 200,
-      },
-    );
+    const targetSession = state.sessionKey;
+    const _originalMessageCount = state.chatMessages.length;
+    const requestPromise = state.client.request<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 200,
+    });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let hasTimedOut = false;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        hasTimedOut = true;
+        reject(new Error("chat.history request timed out after 10000ms"));
+      }, 10000);
+    });
+
+    // Auto-apply late successfully resolved history to recover from transient timeouts
+    void requestPromise
+      .then((res) => {
+        if (
+          hasTimedOut &&
+          state.sessionKey === targetSession &&
+          currentFreshness === _chatHistoryFreshnessToken &&
+          state.chatMessages.length === _originalMessageCount &&
+          state.chatStream === null
+        ) {
+          // Only clear the timeout error, not unrelated errors
+          if (state.lastError && state.lastError.includes("timed out")) {
+            state.lastError = null;
+          }
+          const messages = Array.isArray(res.messages) ? res.messages : [];
+          state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+          state.chatThinkingLevel = res.thinkingLevel ?? null;
+          maybeResetToolStream(state);
+          state.chatStream = null;
+          state.chatStreamStartedAt = null;
+          if (typeof (state as unknown as Record<string, Function>).requestUpdate === "function") {
+            (state as unknown as { requestUpdate: () => void }).requestUpdate();
+          }
+        }
+      })
+      .catch(() => {});
+
+    const res = await Promise.race([requestPromise, timeoutPromise]).finally(() => {
+      clearTimeout(timeoutId);
+    });
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -174,10 +218,16 @@ export async function sendChatMessage(
     return null;
   }
 
+  _chatHistoryFreshnessToken++; // bust history cache on interaction
+
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
