@@ -58,6 +58,7 @@ export class TelnyxMessagingClient {
         text,
         messaging_profile_id: this.messagingProfileId,
       }),
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!resp.ok) {

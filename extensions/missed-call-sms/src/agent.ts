@@ -253,6 +253,7 @@ Do not output anything outside the marker. Do not include quotes around the body
         system,
         messages,
       }),
+      signal: AbortSignal.timeout(30000),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");

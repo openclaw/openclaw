@@ -102,6 +102,7 @@ export class TelnyxCallsClient {
         authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
@@ -114,6 +115,7 @@ export class TelnyxCallsClient {
   private async get(path: string): Promise<unknown> {
     const resp = await fetch(`${TELNYX_API}${path}`, {
       headers: { authorization: `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(15000),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");

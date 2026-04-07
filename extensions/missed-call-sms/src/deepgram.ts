@@ -55,6 +55,10 @@ export class DeepgramClient {
         authorization: `Token ${this.apiKey}`,
       },
       body: JSON.stringify({ url: audioUrl }),
+      // Hard timeout — Deepgram occasionally hangs when fetching a Telnyx
+      // recording URL that isn't ready yet, and Node fetch has no default
+      // timeout. 30s is generous; voicemails are <60s of audio.
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!resp.ok) {

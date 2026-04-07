@@ -375,8 +375,20 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
         const recordingId = String(payload.recording_id ?? "");
         const inlineUrls = payload.public_recording_urls as { mp3?: string } | undefined;
         let recordingUrl = inlineUrls?.mp3;
+        const t0 = Date.now();
+        const step = (label: string) =>
+          logger.info(`[missed-call-sms] recording.saved step=${label} ms=${Date.now() - t0}`);
+        step(`start inlineMp3=${inlineUrls?.mp3 ? "yes" : "no"} recId=${recordingId || "none"}`);
         if (!recordingUrl && recordingId) {
-          recordingUrl = await telnyxCalls.getRecordingUrl(recordingId);
+          try {
+            recordingUrl = await telnyxCalls.getRecordingUrl(recordingId);
+            step(`getRecordingUrl ok url=${recordingUrl ? "yes" : "no"}`);
+          } catch (err) {
+            logger.error(
+              `[missed-call-sms] getRecordingUrl failed: ${err instanceof Error ? err.message : err}`,
+            );
+            return;
+          }
         }
         if (!recordingUrl) {
           logger.warn(`[missed-call-sms] recording.saved with no URL for ccid=${callControlId}`);
@@ -384,6 +396,7 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
         }
 
         const convo = await store.getActiveByPhone(callerPhone);
+        step(`getActiveByPhone ${convo ? "found" : "missing"}`);
         if (!convo) {
           logger.warn(
             `[missed-call-sms] no active conversation for ${callerPhone} on recording.saved`,
@@ -398,27 +411,46 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
           const result = await deepgram.transcribeFromUrl(recordingUrl);
           transcript = result.transcript;
           confidence = result.confidence;
+          step(`deepgram ok len=${transcript.length} conf=${confidence.toFixed(2)}`);
         } catch (err) {
+          step(`deepgram FAILED`);
           logger.error(
             `[missed-call-sms] deepgram transcription failed: ${err instanceof Error ? err.message : err}`,
           );
         }
 
-        await store.attachVoicemail(convo.id, {
-          recordingUrl,
-          transcript,
-          transcriptConfidence: confidence,
-          durationSeconds:
-            typeof payload.recording_duration_millis === "number"
-              ? Math.round(payload.recording_duration_millis / 1000)
-              : undefined,
-          capturedAt: new Date().toISOString(),
-        });
+        try {
+          await store.attachVoicemail(convo.id, {
+            recordingUrl,
+            transcript,
+            transcriptConfidence: confidence,
+            durationSeconds:
+              typeof payload.recording_duration_millis === "number"
+                ? Math.round(payload.recording_duration_millis / 1000)
+                : undefined,
+            capturedAt: new Date().toISOString(),
+          });
+          step(`attachVoicemail ok`);
+        } catch (err) {
+          step(`attachVoicemail FAILED`);
+          logger.error(
+            `[missed-call-sms] attachVoicemail failed: ${err instanceof Error ? err.message : err}`,
+          );
+          return;
+        }
 
         // Fire the agent's first turn (sends initial SMS to the caller).
-        const turn = await agent.handleVoicemail(convo.id);
-        if (!turn.success) {
-          logger.error(`[missed-call-sms] first agent turn failed: ${turn.error}`);
+        try {
+          const turn = await agent.handleVoicemail(convo.id);
+          step(`agent.handleVoicemail ${turn.success ? "ok" : "fail"}`);
+          if (!turn.success) {
+            logger.error(`[missed-call-sms] first agent turn failed: ${turn.error}`);
+          }
+        } catch (err) {
+          step(`agent.handleVoicemail THREW`);
+          logger.error(
+            `[missed-call-sms] agent.handleVoicemail threw: ${err instanceof Error ? err.message : err}`,
+          );
         }
         return;
       }
