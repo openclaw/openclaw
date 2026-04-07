@@ -98,7 +98,6 @@ export type SpawnSubagentParams = {
   lightContext?: boolean;
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
-  lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;
