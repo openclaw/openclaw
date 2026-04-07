@@ -92,13 +92,14 @@ export function resolveDiscoveredProviderPluginIds(params: {
       if (!shouldFilterUntrustedWorkspacePlugins || plugin.origin !== "workspace") {
         return true;
       }
-      return resolveEffectivePluginActivationState({
+      const activation = resolveEffectivePluginActivationState({
         id: plugin.id,
         origin: plugin.origin,
         config: normalizedConfig,
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
-      }).activated;
+      });
+      return activation.activated || activation.explicitlyEnabled;
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));

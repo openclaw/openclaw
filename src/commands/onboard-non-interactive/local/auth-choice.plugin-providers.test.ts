@@ -69,6 +69,29 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
+  it("fails explicitly when a provider-plugin auth choice resolves to no trusted setup provider", async () => {
+    const runtime = createRuntime();
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "provider-plugin:workspace-provider:api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
+      ),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));

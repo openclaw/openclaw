@@ -78,6 +78,16 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     choice: params.authChoice,
   });
   if (!providerChoice) {
+    if (prefixedProviderId) {
+      params.runtime.error(
+        [
+          `Auth choice "${params.authChoice}" was not matched to a trusted provider plugin.`,
+          "If this provider comes from a workspace plugin, trust/allow it first and retry.",
+        ].join("\n"),
+      );
+      params.runtime.exit(1);
+      return null;
+    }
     return undefined;
   }
 
