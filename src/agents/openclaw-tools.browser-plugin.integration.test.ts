@@ -87,8 +87,11 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     const browserTool = tools.find((tool) => tool.name === "browser");
     expect(browserTool).toBeDefined();
+    if (!browserTool) {
+      throw new Error("expected browser tool");
+    }
 
-    const result = await browserTool!.execute("tool-call", {});
+    const result = await browserTool.execute("tool-call", {});
     const details = (result.details ?? {}) as { workspaceOnly?: boolean | null };
     expect(details.workspaceOnly).toBe(true);
   });
