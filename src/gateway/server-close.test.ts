@@ -170,9 +170,7 @@ describe("createGatewayCloseHandler", () => {
         correlationId: "corr-123",
       });
       expect(Array.isArray(preRestartEvent?.context?.outbox)).toBe(true);
-      expect(triggerInternalHook.mock.calls[0]?.[1]).toMatchObject({
-        perHandlerTimeoutMs: 1500,
-      });
+      expect(triggerInternalHook.mock.calls[0]?.[1]).toBeUndefined();
     } finally {
       harness.dispose();
     }

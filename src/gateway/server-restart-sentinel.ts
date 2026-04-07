@@ -132,7 +132,11 @@ function executePersistedRestartOutbox(tasks: RestartOutboxTask[] | undefined) {
     if (!message || !sessionKey) {
       continue;
     }
-    const deliveryContext = "deliveryContext" in task ? task.deliveryContext : undefined;
+    const deliveryContextRaw = "deliveryContext" in task ? task.deliveryContext : undefined;
+    const deliveryContext =
+      deliveryContextRaw && typeof deliveryContextRaw === "object"
+        ? (deliveryContextRaw as { channel?: unknown; to?: unknown; accountId?: unknown })
+        : undefined;
     const dcChannel =
       deliveryContext && typeof deliveryContext.channel === "string"
         ? deliveryContext.channel
