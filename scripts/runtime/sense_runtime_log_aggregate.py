@@ -261,6 +261,21 @@ def derive_digest_bucket_badge_order(digest_bucket_dominance_band: object) -> in
     }.get(band, 0)
 
 
+def derive_digest_bucket_badge_tuple(
+    digest_bucket_palette_key: object,
+    digest_bucket_badge_short: object,
+    digest_bucket_badge_order: object,
+) -> dict[str, object]:
+    palette = digest_bucket_palette_key if isinstance(digest_bucket_palette_key, str) else 'muted'
+    short = digest_bucket_badge_short if isinstance(digest_bucket_badge_short, str) else 'UNK'
+    order = digest_bucket_badge_order if isinstance(digest_bucket_badge_order, int) else 0
+    return {
+        'palette': palette,
+        'short': short,
+        'order': order,
+    }
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -604,6 +619,15 @@ def main() -> int:
         digest_bucket_dominance_band = derive_digest_bucket_dominance_band(
             digest_bucket_share,
         )
+        digest_bucket_palette_key = derive_digest_bucket_palette_key(
+            digest_bucket_dominance_band
+        )
+        digest_bucket_badge_short = derive_digest_bucket_badge_short(
+            digest_bucket_dominance_band
+        )
+        digest_bucket_badge_order = derive_digest_bucket_badge_order(
+            digest_bucket_dominance_band
+        )
         notification_digest_summary.append(
             {
                 'notification_group_key': aggregate['notification_group_key'],
@@ -624,17 +648,16 @@ def main() -> int:
                 'digest_bucket_share': digest_bucket_share,
                 'digest_bucket_percent': derive_digest_bucket_percent(digest_bucket_share),
                 'digest_bucket_dominance_band': digest_bucket_dominance_band,
-                'digest_bucket_palette_key': derive_digest_bucket_palette_key(
-                    digest_bucket_dominance_band
-                ),
+                'digest_bucket_palette_key': digest_bucket_palette_key,
                 'digest_bucket_badge': derive_digest_bucket_badge(
                     digest_bucket_dominance_band
                 ),
-                'digest_bucket_badge_short': derive_digest_bucket_badge_short(
-                    digest_bucket_dominance_band
-                ),
-                'digest_bucket_badge_order': derive_digest_bucket_badge_order(
-                    digest_bucket_dominance_band
+                'digest_bucket_badge_short': digest_bucket_badge_short,
+                'digest_bucket_badge_order': digest_bucket_badge_order,
+                'digest_bucket_badge_tuple': derive_digest_bucket_badge_tuple(
+                    digest_bucket_palette_key,
+                    digest_bucket_badge_short,
+                    digest_bucket_badge_order,
                 ),
                 'digest_bucket_rank': 0,
                 'digest_bucket_leader': False,
