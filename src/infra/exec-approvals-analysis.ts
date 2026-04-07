@@ -242,6 +242,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       if (ch === "`") {
         return { ok: false, reason: "unsupported shell token: `", segments: [] };
       }
+      // Claude Code: detect process substitution <() and >()
+      // These allow command execution within file descriptor substitution
+      if (ch === "<" && next === "(") {
+        return { ok: false, reason: "unsupported shell token: process substitution <()", segments: [] };
+      }
+      if (ch === ">" && next === "(") {
+        return { ok: false, reason: "unsupported shell token: process substitution >()", segments: [] };
+      }
       if (ch === "\n" || ch === "\r") {
         return { ok: false, reason: "unsupported shell token: newline", segments: [] };
       }
@@ -907,6 +915,39 @@ export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[]
   if (resolvedExecutable) {
     argv[0] = resolvedExecutable;
   }
+
+  // Claude Code: detect Zsh dangerous commands
+  // These commands can bypass security checks when loaded via zsh modules
+  // zmodload loads dangerous modules (mapfile, system, net/tcp)
+  // emulate allows eval-equivalent code execution
+  // sysopen/sysread/syswrite provide direct file descriptor access
+  // zpty creates pseudo-terminals for command execution
+  // ztcp creates TCP connections for exfiltration
+  const baseCommand = argv[0]?.split(/[\s\/]/).pop()?.toLowerCase() ?? "";
+  const zshDangerousCommands = new Set([
+    'zmodload',
+    'emulate',
+    'sysopen',
+    'sysread',
+    'syswrite',
+    'sysseek',
+    'zpty',
+    'ztcp',
+    'zsocket',
+    'mapfile',
+    'zf_rm',
+    'zf_mv',
+    'zf_ln',
+    'zf_chmod',
+    'zf_chown',
+    'zf_mkdir',
+    'zf_rmdir',
+    'zf_chgrp',
+  ]);
+  if (zshDangerousCommands.has(baseCommand)) {
+    return null;
+  }
+
   return argv;
 }
 
