@@ -65,7 +65,12 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
 }
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
-  const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+  const subagents = cfg.agents?.defaults?.subagents;
+  const configured =
+    typeof subagents?.completionAnnounceTimeoutMs === "number" &&
+    Number.isFinite(subagents.completionAnnounceTimeoutMs)
+      ? subagents.completionAnnounceTimeoutMs
+      : subagents?.announceTimeoutMs;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
     return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
   }

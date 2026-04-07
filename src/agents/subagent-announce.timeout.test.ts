@@ -122,13 +122,15 @@ vi.mock("./subagent-announce-delivery.js", () => ({
             }),
       },
     });
+    const subagents = configOverride.agents?.defaults?.subagents;
+    const configuredTimeoutMs =
+      typeof subagents?.completionAnnounceTimeoutMs === "number" &&
+      Number.isFinite(subagents.completionAnnounceTimeoutMs)
+        ? subagents.completionAnnounceTimeoutMs
+        : subagents?.announceTimeoutMs;
     const timeoutMs =
-      typeof configOverride.agents?.defaults?.subagents?.announceTimeoutMs === "number" &&
-      Number.isFinite(configOverride.agents.defaults.subagents.announceTimeoutMs)
-        ? Math.min(
-            Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
-            2_147_000_000,
-          )
+      typeof configuredTimeoutMs === "number" && Number.isFinite(configuredTimeoutMs)
+        ? Math.min(Math.max(1, Math.floor(configuredTimeoutMs)), 2_147_000_000)
         : 120_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
@@ -160,7 +162,12 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
     params.requesterOrigin,
   resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
-    const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+    const subagents = cfg.agents?.defaults?.subagents;
+    const configured =
+      typeof subagents?.completionAnnounceTimeoutMs === "number" &&
+      Number.isFinite(subagents.completionAnnounceTimeoutMs)
+        ? subagents.completionAnnounceTimeoutMs
+        : subagents?.announceTimeoutMs;
     if (typeof configured !== "number" || !Number.isFinite(configured)) {
       return 120_000;
     }
@@ -212,13 +219,21 @@ const baseAnnounceFlowParams = {
   outcome: { status: "ok" as const },
 } satisfies Omit<AnnounceFlowParams, "childRunId">;
 
-function setConfiguredAnnounceTimeout(timeoutMs: number): void {
+function setConfiguredAnnounceTimeout(params: {
+  announceTimeoutMs?: number;
+  completionAnnounceTimeoutMs?: number;
+}): void {
   configOverride = {
     session: defaultSessionConfig,
     agents: {
       defaults: {
         subagents: {
-          announceTimeoutMs: timeoutMs,
+          ...(typeof params.announceTimeoutMs === "number"
+            ? { announceTimeoutMs: params.announceTimeoutMs }
+            : {}),
+          ...(typeof params.completionAnnounceTimeoutMs === "number"
+            ? { completionAnnounceTimeoutMs: params.completionAnnounceTimeoutMs }
+            : {}),
         },
       },
     },
@@ -288,7 +303,7 @@ describe("subagent announce timeout config", () => {
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
-    setConfiguredAnnounceTimeout(120_000);
+    setConfiguredAnnounceTimeout({ announceTimeoutMs: 120_000 });
     await runAnnounceFlowForTest("run-config-timeout-agent");
 
     const directAgentCall = findGatewayCall(
@@ -298,7 +313,7 @@ describe("subagent announce timeout config", () => {
   });
 
   it("honors configured announce timeout for completion direct agent call", async () => {
-    setConfiguredAnnounceTimeout(120_000);
+    setConfiguredAnnounceTimeout({ announceTimeoutMs: 120_000 });
     await runAnnounceFlowForTest("run-config-timeout-send", {
       requesterOrigin: {
         channel: "discord",
@@ -311,6 +326,29 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
+  });
+
+  it("uses completionAnnounceTimeoutMs when only the new key is configured", async () => {
+    setConfiguredAnnounceTimeout({ completionAnnounceTimeoutMs: 95_000 });
+    await runAnnounceFlowForTest("run-config-completion-timeout-only");
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall?.timeoutMs).toBe(95_000);
+  });
+
+  it("prefers completionAnnounceTimeoutMs over announceTimeoutMs when both are set", async () => {
+    setConfiguredAnnounceTimeout({
+      announceTimeoutMs: 80_000,
+      completionAnnounceTimeoutMs: 105_000,
+    });
+    await runAnnounceFlowForTest("run-config-completion-timeout-precedence");
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall?.timeoutMs).toBe(105_000);
   });
 
   it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
