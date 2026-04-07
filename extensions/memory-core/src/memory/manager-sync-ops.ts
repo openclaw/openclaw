@@ -1176,6 +1176,7 @@ export abstract class MemoryManagerSyncOps {
       } else {
         this.db = originalDb;
       }
+      this.hasIndexedContentCached = null;
       this.fts.available = originalState.ftsAvailable;
       this.fts.loadError = originalState.ftsError;
       this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
@@ -1185,6 +1186,7 @@ export abstract class MemoryManagerSyncOps {
     };
 
     this.db = tempDb;
+    this.hasIndexedContentCached = null;
     this.vectorReady = null;
     this.vector.available = null;
     this.vector.loadError = undefined;
@@ -1246,6 +1248,7 @@ export abstract class MemoryManagerSyncOps {
       await this.swapIndexFiles(dbPath, tempDbPath);
 
       this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+      this.hasIndexedContentCached = null;
       this.vectorReady = null;
       this.vector.available = null;
       this.vector.loadError = undefined;
