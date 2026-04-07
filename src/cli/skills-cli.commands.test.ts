@@ -111,10 +111,11 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentIdMock(...args),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDirMock(...args),
-  resolveAgentIdByWorkspacePath: (...args: unknown[]) =>
-    mocks.resolveAgentIdByWorkspacePathMock(...args),
+  resolveDefaultAgentId: (config: unknown) => mocks.resolveDefaultAgentIdMock(config),
+  resolveAgentWorkspaceDir: (config: unknown, agentId: unknown) =>
+    mocks.resolveAgentWorkspaceDirMock(config, agentId),
+  resolveAgentIdByWorkspacePath: (config: unknown, workspacePath: unknown) =>
+    mocks.resolveAgentIdByWorkspacePathMock(config, workspacePath),
 }));
 
 vi.mock("../agents/skills-clawhub.js", () => ({
