@@ -73,10 +73,10 @@ export function resolveConversationBindingContextFromMessage(params: {
     senderId: params.senderId ?? params.ctx.SenderId,
     sessionKey: params.sessionKey ?? params.ctx.SessionKey,
     parentSessionKey: params.parentSessionKey ?? params.ctx.ParentSessionKey,
+    from: params.ctx.From,
     originatingTo: params.ctx.OriginatingTo,
     commandTo: params.commandTo,
     fallbackTo: params.ctx.To,
-    from: params.ctx.From,
     nativeChannelId: params.ctx.NativeChannelId,
   });
 }

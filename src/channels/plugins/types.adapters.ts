@@ -847,6 +847,8 @@ export type ChannelCommandConversationContext = {
   senderId?: string;
   sessionKey?: string;
   parentSessionKey?: string;
+  from?: string;
+  chatType?: string;
   originatingTo?: string;
   commandTo?: string;
   fallbackTo?: string;
