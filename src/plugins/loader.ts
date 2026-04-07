@@ -594,6 +594,28 @@ function unwrapDefaultModuleExport(
   return resolved;
 }
 
+function defaultChainContainsPluginExport(next: unknown): boolean {
+  let current = next;
+  const visited = new Set<unknown>();
+  while (true) {
+    if (typeof current === "function") {
+      return true;
+    }
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      return false;
+    }
+    const record = current as Record<string, unknown>;
+    if (typeof record.register === "function" || typeof record.activate === "function") {
+      return true;
+    }
+    if (!("default" in record)) {
+      return false;
+    }
+    visited.add(current);
+    current = record.default;
+  }
+}
+
 function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
@@ -601,18 +623,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   const resolved = unwrapDefaultModuleExport(moduleExport, {
     shouldStop: (candidate) =>
       typeof candidate.register === "function" || typeof candidate.activate === "function",
-    shouldContinueOnDefault: (_candidate, next) => {
-      if (typeof next === "function") {
-        return true;
-      }
-      if (!next || typeof next !== "object") {
-        return false;
-      }
-      return (
-        typeof (next as { register?: unknown }).register === "function" ||
-        typeof (next as { activate?: unknown }).activate === "function"
-      );
-    },
+    shouldContinueOnDefault: (_candidate, next) => defaultChainContainsPluginExport(next),
   });
   if (typeof resolved === "function") {
     return {
