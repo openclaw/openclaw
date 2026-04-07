@@ -331,7 +331,7 @@ async function prepareCronRunContext(params: {
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
   if (resolvedModelSelection.warning) {
-    logWarn(resolvedModelSelection.warning);
+    logWarn(`[cron:${input.job.id}] ${resolvedModelSelection.warning}`);
   }
 
   const hooksGmailThinking = isGmailHook
