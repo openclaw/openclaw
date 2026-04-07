@@ -77,12 +77,21 @@ export function resolveCronSession(params: {
     // replies instead of channel top-level messages.
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
+    // CLI session identity (cliSessionIds, cliSessionBindings, claudeCliSessionId)
+    // must also be cleared so the new session entry does not advertise a stale
+    // CLI session that belongs to the previous run. The consumption-site guard
+    // in run-executor.ts already drops the resume id when isNewSession is true,
+    // but the entry itself should be coherent — a "new" session should not claim
+    // a prior CLI session resume token.
     ...(isNewSession && {
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      cliSessionIds: undefined,
+      cliSessionBindings: undefined,
+      claudeCliSessionId: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };

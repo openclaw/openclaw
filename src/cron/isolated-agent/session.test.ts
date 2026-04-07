@@ -226,6 +226,88 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
     });
 
+    it("clears CLI session identity when forceNew is true (#62707)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-cli",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
+          cliSessionBindings: {
+            "claude-cli": {
+              cliSessionId: "prev-cli-session-abc",
+              modelOverride: "claude-opus-4-6",
+              providerOverride: "anthropic",
+            },
+          },
+          claudeCliSessionId: "prev-cli-session-abc",
+          modelOverride: "claude-opus-4-6",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // CLI session identity must be cleared so the new session entry does
+      // not advertise a stale CLI session token from the previous run.
+      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+      // Per-session model overrides must still be preserved
+      expect(result.sessionEntry.modelOverride).toBe("claude-opus-4-6");
+    });
+
+    it("clears CLI session identity when session is stale (#62707)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          cliSessionIds: { "codex-cli": "prev-codex-session-xyz" },
+          cliSessionBindings: {
+            "codex-cli": {
+              cliSessionId: "prev-codex-session-xyz",
+            },
+          },
+          claudeCliSessionId: "prev-claude-session-stale",
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+    });
+
+    it("preserves CLI session identity when reusing fresh session (#62707)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-keep",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          cliSessionIds: { "claude-cli": "live-cli-session-keep" },
+          cliSessionBindings: {
+            "claude-cli": {
+              cliSessionId: "live-cli-session-keep",
+            },
+          },
+          claudeCliSessionId: "live-cli-session-keep",
+        },
+        fresh: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionEntry.cliSessionIds).toEqual({
+        "claude-cli": "live-cli-session-keep",
+      });
+      expect(result.sessionEntry.cliSessionBindings).toEqual({
+        "claude-cli": {
+          cliSessionId: "live-cli-session-keep",
+        },
+      });
+      expect(result.sessionEntry.claudeCliSessionId).toBe("live-cli-session-keep");
+    });
+
     it("preserves delivery routing metadata when reusing fresh session", () => {
       const result = resolveWithStoredEntry({
         entry: {
