@@ -59,10 +59,14 @@ function matchExecDiagnosticType(command: string): ReplayDiagnosticType | null {
     return "openclaw.config_snapshot";
   }
   if (
-    /\bcat\s+["']?[^"'`\s]*openclaw\.json["']?/iu.test(command) ||
-    /\bcat\s+["']?[^"'`\s]*extensions[\\/][^/"'`\\\s]+[\\/]package\.json["']?/iu.test(command)
+    /\bcat\s+"[^"]*openclaw\.json"/iu.test(command) ||
+    /\bcat\s+'[^']*openclaw\.json'/iu.test(command) ||
+    /\bcat\s+[^"'`\s]*openclaw\.json(?:\s|$)/iu.test(command) ||
+    /\bcat\s+"[^"]*extensions[\\/][^"]+[\\/]package\.json"/iu.test(command) ||
+    /\bcat\s+'[^']*extensions[\\/][^']+[\\/]package\.json'/iu.test(command) ||
+    /\bcat\s+[^"'`\s]*extensions[\\/][^/"'`\\\s]+[\\/]package\.json(?:\s|$)/iu.test(command)
   ) {
-    return command.includes("openclaw.json")
+    return /openclaw\.json/iu.test(command)
       ? "openclaw.config_snapshot"
       : "openclaw.plugin_path_probe";
   }
