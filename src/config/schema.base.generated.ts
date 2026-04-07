@@ -7353,6 +7353,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
                   },
+                  ssrfPolicy: {
+                    type: "object",
+                    properties: {
+                      allowRfc2544BenchmarkRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow RFC 2544 Benchmark Range",
+                        description:
+                          "Allow web_fetch requests that resolve to the RFC 2544 benchmarking range (198.18.0.0/15). Enable when using Clash or mihomo in fake-ip mode.",
+                      },
+                      dangerouslyAllowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Web Fetch Dangerously Allow Private Network",
+                        description:
+                          "Dangerously allow web_fetch requests that resolve to private/internal IP addresses.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Web Fetch SSRF Policy",
+                    description:
+                      "SSRF policy overrides for web_fetch. Use when DNS resolves to virtual IP ranges (e.g. Clash/mihomo fake-ip mode).",
+                  },
                   firecrawl: {
                     type: "object",
                     properties: {
@@ -23884,6 +23905,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
+    },
+    "tools.web.fetch.ssrfPolicy": {
+      label: "Web Fetch SSRF Policy",
+      help: "SSRF policy overrides for web_fetch. Use when DNS resolves to virtual IP ranges (e.g. Clash/mihomo fake-ip mode).",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Web Fetch Allow RFC 2544 Benchmark Range",
+      help: "Allow web_fetch requests that resolve to the RFC 2544 benchmarking range (198.18.0.0/15). Enable when using Clash or mihomo in fake-ip mode.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Web Fetch Dangerously Allow Private Network",
+      help: "Dangerously allow web_fetch requests that resolve to private/internal IP addresses.",
+      tags: ["security", "access", "tools", "advanced"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",

@@ -263,13 +263,9 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
-<<<<<<< HEAD
   lookupFn?: LookupFn;
-  resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
-=======
   ssrfPolicy?: SsrFPolicy;
-  providerFallback: ReturnType<typeof resolveWebFetchDefinition>;
->>>>>>> a6fd98fe13 (fix(tools): add ssrfPolicy.allowRfc2544BenchmarkRange to web_fetch config)
+  resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
@@ -381,8 +377,11 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  const ssrfSuffix = params.ssrfPolicy
+    ? `:ssrf:${JSON.stringify(params.ssrfPolicy)}`
+    : "";
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${ssrfSuffix}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -408,11 +407,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
-<<<<<<< HEAD
       lookupFn: params.lookupFn,
-=======
       policy: params.ssrfPolicy,
->>>>>>> a6fd98fe13 (fix(tools): add ssrfPolicy.allowRfc2544BenchmarkRange to web_fetch config)
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -642,13 +638,9 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
-<<<<<<< HEAD
         lookupFn: options?.lookupFn,
-        resolveProviderFallback,
-=======
         ssrfPolicy: resolveFetchSsrfPolicy(fetch),
-        providerFallback,
->>>>>>> a6fd98fe13 (fix(tools): add ssrfPolicy.allowRfc2544BenchmarkRange to web_fetch config)
+        resolveProviderFallback,
       });
       return jsonResult(result);
     },
