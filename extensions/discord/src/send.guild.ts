@@ -98,7 +98,7 @@ function validateEventImageType(contentType: string | undefined): asserts conten
  */
 export async function resolveEventCoverImage(
   imageUrl: string,
-  options?: { localRoots?: readonly string[] },
+  options?: { localRoots?: readonly string[]; readFile?: (filePath: string) => Promise<Buffer> },
 ): Promise<string> {
   // Already a data URI — validate and pass through.
   const dataUriMatch = imageUrl.match(/^data:(image\/[^;]+);base64,/);
@@ -117,8 +117,10 @@ export async function resolveEventCoverImage(
   }
 
   // URL or local file — load via the standard media pipeline.
-  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES, {
+  const media = await loadWebMediaRaw(imageUrl, {
+    maxBytes: DISCORD_MAX_EVENT_COVER_BYTES,
     localRoots: options?.localRoots,
+    readFile: options?.readFile,
   });
   const contentType = media.contentType?.toLowerCase();
   validateEventImageType(contentType);

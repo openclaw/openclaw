@@ -15,7 +15,7 @@ import {
 
 type Ctx = Pick<
   ChannelMessageActionContext,
-  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "mediaLocalRoots"
+  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "mediaLocalRoots" | "mediaReadFile"
 >;
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
@@ -352,7 +352,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         image,
       },
       cfg,
-      image ? { mediaLocalRoots: ctx.mediaLocalRoots } : undefined,
+      image ? { mediaLocalRoots: ctx.mediaLocalRoots, mediaReadFile: ctx.mediaReadFile } : undefined,
     );
   }
 

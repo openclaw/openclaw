@@ -59,6 +59,7 @@ export async function handleDiscordAction(
   cfg: OpenClawConfig,
   options?: {
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });

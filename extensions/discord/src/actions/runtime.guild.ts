@@ -97,7 +97,7 @@ export async function handleDiscordGuildAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg?: OpenClawConfig,
-  options?: { mediaLocalRoots?: readonly string[] },
+  options?: { mediaLocalRoots?: readonly string[]; mediaReadFile?: (filePath: string) => Promise<Buffer> },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   switch (action) {
@@ -308,6 +308,7 @@ export async function handleDiscordGuildAction(
       const image = imageUrl
         ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
             localRoots: options?.mediaLocalRoots,
+            readFile: options?.mediaReadFile,
           })
         : undefined;
       const payload = {
