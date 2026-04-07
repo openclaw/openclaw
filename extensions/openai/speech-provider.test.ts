@@ -77,6 +77,32 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("preserves talk responseFormat overrides", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: {} as never,
+        timeoutMs: 30_000,
+        baseTtsConfig: {
+          providers: {
+            openai: {
+              apiKey: "sk-base",
+              responseFormat: "mp3",
+            },
+          },
+        },
+        talkProviderConfig: {
+          apiKey: "sk-talk",
+          responseFormat: " WAV ",
+        },
+      }),
+    ).toMatchObject({
+      apiKey: "sk-talk",
+      responseFormat: "wav",
+    });
+  });
+
   it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {

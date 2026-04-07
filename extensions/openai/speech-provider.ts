@@ -184,6 +184,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeOpenAIProviderConfig(baseTtsConfig);
+      const responseFormat = normalizeOpenAISpeechResponseFormat(talkProviderConfig.responseFormat);
       return {
         ...base,
         ...(talkProviderConfig.apiKey === undefined
@@ -209,6 +210,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.instructions) == null
           ? {}
           : { instructions: trimToUndefined(talkProviderConfig.instructions) }),
+        ...(responseFormat == null ? {} : { responseFormat }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
