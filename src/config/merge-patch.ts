@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
@@ -94,4 +95,43 @@ export function applyMergePatch(
   }
 
   return result;
+}
+
+/**
+ * Compute an RFC 7396 merge-patch that transforms `base` into `target`.
+ * Applying the returned patch to `base` via applyMergePatch reproduces `target`.
+ */
+export function createMergePatch(base: unknown, target: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(target)) {
+    return structuredClone(target);
+  }
+
+  const patch: Record<string, unknown> = {};
+  const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
+  for (const key of keys) {
+    const hasBase = key in base;
+    const hasTarget = key in target;
+    if (!hasTarget) {
+      patch[key] = null;
+      continue;
+    }
+    const targetValue = target[key];
+    if (!hasBase) {
+      patch[key] = structuredClone(targetValue);
+      continue;
+    }
+    const baseValue = base[key];
+    if (isPlainObject(baseValue) && isPlainObject(targetValue)) {
+      const childPatch = createMergePatch(baseValue, targetValue);
+      if (isPlainObject(childPatch) && Object.keys(childPatch).length === 0) {
+        continue;
+      }
+      patch[key] = childPatch;
+      continue;
+    }
+    if (!isDeepStrictEqual(baseValue, targetValue)) {
+      patch[key] = structuredClone(targetValue);
+    }
+  }
+  return patch;
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_ID,
@@ -175,6 +176,7 @@ describe("gateway hot reload", () => {
   let prevSkipProviders: string | undefined;
   let prevOpenAiApiKey: string | undefined;
   let prevGeminiApiKey: string | undefined;
+  let prevDiscordBotToken: string | undefined;
 
   beforeEach(() => {
     prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
@@ -182,6 +184,7 @@ describe("gateway hot reload", () => {
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     prevOpenAiApiKey = process.env.OPENAI_API_KEY;
     prevGeminiApiKey = process.env.GEMINI_API_KEY;
+    prevDiscordBotToken = process.env.DISCORD_BOT_TOKEN;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -213,6 +216,11 @@ describe("gateway hot reload", () => {
     } else {
       process.env.GEMINI_API_KEY = prevGeminiApiKey;
     }
+    if (prevDiscordBotToken === undefined) {
+      delete process.env.DISCORD_BOT_TOKEN;
+    } else {
+      process.env.DISCORD_BOT_TOKEN = prevDiscordBotToken;
+    }
   });
 
   async function writeEnvRefConfig() {
@@ -234,6 +242,34 @@ describe("gateway hot reload", () => {
       channels: {
         telegram: {
           botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    });
+  }
+
+  async function writeDiscordChannelEnvRefConfig() {
+    await writeConfigFile({
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    });
+  }
+
+  async function writeDiscordChannelEnvRefAllowlistViolationConfig() {
+    await writeConfigFile({
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: {
+            source: "env",
+            allowlist: ["SOME_OTHER_TOKEN"],
+          },
         },
       },
     });
@@ -583,6 +619,73 @@ describe("gateway hot reload", () => {
     await expect(withGatewayServer(async () => {})).resolves.toBeUndefined();
   });
 
+  it("degrades startup when active channel secret refs are unresolved", async () => {
+    await writeDiscordChannelEnvRefConfig();
+    delete process.env.DISCORD_BOT_TOKEN;
+
+    await withGatewayServer(async () => {
+      const snapshot = getActiveSecretsRuntimeSnapshot();
+      expect(snapshot?.sourceConfig.channels?.discord).toMatchObject({
+        enabled: false,
+        token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      });
+      expect(snapshot?.config.channels?.discord).toMatchObject({
+        enabled: false,
+        token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      });
+      expect(snapshot?.recoveryConfig?.channels?.discord).toMatchObject({
+        token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      });
+      expect(
+        (snapshot?.recoveryConfig?.channels?.discord as Record<string, unknown> | undefined)
+          ?.enabled,
+      ).not.toBe(false);
+    });
+  });
+
+  it("recovers degraded channel via secrets.reload once secret becomes available", async () => {
+    await writeDiscordChannelEnvRefConfig();
+    delete process.env.DISCORD_BOT_TOKEN;
+
+    const { server, ws } = await startServerWithClient();
+    try {
+      await connectOk(ws);
+
+      // Confirm we started in degraded state.
+      const degraded = getActiveSecretsRuntimeSnapshot();
+      expect(
+        (degraded?.recoveryConfig?.channels?.discord as Record<string, unknown> | undefined)
+          ?.enabled,
+      ).not.toBe(false);
+
+      // Now make the secret available and trigger reload.
+      process.env.DISCORD_BOT_TOKEN = "test-bot-token"; // pragma: allowlist secret
+      const result = await rpcReq(ws, "secrets.reload", {});
+      expect(result).toMatchObject({ ok: true });
+
+      // After recovery the snapshot should no longer carry recoveryConfig.
+      const recovered = getActiveSecretsRuntimeSnapshot();
+      expect("recoveryConfig" in (recovered ?? {})).toBe(false);
+      expect(recovered?.config.channels?.discord).toMatchObject({
+        token: expect.any(String),
+      });
+      expect(
+        (recovered?.config.channels?.discord as Record<string, unknown> | undefined)?.enabled,
+      ).not.toBe(false);
+    } finally {
+      ws.close();
+      await server.close();
+    }
+  });
+
+  it("fails startup when an active channel env ref violates provider allowlist policy", async () => {
+    await writeDiscordChannelEnvRefAllowlistViolationConfig();
+    process.env.DISCORD_BOT_TOKEN = "test-bot-token"; // pragma: allowlist secret
+    await expect(withGatewayServer(async () => {})).rejects.toThrow(
+      /allowlist|not allowed|DISCORD_BOT_TOKEN/i,
+    );
+  });
+
   it("fails startup when an active exec ref id contains traversal segments", async () => {
     await writeGatewayTraversalExecRefConfig();
     const previousGatewayAuth = testState.gatewayAuth;
@@ -645,6 +748,7 @@ describe("gateway hot reload", () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
       const sessionKey = resolveMainSessionKeyFromConfig();
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
       const plan = {
         changedPaths: ["models.providers.openai.apiKey"],
         restartGateway: false,

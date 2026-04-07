@@ -63,6 +63,7 @@ import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
+import { SecretRefResolutionError } from "../secrets/resolve.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
@@ -263,6 +264,99 @@ function applyGatewayAuthOverridesForStartupPreflight(
       auth: mergeGatewayAuthConfig(config.gateway?.auth, overrides.auth),
       tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale),
     },
+  };
+}
+
+function disableChannelsForStartupDegrade(
+  config: OpenClawConfig,
+  channelIds: readonly string[],
+): OpenClawConfig {
+  if (channelIds.length === 0 || !config.channels) {
+    return config;
+  }
+  const next = structuredClone(config);
+  const nextChannels = next.channels!;
+  for (const channelId of channelIds) {
+    const channel = nextChannels[channelId];
+    if (!channel || typeof channel !== "object") {
+      continue;
+    }
+    nextChannels[channelId] = {
+      ...(channel as Record<string, unknown>),
+      enabled: false,
+    };
+  }
+  return next;
+}
+
+function isSecretResolutionAvailabilityError(error: unknown): boolean {
+  if (error instanceof SecretRefResolutionError) {
+    return error.source === "env" && /is missing or empty\.?$/i.test(error.message);
+  }
+  return false;
+}
+
+async function prepareStartupChannelDegradedSnapshot(params: { config: OpenClawConfig }): Promise<{
+  prepared: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>;
+  disabledChannelIds: string[];
+} | null> {
+  const channelEntries = Object.entries(params.config.channels ?? {}).filter(
+    ([, value]) =>
+      value && typeof value === "object" && (value as { enabled?: boolean }).enabled !== false,
+  );
+  if (channelEntries.length === 0) {
+    return null;
+  }
+
+  const allChannelIds = channelEntries.map(([channelId]) => channelId);
+  try {
+    await prepareSecretsRuntimeSnapshot({
+      config: disableChannelsForStartupDegrade(params.config, allChannelIds),
+    });
+  } catch {
+    // Non-channel surfaces are still unresolved, so startup must keep failing.
+    return null;
+  }
+
+  const disabledChannelIds: string[] = [];
+  for (const [channelId] of channelEntries) {
+    const isolatedConfig = disableChannelsForStartupDegrade(
+      params.config,
+      allChannelIds.filter((candidateId) => candidateId !== channelId),
+    );
+    try {
+      await prepareSecretsRuntimeSnapshot({ config: isolatedConfig });
+    } catch (err) {
+      if (!isSecretResolutionAvailabilityError(err)) {
+        return null;
+      }
+      disabledChannelIds.push(channelId);
+    }
+  }
+  if (disabledChannelIds.length === 0) {
+    return null;
+  }
+
+  const degradedConfig = disableChannelsForStartupDegrade(params.config, disabledChannelIds);
+  let prepared: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>;
+  try {
+    prepared = await prepareSecretsRuntimeSnapshot({ config: degradedConfig });
+  } catch {
+    return null;
+  }
+  return {
+    prepared: {
+      ...prepared,
+      // recoveryConfig holds the original (pre-degradation) config so that
+      // secrets.reload can attempt to recover disabled channels once their
+      // env-backed refs become available. sourceConfig intentionally stays as
+      // degradedConfig so the writeConfigFile merge-patch invariant holds:
+      // runtimeConfigSnapshot and runtimeConfigSourceSnapshot must agree on
+      // which channels are enabled, preventing operator writes from being
+      // silently dropped as empty patches.
+      recoveryConfig: structuredClone(params.config),
+    },
+    disabledChannelIds,
   };
 }
 
@@ -514,6 +608,21 @@ export async function startGatewayServer(
         }
         secretsDegraded = true;
         if (params.reason === "startup") {
+          const degraded = await prepareStartupChannelDegradedSnapshot({ config });
+          if (degraded) {
+            const disabledSummary = degraded.disabledChannelIds.join(", ");
+            logSecrets.warn(
+              `[SECRETS_STARTUP_CHANNELS_DISABLED] Disabled channels with unresolved startup secrets: ${disabledSummary}`,
+            );
+            if (params.activate) {
+              activateSecretsRuntimeSnapshot(degraded.prepared);
+              logGatewayAuthSurfaceDiagnostics(degraded.prepared);
+            }
+            for (const warning of degraded.prepared.warnings) {
+              logSecrets.warn(`[${warning.code}] ${warning.message}`);
+            }
+            return degraded.prepared;
+          }
           throw new Error(`Startup failed: required secrets are unavailable. ${details}`, {
             cause: err,
           });
@@ -1233,7 +1342,13 @@ export async function startGatewayServer(
         if (!active) {
           throw new Error("Secrets runtime snapshot is not active.");
         }
-        const prepared = await activateRuntimeSecrets(active.sourceConfig, {
+        // When the runtime was degraded at startup (channels disabled due to
+        // missing secrets), use recoveryConfig — the original pre-degradation
+        // source config — so we attempt to re-enable those channels.
+        // For non-degraded snapshots, recoveryConfig is undefined and
+        // sourceConfig is the correct baseline to reload from.
+        const reloadConfig = active.recoveryConfig ?? active.sourceConfig;
+        const prepared = await activateRuntimeSecrets(reloadConfig, {
           reason: "reload",
           activate: true,
         });

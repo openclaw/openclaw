@@ -17,6 +17,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 import { type SecretResolverWarning } from "./runtime-shared.js";
@@ -35,6 +36,14 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
   webTools: RuntimeWebToolsMetadata;
+  /**
+   * When startup degraded by disabling channels whose secrets were unavailable,
+   * this holds the original (pre-degradation) source config. The secrets.reload
+   * path uses this to attempt full recovery once secrets become available.
+   * Must NOT be used as the sourceConfig for writeConfigFile merge-patch logic;
+   * sourceConfig always reflects the config that produced this snapshot.
+   */
+  recoveryConfig?: OpenClawConfig;
 };
 
 type SecretsRuntimeRefreshContext = {
@@ -86,6 +95,9 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     webTools: structuredClone(snapshot.webTools),
+    ...(snapshot.recoveryConfig !== undefined
+      ? { recoveryConfig: structuredClone(snapshot.recoveryConfig) }
+      : undefined),
   };
 }
 
@@ -270,6 +282,19 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       if (!activeSnapshot || !activeRefreshContext) {
         return false;
       }
+      // Preserve recoveryConfig across in-process config writes (e.g. control-UI
+      // origin seeding at startup). prepareSecretsRuntimeSnapshot builds a fresh
+      // snapshot from sourceConfig and never sets recoveryConfig; without this,
+      // any writeConfigFile call during degraded startup drops the field and
+      // secrets.reload falls back to the degraded sourceConfig, so recovered env
+      // secrets never re-enable the channel until a manual config change or restart.
+      //
+      // Forward operator edits made while secrets are still missing: compute the
+      // delta from the previous sourceConfig to the incoming sourceConfig and apply
+      // it to recoveryConfig so that config.set changes are not silently replayed
+      // over by the stale startup snapshot when secrets.reload eventually fires.
+      const prevSourceConfig = activeSnapshot.sourceConfig;
+      const existingRecoveryConfig = activeSnapshot.recoveryConfig;
       const refreshed = await prepareSecretsRuntimeSnapshot({
         config: sourceConfig,
         env: activeRefreshContext.env,
@@ -277,6 +302,19 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
         loadAuthStore: activeRefreshContext.loadAuthStore,
         loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
       });
+      if (existingRecoveryConfig !== undefined && refreshed.recoveryConfig === undefined) {
+        // Build a patch from old sourceConfig → new sourceConfig so that any
+        // operator writes (config.set etc.) are forwarded into recoveryConfig.
+        // applyMergePatch returns unknown; cast to OpenClawConfig via the same
+        // pattern used in io.ts (coerce-as-object, treat non-object as empty).
+        const delta = createMergePatch(prevSourceConfig, sourceConfig);
+        const updated = applyMergePatch(existingRecoveryConfig, delta);
+        refreshed.recoveryConfig = (
+          updated && typeof updated === "object" && !Array.isArray(updated)
+            ? updated
+            : existingRecoveryConfig
+        ) as OpenClawConfig;
+      }
       activateSecretsRuntimeSnapshot(refreshed);
       return true;
     },
