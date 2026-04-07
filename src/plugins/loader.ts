@@ -565,16 +565,26 @@ function validatePluginConfig(params: {
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
+function unwrapDefaultModuleExport(moduleExport: unknown): unknown {
+  let resolved = moduleExport;
+  const visited = new Set<unknown>();
+  while (
+    resolved &&
+    typeof resolved === "object" &&
+    "default" in (resolved as Record<string, unknown>) &&
+    !visited.has(resolved)
+  ) {
+    visited.add(resolved);
+    resolved = (resolved as { default: unknown }).default;
+  }
+  return resolved;
+}
+
 function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],
@@ -591,12 +601,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
     return {};
   }

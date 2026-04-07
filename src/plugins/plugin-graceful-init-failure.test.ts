@@ -128,6 +128,19 @@ describe("graceful plugin initialization failure", () => {
     expect(failed?.error).toBe("plugin export missing register/activate");
   });
 
+  it("loads plugins exported through nested default wrappers", async () => {
+    const plugin = writePlugin({
+      id: "nested-default-wrapper",
+      body: `module.exports = { default: { default: { id: "nested-default-wrapper", register() {} } } };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find((entry) => entry.id === "nested-default-wrapper");
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+  });
+
   it("logs a startup summary grouped by failure phase", async () => {
     const registerFailure = writePlugin({
       id: "warn-register",
