@@ -203,7 +203,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!manager) {
     return null;
   }
-  // Only probe vector availability if the manager explicitly opts in.
+  // Probe is always called; failures are non-fatal in a status context.
   // Third-party memory plugins loaded in the CLI status process may not
   // have completed async startup (embedder, extensions, backfill) and
   // probing them can trigger side effects or report false negatives.
