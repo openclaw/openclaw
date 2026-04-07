@@ -217,7 +217,6 @@ foundation models in `openclaw models list`.
 
 ## Notes
 
-- Bedrock requires **model access** enabled in your AWS account/region.
 - Automatic discovery needs the `bedrock:ListFoundationModels` and
   `bedrock:ListInferenceProfiles` permissions.
 - If you rely on auto mode, set one of the supported AWS auth env markers on the
