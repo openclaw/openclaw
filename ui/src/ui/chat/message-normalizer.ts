@@ -431,3 +431,28 @@ export function isToolResultMessage(message: unknown): boolean {
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
 }
+
+// Pattern matching exec notification lines produced by session-system-events.
+// Format: "System: [timestamp] Exec completed ..." or
+//         "System (untrusted): [timestamp] Exec failed ..."
+const EXEC_NOTIFICATION_RE =
+  /^System(?:\s*\(untrusted\))?\s*:.*\bExec\s+(?:completed|failed|denied|timed\s+out|finished)\b/i;
+
+/**
+ * Check if a system message consists entirely of internal exec notifications.
+ * These are gateway-internal events formatted by session-system-events and
+ * should not be displayed in user-facing chat surfaces like WebChat.
+ */
+export function isInternalExecNotification(message: unknown): boolean {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  if (role !== "system") {
+    return false;
+  }
+  const content = typeof m.content === "string" ? m.content : "";
+  const lines = content.split("\n").filter((line) => line.trim());
+  if (lines.length === 0) {
+    return false;
+  }
+  return lines.every((line) => EXEC_NOTIFICATION_RE.test(line.trim()));
+}

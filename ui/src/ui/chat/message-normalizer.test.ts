@@ -3,6 +3,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
   isToolResultMessage,
+  isInternalExecNotification,
 } from "./message-normalizer.ts";
 
 describe("message-normalizer", () => {
@@ -453,6 +454,108 @@ describe("message-normalizer", () => {
     it("returns false for non-string role", () => {
       expect(isToolResultMessage({ role: 123 })).toBe(false);
       expect(isToolResultMessage({ role: null })).toBe(false);
+    });
+  });
+
+  describe("isInternalExecNotification", () => {
+    it("detects trusted exec completed notification", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: "System: [2026-04-07 10:30:00] Exec completed (nova-rid, code 0) :: ls -la",
+        }),
+      ).toBe(true);
+    });
+
+    it("detects untrusted exec failed notification", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content:
+            "System (untrusted): [2026-04-07 10:30:01] Exec failed (wild-sho, signal SIGKILL)",
+        }),
+      ).toBe(true);
+    });
+
+    it("detects exec denied notification", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: "System: [2026-04-07 10:30:02] Exec denied (abc-def, policy)",
+        }),
+      ).toBe(true);
+    });
+
+    it("detects exec timed out notification", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: "System (untrusted): [2026-04-07 10:30:03] Exec timed out (xyz-123, timeout)",
+        }),
+      ).toBe(true);
+    });
+
+    it("detects multi-line exec notifications", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: [
+            "System (untrusted): [2026-04-07 10:30:00] Exec completed (aaa-bbb, code 0) :: cmd1",
+            "System (untrusted): [2026-04-07 10:30:01] Exec failed (ccc-ddd, code 1)",
+          ].join("\n"),
+        }),
+      ).toBe(true);
+    });
+
+    it("returns false for non-system role", () => {
+      expect(
+        isInternalExecNotification({
+          role: "user",
+          content: "System: [2026-04-07 10:30:00] Exec completed (nova-rid, code 0)",
+        }),
+      ).toBe(false);
+      expect(
+        isInternalExecNotification({
+          role: "assistant",
+          content: "System: [2026-04-07 10:30:00] Exec completed (nova-rid, code 0)",
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for channel summary system messages", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: "System: Connected channels: telegram, discord",
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for mixed exec and non-exec content", () => {
+      expect(
+        isInternalExecNotification({
+          role: "system",
+          content: [
+            "System: Connected channels: telegram",
+            "System (untrusted): [2026-04-07 10:30:00] Exec completed (aaa-bbb, code 0)",
+          ].join("\n"),
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for empty content", () => {
+      expect(isInternalExecNotification({ role: "system", content: "" })).toBe(false);
+      expect(isInternalExecNotification({ role: "system", content: "  \n  " })).toBe(false);
+    });
+
+    it("returns false for missing role or content", () => {
+      expect(isInternalExecNotification({})).toBe(false);
+      expect(isInternalExecNotification({ role: "system" })).toBe(false);
+    });
+
+    it("returns false for non-string content", () => {
+      expect(isInternalExecNotification({ role: "system", content: 123 })).toBe(false);
+      expect(isInternalExecNotification({ role: "system", content: null })).toBe(false);
     });
   });
 });

@@ -17,6 +17,7 @@ import {
 import { InputHistory } from "../chat/input-history.ts";
 import { extractTextCached } from "../chat/message-extract.ts";
 import {
+  isInternalExecNotification,
   isToolResultMessage,
   normalizeMessage,
   normalizeRoleForGrouping,
@@ -1764,6 +1765,13 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
 
     if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    // Hide internal exec notifications from user-visible chat.
+    // These are gateway-internal events (e.g. "Exec completed", "Exec failed")
+    // formatted by session-system-events that should not be shown to end users.
+    if (isInternalExecNotification(msg)) {
       continue;
     }
 
