@@ -90,6 +90,11 @@ describe("isFileLogLevelEnabled", () => {
     expect(logging.isFileLogLevelEnabled("debug")).toBe(true);
     expect(logging.isFileLogLevelEnabled("trace")).toBe(true);
   });
+
+  it("never treats silent as an emittable file level", () => {
+    logging.setLoggerOverride({ level: "info" });
+    expect(logging.isFileLogLevelEnabled("silent")).toBe(false);
+  });
 });
 
 describe("getChildLogger minLevel inheritance", () => {

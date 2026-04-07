@@ -54,6 +54,13 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(traceLogger.isEnabled("debug", "console")).toBe(true);
   });
 
+  it("never treats silent as an emittable console level", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const log = createSubsystemLogger("agent/embedded");
+
+    expect(log.isEnabled("silent", "console")).toBe(false);
+  });
+
   it("returns false when neither console nor file logging would emit", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "silent" });
     const log = createSubsystemLogger("agent/embedded");
