@@ -681,6 +681,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
+    compact: {
+      emoji: "🗜️",
+      title: "Compact",
+      detailKeys: ["summary"],
+    },
     sessions_yield: {
       emoji: "⏸️",
       title: "Yield",
