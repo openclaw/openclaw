@@ -3,13 +3,14 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveBundledPluginWorkspaceSourcePath } from "../../../plugins/bundled-plugin-metadata.js";
 import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 
 export function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string {
-  return cfg.acp?.backend?.trim() || "acpx";
+  return normalizeOptionalString(cfg.acp?.backend) || "acpx";
 }
 
 export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
-  const configured = cfg.acp?.runtime?.installCommand?.trim();
+  const configured = normalizeOptionalString(cfg.acp?.runtime?.installCommand);
   if (configured) {
     return configured;
   }

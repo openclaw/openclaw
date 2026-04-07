@@ -152,6 +152,14 @@ const ZALOUSER_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
+export const legacyConfigRules = ZALOUSER_LEGACY_CONFIG_RULES;
+
+export function normalizeCompatibilityConfig(params: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  return normalizeZalouserCompatibilityConfig(params.cfg);
+}
+
 export const collectZalouserMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "zalouser",
@@ -174,7 +182,7 @@ export const zalouserDoctor: ChannelDoctorAdapter = {
   groupModel: "hybrid",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
-  legacyConfigRules: ZALOUSER_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeZalouserCompatibilityConfig(cfg),
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
   collectMutableAllowlistWarnings: collectZalouserMutableAllowlistWarnings,
 };

@@ -19,7 +19,7 @@ export function isModernXaiModel(modelId: string): boolean {
 export function resolveXaiForwardCompatModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
+}) {
   const definition = resolveXaiCatalogEntry(params.ctx.modelId);
   if (!definition) {
     return undefined;

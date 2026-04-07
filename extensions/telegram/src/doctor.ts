@@ -3,6 +3,7 @@ import {
   type ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
@@ -30,10 +31,6 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 
 function sanitizeForLog(value: string): string {
   return value.replace(/\p{Cc}+/gu, " ").trim();
-}
-
-function describeUnknownError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
@@ -163,17 +160,19 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
 
   const tokenResolutionWarnings: string[] = [];
   const resolverAccountIds: string[] = [];
+  let sawConfiguredUnavailableToken = false;
   for (const accountId of listTelegramAccountIds(resolvedConfig)) {
     let inspected: ReturnType<typeof inspectTelegramAccount>;
     try {
       inspected = inspectTelegramAccount({ cfg: resolvedConfig, accountId });
     } catch (error) {
       tokenResolutionWarnings.push(
-        `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
+        `- Telegram account ${accountId}: failed to inspect bot token (${formatErrorMessage(error)}).`,
       );
       continue;
     }
     if (inspected.tokenStatus === "configured_unavailable") {
+      sawConfiguredUnavailableToken = true;
       tokenResolutionWarnings.push(
         `- Telegram account ${accountId}: failed to inspect bot token (configured but unavailable in this command path).`,
       );
@@ -189,7 +188,9 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       config: cfg,
       changes: [
         ...tokenResolutionWarnings,
-        "- Telegram allowFrom contains @username entries, but no Telegram bot token is available in this command path; cannot auto-resolve.",
+        sawConfiguredUnavailableToken
+          ? "- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve."
+          : "- Telegram allowFrom contains @username entries, but no Telegram bot token is available in this command path; cannot auto-resolve.",
       ],
     };
   }

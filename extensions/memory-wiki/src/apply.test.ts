@@ -55,10 +55,10 @@ describe("applyMemoryWikiMutation", () => {
   it("updates page metadata without overwriting existing human notes", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-",
-      initialize: true,
     });
 
     const targetPath = path.join(rootDir, "entities", "alpha.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(
       targetPath,
       renderWikiMarkdown({

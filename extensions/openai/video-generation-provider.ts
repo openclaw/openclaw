@@ -11,6 +11,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_VIDEO_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_VIDEO_MODEL = "sora-2";
@@ -35,19 +36,10 @@ type OpenAIVideoResponse = {
   } | null;
 };
 
-function resolveOpenAIVideoBaseUrl(req: VideoGenerationRequest): string {
-  const direct = req.cfg?.models?.providers?.openai?.baseUrl?.trim();
-  return direct || DEFAULT_OPENAI_VIDEO_BASE_URL;
-}
-
 function toBlobBytes(buffer: Buffer): ArrayBuffer {
   const arrayBuffer = new ArrayBuffer(buffer.byteLength);
   new Uint8Array(arrayBuffer).set(buffer);
   return arrayBuffer;
-}
-
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
 function resolveDurationSeconds(durationSeconds: number | undefined): "4" | "8" | "12" | undefined {
@@ -198,6 +190,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         maxDurationSeconds: 12,
         supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
         supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
       },
       imageToVideo: {
         enabled: true,
@@ -206,6 +199,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         maxDurationSeconds: 12,
         supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
         supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
       },
       videoToVideo: {
         enabled: true,
@@ -214,6 +208,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         maxDurationSeconds: 12,
         supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
         supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
       },
     },
     async generateVideo(req) {
@@ -230,7 +225,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveOpenAIVideoBaseUrl(req),
+          baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_VIDEO_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
@@ -265,7 +260,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   ...(seconds ? { seconds } : {}),
                   ...(size ? { size } : {}),
                   input_reference: {
-                    image_url: toDataUrl(
+                    image_url: toOpenAIDataUrl(
                       inputImage.buffer,
                       inputImage.mimeType?.trim() || "image/png",
                     ),

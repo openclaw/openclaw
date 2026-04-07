@@ -71,7 +71,10 @@ export function createSignalToolResultConfig(
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 export function createMockSignalDaemonHandle(
   overrides: {

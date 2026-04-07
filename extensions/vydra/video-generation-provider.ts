@@ -27,7 +27,9 @@ function resolveVydraVideoRequestBody(
       model,
       body: {
         prompt: req.prompt,
+        // Vydra's kling route has been inconsistent about which field it requires.
         image_url: imageUrl,
+        video_url: imageUrl,
       },
     };
   }

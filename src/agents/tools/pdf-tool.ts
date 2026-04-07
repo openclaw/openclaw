@@ -1,19 +1,12 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  providerSupportsNativePdfDocument,
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
-} from "../../media-understanding/defaults.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  coerceImageModelConfig,
-  type ImageModelConfig,
-  resolveProviderVisionModelFromConfig,
-} from "./image-tool.helpers.js";
+import { type ImageModelConfig } from "./image-tool.helpers.js";
+import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -22,7 +15,6 @@ import {
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
@@ -56,105 +48,7 @@ const PDF_MAX_PIXELS = 4_000_000;
 // Model resolution (mirrors image tool pattern)
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the effective PDF model config.
- * Falls back to the image model config, then to provider-specific defaults.
- */
-export function resolvePdfModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-}): ImageModelConfig | null {
-  // Check for explicit PDF model config first
-  const explicitPdf = coercePdfModelConfig(params.cfg);
-  if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
-    return explicitPdf;
-  }
-
-  // Fall back to the image model config
-  const explicitImage = coerceImageModelConfig(params.cfg);
-  if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return explicitImage;
-  }
-
-  // Auto-detect from available providers
-  const primary = resolveDefaultModelRef(params.cfg);
-  const googleOk = hasAuthForProvider({ provider: "google", agentDir: params.agentDir });
-
-  const fallbacks: string[] = [];
-  const addFallback = (ref: string) => {
-    const trimmed = ref.trim();
-    if (trimmed && !fallbacks.includes(trimmed)) {
-      fallbacks.push(trimmed);
-    }
-  };
-
-  // Prefer providers with native PDF support
-  let preferred: string | null = null;
-
-  const providerOk = hasAuthForProvider({ provider: primary.provider, agentDir: params.agentDir });
-  const providerVision = resolveProviderVisionModelFromConfig({
-    cfg: params.cfg,
-    provider: primary.provider,
-  });
-  const providerDefault = resolveDefaultMediaModel({
-    cfg: params.cfg,
-    providerId: primary.provider,
-    capability: "image",
-  });
-  const primarySupportsNativePdf = providerSupportsNativePdfDocument({
-    cfg: params.cfg,
-    providerId: primary.provider,
-  });
-  const nativePdfCandidates = resolveAutoMediaKeyProviders({
-    cfg: params.cfg,
-    capability: "image",
-  })
-    .filter((providerId) => providerSupportsNativePdfDocument({ cfg: params.cfg, providerId }))
-    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
-    .map((providerId) => {
-      const modelId = resolveDefaultMediaModel({
-        cfg: params.cfg,
-        providerId,
-        capability: "image",
-      });
-      return modelId ? `${providerId}/${modelId}` : null;
-    })
-    .filter((value): value is string => Boolean(value));
-  const genericImageCandidates = resolveAutoMediaKeyProviders({
-    cfg: params.cfg,
-    capability: "image",
-  })
-    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
-    .map((providerId) => {
-      const modelId = resolveDefaultMediaModel({
-        cfg: params.cfg,
-        providerId,
-        capability: "image",
-      });
-      return modelId ? `${providerId}/${modelId}` : null;
-    })
-    .filter((value): value is string => Boolean(value));
-
-  if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
-    preferred = providerVision;
-  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
-    preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
-  } else {
-    preferred = nativePdfCandidates[0] ?? genericImageCandidates[0] ?? null;
-  }
-
-  if (preferred?.trim()) {
-    for (const candidate of [...nativePdfCandidates, ...genericImageCandidates]) {
-      if (candidate !== preferred) {
-        addFallback(candidate);
-      }
-    }
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
-  }
-
-  return null;
-}
+export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 // ---------------------------------------------------------------------------
 // Build context for extraction fallback path
@@ -430,8 +324,7 @@ export function createPdfTool(options?: {
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
-      const pagesRaw =
-        typeof record.pages === "string" && record.pages.trim() ? record.pages.trim() : undefined;
+      const pagesRaw = normalizeOptionalString(record.pages);
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()

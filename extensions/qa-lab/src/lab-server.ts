@@ -11,6 +11,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
@@ -159,13 +160,24 @@ function missingUiHtml() {
 </html>`;
 }
 
-function resolveUiDistDir() {
+function resolveUiDistDir(overrideDir?: string | null) {
+  if (overrideDir?.trim()) {
+    return overrideDir;
+  }
   const candidates = [
     fileURLToPath(new URL("../web/dist", import.meta.url)),
     path.resolve(process.cwd(), "extensions/qa-lab/web/dist"),
     path.resolve(process.cwd(), "dist/extensions/qa-lab/web/dist"),
   ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+  return (
+    candidates.find((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        return false;
+      }
+      const indexPath = path.join(candidate, "index.html");
+      return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
+    }) ?? candidates[0]
+  );
 }
 
 function resolveAdvertisedBaseUrl(params: {
@@ -335,8 +347,8 @@ function proxyUpgradeRequest(params: {
   params.socket.on("close", closeBoth);
 }
 
-function tryResolveUiAsset(pathname: string): string | null {
-  const distDir = resolveUiDistDir();
+function tryResolveUiAsset(pathname: string, overrideDir?: string | null): string | null {
+  const distDir = resolveUiDistDir(overrideDir);
   if (!fs.existsSync(distDir)) {
     return null;
   }
@@ -415,6 +427,7 @@ export async function startQaLabServer(params?: {
   controlUiUrl?: string;
   controlUiToken?: string;
   controlUiProxyTarget?: string;
+  uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
@@ -658,7 +671,7 @@ export async function startQaLabServer(params?: {
               startedAt,
               finishedAt: new Date().toISOString(),
               artifacts: null,
-              error: error instanceof Error ? error.message : String(error),
+              error: formatErrorMessage(error),
             };
           } finally {
             activeSuiteRun = null;
@@ -676,7 +689,7 @@ export async function startQaLabServer(params?: {
         return;
       }
 
-      const asset = tryResolveUiAsset(url.pathname);
+      const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir);
       if (!asset) {
         const html = missingUiHtml();
         res.writeHead(200, {

@@ -16,6 +16,7 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "./reply.js";
 
 function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
@@ -41,7 +42,7 @@ function makeModelSwitchConfig(home: string) {
 }
 
 function makeMoonshotConfig(home: string, storePath: string) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
@@ -64,7 +65,7 @@ function makeMoonshotConfig(home: string, storePath: string) {
       },
     },
     session: { store: storePath },
-  } as unknown as OpenClawConfig;
+  } as unknown as OpenClawConfig);
 }
 
 describe("directive behavior", () => {
@@ -189,10 +190,10 @@ describe("directive behavior", () => {
         await getReplyFromConfig(
           { Body: testCase.body, From: "+1222", To: "+1222", CommandAuthorized: true },
           {},
-          {
+          withFullRuntimeReplyConfig({
             ...testCase.config,
             session: { store: testCase.storePath },
-          } as unknown as OpenClawConfig,
+          } as unknown as OpenClawConfig),
         );
         assertModelSelection(testCase.storePath, testCase.expectedSelection);
       }
@@ -206,7 +207,7 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/model ki", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        {
+        withFullRuntimeReplyConfig({
           agents: {
             defaults: {
               model: { primary: "anthropic/claude-opus-4-6" },
@@ -236,7 +237,7 @@ describe("directive behavior", () => {
             },
           },
           session: { store: storePath },
-        },
+        } as OpenClawConfig),
       );
 
       const text = replyText(res);

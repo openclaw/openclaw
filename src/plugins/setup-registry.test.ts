@@ -25,7 +25,8 @@ vi.mock("./manifest-registry.js", () => ({
     mocks.loadPluginManifestRegistry(...args),
 }));
 
-import { clearPluginSetupRegistryCache, resolvePluginSetupRegistry } from "./setup-registry.js";
+let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
+let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -36,7 +37,10 @@ afterEach(() => {
 });
 
 describe("setup-registry getJiti", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ clearPluginSetupRegistryCache, resolvePluginSetupRegistry } =
+      await import("./setup-registry.js"));
     clearPluginSetupRegistryCache();
     mocks.createJiti.mockReset();
     mocks.discoverOpenClawPlugins.mockReset();

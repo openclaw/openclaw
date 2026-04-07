@@ -54,12 +54,6 @@ function normalizeProviderConfig(
   };
 }
 
-function readProviderConfig(
-  providerConfig: RealtimeTranscriptionProviderConfig,
-): OpenAIRealtimeTranscriptionProviderConfig {
-  return normalizeProviderConfig(providerConfig);
-}
-
 class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly RECONNECT_DELAY_MS = 1000;
@@ -234,9 +228,9 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
     createSession: (req) => {
-      const config = readProviderConfig(req.providerConfig);
+      const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         throw new Error("OpenAI API key missing");

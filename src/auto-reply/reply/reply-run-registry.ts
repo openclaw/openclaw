@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyRunKey = string;
 
@@ -104,13 +105,11 @@ export class ReplyRunAlreadyActiveError extends Error {
 }
 
 function normalizeSessionKey(sessionKey: string | undefined): string | undefined {
-  const normalized = sessionKey?.trim();
-  return normalized || undefined;
+  return normalizeOptionalString(sessionKey);
 }
 
 function normalizeSessionId(sessionId: string | undefined): string | undefined {
-  const normalized = sessionId?.trim();
-  return normalized || undefined;
+  return normalizeOptionalString(sessionId);
 }
 
 function createUserAbortError(): Error {

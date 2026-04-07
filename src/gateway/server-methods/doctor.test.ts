@@ -117,7 +117,7 @@ describe("doctor.memory.status", () => {
         provider: "gemini",
         embedding: { ok: true },
         dreaming: expect.objectContaining({
-          enabled: true,
+          enabled: false,
           shortTermCount: 0,
           totalSignalCount: 0,
           phaseSignalCount: 0,
@@ -615,7 +615,7 @@ describe("doctor.memory.dreamDiary", () => {
         expect.objectContaining({
           agentId: "main",
           found: true,
-          path: "dreams.md",
+          path: "DREAMS.md",
           content: "lowercase diary\n",
           updatedAtMs: expect.any(Number),
         }),

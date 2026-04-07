@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -182,9 +182,20 @@ describe("qa-lab server", () => {
   });
 
   it("serves the built QA UI bundle when available", async () => {
+    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-dist-"));
+    cleanups.push(async () => {
+      await rm(uiDistDir, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
+      "utf8",
+    );
+
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
+      uiDistDir,
     });
     cleanups.push(async () => {
       await lab.stop();

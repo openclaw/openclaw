@@ -236,9 +236,9 @@ async function runRoutedAcpTextTurn(text: string) {
   return { result };
 }
 
-function expectSecondRoutedPayload(payload: Partial<MockTtsReply>) {
+function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) {
   expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
-    2,
+    callIndex,
     expect.objectContaining({
       payload: expect.objectContaining(payload),
     }),
@@ -1221,7 +1221,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not add text fallback when final TTS already delivered audio", async () => {
+  it("does not add a second routed payload when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "Task completed" }, {
@@ -1231,11 +1231,10 @@ describe("tryDispatchAcpReply", () => {
     const { result } = await runRoutedAcpTextTurn("Task completed");
 
     expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
-    expectSecondRoutedPayload({
-      mediaUrl: "https://example.com/final.mp3",
-      audioAsVoice: true,
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expectRoutedPayload(1, {
+      text: "Task completed",
     });
   });
 

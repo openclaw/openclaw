@@ -4,7 +4,7 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.5.0"
+    "acpx": "0.5.1"
   },
   "openclaw": {
     "extensions": [

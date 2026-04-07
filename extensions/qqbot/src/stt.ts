@@ -6,23 +6,13 @@
 
 import * as fs from "node:fs";
 import path from "node:path";
+import { asRecord, readString } from "./config-record-shared.js";
 import { sanitizeFileName } from "./utils/platform.js";
 
 export interface STTConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {

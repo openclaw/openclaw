@@ -8,6 +8,7 @@ import {
   makeReplyConfig,
   resetReplyRuntimeMocks,
 } from "../reply.test-harness.js";
+import { loadReplyModuleForTest } from "./get-reply.test-loader.js";
 
 let getReplyFromConfig: typeof import("../reply.js").getReplyFromConfig;
 const agentMocks = createReplyRuntimeMocks();
@@ -17,10 +18,9 @@ installReplyRuntimeMocks(agentMocks);
 
 describe("getReplyFromConfig fast-path runtime", () => {
   beforeEach(async () => {
-    vi.resetModules();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
-    ({ getReplyFromConfig } = await import("../reply.js"));
+    ({ getReplyFromConfig } = await loadReplyModuleForTest({ cacheKey: import.meta.url }));
   });
 
   afterEach(() => {

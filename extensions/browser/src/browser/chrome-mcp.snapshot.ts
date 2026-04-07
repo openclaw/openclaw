@@ -1,3 +1,4 @@
+import { normalizeString } from "../record-shared.js";
 import type { SnapshotAriaNode } from "./client.js";
 import {
   getRoleSnapshotStats,
@@ -18,17 +19,6 @@ export type ChromeMcpSnapshotNode = {
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
   const role = typeof node.role === "string" ? node.role.trim().toLowerCase() : "";
   return role || "generic";
-}
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return undefined;
 }
 
 function escapeQuoted(value: string): string {

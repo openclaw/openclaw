@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { migrateLegacyConfig } from "../src/commands/doctor/shared/legacy-config-migrate.js";
+import { applyLegacyDoctorMigrations } from "../src/commands/doctor/shared/legacy-config-migrate.js";
+import { validateConfigObjectWithPlugins } from "../src/config/validation.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
@@ -287,8 +288,13 @@ function sanitizeLiveConfig(raw: string): string {
       });
     }
 
-    const migrated = migrateLegacyConfig(parsed);
-    return `${JSON.stringify(migrated.config ?? parsed, null, 2)}\n`;
+    const migrated = applyLegacyDoctorMigrations(parsed);
+    if (!migrated.next) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const validated = validateConfigObjectWithPlugins(migrated.next);
+    return `${JSON.stringify(validated.ok ? validated.config : migrated.next, null, 2)}\n`;
   } catch {
     return raw;
   }

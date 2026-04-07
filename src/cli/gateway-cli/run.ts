@@ -21,6 +21,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { resolveControlUiRootSync } from "../../infra/control-ui-assets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
@@ -35,7 +36,6 @@ import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
-  describeUnknownError,
   extractGatewayMiskeys,
   maybeExplainGatewayServiceStop,
   parsePort,
@@ -398,7 +398,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   try {
     passwordRaw = resolveGatewayPasswordOption(opts);
   } catch (err) {
-    defaultRuntime.error(err instanceof Error ? err.message : String(err));
+    defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
     return;
   }
@@ -558,7 +558,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     }
   } catch (err) {
     if (isGatewayLockError(err)) {
-      const errMessage = describeUnknownError(err);
+      const errMessage = formatErrorMessage(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );

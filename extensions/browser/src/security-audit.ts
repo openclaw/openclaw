@@ -4,16 +4,13 @@ import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { isPrivateNetworkOptInEnabled, isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { redactCdpUrl, resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { resolveBrowserControlAuth } from "./browser/control-auth.js";
+import { hasNonEmptyString } from "./record-shared.js";
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "localhost.localdomain",
   "metadata.google.internal",
 ]);
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function isTrustedPrivateHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();

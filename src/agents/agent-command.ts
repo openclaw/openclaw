@@ -27,6 +27,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -128,7 +129,10 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   });
 }
 
-async function resolveAgentRuntimeConfig(runtime: RuntimeEnv): Promise<{
+async function resolveAgentRuntimeConfig(
+  runtime: RuntimeEnv,
+  params?: { runtimeTargetsChannelSecrets?: boolean },
+): Promise<{
   loadedRaw: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   cfg: OpenClawConfig;
@@ -148,7 +152,9 @@ async function resolveAgentRuntimeConfig(runtime: RuntimeEnv): Promise<{
   const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "agent",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getAgentRuntimeCommandSecretTargetIds({
+      includeChannelTargets: params?.runtimeTargetsChannelSecrets === true,
+    }),
     runtime,
   });
   setRuntimeConfigSnapshot(cfg, sourceConfig);
@@ -196,7 +202,9 @@ async function prepareAgentCommandExecution(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime);
+  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+    runtimeTargetsChannelSecrets: opts.deliver === true,
+  });
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,
@@ -473,7 +481,7 @@ async function agentCommandInternal(
         });
       } catch (error) {
         log.warn(
-          `ACP transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
 

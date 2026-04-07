@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -177,7 +178,7 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
         ...(setupEntry ? { setupEntry } : {}),
       });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = formatErrorMessage(error);
       log.warn(`[channels] failed to load bundled channel ${metadata.manifest.id}: ${detail}`);
     }
   }

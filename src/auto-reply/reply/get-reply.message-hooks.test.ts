@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -48,9 +49,8 @@ vi.mock("./session.js", () => ({
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 
-async function loadFreshGetReplyModuleForTest() {
-  vi.resetModules();
-  ({ getReplyFromConfig } = await import("./get-reply.js"));
+async function loadGetReplyRuntimeForTest() {
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
@@ -78,7 +78,7 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
 
 describe("getReplyFromConfig message hooks", () => {
   beforeEach(async () => {
-    await loadFreshGetReplyModuleForTest();
+    await loadGetReplyRuntimeForTest();
     delete process.env.OPENCLAW_TEST_FAST;
     mocks.applyMediaUnderstanding.mockReset();
     mocks.applyLinkUnderstanding.mockReset();

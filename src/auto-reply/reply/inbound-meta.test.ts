@@ -1,10 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (channelId: string) =>
+    channelId === "slack"
+      ? {
+          agentPrompt: {
+            inboundFormattingHints: () => ({
+              text_markup: "slack_mrkdwn",
+              rules: [
+                "Use Slack mrkdwn, not standard Markdown.",
+                "Bold uses *single asterisks*.",
+                "Links use <url|label>.",
+                "Code blocks use triple backticks without a language identifier.",
+                "Do not use markdown headings or pipe tables.",
+              ],
+            }),
+          },
+        }
+      : undefined,
+  getLoadedChannelPlugin: (channelId: string) =>
     channelId === "slack"
       ? {
           agentPrompt: {
@@ -123,6 +142,40 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("includes Slack mrkdwn response format hints for Slack chats", () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack-plugin",
+          source: "test",
+          plugin: {
+            id: "slack",
+            meta: {
+              id: "slack",
+              label: "Slack",
+              selectionLabel: "Slack",
+              docsPath: "/channels/slack",
+              blurb: "test stub",
+            },
+            capabilities: { chatTypes: ["channel"] },
+            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+            agentPrompt: {
+              inboundFormattingHints: () => ({
+                text_markup: "slack_mrkdwn",
+                rules: [
+                  "Use Slack mrkdwn, not standard Markdown.",
+                  "Bold uses *single asterisks*.",
+                  "Links use <url|label>.",
+                  "Code blocks use triple backticks without a language identifier.",
+                  "Do not use markdown headings or pipe tables.",
+                ],
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
     const prompt = buildInboundMetaSystemPrompt({
       OriginatingTo: "channel:C123",
       OriginatingChannel: "slack",

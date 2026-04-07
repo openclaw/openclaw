@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "./errors.js";
 import {
   type Bootstrap,
   type OutcomesEnvelope,
@@ -157,7 +158,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       }
       state.error = null;
     } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = formatErrorMessage(error);
     }
 
     /* Only re-render when data actually changed; defer if a <select> is open */
@@ -206,7 +207,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.activeTab = "report";
       await refresh();
     } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = formatErrorMessage(error);
       render();
     } finally {
       state.busy = false;
@@ -223,7 +224,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.selectedThreadId = null;
       await refresh();
     } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = formatErrorMessage(error);
       render();
     } finally {
       state.busy = false;
@@ -259,7 +260,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       chatScrollLocked = true;
       await refresh();
     } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = formatErrorMessage(error);
       render();
     } finally {
       state.busy = false;
@@ -295,7 +296,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.activeTab = "chat";
       await refresh();
     } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = formatErrorMessage(error);
       render();
     } finally {
       state.busy = false;
@@ -313,7 +314,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       chatScrollLocked = true;
       await refresh();
     } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = formatErrorMessage(error);
       render();
     } finally {
       state.busy = false;

@@ -1,17 +1,23 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { SessionInitResult } from "./session.js";
 
 const COMPLETE_REPLY_CONFIG_SYMBOL = Symbol.for("openclaw.reply.complete-config");
+const FULL_REPLY_RUNTIME_SYMBOL = Symbol.for("openclaw.reply.full-runtime");
 
 type ReplyConfigWithMarker = OpenClawConfig & {
   [COMPLETE_REPLY_CONFIG_SYMBOL]?: true;
+  [FULL_REPLY_RUNTIME_SYMBOL]?: true;
 };
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -21,26 +27,47 @@ function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 function resolveFastSessionKey(ctx: MsgContext): string {
-  const existing = ctx.SessionKey?.trim();
+  const existing = normalizeOptionalString(ctx.SessionKey);
   if (existing) {
     return existing;
   }
-  const provider = ctx.Provider?.trim() || ctx.Surface?.trim() || "main";
-  const destination = ctx.To?.trim() || ctx.From?.trim() || "default";
+  const provider =
+    normalizeOptionalString(ctx.Provider) ?? normalizeOptionalString(ctx.Surface) ?? "main";
+  const destination =
+    normalizeOptionalString(ctx.To) ?? normalizeOptionalString(ctx.From) ?? "default";
   return `agent:main:${provider}:${destination}`;
 }
 
-export function markCompleteReplyConfig<T extends OpenClawConfig>(config: T): T {
+function markReplyConfigRuntimeMode(
+  config: ReplyConfigWithMarker,
+  runtimeMode: "fast" | "full" = "fast",
+): void {
+  Object.defineProperty(config, FULL_REPLY_RUNTIME_SYMBOL, {
+    value: runtimeMode === "full" ? true : undefined,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
+export function markCompleteReplyConfig<T extends OpenClawConfig>(
+  config: T,
+  options?: { runtimeMode?: "fast" | "full" },
+): T {
   Object.defineProperty(config as ReplyConfigWithMarker, COMPLETE_REPLY_CONFIG_SYMBOL, {
     value: true,
     configurable: true,
     enumerable: false,
   });
+  markReplyConfigRuntimeMode(config as ReplyConfigWithMarker, options?.runtimeMode ?? "fast");
   return config;
 }
 
 export function withFastReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markCompleteReplyConfig(config);
+  return markCompleteReplyConfig(config, { runtimeMode: "fast" });
+}
+
+export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
+  return markCompleteReplyConfig(config, { runtimeMode: "full" });
 }
 
 export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
@@ -48,6 +75,14 @@ export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig
     config &&
     typeof config === "object" &&
     (config as ReplyConfigWithMarker)[COMPLETE_REPLY_CONFIG_SYMBOL] === true,
+  );
+}
+
+export function usesFullReplyRuntime(config: unknown): boolean {
+  return Boolean(
+    config &&
+    typeof config === "object" &&
+    (config as ReplyConfigWithMarker)[FULL_REPLY_RUNTIME_SYMBOL] === true,
   );
 }
 
@@ -75,7 +110,79 @@ export function shouldUseReplyFastTestBootstrap(params: {
   isFastTestEnv: boolean;
   configOverride?: OpenClawConfig;
 }): boolean {
-  return params.isFastTestEnv && isCompleteReplyConfig(params.configOverride);
+  return (
+    params.isFastTestEnv &&
+    isCompleteReplyConfig(params.configOverride) &&
+    !usesFullReplyRuntime(params.configOverride)
+  );
+}
+
+export function shouldUseReplyFastTestRuntime(params: {
+  cfg: OpenClawConfig;
+  isFastTestEnv: boolean;
+}): boolean {
+  return (
+    params.isFastTestEnv && isCompleteReplyConfig(params.cfg) && !usesFullReplyRuntime(params.cfg)
+  );
+}
+
+export function shouldUseReplyFastDirectiveExecution(params: {
+  isFastTestBootstrap: boolean;
+  isGroup: boolean;
+  isHeartbeat: boolean;
+  resetTriggered: boolean;
+  triggerBodyNormalized: string;
+}): boolean {
+  if (
+    !params.isFastTestBootstrap ||
+    params.isGroup ||
+    params.isHeartbeat ||
+    params.resetTriggered
+  ) {
+    return false;
+  }
+  return !params.triggerBodyNormalized.includes("/");
+}
+
+export function buildFastReplyCommandContext(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  isGroup: boolean;
+  triggerBodyNormalized: string;
+  commandAuthorized: boolean;
+}): CommandContext {
+  const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized, commandAuthorized } =
+    params;
+  const surface = normalizeOptionalString(ctx.Surface ?? ctx.Provider)?.toLowerCase() ?? "";
+  const channel = normalizeOptionalString(ctx.Provider ?? surface)?.toLowerCase() ?? "";
+  const from = normalizeOptionalString(ctx.From);
+  const to = normalizeOptionalString(ctx.To);
+  return {
+    surface,
+    channel,
+    channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    ownerList: [],
+    senderIsOwner: false,
+    isAuthorizedSender: commandAuthorized,
+    senderId: from,
+    abortKey: sessionKey ?? from ?? to,
+    rawBodyNormalized: triggerBodyNormalized,
+    commandBodyNormalized: normalizeCommandBody(
+      isGroup ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId) : triggerBodyNormalized,
+      { botUsername: ctx.BotUsername },
+    ),
+    from,
+    to,
+  };
+}
+
+export function shouldHandleFastReplyTextCommands(params: {
+  cfg: OpenClawConfig;
+  commandSource?: string;
+}): boolean {
+  return params.commandSource === "native" || params.cfg.commands?.text !== false;
 }
 
 export function initFastReplySessionState(params: {
@@ -108,9 +215,15 @@ export function initFastReplySessionState(params: {
     sessionFile,
     updatedAt: now,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
-    ...(ctx.Provider?.trim() ? { channel: ctx.Provider.trim() } : {}),
-    ...(ctx.GroupSubject?.trim() ? { subject: ctx.GroupSubject.trim() } : {}),
-    ...(ctx.GroupChannel?.trim() ? { groupChannel: ctx.GroupChannel.trim() } : {}),
+    ...(normalizeOptionalString(ctx.Provider)
+      ? { channel: normalizeOptionalString(ctx.Provider) }
+      : {}),
+    ...(normalizeOptionalString(ctx.GroupSubject)
+      ? { subject: normalizeOptionalString(ctx.GroupSubject) }
+      : {}),
+    ...(normalizeOptionalString(ctx.GroupChannel)
+      ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
+      : {}),
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
   const sessionCtx: TemplateContext = {
@@ -131,7 +244,7 @@ export function initFastReplySessionState(params: {
     resetTriggered,
     systemSent: false,
     abortedLastRun: false,
-    storePath: cfg.session?.store?.trim() ?? "",
+    storePath: normalizeOptionalString(cfg.session?.store) ?? "",
     sessionScope,
     groupResolution: undefined,
     isGroup,

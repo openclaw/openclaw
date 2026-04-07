@@ -500,6 +500,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.videoGenerationModel.fallbacks": "Video Generation Model Fallbacks",
   "agents.defaults.musicGenerationModel.primary": "Music Generation Model",
   "agents.defaults.musicGenerationModel.fallbacks": "Music Generation Model Fallbacks",
+  "agents.defaults.mediaGenerationAutoProviderFallback": "Media Generation Auto Provider Fallback",
   "agents.defaults.pdfModel.primary": "PDF Model",
   "agents.defaults.pdfModel.fallbacks": "PDF Model Fallbacks",
   "agents.defaults.pdfMaxBytesMb": "PDF Max Size (MB)",

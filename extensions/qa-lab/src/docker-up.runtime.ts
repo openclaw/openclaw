@@ -113,13 +113,14 @@ async function waitForHealth(
   url: string,
   deps: {
     label?: string;
+    composeFile?: string;
     fetchImpl: FetchLike;
     sleepImpl: (ms: number) => Promise<unknown>;
     timeoutMs?: number;
     pollMs?: number;
   },
 ) {
-  const timeoutMs = deps.timeoutMs ?? 240_000;
+  const timeoutMs = deps.timeoutMs ?? 360_000;
   const pollMs = deps.pollMs ?? 1_000;
   const startMs = Date.now();
   const deadline = startMs + timeoutMs;
@@ -143,7 +144,7 @@ async function waitForHealth(
   const lines = [
     `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,
     lastError ? `Last error: ${describeError(lastError)}` : "",
-    "Hint: check container logs with `docker compose -f <compose-file> logs` and verify the port is not already in use.",
+    `Hint: check container logs with \`docker compose -f ${deps.composeFile ?? "<compose-file>"} logs\` and verify the port is not already in use.`,
   ];
   throw new Error(lines.filter(Boolean).join("\n"));
 }
@@ -217,11 +218,24 @@ export async function runQaDockerUp(
 
   await runCommand("docker", composeArgs, repoRoot);
 
+  // Brief settle delay so Docker Desktop finishes port-forwarding setup.
+  await sleepImpl(3_000);
+
   const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
 
-  await waitForHealth(`${qaLabUrl}/healthz`, { label: "QA Lab", fetchImpl, sleepImpl });
-  await waitForHealth(`${gatewayUrl}healthz`, { label: "Gateway", fetchImpl, sleepImpl });
+  await waitForHealth(`${qaLabUrl}/healthz`, {
+    label: "QA Lab",
+    fetchImpl,
+    sleepImpl,
+    composeFile,
+  });
+  await waitForHealth(`${gatewayUrl}healthz`, {
+    label: "Gateway",
+    fetchImpl,
+    sleepImpl,
+    composeFile,
+  });
 
   return {
     outputDir,

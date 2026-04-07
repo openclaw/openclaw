@@ -45,6 +45,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -484,7 +485,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           } catch (err) {
             return {
               ok: false,
-              error: err instanceof Error ? err.message : String(err),
+              error: formatMatrixErrorMessage(err),
               elapsedMs: 0,
             };
           }

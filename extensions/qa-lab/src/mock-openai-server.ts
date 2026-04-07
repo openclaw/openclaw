@@ -70,17 +70,7 @@ function extractLastUserText(input: ResponsesInputItem[]) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
-    const text = item.content
-      .filter(
-        (entry): entry is { type: "input_text"; text: string } =>
-          !!entry &&
-          typeof entry === "object" &&
-          (entry as { type?: unknown }).type === "input_text" &&
-          typeof (entry as { text?: unknown }).text === "string",
-      )
-      .map((entry) => entry.text)
-      .join("\n")
-      .trim();
+    const text = extractInputText(item.content);
     if (text) {
       return text;
     }
@@ -109,23 +99,27 @@ function extractToolOutput(input: ResponsesInputItem[]) {
   return "";
 }
 
+function extractInputText(content: unknown[]): string {
+  return content
+    .filter(
+      (entry): entry is { type: "input_text"; text: string } =>
+        !!entry &&
+        typeof entry === "object" &&
+        (entry as { type?: unknown }).type === "input_text" &&
+        typeof (entry as { text?: unknown }).text === "string",
+    )
+    .map((entry) => entry.text)
+    .join("\n")
+    .trim();
+}
+
 function extractAllUserTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
-    const text = item.content
-      .filter(
-        (entry): entry is { type: "input_text"; text: string } =>
-          !!entry &&
-          typeof entry === "object" &&
-          (entry as { type?: unknown }).type === "input_text" &&
-          typeof (entry as { text?: unknown }).text === "string",
-      )
-      .map((entry) => entry.text)
-      .join("\n")
-      .trim();
+    const text = extractInputText(item.content);
     if (text) {
       texts.push(text);
     }
@@ -142,17 +136,7 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     if (!Array.isArray(item.content)) {
       continue;
     }
-    const text = item.content
-      .filter(
-        (entry): entry is { type: "input_text"; text: string } =>
-          !!entry &&
-          typeof entry === "object" &&
-          (entry as { type?: unknown }).type === "input_text" &&
-          typeof (entry as { text?: unknown }).text === "string",
-      )
-      .map((entry) => entry.text)
-      .join("\n")
-      .trim();
+    const text = extractInputText(item.content);
     if (text) {
       texts.push(text);
     }

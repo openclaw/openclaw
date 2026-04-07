@@ -551,7 +551,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
-    ).rejects.toThrow(/Path segment does not exist/i);
+    ).rejects.toThrow(
+      "memory status: failed to apply resolved secret assignment at talk.providers.missing.apiKey",
+    );
   });
 
   it("fails when configured refs remain unresolved after gateway assignments are applied", async () => {

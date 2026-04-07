@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -6,6 +7,7 @@ import { MAX_IMAGE_BYTES } from "../media/constants.js";
 import {
   buildCliArgs,
   loadPromptRefImages,
+  prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
   writeCliImages,
 } from "./cli-runner/helpers.js";
@@ -177,6 +179,142 @@ describe("writeCliImages", () => {
       expect(written.paths[0]).toMatch(/\.heic$/);
     } finally {
       await fs.rm(written.paths[0], { force: true });
+    }
+  });
+
+  it("hydrates prompt media refs into codex image args through the helper seams", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
+    );
+    const sourceImage = path.join(tempDir, "bb-image.png");
+    await fs.writeFile(
+      sourceImage,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+          input: "arg",
+        },
+        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        workspaceDir: tempDir,
+      });
+      const argv = buildCliArgs({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+        },
+        baseArgs: ["exec", "--json"],
+        modelId: "gpt-5.4",
+        imagePaths: prepared.imagePaths,
+        useResume: false,
+      });
+
+      const imageArgIndex = argv.indexOf("--image");
+      expect(imageArgIndex).toBeGreaterThanOrEqual(0);
+      expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
+      expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
+
+      await prepared.cleanupImages?.();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("appends hydrated prompt media refs for stdin backends through the helper seams", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
+    );
+    const sourceImage = path.join(tempDir, "claude-image.png");
+    await fs.writeFile(
+      sourceImage,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    try {
+      const prompt = `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`;
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "claude",
+          input: "stdin",
+        },
+        prompt,
+        workspaceDir: tempDir,
+      });
+      const promptWithImages = prepared.prompt;
+
+      expect(promptWithImages).toContain("openclaw-cli-images");
+      expect(promptWithImages).toContain(prepared.imagePaths?.[0] ?? "");
+      expect(promptWithImages.trimEnd().endsWith(prepared.imagePaths?.[0] ?? "")).toBe(true);
+
+      await prepared.cleanupImages?.();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers explicit images over prompt refs through the helper seams", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
+    );
+    const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
+    await fs.writeFile(
+      sourceImage,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const explicitImage: ImageContent = {
+      type: "image",
+      data: "c29tZS1leHBsaWNpdC1pbWFnZQ==",
+      mimeType: "image/png",
+    };
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+          input: "arg",
+        },
+        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        workspaceDir: tempDir,
+        images: [explicitImage],
+      });
+      const argv = buildCliArgs({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+        },
+        baseArgs: ["exec", "--json"],
+        modelId: "gpt-5.4",
+        imagePaths: prepared.imagePaths,
+        useResume: false,
+      });
+
+      expect(argv.filter((arg) => arg === "--image")).toHaveLength(1);
+      expect(argv[argv.indexOf("--image") + 1]).toContain("openclaw-cli-images");
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(
+        Buffer.from(explicitImage.data, "base64"),
+      );
+
+      await prepared.cleanupImages?.();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 });

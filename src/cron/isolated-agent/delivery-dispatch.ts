@@ -8,6 +8,7 @@ import {
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { logWarn, logError } from "../../logger.js";
@@ -273,7 +274,7 @@ async function queueCronAwarenessSystemEvent(params: {
     });
   } catch (err) {
     logWarn(
-      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${err instanceof Error ? err.message : String(err)}`,
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
     );
   }
 }
@@ -488,7 +489,7 @@ export async function dispatchCronDelivery(
         ? (err: unknown, _payload: unknown) => {
             hadPartialFailure = true;
             logError(
-              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );
           }
         : undefined;
@@ -551,9 +552,7 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      logError(
-        `[cron:${params.job.id}] delivery failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logError(`[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`);
       return null;
     }
   };

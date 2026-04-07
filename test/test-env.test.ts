@@ -71,11 +71,17 @@ describe("installTestEnv", () => {
         },
         channels: {
           telegram: {
-            streamMode: "block",
-            chunkMode: "newline",
-            blockStreaming: true,
-            draftChunk: {
-              minChars: 120,
+            streaming: {
+              mode: "block",
+              chunkMode: "newline",
+              block: {
+                enabled: true,
+              },
+              preview: {
+                chunk: {
+                  minChars: 120,
+                },
+              },
             },
           },
         },
@@ -127,7 +133,7 @@ describe("installTestEnv", () => {
     expect(copiedConfig.agents?.defaults?.agentDir).toBeUndefined();
     expect(copiedConfig.agents?.list?.[0]?.workspace).toBeUndefined();
     expect(copiedConfig.agents?.list?.[0]?.agentDir).toBeUndefined();
-    expect(copiedConfig.channels?.telegram?.streaming).toMatchObject({
+    expect(copiedConfig.channels?.telegram?.streaming).toEqual({
       mode: "block",
       chunkMode: "newline",
       block: { enabled: true },

@@ -3,6 +3,13 @@ type EnableStateLike = {
   reason?: string;
 };
 
+type EnableStateParamsLike = {
+  id: string;
+  origin: string;
+  config: unknown;
+  enabledByDefault?: boolean;
+};
+
 type PluginKindLike = string | readonly string[] | undefined;
 
 export function toEnableStateResult<TState extends EnableStateLike>(
@@ -16,6 +23,16 @@ export function resolveEnableStateResult<TParams, TState extends EnableStateLike
   resolveState: (params: TParams) => TState,
 ): { enabled: boolean; reason?: string } {
   return toEnableStateResult(resolveState(params));
+}
+
+export function resolveEnableStateShared<
+  TParams extends EnableStateParamsLike,
+  TState extends EnableStateLike,
+>(
+  params: TParams,
+  resolveState: (params: TParams) => TState,
+): { enabled: boolean; reason?: string } {
+  return resolveEnableStateResult(params, resolveState);
 }
 
 function hasKind(kind: PluginKindLike, target: string): boolean {

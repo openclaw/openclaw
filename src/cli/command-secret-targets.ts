@@ -21,7 +21,7 @@ const STATIC_MODEL_TARGET_IDS = [
   "models.providers.*.request.tls.key",
   "models.providers.*.request.tls.passphrase",
 ] as const;
-const STATIC_AGENT_RUNTIME_TARGET_IDS = [
+const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
@@ -75,7 +75,7 @@ function buildCommandSecretTargets(): CommandSecretTargets {
   const channelTargetIds = getChannelSecretTargetIds();
   return {
     channels: channelTargetIds,
-    agentRuntime: [...STATIC_AGENT_RUNTIME_TARGET_IDS, ...channelTargetIds],
+    agentRuntime: [...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS, ...channelTargetIds],
     status: [...STATIC_STATUS_TARGET_IDS, ...channelTargetIds],
     securityAudit: [...STATIC_SECURITY_AUDIT_TARGET_IDS, ...channelTargetIds],
   };
@@ -162,7 +162,12 @@ export function getModelsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_MODEL_TARGET_IDS);
 }
 
-export function getAgentRuntimeCommandSecretTargetIds(): Set<string> {
+export function getAgentRuntimeCommandSecretTargetIds(params?: {
+  includeChannelTargets?: boolean;
+}): Set<string> {
+  if (params?.includeChannelTargets !== true) {
+    return toTargetIdSet(STATIC_AGENT_RUNTIME_BASE_TARGET_IDS);
+  }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
 }
 

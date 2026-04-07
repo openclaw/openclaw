@@ -12,6 +12,7 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
 const allowedNonExtensionTests = new Set<string>([
   "src/agents/pi-embedded-runner-extraparams-moonshot.test.ts",
   "src/agents/pi-embedded-runner-extraparams.test.ts",
+  "src/agents/pi-embedded-runner-extraparams-moonshot.test.ts",
   "src/channels/plugins/contracts/dm-policy.contract.test.ts",
   "src/channels/plugins/contracts/group-policy.contract.test.ts",
   "src/commands/channels.surfaces-signal-runtime-errors-channels-status-output.test.ts",
@@ -21,6 +22,8 @@ const allowedNonExtensionTests = new Set<string>([
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
   "src/plugin-sdk/telegram-command-config.test.ts",
+  "src/security/audit-channel-slack-command-findings.test.ts",
+  "src/security/audit-feishu-doc-risk.test.ts",
   "src/secrets/runtime-channel-inactive-variants.test.ts",
   "src/secrets/runtime-discord-surface.test.ts",
   "src/secrets/runtime-inactive-telegram-surfaces.test.ts",
@@ -30,8 +33,6 @@ const allowedNonExtensionTests = new Set<string>([
   "src/secrets/runtime-nextcloud-talk-file-precedence.test.ts",
   "src/secrets/runtime-telegram-token-inheritance.test.ts",
   "src/secrets/runtime-zalo-token-activity.test.ts",
-  "src/security/audit-channel-slack-command-findings.test.ts",
-  "src/security/audit-feishu-doc-risk.test.ts",
 ]);
 
 function walk(dir: string, entries: string[] = []): string[] {

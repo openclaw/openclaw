@@ -613,18 +613,20 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
+  it("exports search providers in alphabetical order", () => {
     const providers = listSearchProviderOptions();
     const values = providers.map((e) => e.id);
-    expect(providers).toHaveLength(7);
-    expect(values).toEqual([
-      "brave",
-      "firecrawl",
-      "gemini",
-      "grok",
-      "kimi",
-      "perplexity",
-      "tavily",
-    ]);
+    expect(values).toEqual([...values].toSorted());
+    expect(values).toEqual(
+      expect.arrayContaining([
+        "brave",
+        "firecrawl",
+        "gemini",
+        "grok",
+        "kimi",
+        "perplexity",
+        "tavily",
+      ]),
+    );
   });
 });

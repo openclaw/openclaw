@@ -1,10 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createSubsystemLogger,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
-  createSubsystemLogger,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -28,142 +29,40 @@ import {
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import {
+  resolveMemoryPrimaryProviderRequest,
+  resolveMemoryProviderState,
+} from "./manager-provider-state.js";
+import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
-import { resolveInitialMemoryDirty, resolveStatusProviderInfo } from "./manager-status-state.js";
+import {
+  collectMemoryStatusAggregate,
+  resolveInitialMemoryDirty,
+  resolveStatusProviderInfo,
+} from "./manager-status-state.js";
+import {
+  enqueueMemoryTargetedSessionSync,
+  extractMemoryErrorReason,
+  isMemoryReadonlyDbError,
+  runMemorySyncWithReadonlyRecovery,
+  type MemoryReadonlyRecoveryState,
+} from "./manager-sync-control.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
-const BATCH_FAILURE_LIMIT = 2;
-
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
-
 const log = createSubsystemLogger("memory");
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
-
-type MemoryReadonlyRecoveryState = {
-  closed: boolean;
-  db: DatabaseSync;
-  vectorReady: Promise<boolean> | null;
-  vector: {
-    enabled: boolean;
-    available: boolean | null;
-    extensionPath?: string;
-    loadError?: string;
-    dims?: number;
-  };
-  readonlyRecoveryAttempts: number;
-  readonlyRecoverySuccesses: number;
-  readonlyRecoveryFailures: number;
-  readonlyRecoveryLastError?: string;
-  runSync: (params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }) => Promise<void>;
-  openDatabase: () => DatabaseSync;
-  ensureSchema: () => void;
-  readMeta: () => { vectorDims?: number } | undefined;
-};
-
-export function isMemoryReadonlyDbError(err: unknown): boolean {
-  const readonlyPattern =
-    /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
-  const messages = new Set<string>();
-
-  const pushValue = (value: unknown): void => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const normalized = value.trim();
-    if (!normalized) {
-      return;
-    }
-    messages.add(normalized);
-  };
-
-  pushValue(err instanceof Error ? err.message : String(err));
-  if (err && typeof err === "object") {
-    const record = err as Record<string, unknown>;
-    pushValue(record.message);
-    pushValue(record.code);
-    pushValue(record.name);
-    if (record.cause && typeof record.cause === "object") {
-      const cause = record.cause as Record<string, unknown>;
-      pushValue(cause.message);
-      pushValue(cause.code);
-      pushValue(cause.name);
-    }
-  }
-
-  return [...messages].some((value) => readonlyPattern.test(value));
-}
-
-export function extractMemoryErrorReason(err: unknown): string {
-  if (err instanceof Error && err.message.trim()) {
-    return err.message;
-  }
-  if (err && typeof err === "object") {
-    const record = err as Record<string, unknown>;
-    if (typeof record.message === "string" && record.message.trim()) {
-      return record.message;
-    }
-    if (typeof record.code === "string" && record.code.trim()) {
-      return record.code;
-    }
-  }
-  return String(err);
-}
-
-export async function runMemorySyncWithReadonlyRecovery(
-  state: MemoryReadonlyRecoveryState,
-  params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  },
-): Promise<void> {
-  try {
-    await state.runSync(params);
-    return;
-  } catch (err) {
-    if (!isMemoryReadonlyDbError(err) || state.closed) {
-      throw err;
-    }
-    const reason = extractMemoryErrorReason(err);
-    state.readonlyRecoveryAttempts += 1;
-    state.readonlyRecoveryLastError = reason;
-    log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
-    try {
-      state.db.close();
-    } catch {}
-    state.db = state.openDatabase();
-    state.vectorReady = null;
-    state.vector.available = null;
-    state.vector.loadError = undefined;
-    state.ensureSchema();
-    const meta = state.readMeta();
-    state.vector.dims = meta?.vectorDims;
-    try {
-      await state.runSync(params);
-      state.readonlyRecoverySuccesses += 1;
-    } catch (retryErr) {
-      state.readonlyRecoveryFailures += 1;
-      throw retryErr;
-    }
-  }
-}
-
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   await closeManagedCacheEntries({
     cache: INDEX_CACHE,
@@ -247,12 +146,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return await createEmbeddingProvider({
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),
-      provider: params.settings.provider,
-      remote: params.settings.remote,
-      model: params.settings.model,
-      outputDimensionality: params.settings.outputDimensionality,
-      fallback: params.settings.fallback,
-      local: params.settings.local,
+      ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
     });
   }
 
@@ -340,11 +234,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {
-    this.provider = providerResult.provider;
-    this.fallbackFrom = providerResult.fallbackFrom;
-    this.fallbackReason = providerResult.fallbackReason;
-    this.providerUnavailableReason = providerResult.providerUnavailableReason;
-    this.providerRuntime = providerResult.runtime;
+    const providerState = resolveMemoryProviderState(providerResult);
+    this.provider = providerState.provider;
+    this.fallbackFrom = providerState.fallbackFrom;
+    this.fallbackReason = providerState.fallbackReason;
+    this.providerUnavailableReason = providerState.providerUnavailableReason;
+    this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
   }
 
@@ -397,10 +292,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
-    const cleaned = query.trim();
-    if (!cleaned) {
+    const preflight = resolveMemorySearchPreflight({
+      query,
+      hasIndexedContent: this.hasIndexedContent(),
+    });
+    if (!preflight.shouldSearch) {
       return [];
     }
+    const cleaned = preflight.normalizedQuery;
     void this.warmSession(opts?.sessionKey);
     startAsyncSearchSync({
       enabled: this.settings.sync.onSearch,
@@ -411,11 +310,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         log.warn(`memory sync failed (search): ${String(err)}`);
       },
     });
-    const hasIndexedContent = this.hasIndexedContent();
-    if (!hasIndexedContent) {
-      return [];
+    if (preflight.shouldInitializeProvider) {
+      await this.ensureProviderInitialized();
     }
-    await this.ensureProviderInitialized();
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const hybrid = this.settings.query.hybrid;
@@ -649,33 +546,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
-    for (const sessionFile of sessionFiles ?? []) {
-      const trimmed = sessionFile.trim();
-      if (trimmed) {
-        this.queuedSessionFiles.add(trimmed);
-      }
-    }
-    if (this.queuedSessionFiles.size === 0) {
-      return this.syncing ?? Promise.resolve();
-    }
-    if (!this.queuedSessionSync) {
-      this.queuedSessionSync = (async () => {
-        try {
-          await this.syncing?.catch(() => undefined);
-          while (!this.closed && this.queuedSessionFiles.size > 0) {
-            const queuedSessionFiles = Array.from(this.queuedSessionFiles);
-            this.queuedSessionFiles.clear();
-            await this.sync({
-              reason: "queued-session-files",
-              sessionFiles: queuedSessionFiles,
-            });
-          }
-        } finally {
-          this.queuedSessionSync = null;
-        }
-      })();
-    }
-    return this.queuedSessionSync;
+    return enqueueMemoryTargetedSessionSync(
+      {
+        isClosed: () => this.closed,
+        getSyncing: () => this.syncing,
+        getQueuedSessionFiles: () => this.queuedSessionFiles,
+        getQueuedSessionSync: () => this.queuedSessionSync,
+        setQueuedSessionSync: (value) => {
+          this.queuedSessionSync = value;
+        },
+        sync: async (params) => await this.sync(params),
+      },
+      sessionFiles,
+    );
   }
 
   private isReadonlyDbError(err: unknown): boolean {
@@ -782,43 +665,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   status(): MemoryProviderStatus {
     const sourceFilter = this.buildSourceFilter();
-    const aggregateRows = this.db
-      .prepare(
-        `SELECT 'files' AS kind, source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source\n` +
-          `UNION ALL\n` +
-          `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
-      )
-      .all(...sourceFilter.params, ...sourceFilter.params) as Array<{
-      kind: "files" | "chunks";
-      source: MemorySource;
-      c: number;
-    }>;
-    const aggregateState = (() => {
-      const sources = Array.from(this.sources);
-      const bySource = new Map<MemorySource, { files: number; chunks: number }>();
-      for (const source of sources) {
-        bySource.set(source, { files: 0, chunks: 0 });
-      }
-      let files = 0;
-      let chunks = 0;
-      for (const row of aggregateRows) {
-        const count = row.c ?? 0;
-        const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
-        if (row.kind === "files") {
-          entry.files = count;
-          files += count;
-        } else {
-          entry.chunks = count;
-          chunks += count;
-        }
-        bySource.set(row.source, entry);
-      }
-      return {
-        files,
-        chunks,
-        sourceCounts: sources.map((source) => Object.assign({ source }, bySource.get(source)!)),
-      };
-    })();
+    const aggregateState = collectMemoryStatusAggregate({
+      db: {
+        prepare: (sql) => ({
+          all: (...args) =>
+            this.db.prepare(sql).all(...args) as Array<{
+              kind: "files" | "chunks";
+              source: MemorySource;
+              c: number;
+            }>,
+        }),
+      },
+      sources: this.sources,
+      sourceFilterSql: sourceFilter.sql,
+      sourceFilterParams: sourceFilter.params,
+    });
 
     const providerInfo = resolveStatusProviderInfo({
       provider: this.provider,
@@ -870,7 +731,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       batch: {
         enabled: this.batch.enabled,
         failures: this.batchFailureCount,
-        limit: BATCH_FAILURE_LIMIT,
+        limit: MEMORY_BATCH_FAILURE_LIMIT,
         wait: this.batch.wait,
         concurrency: this.batch.concurrency,
         pollIntervalMs: this.batch.pollIntervalMs,
@@ -916,7 +777,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await this.embedBatchWithRetry(["ping"]);
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       return { ok: false, error: message };
     }
   }
