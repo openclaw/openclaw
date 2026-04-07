@@ -4,7 +4,7 @@
 // so runtime dependencies declared in dist/extensions/*/package.json must also
 // resolve from the package root node_modules. Skip source checkouts.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
@@ -183,6 +183,117 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 }
 
+// Patches for third-party dependencies that fix bugs or improve behavior.
+function applyDependencyPatches(params = {}) {
+  const pathExists = params.existsSync ?? existsSync;
+  const readFile = params.readFileSync ?? readFileSync;
+  const writeFile = params.writeFileSync ?? writeFileSync;
+  const log = params.log ?? console;
+
+  const ROOT = params.root ?? DEFAULT_PACKAGE_ROOT;
+
+  // Patch pi-coding-agent's edit-diff.js to improve error messages when fuzzy matching is used.
+  // Issue: edit tool requires exact text match causing memory write failures
+  // The edit tool has fuzzy matching but error messages say "exact text" even when fuzzy was used.
+  const EDIT_DIFF_PATH = join(
+    ROOT,
+    "node_modules/@mariozechner/pi-coding-agent/dist/core/tools/edit-diff.js",
+  );
+
+  if (!pathExists(EDIT_DIFF_PATH)) {
+    return; // pi-coding-agent not installed, skip
+  }
+
+  let content = readFile(EDIT_DIFF_PATH, "utf-8");
+
+  // Check if already patched
+  if (content.includes("usedFuzzyMatch")) {
+    return; // Already patched
+  }
+
+  let patched = false;
+
+  // Patch getNotFoundError function
+  const oldNotFoundError = `function getNotFoundError(path, editIndex, totalEdits) {
+    if (totalEdits === 1) {
+        return new Error(\`Could not find the exact text in \${path}. The old text must match exactly including all whitespace and newlines.\`);
+    }
+    return new Error(\`Could not find edits[\${editIndex}] in \${path}. The oldText must match exactly including all whitespace and newlines.\`);
+}`;
+
+  const newNotFoundError = `function getNotFoundError(path, editIndex, totalEdits, usedFuzzyMatch) {
+    const fuzzyHint = usedFuzzyMatch
+        ? " (fuzzy matching was applied but the text was not found)"
+        : "";
+    if (totalEdits === 1) {
+        return new Error(\`Could not find the text in \${path}. The old text must match exactly including all whitespace and newlines.\${fuzzyHint}\`);
+    }
+    return new Error(\`Could not find edits[\${editIndex}] in \${path}. The oldText must match exactly including all whitespace and newlines.\${fuzzyHint}\`);
+}`;
+
+  if (content.includes(oldNotFoundError)) {
+    content = content.replace(oldNotFoundError, newNotFoundError);
+    patched = true;
+  }
+
+  // Patch getDuplicateError function
+  const oldDuplicateError = `function getDuplicateError(path, editIndex, totalEdits, occurrences) {
+    if (totalEdits === 1) {
+        return new Error(\`Found \${occurrences} occurrences of the text in \${path}. The text must be unique. Please provide more context to make it unique.\`);
+    }
+    return new Error(\`Found \${occurrences} occurrences of edits[\${editIndex}] in \${path}. Each oldText must be unique. Please provide more context to make it unique.\`);
+}`;
+
+  const newDuplicateError = `function getDuplicateError(path, editIndex, totalEdits, occurrences, usedFuzzyMatch) {
+    const fuzzyHint = usedFuzzyMatch
+        ? " (fuzzy matching normalized the text, causing multiple matches). Try including more surrounding context to make your oldText more specific."
+        : "";
+    if (totalEdits === 1) {
+        return new Error(\`Found \${occurrences} occurrences of the text in \${path}. The text must be unique. Please provide more context to make it unique.\${fuzzyHint}\`);
+    }
+    return new Error(\`Found \${occurrences} occurrences of edits[\${editIndex}] in \${path}. Each oldText must be unique. Please provide more context to make it unique.\${fuzzyHint}\`);
+}`;
+
+  if (content.includes(oldDuplicateError)) {
+    content = content.replace(oldDuplicateError, newDuplicateError);
+    patched = true;
+  }
+
+  // Patch the call sites in applyEditsToNormalizedContent
+  const oldMatchCheck = `        if (!matchResult.found) {
+            throw getNotFoundError(path, i, normalizedEdits.length);
+        }
+
+        const occurrences = countOccurrences(baseContent, edit.oldText);
+        if (occurrences > 1) {
+            throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
+        }`;
+
+  const newMatchCheck = `        if (!matchResult.found) {
+            throw getNotFoundError(path, i, normalizedEdits.length, matchResult.usedFuzzyMatch);
+        }
+
+        const occurrences = countOccurrences(baseContent, edit.oldText);
+        if (occurrences > 1) {
+            throw getDuplicateError(path, i, normalizedEdits.length, occurrences, matchResult.usedFuzzyMatch);
+        }`;
+
+  if (content.includes(oldMatchCheck)) {
+    content = content.replace(oldMatchCheck, newMatchCheck);
+    patched = true;
+  }
+
+  if (patched) {
+    writeFile(EDIT_DIFF_PATH, content, "utf-8");
+    log.log(
+      "[postinstall] patched pi-coding-agent edit-diff.js for improved fuzzy match error messages",
+    );
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runBundledPluginPostinstall();
+  applyDependencyPatches();
 }
+
+export { applyDependencyPatches };

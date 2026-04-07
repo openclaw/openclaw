@@ -1,0 +1,59 @@
+# Patch for @mariozechner/pi-coding-agent edit-diff.js
+# Issue: edit tool requires exact text match causing memory write failures
+# The edit tool has fuzzy matching but error messages say "exact text" even when fuzzy was used
+#
+# Apply with: node scripts/patches/apply-pi-coding-agent-edit-diff-patch.mjs
+#
+# This patch modifies the error messages in fuzzy matching to indicate when
+# fuzzy matching was applied vs pure exact matching.
+
+--- a/node_modules/@mariozechner/pi-coding-agent/dist/core/tools/edit-diff.js
++++ b/node_modules/@mariozechner/pi-coding-agent/dist/core/tools/edit-diff.js
+@@ -98,22 +98,32 @@ function countOccurrences(content, oldText) {
+     return fuzzyContent.split(fuzzyOldText).length - 1;
+ }
+ 
+-function getNotFoundError(path, editIndex, totalEdits) {
++function getNotFoundError(path, editIndex, totalEdits, usedFuzzyMatch) {
++    const fuzzyHint = usedFuzzyMatch
++        ? " (fuzzy matching was applied but the text was not found)"
++        : "";
+     if (totalEdits === 1) {
+-        return new Error(`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`);
++        return new Error(`Could not find the text in ${path}. The old text must match exactly including all whitespace and newlines.${fuzzyHint}`);
+     }
+-    return new Error(`Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`);
++    return new Error(`Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.${fuzzyHint}`);
+ }
+ 
+-function getDuplicateError(path, editIndex, totalEdits, occurrences) {
++function getDuplicateError(path, editIndex, totalEdits, occurrences, usedFuzzyMatch) {
++    const fuzzyHint = usedFuzzyMatch
++        ? " (fuzzy matching normalized the text, causing multiple matches). Try including more surrounding context to make your oldText more specific."
++        : "";
+     if (totalEdits === 1) {
+-        return new Error(`Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`);
++        return new Error(`Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.${fuzzyHint}`);
+     }
+-    return new Error(`Found ${occurrences} occurrences of edits[${editIndex}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`);
++    return new Error(`Found ${occurrences} occurrences of edits[${editIndex}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.${fuzzyHint}`);
+ }
+ 
+ function getEmptyOldTextError(path, editIndex, totalEdits) {
+     if (totalEdits === 1) {
+         return new Error(`oldText must not be empty in ${path}.`);
+@@ -148,11 +158,11 @@ export function applyEditsToNormalizedContent(normalizedContent, edits, path) {
+         const edit = normalizedEdits[i];
+         const matchResult = fuzzyFindText(baseContent, edit.oldText);
+         if (!matchResult.found) {
+-            throw getNotFoundError(path, i, normalizedEdits.length);
++            throw getNotFoundError(path, i, normalizedEdits.length, matchResult.usedFuzzyMatch);
+         }
+ 
+         const occurrences = countOccurrences(baseContent, edit.oldText);
+         if (occurrences > 1) {
+-            throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
++            throw getDuplicateError(path, i, normalizedEdits.length, occurrences, matchResult.usedFuzzyMatch);
+         }
+ 
+         matchedEdits.push({
