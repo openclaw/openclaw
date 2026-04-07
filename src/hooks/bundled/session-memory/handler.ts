@@ -225,6 +225,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Append to existing daily file so multiple /reset calls in the same day
     // accumulate in one canonical file instead of creating orphaned slug files.
+    // Read existing content with raw fs.readFile — the filename is constructed
+    // from Intl.DateTimeFormat output (pure YYYY-MM-DD), so there is no path
+    // traversal surface. The subsequent write goes through writeFileWithinRoot
+    // which enforces full symlink/boundary validation.
     const rawExisting = await fs.readFile(memoryFilePath, "utf-8").catch((err) => {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return null;
