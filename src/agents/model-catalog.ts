@@ -130,19 +130,49 @@ export async function loadModelCatalog(params?: {
       logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
+      // Build a set of explicitly configured provider keys so we can detect phantom
+      // entries inferred from aggregator model-ID prefixes (e.g. openrouter model
+      // "google/gemini-3-flash-preview" causing a phantom "google" provider).
+      const configuredProviders = new Set(
+        Object.keys(cfg.models?.providers ?? {}).map((k) => normalizeProviderId(k)),
+      );
+      // Collect a set of qualified aggregator model IDs (e.g. "openrouter::google/gemini-3-flash-preview")
+      // so we can identify phantom entries whose provider + id were split from these.
+      const aggregatorModelKeys = new Set<string>();
       for (const entry of entries) {
-        const id = String(entry?.id ?? "").trim();
+        try {
+          const id = (entry?.id ?? "").trim();
+          const provider = normalizeProviderId(entry?.provider ?? "");
+          if (id && provider && configuredProviders.has(provider) && id.includes("/")) {
+            aggregatorModelKeys.add(`${id.split("/")[0]}::${id.split("/").slice(1).join("/")}`);
+          }
+        } catch {
+          // Skip entries that throw on property access.
+        }
+      }
+
+      for (const entry of entries) {
+        const id = (entry?.id ?? "").trim();
         if (!id) {
           continue;
         }
-        const provider = String(entry?.provider ?? "").trim();
+        const provider = (entry?.provider ?? "").trim();
         if (!provider) {
           continue;
         }
         if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
-        const name = String(entry?.name ?? id).trim() || id;
+        // Skip phantom entries: provider not explicitly configured and the entry
+        // matches an aggregator model whose ID was split on "/".
+        const normalizedProvider = normalizeProviderId(provider);
+        if (
+          !configuredProviders.has(normalizedProvider) &&
+          aggregatorModelKeys.has(`${normalizedProvider}::${id}`)
+        ) {
+          continue;
+        }
+        const name = (entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
