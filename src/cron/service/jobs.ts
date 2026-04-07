@@ -6,6 +6,7 @@ import {
   computeNextRunAtMs,
   computePreviousRunAtMs,
 } from "../schedule.js";
+import { assertSafeCronSessionTargetId } from "../session-target.js";
 import {
   normalizeCronStaggerMs,
   resolveCronStaggerMs,
@@ -136,6 +137,9 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
     job.sessionTarget.startsWith("session:");
+  if (job.sessionTarget.startsWith("session:")) {
+    assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
+  }
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
@@ -163,23 +167,6 @@ function assertMainSessionAgentId(
   }
 }
 
-const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
-const TELEGRAM_SLASH_TOPIC_REGEX = /^-?\d+\/\d+$/;
-
-function validateTelegramDeliveryTarget(to: string | undefined): string | undefined {
-  if (!to) {
-    return undefined;
-  }
-  const trimmed = to.trim();
-  if (TELEGRAM_TME_URL_REGEX.test(trimmed)) {
-    return undefined;
-  }
-  if (TELEGRAM_SLASH_TOPIC_REGEX.test(trimmed)) {
-    return `Invalid Telegram delivery target "${to}". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username`;
-  }
-  return undefined;
-}
-
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   // No delivery object or mode is "none" -- nothing to validate.
   if (!job.delivery || job.delivery.mode === "none") {
@@ -200,12 +187,6 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.sessionTarget.startsWith("session:");
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
-  }
-  if (job.delivery.channel === "telegram") {
-    const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
-    if (telegramError) {
-      throw new Error(telegramError);
-    }
   }
 }
 
@@ -238,8 +219,12 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
+  return job.enabled ?? true;
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled) {
+  if (!isJobEnabled(job)) {
     return undefined;
   }
   if (job.schedule.kind === "every") {
@@ -295,7 +280,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 }
 
 export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled || job.schedule.kind !== "cron") {
+  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
     return undefined;
   }
   const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
@@ -359,7 +344,21 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
-  if (!job.enabled) {
+  if (job.schedule.kind === "every") {
+    const normalizedAnchorMs = resolveEveryAnchorMs({
+      schedule: job.schedule,
+      fallbackAnchorMs: isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs,
+    });
+    if (job.schedule.anchorMs !== normalizedAnchorMs) {
+      job.schedule = {
+        ...job.schedule,
+        anchorMs: normalizedAnchorMs,
+      };
+      changed = true;
+    }
+  }
+
+  if (!isJobEnabled(job)) {
     if (job.state.nextRunAtMs !== undefined) {
       job.state.nextRunAtMs = undefined;
       changed = true;
@@ -669,6 +668,14 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.model === "string") {
     next.model = patch.model;
   }
+  if (Array.isArray(patch.fallbacks)) {
+    next.fallbacks = patch.fallbacks;
+  }
+  if (Array.isArray(patch.toolsAllow)) {
+    next.toolsAllow = patch.toolsAllow;
+  } else if (patch.toolsAllow === null) {
+    delete next.toolsAllow;
+  }
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
@@ -700,6 +707,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     kind: "agentTurn",
     message: patch.message,
     model: patch.model,
+    fallbacks: patch.fallbacks,
+    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
@@ -840,7 +849,9 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (opts.forced) {
     return true;
   }
-  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
+  return (
+    isJobEnabled(job) && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs
+  );
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {

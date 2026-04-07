@@ -2,9 +2,16 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { listTasksForAgentId, listTasksForSessionKey } from "../../tasks/task-registry.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
-import { buildTaskStatusSnapshot } from "../../tasks/task-status.js";
+import {
+  listTasksForAgentIdForStatus,
+  listTasksForSessionKeyForStatus,
+} from "../../tasks/task-status-access.js";
+import {
+  buildTaskStatusSnapshot,
+  formatTaskStatusDetail,
+  formatTaskStatusTitle,
+} from "../../tasks/task-status.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -35,7 +42,7 @@ function formatTaskHeadline(snapshot: ReturnType<typeof buildTaskStatusSnapshot>
 }
 
 function formatAgentFallbackLine(agentId: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForAgentId(agentId));
+  const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
     return undefined;
   }
@@ -55,14 +62,11 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
 }
 
 function formatTaskDetail(task: TaskRecord): string | undefined {
-  if (task.status === "running" || task.status === "queued") {
-    return task.progressSummary?.trim();
-  }
-  return task.error?.trim() || task.terminalSummary?.trim();
+  return formatTaskStatusDetail(task);
 }
 
 function formatVisibleTask(task: TaskRecord, index: number): string {
-  const title = task.label?.trim() || task.task.trim();
+  const title = formatTaskStatusTitle(task);
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);
@@ -75,7 +79,9 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
 }
 
 export function buildTasksText(params: { sessionKey: string; agentId: string }): string {
-  const sessionSnapshot = buildTaskStatusSnapshot(listTasksForSessionKey(params.sessionKey));
+  const sessionSnapshot = buildTaskStatusSnapshot(
+    listTasksForSessionKeyForStatus(params.sessionKey),
+  );
   const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot)];
 
   if (sessionSnapshot.totalCount > 0) {

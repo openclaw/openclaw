@@ -22,6 +22,15 @@ export type AuthConfig = {
     /** Billing backoff cap (hours). Default: 24. */
     billingMaxHours?: number;
     /**
+     * Base backoff for high-confidence permanent-auth failures (minutes).
+     * Default: 10.
+     */
+    authPermanentBackoffMinutes?: number;
+    /**
+     * Cap for high-confidence permanent-auth backoff (minutes). Default: 60.
+     */
+    authPermanentMaxMinutes?: number;
+    /**
      * Failure window for backoff counters (hours). If no failures occur within
      * this window, counters reset. Default: 24.
      */
@@ -36,5 +45,10 @@ export type AuthConfig = {
      * Default: 0.
      */
     overloadedBackoffMs?: number;
+    /**
+     * Maximum same-provider auth-profile rotations to allow for rate-limit
+     * errors before escalating to cross-provider model fallback. Default: 1.
+     */
+    rateLimitedProfileRotations?: number;
   };
 };

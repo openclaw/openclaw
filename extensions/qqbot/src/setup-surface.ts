@@ -28,7 +28,7 @@ function clearQQBotCredentialField(
   field: QQBotEnvCredentialField,
 ): OpenClawConfig {
   const next = { ...cfg };
-  const qqbot = { ...((next.channels?.qqbot as Record<string, unknown>) || {}) };
+  const qqbot = { ...(next.channels?.qqbot as Record<string, unknown> | undefined) };
 
   const clearField = (entry: Record<string, unknown>) => {
     if (field === "appId") {
@@ -42,7 +42,7 @@ function clearQQBotCredentialField(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     clearField(qqbot);
   } else {
-    const accounts = { ...((qqbot.accounts as Record<string, Record<string, unknown>>) || {}) };
+    const accounts = { ...(qqbot.accounts as Record<string, Record<string, unknown>> | undefined) };
     if (accounts[accountId]) {
       const entry = { ...accounts[accountId] };
       clearField(entry);
@@ -73,9 +73,11 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "needs AppID + AppSecret",
     configuredScore: 1,
     unconfiguredScore: 6,
-    resolveConfigured: ({ cfg }) =>
-      listQQBotAccountIds(cfg).some((accountId) => {
-        const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
+    resolveConfigured: ({ cfg, accountId }) =>
+      (accountId ? [accountId] : listQQBotAccountIds(cfg)).some((resolvedAccountId) => {
+        const account = resolveQQBotAccount(cfg, resolvedAccountId, {
+          allowUnresolvedSecretRef: true,
+        });
         return Boolean(
           account.appId &&
           (Boolean(account.clientSecret) ||

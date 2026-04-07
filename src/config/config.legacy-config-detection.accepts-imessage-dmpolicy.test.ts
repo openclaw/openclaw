@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
+const { loadConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
 import { withTempHome } from "./test-helpers.js";
 
@@ -199,7 +199,7 @@ describe("legacy config detection", () => {
   });
   it("rejects legacy agent.model string", async () => {
     const res = validateConfigObject({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -207,14 +207,6 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"agent"');
     }
   });
-  it("does not rewrite removed telegram.requireMention migrations", async () => {
-    const res = migrateLegacyConfig({
-      telegram: { requireMention: false },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-
   it("flags channels.telegram.groupMentionsOnly as legacy in snapshot", async () => {
     await withSnapshotForConfig(
       { channels: { telegram: { groupMentionsOnly: true } } },
@@ -233,27 +225,6 @@ describe("legacy config detection", () => {
     );
   });
 
-  it("does not rewrite removed messages.tts.enabled migrations", async () => {
-    const res = migrateLegacyConfig({
-      messages: { tts: { enabled: true } },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("does not rewrite removed legacy model config migrations", async () => {
-    const res = migrateLegacyConfig({
-      agent: {
-        model: "anthropic/claude-opus-4-5",
-        modelFallbacks: ["openai/gpt-4.1-mini"],
-        imageModel: "openai/gpt-4.1-mini",
-        imageModelFallbacks: ["anthropic/claude-opus-4-5"],
-        allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
-        modelAliases: { Opus: "anthropic/claude-opus-4-5" },
-      },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
   it("rejects removed routing.allowFrom in snapshot", async () => {
     await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
       expectSnapshotInvalidRootKey(ctx, "routing");

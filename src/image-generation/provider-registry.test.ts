@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 
 const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
@@ -20,7 +20,7 @@ describe("image-generation provider registry", () => {
       await import("./provider-registry.js"));
   });
 
-  afterEach(() => {
+  beforeEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
   });

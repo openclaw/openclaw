@@ -201,6 +201,55 @@ export type VisibleSessionReferenceResolution =
       displayKey: string;
     };
 
+function buildResolvedSessionReference(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+  resolvedViaSessionId: boolean;
+}): Extract<SessionReferenceResolution, { ok: true }> {
+  return {
+    ok: true,
+    key: params.key,
+    displayKey: resolveDisplaySessionKey({
+      key: params.key,
+      alias: params.alias,
+      mainKey: params.mainKey,
+    }),
+    resolvedViaSessionId: params.resolvedViaSessionId,
+  };
+}
+
+function buildSessionIdResolveParams(params: {
+  sessionId: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+}) {
+  return {
+    sessionId: params.sessionId,
+    spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+    includeGlobal: !params.restrictToSpawned,
+    includeUnknown: !params.restrictToSpawned,
+  };
+}
+
+async function callGatewayResolveSessionId(params: {
+  sessionId: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+}): Promise<string> {
+  const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+    method: "sessions.resolve",
+    params: buildSessionIdResolveParams(params),
+  });
+  const key = typeof result?.key === "string" ? result.key.trim() : "";
+  if (!key) {
+    throw new Error(
+      `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`,
+    );
+  }
+  return key;
+}
+
 async function resolveSessionKeyFromSessionId(params: {
   sessionId: string;
   alias: string;
@@ -210,31 +259,13 @@ async function resolveSessionKeyFromSessionId(params: {
 }): Promise<SessionReferenceResolution> {
   try {
     // Resolve via gateway so we respect store routing and visibility rules.
-    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
-      method: "sessions.resolve",
-      params: {
-        sessionId: params.sessionId,
-        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
-        includeGlobal: !params.restrictToSpawned,
-        includeUnknown: !params.restrictToSpawned,
-      },
-    });
-    const key = typeof result?.key === "string" ? result.key.trim() : "";
-    if (!key) {
-      throw new Error(
-        `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`,
-      );
-    }
-    return {
-      ok: true,
+    const key = await callGatewayResolveSessionId(params);
+    return buildResolvedSessionReference({
       key,
-      displayKey: resolveDisplaySessionKey({
-        key,
-        alias: params.alias,
-        mainKey: params.mainKey,
-      }),
+      alias: params.alias,
+      mainKey: params.mainKey,
       resolvedViaSessionId: true,
-    };
+    });
   } catch (err) {
     if (params.restrictToSpawned) {
       return {
@@ -274,16 +305,12 @@ async function resolveSessionKeyFromKey(params: {
     if (!key) {
       return null;
     }
-    return {
-      ok: true,
+    return buildResolvedSessionReference({
       key,
-      displayKey: resolveDisplaySessionKey({
-        key,
-        alias: params.alias,
-        mainKey: params.mainKey,
-      }),
+      alias: params.alias,
+      mainKey: params.mainKey,
       resolvedViaSessionId: false,
-    };
+    });
   } catch {
     return null;
   }
@@ -297,32 +324,60 @@ async function tryResolveSessionKeyFromSessionId(params: {
   restrictToSpawned: boolean;
 }): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
   try {
-    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
-      method: "sessions.resolve",
-      params: {
-        sessionId: params.sessionId,
-        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
-        includeGlobal: !params.restrictToSpawned,
-        includeUnknown: !params.restrictToSpawned,
-      },
-    });
-    const key = typeof result?.key === "string" ? result.key.trim() : "";
-    if (!key) {
-      return null;
-    }
-    return {
-      ok: true,
+    const key = await callGatewayResolveSessionId(params);
+    return buildResolvedSessionReference({
       key,
-      displayKey: resolveDisplaySessionKey({
-        key,
-        alias: params.alias,
-        mainKey: params.mainKey,
-      }),
+      alias: params.alias,
+      mainKey: params.mainKey,
       resolvedViaSessionId: true,
-    };
+    });
   } catch {
     return null;
   }
+}
+
+async function resolveSessionReferenceByKeyOrSessionId(params: {
+  raw: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+  allowUnresolvedSessionId: boolean;
+  skipKeyLookup?: boolean;
+  forceSessionIdLookup?: boolean;
+}): Promise<SessionReferenceResolution | null> {
+  if (!params.skipKeyLookup) {
+    // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
+    const resolvedByKey = await resolveSessionKeyFromKey({
+      key: params.raw,
+      alias: params.alias,
+      mainKey: params.mainKey,
+      requesterInternalKey: params.requesterInternalKey,
+      restrictToSpawned: params.restrictToSpawned,
+    });
+    if (resolvedByKey) {
+      return resolvedByKey;
+    }
+  }
+  if (!(params.forceSessionIdLookup || shouldResolveSessionIdInput(params.raw))) {
+    return null;
+  }
+  if (params.allowUnresolvedSessionId) {
+    return await tryResolveSessionKeyFromSessionId({
+      sessionId: params.raw,
+      alias: params.alias,
+      mainKey: params.mainKey,
+      requesterInternalKey: params.requesterInternalKey,
+      restrictToSpawned: params.restrictToSpawned,
+    });
+  }
+  return await resolveSessionKeyFromSessionId({
+    sessionId: params.raw,
+    alias: params.alias,
+    mainKey: params.mainKey,
+    requesterInternalKey: params.requesterInternalKey,
+    restrictToSpawned: params.restrictToSpawned,
+  });
 }
 
 export async function resolveSessionReference(params: {
@@ -334,50 +389,34 @@ export async function resolveSessionReference(params: {
 }): Promise<SessionReferenceResolution> {
   const rawInput = params.sessionKey.trim();
   if (rawInput === "current") {
-    if (!params.restrictToSpawned) {
-      const resolvedByKey = await resolveSessionKeyFromKey({
-        key: rawInput,
-        alias: params.alias,
-        mainKey: params.mainKey,
-        requesterInternalKey: params.requesterInternalKey,
-        restrictToSpawned: false,
-      });
-      if (resolvedByKey) {
-        return resolvedByKey;
-      }
-    }
-    const resolvedBySessionId = await tryResolveSessionKeyFromSessionId({
-      sessionId: rawInput,
+    const resolvedCurrent = await resolveSessionReferenceByKeyOrSessionId({
+      raw: rawInput,
       alias: params.alias,
       mainKey: params.mainKey,
       requesterInternalKey: params.requesterInternalKey,
       restrictToSpawned: params.restrictToSpawned,
+      allowUnresolvedSessionId: true,
+      skipKeyLookup: params.restrictToSpawned,
+      forceSessionIdLookup: true,
     });
-    if (resolvedBySessionId) {
-      return resolvedBySessionId;
+    if (resolvedCurrent) {
+      return resolvedCurrent;
     }
   }
   const raw =
     rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
-    // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
-    const resolvedByKey = await resolveSessionKeyFromKey({
-      key: raw,
+    const resolvedByGateway = await resolveSessionReferenceByKeyOrSessionId({
+      raw,
       alias: params.alias,
       mainKey: params.mainKey,
       requesterInternalKey: params.requesterInternalKey,
       restrictToSpawned: params.restrictToSpawned,
+      allowUnresolvedSessionId: false,
     });
-    if (resolvedByKey) {
-      return resolvedByKey;
+    if (resolvedByGateway) {
+      return resolvedByGateway;
     }
-    return await resolveSessionKeyFromSessionId({
-      sessionId: raw,
-      alias: params.alias,
-      mainKey: params.mainKey,
-      requesterInternalKey: params.requesterInternalKey,
-      restrictToSpawned: params.restrictToSpawned,
-    });
   }
 
   const resolvedKey = resolveInternalSessionKey({

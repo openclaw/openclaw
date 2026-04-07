@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
-import { telegramNativeApprovalAdapter } from "./approval-native.js";
+import { telegramApprovalCapability, telegramNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
@@ -32,6 +32,31 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("telegram native approval adapter", () => {
+  it("describes the correct Telegram exec-approval setup path", () => {
+    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
+      channel: "telegram",
+      channelLabel: "Telegram",
+    });
+
+    expect(text).toContain("`channels.telegram.execApprovals.approvers`");
+    expect(text).toContain("`channels.telegram.allowFrom`");
+    expect(text).toContain("`channels.telegram.defaultTo`");
+    expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
+  });
+
+  it("describes the named-account Telegram exec-approval setup path", () => {
+    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.telegram.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`channels.telegram.accounts.work.allowFrom`");
+    expect(text).toContain("`channels.telegram.accounts.work.defaultTo`");
+    expect(text).not.toContain("`channels.telegram.allowFrom`");
+  });
+
   it("normalizes direct-chat origin targets so DM dedupe can converge", async () => {
     const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
@@ -54,6 +79,31 @@ describe("telegram native approval adapter", () => {
     expect(target).toEqual({
       to: "8460800771",
       threadId: undefined,
+    });
+  });
+
+  it("parses topic-scoped turn-source targets in the extension", async () => {
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-topic-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1003841603622:topic:928",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "-1003841603622",
+      threadId: 928,
     });
   });
 

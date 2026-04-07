@@ -32,9 +32,17 @@ export async function ensureLoaded(
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
+  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
+  for (const job of jobs) {
+    // Persisted legacy jobs may predate the required `enabled` field.
+    // Keep runtime behavior backward-compatible without rewriting the store.
+    if (typeof job.enabled !== "boolean") {
+      job.enabled = true;
+    }
+  }
   state.store = {
     version: 1,
-    jobs: (loaded.jobs ?? []) as unknown as CronJob[],
+    jobs,
   };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;

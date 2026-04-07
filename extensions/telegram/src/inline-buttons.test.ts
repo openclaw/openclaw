@@ -1,23 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { buildTelegramInteractiveButtons, resolveTelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramTargetChatType } from "./inline-buttons.js";
-
-describe("telegram approval buttons", () => {
-  it("builds allow-once, allow-always, and deny buttons", () => {
-    expect(buildTelegramExecApprovalButtons("fbd8daf7")).toEqual([
-      [
-        { text: "Allow Once", callback_data: "/approve fbd8daf7 allow-once" },
-        { text: "Allow Always", callback_data: "/approve fbd8daf7 always" },
-      ],
-      [{ text: "Deny", callback_data: "/approve fbd8daf7 deny" }],
-    ]);
-  });
-
-  it("skips buttons when callback_data exceeds Telegram's limit", () => {
-    expect(buildTelegramExecApprovalButtons(`a${"b".repeat(60)}`)).toBeUndefined();
-  });
-});
 
 describe("resolveTelegramTargetChatType", () => {
   it("returns 'direct' for positive numeric IDs", () => {
@@ -99,6 +82,34 @@ describe("buildTelegramInteractiveButtons", () => {
         ],
       }),
     ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
+  });
+
+  it("rewrites /approve allow-always callbacks to always so plugin IDs fit Telegram limits", () => {
+    const pluginApprovalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Always",
+                value: `/approve ${pluginApprovalId} allow-always`,
+                style: "primary",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow Always",
+          callback_data: `/approve ${pluginApprovalId} always`,
+          style: "primary",
+        },
+      ],
+    ]);
   });
 });
 

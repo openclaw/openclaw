@@ -3,9 +3,9 @@ import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
+  getSlackHandlerOrThrow,
   getSlackClient,
   getSlackHandlers,
-  getSlackHandlerOrThrow,
   flush,
   resetSlackTestState,
   runSlackMessageOnce,
@@ -13,20 +13,22 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-let resetInboundDedupe: typeof import("openclaw/plugin-sdk/reply-runtime").resetInboundDedupe;
-let HISTORY_CONTEXT_MARKER: typeof import("../../../src/auto-reply/reply/history.js").HISTORY_CONTEXT_MARKER;
-let CURRENT_MESSAGE_MARKER: typeof import("../../../src/auto-reply/reply/mentions.js").CURRENT_MESSAGE_MARKER;
-let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
+const [
+  { resetInboundDedupe },
+  { HISTORY_CONTEXT_MARKER },
+  { CURRENT_MESSAGE_MARKER },
+  { monitorSlackProvider },
+] = await Promise.all([
+  import("openclaw/plugin-sdk/reply-runtime"),
+  import("../../../src/auto-reply/reply/history.js"),
+  import("../../../src/auto-reply/reply/mentions.js"),
+  import("./monitor/provider.js"),
+]);
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ resetInboundDedupe } = await import("openclaw/plugin-sdk/reply-runtime"));
-  ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
-  ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
-  ({ monitorSlackProvider } = await import("./monitor.js"));
+beforeEach(() => {
   resetInboundDedupe();
   resetSlackTestState(defaultSlackTestConfig());
 });
@@ -711,7 +713,8 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+    const sentText = sendMock.mock.calls[0]?.[1];
+    expectPairingReplyText(typeof sentText === "string" ? sentText : "", {
       channel: "slack",
       idLine: "Your Slack user id: U1",
       code: "PAIRCODE",

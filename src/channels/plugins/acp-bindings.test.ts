@@ -6,6 +6,7 @@ const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
+const requireActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: (...args: unknown[]) => resolveAgentConfigMock(...args),
@@ -20,6 +21,8 @@ vi.mock("./index.js", () => ({
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
     getActivePluginChannelRegistryVersionMock(...args),
+  requireActivePluginChannelRegistry: (...args: unknown[]) =>
+    requireActivePluginChannelRegistryMock(...args),
 }));
 
 async function importConfiguredBindings() {
@@ -100,6 +103,7 @@ describe("configured binding registry", () => {
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
     getChannelPluginMock.mockReset();
     getActivePluginChannelRegistryVersionMock.mockReset().mockReturnValue(1);
+    requireActivePluginChannelRegistryMock.mockReset().mockReturnValue({});
   });
 
   it("resolves configured ACP bindings from an already loaded channel plugin", async () => {

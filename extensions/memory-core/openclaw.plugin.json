@@ -1,9 +1,29 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "uiHints": {
+    "dreaming.frequency": {
+      "label": "Dreaming Frequency",
+      "placeholder": "0 3 * * *",
+      "help": "Optional cron cadence for the full dreaming sweep (light, REM, then deep)."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "frequency": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

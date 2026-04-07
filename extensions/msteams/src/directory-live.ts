@@ -1,8 +1,6 @@
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
-  type GraphChannel,
-  type GraphGroup,
   listChannelsForTeam,
   listTeamsByName,
   normalizeQuery,

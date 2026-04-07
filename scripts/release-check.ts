@@ -11,6 +11,7 @@ import {
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
@@ -23,6 +24,7 @@ const requiredPathGroups = [
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
+  ...listStaticExtensionAssetOutputs(),
   "scripts/npm-runner.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
@@ -31,7 +33,7 @@ const requiredPathGroups = [
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
 ];
-const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
+const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/", "docs/.generated/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
 // restored bundled upgrade surfaces and Control UI assets while still catching
@@ -169,7 +171,7 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
       }
       return available.has(group) ? [] : [group];
     })
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {

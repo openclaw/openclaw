@@ -125,7 +125,7 @@ describe("voice-call outbound helpers", () => {
         maxConcurrentCalls: 3,
         outbound: { defaultMode: "conversation" },
         fromNumber: "+14155550100",
-        tts: { providers: { openai: { voice: "nova" } } },
+        tts: { provider: "openai", providers: { openai: { voice: "nova" } } },
       },
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
@@ -187,7 +187,7 @@ describe("voice-call outbound helpers", () => {
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", playTts },
-      config: { tts: { providers: { openai: { voice: "alloy" } } } },
+      config: { tts: { provider: "openai", providers: { openai: { voice: "alloy" } } } },
       storePath: "/tmp/voice-call.json",
     };
 

@@ -22,7 +22,10 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import { listTasksForAgentId, listTasksForSessionKey } from "../../tasks/task-registry.js";
+import {
+  listTasksForAgentIdForStatus,
+  listTasksForSessionKeyForStatus,
+} from "../../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
@@ -33,9 +36,9 @@ import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
-import { resolveSubagentLabel } from "./subagents-utils.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
@@ -61,7 +64,7 @@ function shouldLoadUsageSummary(params: {
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKey(sessionKey));
+  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
   if (!task) {
     return undefined;
@@ -79,7 +82,7 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
 }
 
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForAgentId(agentId));
+  const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
     return undefined;
   }
@@ -146,6 +149,7 @@ export async function buildStatusText(params: {
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;
+  includeTranscriptUsage?: boolean;
 }): Promise<string> {
   const {
     cfg,
@@ -268,22 +272,11 @@ export async function buildStatusText(params: {
     }
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
-    if (runs.length > 0) {
-      const active = runs.filter(
-        (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
-      );
-      const done = runs.length - active.length;
-      if (verboseEnabled) {
-        const labels = active
-          .map((entry) => resolveSubagentLabel(entry, ""))
-          .filter(Boolean)
-          .slice(0, 3);
-        const labelText = labels.length ? ` (${labels.join(", ")})` : "";
-        subagentsLine = `🤖 Subagents: ${active.length} active${labelText} · ${done} done`;
-      } else if (active.length > 0) {
-        subagentsLine = `🤖 Subagents: ${active.length} active`;
-      }
-    }
+    subagentsLine = buildSubagentsStatusLine({
+      runs,
+      verboseEnabled,
+      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
+    });
   }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
@@ -342,7 +335,7 @@ export async function buildStatusText(params: {
     subagentsLine,
     taskLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: false,
+    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
 
   return statusText;

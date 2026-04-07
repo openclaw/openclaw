@@ -243,6 +243,19 @@ describe("collectForbiddenPackPaths", () => {
       ]),
     ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
   });
+
+  it("blocks generated docs artifacts from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "docs/.generated/config-baseline.json",
+        "docs/.generated/config-baseline.core.json",
+      ]),
+    ).toEqual([
+      "docs/.generated/config-baseline.core.json",
+      "docs/.generated/config-baseline.json",
+    ]);
+  });
 });
 
 describe("collectMissingPackPaths", () => {
@@ -263,6 +276,7 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         "scripts/npm-runner.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
+        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
@@ -282,6 +296,8 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
+        "dist/extensions/acpx/mcp-proxy.mjs",
+        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
         "scripts/npm-runner.mjs",

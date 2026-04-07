@@ -1,7 +1,12 @@
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
+
+type MatrixInteractiveOptions = Parameters<
+  NonNullable<ChannelSetupWizardAdapter["configureInteractive"]>
+>[0]["options"];
 
 const MATRIX_ENV_KEYS = [
   "MATRIX_HOMESERVER",
@@ -59,7 +64,7 @@ export function createMatrixWizardPrompter(params: {
     fallback: PromptHandler<T | Promise<T>> | undefined,
   ): Promise<T> => {
     if (values && message in values) {
-      return values[message] as T;
+      return values[message];
     }
     if (fallback) {
       return await fallback(message);
@@ -88,7 +93,7 @@ export function createMatrixWizardPrompter(params: {
 export async function runMatrixInteractiveConfigure(params: {
   cfg: CoreConfig;
   prompter: WizardPrompter;
-  options?: unknown;
+  options?: MatrixInteractiveOptions;
   accountOverrides?: Record<string, string>;
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;

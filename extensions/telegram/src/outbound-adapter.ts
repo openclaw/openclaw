@@ -6,6 +6,7 @@ import {
 import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveOutboundSendDep,
+  sanitizeForPlainText,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -109,6 +110,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
