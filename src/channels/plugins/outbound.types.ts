@@ -84,10 +84,14 @@ export type ChannelOutboundAdapter = {
   shouldTreatRoutedTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;
+    cfg?: OpenClawConfig;
+    accountId?: string | null;
   }) => boolean;
   shouldTreatDeliveredTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;
+    cfg?: OpenClawConfig;
+    accountId?: string | null;
   }) => boolean;
   targetsMatchForReplySuppression?: (params: {
     originTarget: string;

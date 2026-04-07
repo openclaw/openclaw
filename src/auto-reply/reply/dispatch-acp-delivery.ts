@@ -61,6 +61,8 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   kind: ReplyDispatchKind;
   text: string | undefined;
   routed: boolean;
+  cfg: OpenClawConfig;
+  accountId?: string;
 }): Promise<boolean> {
   if (!normalizeOptionalString(params.text)) {
     return false;
@@ -80,6 +82,8 @@ async function shouldTreatDeliveredTextAsVisible(params: {
     return visibilityOverride({
       kind: params.kind,
       text: params.text,
+      cfg: params.cfg,
+      accountId: params.accountId,
     });
   }
   if (!params.routed) {
@@ -316,6 +320,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         kind,
         text: ttsPayload.text,
         routed: true,
+        cfg: params.cfg,
+        accountId: resolvedAccountId,
       });
       const { routeReply } = await loadRouteReplyRuntime();
       const result = await routeReply({
@@ -364,6 +370,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       kind,
       text: ttsPayload.text,
       routed: false,
+      cfg: params.cfg,
+      accountId: resolvedAccountId,
     });
     const delivered =
       kind === "tool"

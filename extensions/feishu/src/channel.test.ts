@@ -502,12 +502,33 @@ describe("feishuPlugin actions", () => {
       feishuPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
         kind: "block",
         text: "streamed answer",
+        cfg: {
+          channels: {
+            feishu: {
+              renderMode: "card",
+            },
+          },
+        } as OpenClawConfig,
       }),
     ).toBe(true);
     expect(
       feishuPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "block",
+        text: "plain answer",
+        cfg: {
+          channels: {
+            feishu: {
+              renderMode: "auto",
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toBe(false);
+    expect(
+      feishuPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
         kind: "final",
         text: "final answer",
+        cfg,
       }),
     ).toBe(false);
   });

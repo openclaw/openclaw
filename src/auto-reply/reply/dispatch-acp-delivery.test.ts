@@ -21,14 +21,28 @@ const channelPluginMocks = vi.hoisted(() => ({
   shouldTreatDeliveredTextAsVisible: (({
     kind,
     text,
+    cfg: _cfg,
+    accountId: _accountId,
   }: {
     kind: "tool" | "block" | "final";
     text?: string;
+    cfg?: OpenClawConfig;
+    accountId?: string | null;
   }) => kind === "block" && typeof text === "string" && text.trim().length > 0) as
-    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
+    | ((params: {
+        kind: "tool" | "block" | "final";
+        text?: string;
+        cfg?: OpenClawConfig;
+        accountId?: string | null;
+      }) => boolean)
     | undefined,
   shouldTreatRoutedTextAsVisible: undefined as
-    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
+    | ((params: {
+        kind: "tool" | "block" | "final";
+        text?: string;
+        cfg?: OpenClawConfig;
+        accountId?: string | null;
+      }) => boolean)
     | undefined,
   getChannelPlugin: vi.fn((channelId: string) => {
     if (channelId !== "discord" && channelId !== "feishu" && channelId !== "telegram") {
@@ -97,9 +111,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     channelPluginMocks.shouldTreatDeliveredTextAsVisible = ({
       kind,
       text,
+      cfg: _cfg,
+      accountId: _accountId,
     }: {
       kind: "tool" | "block" | "final";
       text?: string;
+      cfg?: OpenClawConfig;
+      accountId?: string | null;
     }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
     channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
   });
@@ -233,6 +251,38 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+  });
+
+  it("passes cfg and resolved accountId into direct visibility overrides", async () => {
+    const cfg = createAcpTestConfig({
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+        },
+      },
+    });
+    channelPluginMocks.shouldTreatDeliveredTextAsVisible = vi.fn(() => true);
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx: buildTestCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
+
+    expect(channelPluginMocks.shouldTreatDeliveredTextAsVisible).toHaveBeenCalledWith({
+      kind: "block",
+      text: "hello",
+      cfg,
+      accountId: "work",
+    });
   });
 
   it("honors the legacy routed visibility hook name for plugin compatibility", async () => {
@@ -466,5 +516,39 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(1);
+  });
+
+  it("passes cfg and resolved accountId into routed visibility overrides", async () => {
+    const cfg = createAcpTestConfig({
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+        },
+      },
+    });
+    channelPluginMocks.shouldTreatDeliveredTextAsVisible = undefined;
+    channelPluginMocks.shouldTreatRoutedTextAsVisible = vi.fn(() => true);
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx: buildTestCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "feishu",
+      originatingTo: "chat:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(channelPluginMocks.shouldTreatRoutedTextAsVisible).toHaveBeenCalledWith({
+      kind: "block",
+      text: "hello",
+      cfg,
+      accountId: "work",
+    });
   });
 });

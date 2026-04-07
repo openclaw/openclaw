@@ -122,9 +122,25 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
 function shouldTreatFeishuDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
+  cfg?: ClawdbotConfig;
+  accountId?: string | null;
 }): boolean {
+  if (params.kind !== "block" || typeof params.text !== "string" || !params.text.trim()) {
+    return false;
+  }
+  if (!params.cfg) {
+    return false;
+  }
+  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const renderMode = account.config?.renderMode ?? "auto";
+  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  if (!streamingEnabled) {
+    return false;
+  }
   return (
-    params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
+    renderMode === "card" ||
+    /```[\s\S]*?```/.test(params.text) ||
+    /\|.+\|[\r\n]+\|[-:| ]+\|/.test(params.text)
   );
 }
 
