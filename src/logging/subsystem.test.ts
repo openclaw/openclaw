@@ -145,3 +145,46 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("subsystem logger file logger staleness", () => {
+  afterEach(() => {
+    resetLogger();
+    loggingState.rawConsole = null;
+  });
+
+  it("picks up a new parent logger after the parent is rebuilt (generation bump)", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const log = createSubsystemLogger("test/stale");
+
+    // First log — creates the child file logger and records generation.
+    log.info("before rebuild");
+    const genBefore = loggingState.loggerGeneration;
+    expect(genBefore).toBeGreaterThan(0);
+
+    // Simulate a parent logger rebuild (e.g. date-rolled file change).
+    resetLogger();
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+    // After reset, cachedLogger is null, so next getLogger() call rebuilds and bumps.
+    log.info("after rebuild");
+    const genAfter = loggingState.loggerGeneration;
+
+    // Generation must have advanced, proving the subsystem logger
+    // requested a fresh child instead of reusing the stale one.
+    expect(genAfter).toBeGreaterThan(genBefore);
+  });
+
+  it("reuses the cached child file logger when generation has not changed", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const log = createSubsystemLogger("test/reuse");
+
+    log.info("first");
+    const genAfterFirst = loggingState.loggerGeneration;
+
+    log.info("second");
+    const genAfterSecond = loggingState.loggerGeneration;
+
+    // No rebuild happened, generation stays the same.
+    expect(genAfterSecond).toBe(genAfterFirst);
+  });
+});

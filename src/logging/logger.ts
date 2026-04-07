@@ -245,6 +245,7 @@ export function getLogger(): TsLogger<LogObj> {
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
+    loggingState.loggerGeneration += 1;
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
@@ -295,6 +296,25 @@ export type PinoLikeLogger = {
   error: (...args: unknown[]) => void;
   fatal: (...args: unknown[]) => void;
 };
+
+/**
+ * Lightweight check that triggers a parent logger rebuild only when the
+ * rolling date has changed or the cached logger is missing. Avoids the
+ * full resolveSettings() cost of getLogger() on every log call.
+ */
+export function ensureLoggerCurrent(): void {
+  const cached = loggingState.cachedSettings as ResolvedSettings | null;
+  if (!cached || !loggingState.cachedLogger) {
+    // No cached logger yet — let getLogger() do a full build.
+    getLogger();
+    return;
+  }
+  // Fast path: if the cached file is a rolling path and the date has changed,
+  // trigger a full rebuild. Otherwise, nothing to do.
+  if (isRollingPath(cached.file) && cached.file !== defaultRollingPathForToday()) {
+    getLogger();
+  }
+}
 
 export function getResolvedLoggerSettings(): LoggerResolvedSettings {
   return resolveSettings();
