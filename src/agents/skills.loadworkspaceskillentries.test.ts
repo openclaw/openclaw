@@ -294,6 +294,37 @@ describe("loadWorkspaceSkillEntries", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "silently skips sibling skill directories that resolve outside the workspace skills root",
+    async () => {
+      // Reproduce the scenario from issue #62495: a user has a skill symlink pointing
+      // to a sibling directory outside workspace/skills. The skill should be silently
+      // skipped (security maintained) without noisy warn-level startup logs.
+      const workspaceDir = await createTempWorkspaceDir();
+      const siblingDir = await createTempWorkspaceDir(); // outside workspace/skills
+      const siblingSkillDir = path.join(siblingDir, "openclaw-optimisation");
+      await writeSkill({
+        dir: siblingSkillDir,
+        name: "openclaw-optimisation",
+        description: "Sibling optimisation skill",
+      });
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      await fs.symlink(
+        siblingSkillDir,
+        path.join(workspaceDir, "skills", "openclaw-optimisation"),
+        "dir",
+      );
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      // Skill is silently skipped — containment check preserved, no warn log emitted
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("openclaw-optimisation");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "skips workspace skill files that resolve outside the workspace root",
     async () => {
       const workspaceDir = await createTempWorkspaceDir();
