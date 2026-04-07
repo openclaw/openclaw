@@ -4,34 +4,37 @@ const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
+type GatewayTestConfig = {
+  gateway?: {
+    mode?: unknown;
+    remote?: {
+      url?: unknown;
+    } | null;
+  } | null;
+};
 const buildGatewayConnectionDetailsMock = vi.fn(
-  ({ config }: { config?: Record<string, unknown> } = {}) => {
+  ({ config }: { config?: GatewayTestConfig } = {}) => {
     const cfg = config ?? {};
     const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
     if (envUrl) {
       return { url: envUrl, urlSource: "env OPENCLAW_GATEWAY_URL" };
     }
+    const gateway = cfg.gateway;
+    const remote = gateway?.remote;
     const remoteUrl =
-      cfg.gateway &&
-      typeof cfg.gateway === "object" &&
-      cfg.gateway.mode === "remote" &&
-      cfg.gateway.remote &&
-      typeof cfg.gateway.remote === "object" &&
-      typeof cfg.gateway.remote.url === "string" &&
-      cfg.gateway.remote.url.trim()
-        ? cfg.gateway.remote.url.trim()
+      gateway?.mode === "remote" &&
+      remote &&
+      typeof remote === "object" &&
+      typeof remote.url === "string" &&
+      remote.url.trim()
+        ? remote.url.trim()
         : undefined;
     if (remoteUrl) {
       return { url: remoteUrl, urlSource: "config gateway.remote.url" };
     }
     const fallbackLocal =
-      cfg.gateway &&
-      typeof cfg.gateway === "object" &&
-      cfg.gateway.mode === "remote" &&
-      (!cfg.gateway.remote ||
-        typeof cfg.gateway.remote !== "object" ||
-        typeof cfg.gateway.remote.url !== "string" ||
-        !cfg.gateway.remote.url.trim());
+      gateway?.mode === "remote" &&
+      (!remote || typeof remote !== "object" || typeof remote.url !== "string" || !remote.url.trim());
     return {
       url: "ws://127.0.0.1:18789",
       urlSource: fallbackLocal ? "missing gateway.remote.url (fallback local)" : "local loopback",
@@ -43,7 +46,8 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: (...args: unknown[]) => buildGatewayConnectionDetailsMock(...args),
+  buildGatewayConnectionDetails: (args?: { config?: GatewayTestConfig }) =>
+    buildGatewayConnectionDetailsMock(args),
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 vi.mock("../../gateway/net.js", async () => await import("../../gateway/net.ts"));
