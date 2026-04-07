@@ -59,10 +59,16 @@ describe("status.command-sections", () => {
       recent: [
         {
           key: "session-key-1234567890",
-          kind: "chat",
+          kind: "direct",
           updatedAt: 1,
           age: 5_000,
           model: "gpt-5.4",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
         },
       ],
       verbose: true,
@@ -76,7 +82,7 @@ describe("status.command-sections", () => {
     expect(verboseRows).toEqual([
       {
         Key: "session-",
-        Kind: "chat",
+        Kind: "direct",
         Age: "5000ms",
         Model: "gpt-5.4",
         Tokens: "12k",

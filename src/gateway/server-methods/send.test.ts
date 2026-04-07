@@ -13,7 +13,15 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
-  sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+  sendPoll: vi.fn<
+    () => Promise<{
+      messageId: string;
+      toJid?: string;
+      channelId?: string;
+      conversationId?: string;
+      pollId?: string;
+    }>
+  >(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),

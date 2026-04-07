@@ -1,13 +1,18 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
-import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
+import {
+  resolveVideoGenerationMode,
+  resolveVideoGenerationModeCapabilities,
+} from "../../video-generation/capabilities.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
   generateVideo,
@@ -120,7 +125,7 @@ const VideoGenerateToolSchema = Type.Object({
   ),
   resolution: Type.Optional(
     Type.String({
-      description: "Optional resolution hint: 480P, 720P, or 1080P.",
+      description: "Optional resolution hint: 480P, 720P, 768P, or 1080P.",
     }),
   ),
   durationSeconds: Type.Optional(
@@ -159,7 +164,7 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
   if (!raw) {
     return "generate";
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "generate" || normalized === "list" || normalized === "status") {
     return normalized;
   }
@@ -171,10 +176,15 @@ function normalizeResolution(raw: string | undefined): VideoGenerationResolution
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "480P" || normalized === "720P" || normalized === "1080P") {
+  if (
+    normalized === "480P" ||
+    normalized === "720P" ||
+    normalized === "768P" ||
+    normalized === "1080P"
+  ) {
     return normalized;
   }
-  throw new ToolInputError("resolution must be one of 480P, 720P, or 1080P");
+  throw new ToolInputError("resolution must be one of 480P, 720P, 768P, or 1080P");
 }
 
 function normalizeAspectRatio(raw: string | undefined): string | undefined {
@@ -196,7 +206,7 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
     return raw;
   }
   if (typeof raw === "string") {
-    const normalized = raw.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(raw);
     if (normalized === "true") {
       return true;
     }
@@ -268,7 +278,40 @@ function validateVideoGenerationCapabilities(params: {
   if (!provider) {
     return;
   }
-  const caps = provider.capabilities;
+  const mode = resolveVideoGenerationMode({
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
+  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
+    provider,
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
+  if (!caps && mode === "imageToVideo" && params.inputVideoCount === 0) {
+    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
+  }
+  if (!caps && mode === "videoToVideo" && params.inputImageCount === 0) {
+    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
+  }
+  if (!caps) {
+    return;
+  }
+  if (
+    mode === "imageToVideo" &&
+    "enabled" in caps &&
+    !caps.enabled &&
+    params.inputVideoCount === 0
+  ) {
+    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
+  }
+  if (
+    mode === "videoToVideo" &&
+    "enabled" in caps &&
+    !caps.enabled &&
+    params.inputImageCount === 0
+  ) {
+    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
+  }
   if (params.inputImageCount > 0) {
     const maxInputImages = caps.maxInputImages ?? MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
@@ -284,20 +327,6 @@ function validateVideoGenerationCapabilities(params: {
         `${provider.id} supports at most ${maxInputVideos} reference video${maxInputVideos === 1 ? "" : "s"}.`,
       );
     }
-  }
-  if (
-    typeof params.durationSeconds === "number" &&
-    Number.isFinite(params.durationSeconds) &&
-    !resolveVideoGenerationSupportedDurations({
-      provider,
-      model: params.model,
-    }) &&
-    typeof caps.maxDurationSeconds === "number" &&
-    params.durationSeconds > caps.maxDurationSeconds
-  ) {
-    throw new ToolInputError(
-      `${provider.id} supports at most ${caps.maxDurationSeconds} seconds per video.`,
-    );
   }
 }
 
@@ -502,10 +531,11 @@ async function executeVideoGenerationJob(params: {
     ),
   );
   const requestedDurationSeconds =
-    typeof result.metadata?.requestedDurationSeconds === "number" &&
+    result.normalization?.durationSeconds?.requested ??
+    (typeof result.metadata?.requestedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.requestedDurationSeconds)
       ? result.metadata.requestedDurationSeconds
-      : params.durationSeconds;
+      : params.durationSeconds);
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
   const warning =
@@ -513,15 +543,41 @@ async function executeVideoGenerationJob(params: {
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredVideoGenerationOverride).join(", ")}.`
       : undefined;
   const normalizedDurationSeconds =
-    typeof result.metadata?.normalizedDurationSeconds === "number" &&
+    result.normalization?.durationSeconds?.applied ??
+    (typeof result.metadata?.normalizedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.normalizedDurationSeconds)
       ? result.metadata.normalizedDurationSeconds
-      : requestedDurationSeconds;
-  const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
-    ? result.metadata.supportedDurationSeconds.filter(
-        (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
-      )
-    : undefined;
+      : requestedDurationSeconds);
+  const supportedDurationSeconds =
+    result.normalization?.durationSeconds?.supportedValues ??
+    (Array.isArray(result.metadata?.supportedDurationSeconds)
+      ? result.metadata.supportedDurationSeconds.filter(
+          (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
+        )
+      : undefined);
+  const normalizedSize =
+    result.normalization?.size?.applied ??
+    (typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
+      ? result.metadata.normalizedSize
+      : undefined);
+  const normalizedAspectRatio =
+    result.normalization?.aspectRatio?.applied ??
+    (typeof result.metadata?.normalizedAspectRatio === "string" &&
+    result.metadata.normalizedAspectRatio.trim()
+      ? result.metadata.normalizedAspectRatio
+      : undefined);
+  const normalizedResolution =
+    result.normalization?.resolution?.applied ??
+    (typeof result.metadata?.normalizedResolution === "string" &&
+    result.metadata.normalizedResolution.trim()
+      ? result.metadata.normalizedResolution
+      : undefined);
+  const sizeTranslatedToAspectRatio =
+    result.normalization?.aspectRatio?.derivedFrom === "size" ||
+    (!normalizedSize &&
+      typeof result.metadata?.requestedSize === "string" &&
+      result.metadata.requestedSize === params.size &&
+      Boolean(normalizedAspectRatio));
   const lines = [
     `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
@@ -585,12 +641,15 @@ async function executeVideoGenerationJob(params: {
               })),
             }
           : {}),
-      ...(!ignoredOverrideKeys.has("size") && params.size ? { size: params.size } : {}),
-      ...(!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio
-        ? { aspectRatio: params.aspectRatio }
+      ...(normalizedSize ||
+      (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
+        ? { size: normalizedSize ?? params.size }
         : {}),
-      ...(!ignoredOverrideKeys.has("resolution") && params.resolution
-        ? { resolution: params.resolution }
+      ...(normalizedAspectRatio || (!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio)
+        ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
+        : {}),
+      ...(normalizedResolution || (!ignoredOverrideKeys.has("resolution") && params.resolution)
+        ? { resolution: normalizedResolution ?? params.resolution }
         : {}),
       ...(typeof normalizedDurationSeconds === "number"
         ? { durationSeconds: normalizedDurationSeconds }
@@ -611,6 +670,7 @@ async function executeVideoGenerationJob(params: {
         : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       attempts: result.attempts,
+      ...(result.normalization ? { normalization: result.normalization } : {}),
       metadata: result.metadata,
       ...(warning ? { warning } : {}),
       ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
@@ -790,7 +850,7 @@ export function createVideoGenerateTool(options?: {
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",
-              result: error instanceof Error ? error.message : String(error),
+              result: formatErrorMessage(error),
             });
             return;
           }

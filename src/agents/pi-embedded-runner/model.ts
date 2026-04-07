@@ -232,8 +232,7 @@ function findInlineModelMatch(params: {
   );
 }
 
-export { buildModelAliasLines };
-export { buildInlineProviderModels };
+export { buildModelAliasLines, buildInlineProviderModels };
 
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -336,7 +335,6 @@ function applyConfiguredProviderOverrides(params: {
     providerRequest,
   );
 }
-
 function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;

@@ -14,6 +14,10 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   displaySummary?: string;
 };
 
+// Cross-package tool registration still mixes concrete schema-typed tools with
+// plugin/runtime factories that are effectively existential over params/details.
+// Tightening this alias without a dedicated adapter seam blows up plugin tool
+// factories and embedded-runner tool plumbing.
 // oxlint-disable-next-line typescript/no-explicit-any
 export type AnyAgentTool = AgentToolWithMeta<any, unknown>;
 

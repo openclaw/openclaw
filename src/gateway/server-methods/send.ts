@@ -16,6 +16,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
@@ -60,8 +61,7 @@ async function resolveRequestedChannel(params: {
       error: ReturnType<typeof errorShape>;
     }
 > {
-  const channelInput =
-    typeof params.requestChannel === "string" ? params.requestChannel : undefined;
+  const channelInput = readStringValue(params.requestChannel);
   const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
   if (channelInput && !normalizedChannel) {
     const normalizedInput = channelInput.trim().toLowerCase();

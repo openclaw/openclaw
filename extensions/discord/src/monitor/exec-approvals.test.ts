@@ -355,9 +355,7 @@ describe("parseExecApprovalData", () => {
   });
 
   it("rejects null/undefined input", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect(parseExecApprovalData(null as any)).toBeNull();
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect(parseExecApprovalData(undefined as any)).toBeNull();
   });
 
@@ -713,7 +711,6 @@ describe("ExecApprovalButton", () => {
       ephemeral: true,
     });
     expect(acknowledge).not.toHaveBeenCalled();
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
 
@@ -729,7 +726,6 @@ describe("ExecApprovalButton", () => {
 
     expect(reply).not.toHaveBeenCalled();
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-once");
   });
 
@@ -744,7 +740,6 @@ describe("ExecApprovalButton", () => {
     await button.run(interaction, data);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-always");
   });
 
@@ -759,7 +754,6 @@ describe("ExecApprovalButton", () => {
     await button.run(interaction, data);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "deny");
   });
 
@@ -778,7 +772,6 @@ describe("ExecApprovalButton", () => {
       ephemeral: true,
     });
     expect(acknowledge).not.toHaveBeenCalled();
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
 

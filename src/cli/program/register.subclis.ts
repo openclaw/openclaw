@@ -1,9 +1,19 @@
 import type { Command } from "commander";
-import type { OpenClawConfig } from "../../config/config.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
-import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { removeCommandByName } from "./command-tree.js";
-import { registerLazyCommand as registerLazyCommandPlaceholder } from "./register-lazy-command.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import {
+  shouldEagerRegisterSubcommands,
+  shouldRegisterPrimarySubcommandOnly,
+} from "../command-registration-policy.js";
+import {
+  buildCommandGroupEntries,
+  defineImportedProgramCommandGroupSpecs,
+  type CommandGroupDescriptorSpec,
+} from "./command-group-descriptors.js";
+import {
+  registerCommandGroupByName,
+  registerCommandGroups,
+  type CommandGroupEntry,
+} from "./register-command-groups.js";
 import {
   getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
@@ -14,355 +24,217 @@ export { getSubCliCommandsWithSubcommands };
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
-type SubCliEntry = SubCliDescriptor & {
-  register: SubCliRegistrar;
-};
-
-const shouldRegisterPrimaryOnly = (argv: string[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS)) {
-    return false;
+async function registerSubCliWithPluginCommands(
+  program: Command,
+  registerSubCli: () => Promise<void>,
+  pluginCliPosition: "before" | "after",
+) {
+  const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+  if (pluginCliPosition === "before") {
+    await registerPluginCliCommandsFromValidatedConfig(program);
   }
-  if (hasHelpOrVersion(argv)) {
-    return false;
+  await registerSubCli();
+  if (pluginCliPosition === "after") {
+    await registerPluginCliCommandsFromValidatedConfig(program);
   }
-  return true;
-};
-
-const shouldEagerRegisterSubcommands = (_argv: string[]) => {
-  return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
-};
-
-export const loadValidatedConfigForPluginRegistration =
-  async (): Promise<OpenClawConfig | null> => {
-    const mod = await import("../../config/config.js");
-    const snapshot = await mod.readConfigFileSnapshot();
-    if (!snapshot.valid) {
-      return null;
-    }
-    return mod.loadConfig();
-  };
+}
 
 // Note for humans and agents:
 // If you update the list of commands, also check whether they have subcommands
 // and set the flag accordingly.
-const entries: SubCliEntry[] = [
-  {
-    name: "acp",
-    description: "Agent Control Protocol tools",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../acp-cli.js");
-      mod.registerAcpCli(program);
+const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
+  ...defineImportedProgramCommandGroupSpecs([
+    {
+      commandNames: ["acp"],
+      loadModule: () => import("../acp-cli.js"),
+      exportName: "registerAcpCli",
     },
-  },
-  {
-    name: "gateway",
-    description: "Run, inspect, and query the WebSocket Gateway",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../gateway-cli.js");
-      mod.registerGatewayCli(program);
+    {
+      commandNames: ["gateway"],
+      loadModule: () => import("../gateway-cli.js"),
+      exportName: "registerGatewayCli",
     },
-  },
-  {
-    name: "daemon",
-    description: "Gateway service (legacy alias)",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../daemon-cli.js");
-      mod.registerDaemonCli(program);
+    {
+      commandNames: ["daemon"],
+      loadModule: () => import("../daemon-cli.js"),
+      exportName: "registerDaemonCli",
     },
-  },
-  {
-    name: "logs",
-    description: "Tail gateway file logs via RPC",
-    hasSubcommands: false,
-    register: async (program) => {
-      const mod = await import("../logs-cli.js");
-      mod.registerLogsCli(program);
+    {
+      commandNames: ["logs"],
+      loadModule: () => import("../logs-cli.js"),
+      exportName: "registerLogsCli",
     },
-  },
-  {
-    name: "system",
-    description: "System events, heartbeat, and presence",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../system-cli.js");
-      mod.registerSystemCli(program);
+    {
+      commandNames: ["system"],
+      loadModule: () => import("../system-cli.js"),
+      exportName: "registerSystemCli",
     },
-  },
-  {
-    name: "models",
-    description: "Discover, scan, and configure models",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../models-cli.js");
-      mod.registerModelsCli(program);
+    {
+      commandNames: ["models"],
+      loadModule: () => import("../models-cli.js"),
+      exportName: "registerModelsCli",
     },
-  },
-  {
-    name: "approvals",
-    description: "Manage exec approvals (gateway or node host)",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../exec-approvals-cli.js");
-      mod.registerExecApprovalsCli(program);
+    {
+      commandNames: ["infer", "capability"],
+      loadModule: () => import("../capability-cli.js"),
+      exportName: "registerCapabilityCli",
     },
-  },
-  {
-    name: "nodes",
-    description: "Manage gateway-owned node pairing and node commands",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../nodes-cli.js");
-      mod.registerNodesCli(program);
+    {
+      commandNames: ["approvals"],
+      loadModule: () => import("../exec-approvals-cli.js"),
+      exportName: "registerExecApprovalsCli",
     },
-  },
-  {
-    name: "devices",
-    description: "Device pairing + token management",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../devices-cli.js");
-      mod.registerDevicesCli(program);
+    {
+      commandNames: ["nodes"],
+      loadModule: () => import("../nodes-cli.js"),
+      exportName: "registerNodesCli",
     },
-  },
-  {
-    name: "node",
-    description: "Run and manage the headless node host service",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../node-cli.js");
-      mod.registerNodeCli(program);
+    {
+      commandNames: ["devices"],
+      loadModule: () => import("../devices-cli.js"),
+      exportName: "registerDevicesCli",
     },
-  },
-  {
-    name: "sandbox",
-    description: "Manage sandbox containers for agent isolation",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../sandbox-cli.js");
-      mod.registerSandboxCli(program);
+    {
+      commandNames: ["node"],
+      loadModule: () => import("../node-cli.js"),
+      exportName: "registerNodeCli",
     },
-  },
-  {
-    name: "tui",
-    description: "Open a terminal UI connected to the Gateway",
-    hasSubcommands: false,
-    register: async (program) => {
-      const mod = await import("../tui-cli.js");
-      mod.registerTuiCli(program);
+    {
+      commandNames: ["sandbox"],
+      loadModule: () => import("../sandbox-cli.js"),
+      exportName: "registerSandboxCli",
     },
-  },
-  {
-    name: "cron",
-    description: "Manage cron jobs via the Gateway scheduler",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../cron-cli.js");
-      mod.registerCronCli(program);
+    {
+      commandNames: ["tui"],
+      loadModule: () => import("../tui-cli.js"),
+      exportName: "registerTuiCli",
     },
-  },
-  {
-    name: "dns",
-    description: "DNS helpers for wide-area discovery (Tailscale + CoreDNS)",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../dns-cli.js");
-      mod.registerDnsCli(program);
+    {
+      commandNames: ["cron"],
+      loadModule: () => import("../cron-cli.js"),
+      exportName: "registerCronCli",
     },
-  },
-  {
-    name: "docs",
-    description: "Search the live OpenClaw docs",
-    hasSubcommands: false,
-    register: async (program) => {
-      const mod = await import("../docs-cli.js");
-      mod.registerDocsCli(program);
+    {
+      commandNames: ["dns"],
+      loadModule: () => import("../dns-cli.js"),
+      exportName: "registerDnsCli",
     },
-  },
-  {
-    name: "qa",
-    description: "Run QA scenarios and launch the private QA debugger UI",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../qa-cli.js");
-      mod.registerQaCli(program);
+    {
+      commandNames: ["docs"],
+      loadModule: () => import("../docs-cli.js"),
+      exportName: "registerDocsCli",
     },
-  },
-  {
-    name: "hooks",
-    description: "Manage internal agent hooks",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../hooks-cli.js");
-      mod.registerHooksCli(program);
+    {
+      commandNames: ["qa"],
+      loadModule: () => import("../qa-cli.js"),
+      exportName: "registerQaCli",
     },
-  },
-  {
-    name: "webhooks",
-    description: "Webhook helpers and integrations",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../webhooks-cli.js");
-      mod.registerWebhooksCli(program);
+    {
+      commandNames: ["hooks"],
+      loadModule: () => import("../hooks-cli.js"),
+      exportName: "registerHooksCli",
     },
-  },
-  {
-    name: "qr",
-    description: "Generate mobile pairing QR/setup code",
-    hasSubcommands: false,
-    register: async (program) => {
-      const mod = await import("../qr-cli.js");
-      mod.registerQrCli(program);
+    {
+      commandNames: ["webhooks"],
+      loadModule: () => import("../webhooks-cli.js"),
+      exportName: "registerWebhooksCli",
     },
-  },
-  {
-    name: "clawbot",
-    description: "Legacy clawbot command aliases",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../clawbot-cli.js");
-      mod.registerClawbotCli(program);
+    {
+      commandNames: ["qr"],
+      loadModule: () => import("../qr-cli.js"),
+      exportName: "registerQrCli",
     },
-  },
+    {
+      commandNames: ["clawbot"],
+      loadModule: () => import("../clawbot-cli.js"),
+      exportName: "registerClawbotCli",
+    },
+  ]),
   {
-    name: "pairing",
-    description: "Secure DM pairing (approve inbound requests)",
-    hasSubcommands: true,
+    commandNames: ["pairing"],
     register: async (program) => {
       // Initialize plugins before registering pairing CLI.
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
-      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      const config = await loadValidatedConfigForPluginRegistration();
-      if (config) {
-        await registerPluginCliCommands(program, config);
-      }
-      const mod = await import("../pairing-cli.js");
-      mod.registerPairingCli(program);
+      await registerSubCliWithPluginCommands(
+        program,
+        async () => {
+          const mod = await import("../pairing-cli.js");
+          mod.registerPairingCli(program);
+        },
+        "before",
+      );
     },
   },
   {
-    name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
-    hasSubcommands: true,
+    commandNames: ["plugins"],
     register: async (program) => {
-      const mod = await import("../plugins-cli.js");
-      mod.registerPluginsCli(program);
-      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      const config = await loadValidatedConfigForPluginRegistration();
-      if (config) {
-        await registerPluginCliCommands(program, config);
-      }
+      await registerSubCliWithPluginCommands(
+        program,
+        async () => {
+          const mod = await import("../plugins-cli.js");
+          mod.registerPluginsCli(program);
+        },
+        "after",
+      );
     },
   },
-  {
-    name: "channels",
-    description: "Manage connected chat channels (Telegram, Discord, etc.)",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../channels-cli.js");
-      mod.registerChannelsCli(program);
+  ...defineImportedProgramCommandGroupSpecs([
+    {
+      commandNames: ["channels"],
+      loadModule: () => import("../channels-cli.js"),
+      exportName: "registerChannelsCli",
     },
-  },
-  {
-    name: "directory",
-    description: "Lookup contact and group IDs (self, peers, groups) for supported chat channels",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../directory-cli.js");
-      mod.registerDirectoryCli(program);
+    {
+      commandNames: ["directory"],
+      loadModule: () => import("../directory-cli.js"),
+      exportName: "registerDirectoryCli",
     },
-  },
-  {
-    name: "security",
-    description: "Security tools and local config audits",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../security-cli.js");
-      mod.registerSecurityCli(program);
+    {
+      commandNames: ["security"],
+      loadModule: () => import("../security-cli.js"),
+      exportName: "registerSecurityCli",
     },
-  },
-  {
-    name: "secrets",
-    description: "Secrets runtime reload controls",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../secrets-cli.js");
-      mod.registerSecretsCli(program);
+    {
+      commandNames: ["secrets"],
+      loadModule: () => import("../secrets-cli.js"),
+      exportName: "registerSecretsCli",
     },
-  },
-  {
-    name: "skills",
-    description: "List and inspect available skills",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../skills-cli.js");
-      mod.registerSkillsCli(program);
+    {
+      commandNames: ["skills"],
+      loadModule: () => import("../skills-cli.js"),
+      exportName: "registerSkillsCli",
     },
-  },
-  {
-    name: "update",
-    description: "Update OpenClaw and inspect update channel status",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../update-cli.js");
-      mod.registerUpdateCli(program);
+    {
+      commandNames: ["update"],
+      loadModule: () => import("../update-cli.js"),
+      exportName: "registerUpdateCli",
     },
-  },
-  {
-    name: "completion",
-    description: "Generate shell completion script",
-    hasSubcommands: false,
-    register: async (program) => {
-      const mod = await import("../completion-cli.js");
-      mod.registerCompletionCli(program);
+    {
+      commandNames: ["completion"],
+      loadModule: () => import("../completion-cli.js"),
+      exportName: "registerCompletionCli",
     },
-  },
+  ]),
 ];
+
+function resolveSubCliCommandGroups(): CommandGroupEntry[] {
+  return buildCommandGroupEntries(getSubCliEntryDescriptors(), entrySpecs, (register) => register);
+}
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return getSubCliEntryDescriptors();
 }
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
-  const entry = entries.find((candidate) => candidate.name === name);
-  if (!entry) {
-    return false;
-  }
-  removeCommandByName(program, entry.name);
-  await entry.register(program);
-  return true;
-}
-
-function registerLazyCommand(program: Command, entry: SubCliEntry) {
-  registerLazyCommandPlaceholder({
-    program,
-    name: entry.name,
-    description: entry.description,
-    register: async () => {
-      await entry.register(program);
-    },
-  });
+  return registerCommandGroupByName(program, resolveSubCliCommandGroups(), name);
 }
 
 export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
-  if (shouldEagerRegisterSubcommands(argv)) {
-    for (const entry of entries) {
-      void entry.register(program);
-    }
-    return;
-  }
-  const primary = getPrimaryCommand(argv);
-  if (primary && shouldRegisterPrimaryOnly(argv)) {
-    const entry = entries.find((candidate) => candidate.name === primary);
-    if (entry) {
-      registerLazyCommand(program, entry);
-      return;
-    }
-  }
-  for (const candidate of entries) {
-    registerLazyCommand(program, candidate);
-  }
+  const { primary } = resolveCliArgvInvocation(argv);
+  registerCommandGroups(program, resolveSubCliCommandGroups(), {
+    eager: shouldEagerRegisterSubcommands(),
+    primary,
+    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv)),
+  });
 }

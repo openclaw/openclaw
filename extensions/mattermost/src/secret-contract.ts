@@ -4,7 +4,7 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 export const secretTargetRegistryEntries = [
   {
@@ -52,3 +52,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Mattermost account is disabled.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

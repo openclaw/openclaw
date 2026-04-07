@@ -7,6 +7,10 @@ import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
+import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
@@ -73,7 +77,7 @@ function resolveToolErrorWarningPolicy(params: {
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
   const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
@@ -155,7 +159,7 @@ export function buildEmbeddedRunPayloads(params: {
           })
       : undefined;
   const rawErrorMessage = lastAssistantErrored
-    ? params.lastAssistant?.errorMessage?.trim() || undefined
+    ? normalizeOptionalString(params.lastAssistant?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
@@ -343,7 +347,7 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => ({
-      text: item.text?.trim() ? item.text.trim() : undefined,
+      text: normalizeOptionalString(item.text),
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,

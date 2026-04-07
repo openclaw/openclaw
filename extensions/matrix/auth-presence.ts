@@ -43,10 +43,7 @@ export function hasAnyMatrixAuth(
   params: MatrixAuthPresenceParams,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const cfg =
-    params && typeof params === "object" && "cfg" in params
-      ? params.cfg
-      : (params as OpenClawConfig);
+  const cfg = params && typeof params === "object" && "cfg" in params ? params.cfg : params;
   const resolvedEnv =
     params && typeof params === "object" && "cfg" in params ? (params.env ?? env) : env;
   return listMatrixCredentialPaths(cfg, resolvedEnv).some((filePath) => {

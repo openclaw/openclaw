@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
@@ -72,7 +73,7 @@ function getExtensionFromMimeType(mimeType?: string): string {
   if (!mimeType) {
     return ".jpg";
   }
-  return mimeToExt[mimeType.toLowerCase()] || ".jpg";
+  return mimeToExt[normalizeLowercaseStringOrEmpty(mimeType)] || ".jpg";
 }
 
 function hasCustomS3Creds(

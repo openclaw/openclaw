@@ -9,6 +9,7 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -205,7 +206,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return undefined;
   }
 
-  const rawDirective = params.directives.rawModelDirective?.trim();
+  const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
   const directive = rawDirective?.toLowerCase();
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;

@@ -30,6 +30,7 @@ import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-ov
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -42,7 +43,7 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
 }
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -50,7 +51,7 @@ function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | und
 }
 
 function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized;
   }
@@ -62,7 +63,7 @@ function supportsSpawnLineage(storeKey: string): boolean {
 }
 
 function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "orchestrator" || normalized === "leaf") {
     return normalized;
   }
@@ -70,7 +71,7 @@ function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined
 }
 
 function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "children" || normalized === "none") {
     return normalized;
   }

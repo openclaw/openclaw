@@ -27,6 +27,10 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+vi.mock("../../agents/model-selection.js", () => ({
+  isCliProvider: () => false,
+}));
+
 vi.mock("../../agents/bootstrap-budget.js", () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
@@ -52,10 +56,16 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../infra/agent-events.js", () => ({
-  emitAgentEvent: vi.fn(),
-  registerAgentRunContext: vi.fn(),
-}));
+vi.mock("../../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+    "../../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    emitAgentEvent: vi.fn(),
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
@@ -78,12 +88,19 @@ vi.mock("../heartbeat.js", () => ({
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
-  buildEmbeddedRunExecutionParams: (params: { provider: string; model: string }) => ({
+  buildEmbeddedRunExecutionParams: (params: {
+    provider: string;
+    model: string;
+    run: { provider?: string; authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+  }) => ({
     embeddedContext: {},
     senderContext: {},
     runBaseParams: {
       provider: params.provider,
       model: params.model,
+      authProfileId: params.provider === params.run.provider ? params.run.authProfileId : undefined,
+      authProfileIdSource:
+        params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
     },
   }),
   resolveModelFallbackOptions: vi.fn(() => ({})),
@@ -99,6 +116,10 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 
 async function getRunAgentTurnWithFallback() {
   return (await import("./agent-runner-execution.js")).runAgentTurnWithFallback;
+}
+
+async function getApplyFallbackCandidateSelectionToEntry() {
+  return (await import("./agent-runner-execution.js")).applyFallbackCandidateSelectionToEntry;
 }
 
 type FallbackRunnerParams = {
@@ -1283,5 +1304,106 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(sessionStore.main.providerOverride).toBe("zai");
     expect(sessionStore.main.modelOverride).toBe("glm-5");
+  });
+
+  it("drops authProfileId when fallback switches providers", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus";
+    followupRun.run.authProfileId = "anthropic:openclaw";
+    followupRun.run.authProfileIdSource = "user";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(sessionStore.main.authProfileOverride).toBeUndefined();
+  });
+
+  it("keeps same-provider auth profile when fallback only changes model", async () => {
+    const applyFallbackCandidateSelectionToEntry = await getApplyFallbackCandidateSelectionToEntry();
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      authProfileOverride: "anthropic:openclaw",
+      authProfileOverrideSource: "user" as const,
+    } as SessionEntry;
+
+    const { updated } = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run: {
+        provider: "anthropic",
+        model: "claude-opus",
+        authProfileId: "anthropic:openclaw",
+        authProfileIdSource: "user",
+      } as FollowupRun["run"],
+      provider: "anthropic",
+      model: "claude-sonnet",
+      now: 123,
+    });
+
+    expect(updated).toBe(true);
+    expect(entry).toMatchObject({
+      updatedAt: 123,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet",
+      authProfileOverride: "anthropic:openclaw",
+      authProfileOverrideSource: "user",
+    });
   });
 });

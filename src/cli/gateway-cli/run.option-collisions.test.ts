@@ -184,7 +184,7 @@ describe("gateway run option collisions", () => {
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
     expect(waitForPortBindable).toHaveBeenCalledWith(
       18789,
-      expect.objectContaining({ host: "127.0.0.1" }),
+      expect.objectContaining({ intervalMs: 150, timeoutMs: 3000 }),
     );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(startGatewayServer).toHaveBeenCalledWith(
@@ -195,6 +195,18 @@ describe("gateway run option collisions", () => {
         }),
       }),
     );
+  });
+
+  it.each([
+    ["--cli-backend-logs", "generic flag"],
+    ["--claude-cli-logs", "deprecated alias"],
+  ])("enables CLI backend log filtering via %s (%s)", async (flag) => {
+    delete process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT;
+
+    await runGatewayCli(["gateway", "run", flag, "--allow-unconfigured"]);
+
+    expect(setConsoleSubsystemFilter).toHaveBeenCalledWith(["agent/cli-backend"]);
+    expect(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT).toBe("1");
   });
 
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
@@ -353,7 +365,6 @@ describe("gateway run option collisions", () => {
         ).rejects.toThrow("__exit__:1");
       },
     );
-
-    expect(runtimeErrors).toContain("Use either --password or --password-file.");
+    expect(runtimeErrors[0]).toContain("Use either --passw***d or --password-file.");
   });
 });

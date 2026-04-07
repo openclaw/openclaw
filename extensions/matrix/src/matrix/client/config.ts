@@ -52,14 +52,10 @@ let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 const MATRIX_AUTH_REQUEST_RETRY_RE =
   /\b(fetch failed|econnreset|econnrefused|enotfound|etimedout|ehostunreach|enetunreach|eai_again|und_err_|socket hang up|network|headers timeout|body timeout|connect timeout)\b/i;
 
-export function setMatrixAuthClientDepsForTest(
-  deps?:
-    | {
-        MatrixClient: typeof import("../sdk.js").MatrixClient;
-        ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-      }
-    | undefined,
-): void {
+export function setMatrixAuthClientDepsForTest(deps?: {
+  MatrixClient: typeof import("../sdk.js").MatrixClient;
+  ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+}): void {
   matrixAuthClientDepsForTest = deps;
 }
 
@@ -436,7 +432,7 @@ function buildMatrixNetworkFields(params: {
   };
 }
 
-function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {
+export function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {
   return {
     homeserver: clean(env.MATRIX_HOMESERVER, "MATRIX_HOMESERVER"),
     userId: clean(env.MATRIX_USER_ID, "MATRIX_USER_ID"),

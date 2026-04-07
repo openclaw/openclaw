@@ -236,6 +236,9 @@ export function createProfileAvailability({
           return;
         }
       }
+      if (remoteCdp && (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
+        return;
+      }
       throw new BrowserProfileUnavailableError(
         remoteCdp
           ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`

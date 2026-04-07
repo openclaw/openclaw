@@ -1,4 +1,5 @@
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Build a dynamic prompt for cron events by embedding the actual event content.
 // This ensures the model sees the reminder text directly instead of relying on
@@ -72,7 +73,7 @@ function isHeartbeatAckEvent(evt: string): boolean {
 }
 
 function isHeartbeatNoiseEvent(evt: string): boolean {
-  const lower = evt.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(evt);
   if (!lower) {
     return false;
   }

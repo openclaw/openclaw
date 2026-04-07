@@ -1,9 +1,10 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 export function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subagent") {
-  const raw = entry.label?.trim() || entry.task?.trim() || "";
+  const raw = normalizeOptionalString(entry.label) || normalizeOptionalString(entry.task) || "";
   return raw || fallback;
 }
 
@@ -53,7 +54,7 @@ export function resolveSubagentTargetFromRuns(params: {
     unknownTarget: (value: string) => string;
   };
 }): SubagentTargetResolution {
-  const trimmed = params.token?.trim();
+  const trimmed = normalizeOptionalString(params.token);
   if (!trimmed) {
     return { error: params.errors.missingTarget };
   }

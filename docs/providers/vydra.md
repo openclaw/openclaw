@@ -85,7 +85,27 @@ Notes:
 
 - `vydra/veo3` is bundled as text-to-video only.
 - `vydra/kling` currently requires a remote image URL reference. Local file uploads are rejected up front.
+- Vydra's current `kling` HTTP route has been inconsistent about whether it requires `image_url` or `video_url`; the bundled provider maps the same remote image URL into both fields.
 - The bundled plugin stays conservative and does not forward undocumented style knobs such as aspect ratio, resolution, watermark, or generated audio.
+
+Provider-specific live coverage:
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+OPENCLAW_LIVE_VYDRA_VIDEO=1 \
+pnpm test:live -- extensions/vydra/vydra.live.test.ts
+```
+
+The bundled Vydra live file now covers:
+
+- `vydra/veo3` text-to-video
+- `vydra/kling` image-to-video using a remote image URL
+
+Override the remote image fixture when needed:
+
+```bash
+export OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL="https://example.com/reference.png"
+```
 
 See [Video Generation](/tools/video-generation) for shared tool behavior.
 

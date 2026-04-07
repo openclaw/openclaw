@@ -109,4 +109,8 @@ export const slackChannelConfigUiHints = {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
   },
+  "thread.requireExplicitMention": {
+    label: "Slack Thread Require Explicit Mention",
+    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

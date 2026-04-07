@@ -2,14 +2,11 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { withProgress } from "../cli/progress.js";
 import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
-import {
-  collectStatusScanOverview,
-  resolveStatusSummaryFromOverview,
-} from "./status.scan-overview.ts";
-import { buildStatusScanResult, type StatusScanResult } from "./status.scan-result.ts";
+import { collectStatusScanOverview } from "./status.scan-overview.ts";
+import type { StatusScanResult } from "./status.scan-result.ts";
 import { scanStatusJsonWithPolicy } from "./status.scan.fast-json.js";
-import { resolveMemoryPluginStatus } from "./status.scan.shared.js";
 
 export async function scanStatus(
   opts: {
@@ -41,7 +38,7 @@ export async function scanStatus(
   return await withProgress(
     {
       label: "Scanning status…",
-      total: 11,
+      total: 10,
       enabled: true,
     },
     async (progress) => {
@@ -61,53 +58,29 @@ export async function scanStatus(
         },
       });
 
-      progress.setLabel("Checking memory…");
-      const memoryPlugin = resolveMemoryPluginStatus(overview.cfg);
-      const memory = await resolveStatusMemoryStatusSnapshot({
-        cfg: overview.cfg,
-        agentStatus: overview.agentStatus,
-        memoryPlugin,
-      });
-      progress.tick();
-
       progress.setLabel("Checking plugins…");
       const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
       progress.tick();
 
-      progress.setLabel("Reading sessions…");
-      const summary = await resolveStatusSummaryFromOverview({ overview });
+      progress.setLabel("Checking memory and sessions…");
+      const result = await executeStatusScanFromOverview({
+        overview,
+        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+          await resolveStatusMemoryStatusSnapshot({
+            cfg,
+            agentStatus,
+            memoryPlugin,
+          }),
+        channelIssues: overview.channelIssues,
+        channels: overview.channels,
+        pluginCompatibility,
+      });
       progress.tick();
 
       progress.setLabel("Rendering…");
       progress.tick();
 
-      return buildStatusScanResult({
-        cfg: overview.cfg,
-        sourceConfig: overview.sourceConfig,
-        secretDiagnostics: overview.secretDiagnostics,
-        osSummary: overview.osSummary,
-        tailscaleMode: overview.tailscaleMode,
-        tailscaleDns: overview.tailscaleDns,
-        tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
-        update: overview.update,
-        gatewaySnapshot: {
-          gatewayConnection: overview.gatewaySnapshot.gatewayConnection,
-          remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
-          gatewayMode: overview.gatewaySnapshot.gatewayMode,
-          gatewayProbeAuth: overview.gatewaySnapshot.gatewayProbeAuth,
-          gatewayProbeAuthWarning: overview.gatewaySnapshot.gatewayProbeAuthWarning,
-          gatewayProbe: overview.gatewaySnapshot.gatewayProbe,
-          gatewayReachable: overview.gatewaySnapshot.gatewayReachable,
-          gatewaySelf: overview.gatewaySnapshot.gatewaySelf,
-        },
-        channelIssues: overview.channelIssues,
-        agentStatus: overview.agentStatus,
-        channels: overview.channels,
-        summary,
-        memory,
-        memoryPlugin,
-        pluginCompatibility,
-      });
+      return result;
     },
   );
 }

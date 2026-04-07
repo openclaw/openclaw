@@ -1021,7 +1021,7 @@ describe("update-cli", () => {
       makeOkUpdateResult({
         mode: "git",
         root: path.join(tempDir, "..", "openclaw"),
-        after: { version: "2026.4.5" },
+        after: { version: "2026.4.6" },
       }),
     );
     serviceLoaded.mockResolvedValue(true);
