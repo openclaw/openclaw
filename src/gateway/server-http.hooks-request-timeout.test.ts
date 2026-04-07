@@ -70,14 +70,46 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     const firstHandled = await handler(firstReq, first.res);
     expect(firstHandled).toBe(true);
     expect(first.res.statusCode).toBe(200);
+    const firstPayload = JSON.parse((first.end.mock.calls[0] as [string])[0]) as {
+      sessionKey?: string;
+      status?: string;
+    };
 
     const secondReq = createHookRequest({ url: "/hooks/message" });
     const second = createResponse();
     const secondHandled = await handler(secondReq, second.res);
     expect(secondHandled).toBe(true);
     expect(second.res.statusCode).toBe(200);
+    const secondPayload = JSON.parse((second.end.mock.calls[0] as [string])[0]) as {
+      sessionKey?: string;
+      status?: string;
+    };
 
     expect(dispatchMessageHook).toHaveBeenCalledTimes(1);
+    expect(firstPayload.sessionKey).toBe("main");
+    expect(secondPayload.sessionKey).toBe(firstPayload.sessionKey);
+    expect(secondPayload.status).toBe(firstPayload.status);
+  });
+
+  test("returns 503 when /hooks/message dispatch is temporarily unavailable", async () => {
+    readJsonBodyMock.mockResolvedValue({
+      ok: true,
+      value: { message: "hello", requestId: "req-1" },
+    });
+    const dispatchMessageHook = vi.fn(async () => {
+      throw Object.assign(new Error("gateway context unavailable"), { statusCode: 503 });
+    });
+    const handler = createHooksHandler({ dispatchMessageHook });
+    const req = createHookRequest({ url: "/hooks/message" });
+    const { res, end } = createResponse();
+
+    const handled = await handler(req, res);
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(end).toHaveBeenCalledWith(
+      JSON.stringify({ ok: false, error: "hook message dispatch unavailable" }),
+    );
   });
 
   test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {

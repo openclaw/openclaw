@@ -309,6 +309,9 @@ export function createGatewayHooksRequestHandler(params: {
   };
 
   const dispatchMessageHook = async (value: HookMessageDispatchPayload) => {
+    // HTTP ingress resolves hook session policy before invoking this dispatcher.
+    // Keep a main-session fallback for non-HTTP call sites/tests that may bypass
+    // that normalization.
     const requestedSessionKey = value.sessionKey ?? resolveMainSessionKeyFromConfig();
     const receivedFields = resolveHookMessageLifecycleFields({
       value,
@@ -338,7 +341,9 @@ export function createGatewayHooksRequestHandler(params: {
         ...receivedFields,
         status: "gateway context unavailable",
       });
-      throw new Error("gateway request context unavailable");
+      throw Object.assign(new Error("gateway request context unavailable"), {
+        statusCode: 503,
+      });
     }
 
     let targetSessionKey = requestedSessionKey;
@@ -383,7 +388,7 @@ export function createGatewayHooksRequestHandler(params: {
     }
 
     const sendPayload = toRecord(sendResult.payload);
-    const runId = toOptionalString(sendPayload?.runId) ?? value.idempotencyKey;
+    const runId = toOptionalString(sendPayload?.runId);
     const sendStatus = toOptionalString(sendPayload?.status) ?? "started";
     const lifecycleFields = resolveHookMessageLifecycleFields({
       value,
@@ -392,18 +397,28 @@ export function createGatewayHooksRequestHandler(params: {
     });
 
     logHookMessageLifecycle(logHooks, "hook.message.persisted", lifecycleFields);
-    logHookMessageLifecycle(logHooks, "hook.message.reply.started", lifecycleFields);
-    void monitorHookMessageReply({
-      logHooks,
-      context,
-      fields: lifecycleFields,
-      runId,
-    });
+    if (runId) {
+      logHookMessageLifecycle(logHooks, "hook.message.reply.started", lifecycleFields);
+      void monitorHookMessageReply({
+        logHooks,
+        context,
+        fields: lifecycleFields,
+        runId,
+      });
+    } else {
+      logHooks.warn(
+        `hook.message.reply.runid_missing requestId=${value.requestId} sessionKey=${targetSessionKey} status=${sendStatus}`,
+      );
+      logHookMessageLifecycle(logHooks, "hook.message.reply.completed", {
+        ...lifecycleFields,
+        status: "runId-unavailable",
+      });
+    }
 
     return {
       status: "accepted" as const,
       sessionKey: targetSessionKey,
-      runId,
+      ...(runId ? { runId } : {}),
     };
   };
 

@@ -830,6 +830,40 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("applies hook session policy defaults for /hooks/message when sessionKey is omitted", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      defaultSessionKey: "hook:ingress",
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "inbound",
+        requestId: "msg-policy-default",
+      });
+      const rawBody = await response.text();
+      expect(response.status, rawBody).toBe(200);
+      const payload = JSON.parse(rawBody) as { sessionKey?: string };
+      expect(payload.sessionKey).toBe("agent:main:hook:ingress");
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+      const firstCall = dispatchInboundMessageMock.mock.calls[0]?.[0] as
+        | {
+            ctx?: {
+              SessionKey?: unknown;
+            };
+          }
+        | undefined;
+      expect(firstCall?.ctx?.SessionKey).toBe("agent:main:hook:ingress");
+    });
+  });
+
   test("persists /hooks/message inbound text and emits chat final updates", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     dispatchInboundMessageMock.mockReset();

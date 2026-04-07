@@ -116,7 +116,9 @@ export type HookClientIpConfig = Readonly<{
 
 type HookReplayEntry = {
   ts: number;
-  runId: string;
+  runId?: string;
+  sessionKey?: string;
+  status?: string;
 };
 
 type HookReplayScope = {
@@ -439,7 +441,10 @@ export function createHooksRequestHandler(
     return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
   };
 
-  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
+  const resolveCachedHookReplayEntry = (
+    key: string | undefined,
+    now: number,
+  ): HookReplayEntry | undefined => {
     if (!key) {
       return undefined;
     }
@@ -450,16 +455,27 @@ export function createHooksRequestHandler(
     }
     hookReplayCache.delete(key);
     hookReplayCache.set(key, cached);
-    return cached.runId;
+    return cached;
   };
 
-  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
+  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined =>
+    resolveCachedHookReplayEntry(key, now)?.runId;
+
+  const rememberHookReplayEntry = (
+    key: string | undefined,
+    entry: Omit<HookReplayEntry, "ts">,
+    now: number,
+  ) => {
     if (!key) {
       return;
     }
     hookReplayCache.delete(key);
-    hookReplayCache.set(key, { ts: now, runId });
+    hookReplayCache.set(key, { ts: now, ...entry });
     pruneHookReplayCache(now);
+  };
+
+  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
+    rememberHookReplayEntry(key, { runId }, now);
   };
 
   return async (req, res) => {
@@ -627,16 +643,14 @@ export function createHooksRequestHandler(
         return true;
       }
       const requestSessionKey = normalized.value.sessionKey;
-      if (requestSessionKey) {
-        const sessionKey = resolveHookSessionKey({
-          hooksConfig,
-          source: "request",
-          sessionKey: requestSessionKey,
-        });
-        if (!sessionKey.ok) {
-          sendJson(res, 400, { ok: false, error: sessionKey.error });
-          return true;
-        }
+      const resolvedSessionKey = resolveHookSessionKey({
+        hooksConfig,
+        source: "request",
+        sessionKey: requestSessionKey,
+      });
+      if (!resolvedSessionKey.ok) {
+        sendJson(res, 400, { ok: false, error: resolvedSessionKey.error });
+        return true;
       }
 
       const effectiveIdempotencyKey = idempotencyKey ?? normalized.value.requestId;
@@ -648,21 +662,23 @@ export function createHooksRequestHandler(
           requestId: normalized.value.requestId,
           message: normalized.value.message,
           kind: normalized.value.kind,
-          sessionKey: requestSessionKey ?? null,
+          sessionKey: requestSessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
           source: normalized.value.source ?? null,
           sender: normalized.value.sender ?? null,
           conversation: normalized.value.conversation ?? null,
           metadata: normalized.value.metadata ?? null,
         },
       });
-      const cachedRunId = resolveCachedHookRunId(replayKey, now);
-      if (cachedRunId) {
+      const cachedReplay = resolveCachedHookReplayEntry(replayKey, now);
+      if (cachedReplay) {
         sendJson(res, 200, {
           ok: true,
           requestId: normalized.value.requestId,
-          status: normalized.value.kind === "event" ? "event" : "accepted",
-          ...(requestSessionKey ? { sessionKey: requestSessionKey } : {}),
-          ...(normalized.value.kind === "message" ? { runId: cachedRunId } : {}),
+          status: cachedReplay.status ?? (normalized.value.kind === "event" ? "event" : "accepted"),
+          sessionKey: cachedReplay.sessionKey ?? resolvedSessionKey.value,
+          ...(normalized.value.kind === "message" && cachedReplay.runId
+            ? { runId: cachedReplay.runId }
+            : {}),
         });
         return true;
       }
@@ -673,9 +689,18 @@ export function createHooksRequestHandler(
       try {
         const dispatched = await dispatchMessageHook({
           ...normalized.value,
+          sessionKey: resolvedSessionKey.value,
           idempotencyKey: effectiveIdempotencyKey,
         });
-        rememberHookRunId(replayKey, dispatched.runId ?? normalized.value.requestId, now);
+        rememberHookReplayEntry(
+          replayKey,
+          {
+            ...(dispatched.runId ? { runId: dispatched.runId } : {}),
+            sessionKey: dispatched.sessionKey,
+            status: dispatched.status,
+          },
+          now,
+        );
         sendJson(res, 200, {
           ok: true,
           requestId: normalized.value.requestId,
@@ -686,6 +711,17 @@ export function createHooksRequestHandler(
         return true;
       } catch (err) {
         logHooks.warn(`hook message dispatch failed: ${String(err)}`);
+        const dispatchStatusCode =
+          typeof err === "object" &&
+          err !== null &&
+          "statusCode" in err &&
+          typeof (err as { statusCode?: unknown }).statusCode === "number"
+            ? (err as { statusCode: number }).statusCode
+            : 500;
+        if (dispatchStatusCode === 503) {
+          sendJson(res, 503, { ok: false, error: "hook message dispatch unavailable" });
+          return true;
+        }
         sendJson(res, 500, { ok: false, error: "hook message dispatch failed" });
         return true;
       }
