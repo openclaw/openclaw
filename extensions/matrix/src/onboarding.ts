@@ -53,6 +53,18 @@ function isMatrixInviteAutoJoinPolicy(value: string): value is MatrixInviteAutoJ
   return value === "allowlist" || value === "always" || value === "off";
 }
 
+function isMatrixInviteAutoJoinTarget(entry: string): boolean {
+  return (
+    entry === "*" ||
+    (entry.startsWith("!") && entry.includes(":")) ||
+    (entry.startsWith("#") && entry.includes(":"))
+  );
+}
+
+function normalizeMatrixInviteAutoJoinTargets(entries: string[]): string[] {
+  return [...new Set(entries.map((entry) => entry.trim()).filter(Boolean))];
+}
+
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
   return normalizeAccountId(
     accountId?.trim() || resolveDefaultMatrixAccountId(cfg) || DEFAULT_ACCOUNT_ID,
@@ -248,23 +260,49 @@ async function configureMatrixInviteAutoJoin(params: {
   }
   const policy = selectedPolicy;
 
-  if (policy !== "allowlist") {
+  if (policy === "off") {
+    await params.prompter.note(
+      [
+        "Matrix invite auto-join remains off.",
+        "Agents will not join invited rooms or fresh DM-style invites until you change autoJoin.",
+      ].join("\n"),
+      "Matrix invite auto-join",
+    );
     return setMatrixAutoJoin(params.cfg, policy, [], accountId);
   }
 
-  const rawAllowlist = String(
-    await params.prompter.text({
-      message: "Matrix invite auto-join allowlist (comma-separated)",
-      placeholder: "!roomId:server, #alias:server, *",
-      initialValue: currentAllowlist[0] ? currentAllowlist.join(", ") : undefined,
-      validate: (value) => {
-        const entries = splitSetupEntries(String(value ?? ""));
-        return entries.length > 0 ? undefined : "Required";
-      },
-    }),
-  );
-  const allowlist = splitSetupEntries(rawAllowlist);
-  return setMatrixAutoJoin(params.cfg, "allowlist", allowlist, accountId);
+  if (policy === "always") {
+    return setMatrixAutoJoin(params.cfg, policy, [], accountId);
+  }
+
+  while (true) {
+    const rawAllowlist = String(
+      await params.prompter.text({
+        message: "Matrix invite auto-join allowlist (comma-separated)",
+        placeholder: "!roomId:server, #alias:server, *",
+        initialValue: currentAllowlist[0] ? currentAllowlist.join(", ") : undefined,
+        validate: (value) => {
+          const entries = splitSetupEntries(String(value ?? ""));
+          return entries.length > 0 ? undefined : "Required";
+        },
+      }),
+    );
+    const allowlist = normalizeMatrixInviteAutoJoinTargets(splitSetupEntries(rawAllowlist));
+    const invalidEntries = allowlist.filter((entry) => !isMatrixInviteAutoJoinTarget(entry));
+    if (allowlist.length === 0 || invalidEntries.length > 0) {
+      await params.prompter.note(
+        [
+          "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+          invalidEntries.length > 0 ? `Invalid: ${invalidEntries.join(", ")}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Matrix invite auto-join",
+      );
+      continue;
+    }
+    return setMatrixAutoJoin(params.cfg, "allowlist", allowlist, accountId);
+  }
 }
 
 async function configureMatrixAccessPrompts(params: {
