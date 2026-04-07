@@ -503,6 +503,49 @@ describe("web search runtime", () => {
     ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
+  it("still falls back when config names an unknown provider id", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createProvider({
+        pluginId: "google",
+        id: "google",
+        credentialPath: "tools.web.search.google.apiKey",
+        autoDetectOrder: 1,
+        getCredentialValue: () => "configured",
+        createTool: () => {
+          throw new Error("google aborted");
+        },
+      }),
+      createProvider({
+        pluginId: "duckduckgo",
+        id: "duckduckgo",
+        credentialPath: "",
+        autoDetectOrder: 100,
+        requiresCredential: false,
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "missing-id",
+              },
+            },
+          },
+        },
+        args: { query: "config-typo" },
+      }),
+    ).resolves.toMatchObject({
+      provider: "duckduckgo",
+      result: expect.objectContaining({
+        provider: "duckduckgo",
+        query: "config-typo",
+      }),
+    });
+  });
+
   it("honors preferRuntimeProviders during execution", async () => {
     const configuredProvider = createProvider({
       pluginId: "google",

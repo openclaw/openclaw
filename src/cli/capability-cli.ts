@@ -16,6 +16,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
 import { loadConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -581,7 +582,7 @@ async function buildModelProviders() {
   const cfg = loadConfig();
   const catalog = await loadModelCatalog({ config: cfg });
   const selectedProvider = resolveSelectedProviderFromModelRef(
-    cfg.agents?.defaults?.model?.primary,
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
   );
   const grouped = new Map<
     string,
@@ -619,7 +620,7 @@ async function runModelAuthStatus() {
     {
       log: (...args) => captured.push(args.join(" ")),
       error: (message) => {
-        throw new Error(message);
+        throw message instanceof Error ? message : new Error(String(message));
       },
       exit: (code) => {
         throw new Error(`exit ${code}`);
@@ -715,7 +716,7 @@ async function runImageGenerate(params: {
         outputCount: result.images.length,
         subdir: "generated",
       });
-      const metadata = await getImageMetadata(written.path).catch(() => undefined);
+      const metadata = await getImageMetadata(image.buffer).catch(() => undefined);
       return {
         ...written,
         width: metadata?.width,
@@ -1392,7 +1393,7 @@ export function registerCapabilityCli(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = loadConfig();
         const selectedProvider = resolveSelectedProviderFromModelRef(
-          cfg.agents?.defaults?.imageGenerationModel?.primary,
+          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageGenerationModel),
         );
         const result = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
           available: true,
@@ -1645,7 +1646,7 @@ export function registerCapabilityCli(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = loadConfig();
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
-          cfg.agents?.defaults?.videoGenerationModel?.primary,
+          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.videoGenerationModel),
         );
         const result = {
           generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({

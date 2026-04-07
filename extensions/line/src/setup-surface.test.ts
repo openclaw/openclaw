@@ -13,7 +13,9 @@ import {
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
+import { probeLineBot } from "./probe.js";
 import { clearLineRuntime, setLineRuntime } from "./runtime.js";
+import { lineSetupWizard } from "./setup-surface.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
@@ -175,8 +177,6 @@ describe("line setup wizard", () => {
   });
 
   it("reads the named-account DM policy instead of the channel root", async () => {
-    const { lineSetupWizard } = await import("./setup-surface.js");
-
     expect(
       lineSetupWizard.dmPolicy?.getCurrent(
         {
@@ -199,8 +199,6 @@ describe("line setup wizard", () => {
   });
 
   it("reports account-scoped config keys for named accounts", async () => {
-    const { lineSetupWizard } = await import("./setup-surface.js");
-
     expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
       policyKey: "channels.line.accounts.work.dmPolicy",
       allowFromKey: "channels.line.accounts.work.allowFrom",
@@ -208,8 +206,6 @@ describe("line setup wizard", () => {
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", async () => {
-    const { lineSetupWizard } = await import("./setup-surface.js");
-
     const cfg = {
       channels: {
         line: {
@@ -244,8 +240,6 @@ describe("line setup wizard", () => {
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
-    const { lineSetupWizard } = await import("./setup-surface.js");
-
     const next = lineSetupWizard.dmPolicy?.setPolicy(
       {
         channels: {
@@ -277,8 +271,6 @@ describe("line setup wizard", () => {
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {
-    const { lineSetupWizard } = await import("./setup-surface.js");
-
     const configured = await lineSetupWizard.status.resolveConfigured({
       cfg: {
         channels: {
@@ -321,7 +313,6 @@ describe("probeLineBot", () => {
   });
 
   it("returns timeout when bot info stalls", async () => {
-    const { probeLineBot } = await import("./probe.js");
     vi.useFakeTimers();
     getBotInfoMock.mockImplementation(() => new Promise(() => {}));
 
@@ -334,7 +325,6 @@ describe("probeLineBot", () => {
   });
 
   it("returns bot info when available", async () => {
-    const { probeLineBot } = await import("./probe.js");
     getBotInfoMock.mockResolvedValue({
       displayName: "OpenClaw",
       userId: "U123",
@@ -351,7 +341,6 @@ describe("probeLineBot", () => {
 
 describe("linePlugin status.probeAccount", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
-    const { probeLineBot } = await import("./probe.js");
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };

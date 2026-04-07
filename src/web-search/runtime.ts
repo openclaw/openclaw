@@ -265,19 +265,36 @@ function hasExplicitWebSearchSelection(params: {
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   providerId?: string;
+  providers?: PluginWebSearchProviderEntry[];
 }): boolean {
   if (params.providerId?.trim()) {
     return true;
   }
-  if (
+  const availableProviderIds = new Set(
+    (params.providers ?? []).map((provider) => provider.id.trim().toLowerCase()),
+  );
+  const configuredProviderId =
     params.search &&
     "provider" in params.search &&
-    typeof params.search.provider === "string" &&
-    params.search.provider.trim()
+    typeof params.search.provider === "string"
+      ? params.search.provider.trim().toLowerCase()
+      : "";
+  if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {
+    return true;
+  }
+  const runtimeConfiguredId = (
+    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured
+  )
+    ?.trim()
+    .toLowerCase();
+  if (
+    params.runtimeWebSearch?.providerSource === "configured" &&
+    runtimeConfiguredId &&
+    availableProviderIds.has(runtimeConfiguredId)
   ) {
     return true;
   }
-  return params.runtimeWebSearch?.providerSource === "configured";
+  return false;
 }
 
 export async function runWebSearch(
@@ -297,6 +314,7 @@ export async function runWebSearch(
     search,
     runtimeWebSearch,
     providerId: params.providerId,
+    providers: candidates,
   });
   let lastError: unknown;
   let sawUnavailableProvider = false;

@@ -41,6 +41,10 @@ export function resolveWebFetchEnabled(params: {
   return true;
 }
 
+function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
+  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(config, "fetch");
+}
+
 function hasEntryCredential(
   provider: Pick<
     PluginWebFetchProviderEntry,

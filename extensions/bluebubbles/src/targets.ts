@@ -6,7 +6,14 @@ import {
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
 } from "openclaw/plugin-sdk/channel-targets";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
 
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
