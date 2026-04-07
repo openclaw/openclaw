@@ -69,7 +69,7 @@ ${
     ? `  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
-      - "${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
+      - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
 ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
       test:
         - CMD
@@ -119,7 +119,7 @@ ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${params.gatewayPort}:18789"
+      - "127.0.0.1:${params.gatewayPort}:18789"
     environment:
       OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state

@@ -45,8 +45,8 @@ describe("qa docker harness", () => {
     const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
     expect(compose).toContain("image: openclaw:qa-local-prebaked");
     expect(compose).toContain("qa-mock-openai:");
-    expect(compose).toContain("18889:18789");
-    expect(compose).toContain('      - "43124:43123"');
+    expect(compose).toContain('      - "127.0.0.1:18889:18789"');
+    expect(compose).toContain('      - "127.0.0.1:43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
     expect(compose).toContain("      - sh");
     expect(compose).toContain("      - -lc");
