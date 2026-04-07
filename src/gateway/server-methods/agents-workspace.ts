@@ -77,6 +77,14 @@ async function workspaceList(
   }>
 > {
   const targetPath = path.join(workspaceDir, relativePath);
+
+  // Resolve symlinks and verify the target stays within the workspace root
+  const realRoot = await fs.realpath(workspaceDir);
+  const realTarget = await fs.realpath(targetPath);
+  if (!realTarget.startsWith(realRoot + path.sep) && realTarget !== realRoot) {
+    throw new Error("Path resolves outside workspace root");
+  }
+
   const entries = [] as Array<{
     name: string;
     path: string;
@@ -233,6 +241,17 @@ async function workspaceMove(
 ): Promise<void> {
   const fromFullPath = path.join(workspaceDir, fromPath);
   const toFullPath = path.join(workspaceDir, toPath);
+
+  // Enforce workspace boundary: resolve symlinks and verify both paths stay within root
+  const realRoot = await fs.realpath(workspaceDir);
+  const realFrom = await fs.realpath(fromFullPath);
+  if (!realFrom.startsWith(realRoot + path.sep) && realFrom !== realRoot) {
+    throw new Error("Source path resolves outside workspace root");
+  }
+  const realToParent = await fs.realpath(path.dirname(toFullPath)).catch(() => null);
+  if (realToParent && !realToParent.startsWith(realRoot + path.sep) && realToParent !== realRoot) {
+    throw new Error("Destination path resolves outside workspace root");
+  }
 
   // Check source exists
   await fs.access(fromFullPath);

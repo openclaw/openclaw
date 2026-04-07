@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   fsAccess: vi.fn(),
   fsMkdir: vi.fn(),
   fsRename: vi.fn(),
-  fsRealpath: vi.fn(),
+  fsRealpath: vi.fn((p: string) => Promise.resolve(p)),
 
   // config mock
   loadConfigReturn: {

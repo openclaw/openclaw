@@ -2241,6 +2241,7 @@ export function renderApp(state: AppViewState) {
                   state.workspaceSelectedFile = path;
                   state.workspaceEditedContent = null;
                   if (resolvedAgentId && path) {
+                    const requestedPath = path;
                     void state.client
                       ?.request<import("./types.js").AgentsWorkspaceGetResult>(
                         "agents.workspace.get",
@@ -2251,9 +2252,16 @@ export function renderApp(state: AppViewState) {
                         },
                       )
                       .then((result) => {
+                        // Ignore stale responses if user already selected a different file
+                        if (state.workspaceSelectedFile !== requestedPath) {
+                          return;
+                        }
                         state.workspaceFileContent = result?.content ?? null;
                       })
                       .catch((err) => {
+                        if (state.workspaceSelectedFile !== requestedPath) {
+                          return;
+                        }
                         state.workspaceError = String(err);
                       });
                   }
@@ -2366,16 +2374,24 @@ export function renderApp(state: AppViewState) {
                   }
                   for (const file of files) {
                     try {
-                      const content = await file.text();
                       const filePath = state.workspacePath
                         ? `${state.workspacePath}/${file.name}`
                         : file.name;
+                      // Use base64 encoding to preserve binary data for all file types
+                      const buffer = await file.arrayBuffer();
+                      const base64 = btoa(
+                        new Uint8Array(buffer).reduce(
+                          (data, byte) => data + String.fromCharCode(byte),
+                          "",
+                        ),
+                      );
                       await state.client?.request<import("./types.js").AgentsWorkspaceSetResult>(
                         "agents.workspace.set",
                         {
                           agentId: resolvedAgentId,
                           path: filePath,
-                          content,
+                          content: base64,
+                          encoding: "base64",
                         },
                       );
                     } catch (err) {
