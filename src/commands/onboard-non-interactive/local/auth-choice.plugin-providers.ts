@@ -28,40 +28,6 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
 
-function buildIsolatedProviderResolutionConfig(
-  cfg: OpenClawConfig,
-  ids: Iterable<string | undefined>,
-): OpenClawConfig {
-  const allow = new Set(cfg.plugins?.allow ?? []);
-  const entries = {
-    ...cfg.plugins?.entries,
-  };
-  let changed = false;
-  for (const rawId of ids) {
-    const id = rawId?.trim();
-    if (!id) {
-      continue;
-    }
-    allow.add(id);
-    entries[id] = {
-      ...cfg.plugins?.entries?.[id],
-      enabled: true,
-    };
-    changed = true;
-  }
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: Array.from(allow),
-      entries,
-    },
-  };
-}
-
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
   authChoice: string;
@@ -101,16 +67,13 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         workspaceDir,
       })
     : undefined;
-  const resolutionConfig = buildIsolatedProviderResolutionConfig(params.nextConfig, [
-    preferredProviderId,
-    ...(owningPluginIds ?? []),
-  ]);
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
-      config: resolutionConfig,
+      config: params.nextConfig,
       workspaceDir,
       onlyPluginIds: owningPluginIds,
       mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
     }),
     choice: params.authChoice,
   });

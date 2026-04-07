@@ -61,6 +61,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["vllm"],
+        includeUntrustedWorkspacePlugins: false,
       }),
     );
     expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
@@ -68,7 +69,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
-  it("enables owning plugin ids when they differ from the provider id", async () => {
+  it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
     resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
@@ -92,16 +93,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(["demo-provider", "demo-plugin"]),
-            entries: expect.objectContaining({
-              "demo-provider": expect.objectContaining({ enabled: true }),
-              "demo-plugin": expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
+        config: expect.objectContaining({ agents: { defaults: {} } }),
         onlyPluginIds: ["demo-plugin"],
+        includeUntrustedWorkspacePlugins: false,
       }),
     );
     expect(runNonInteractive).toHaveBeenCalledOnce();
@@ -125,6 +119,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({
         choice: "openai-api-key",
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
         includeUntrustedWorkspacePlugins: false,
       }),
     );

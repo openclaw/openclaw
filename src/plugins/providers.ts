@@ -74,17 +74,34 @@ export function resolveDiscoveredProviderPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
+  includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
-  return loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })
-    .plugins.filter(
-      (plugin) =>
-        plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
-    )
+  });
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const normalizedConfig = shouldFilterUntrustedWorkspacePlugins
+    ? normalizePluginsConfig(params.config?.plugins)
+    : undefined;
+  return registry.plugins
+    .filter((plugin) => {
+      if (!(plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)))) {
+        return false;
+      }
+      if (!shouldFilterUntrustedWorkspacePlugins || plugin.origin !== "workspace") {
+        return true;
+      }
+      return resolveEffectivePluginActivationState({
+        id: plugin.id,
+        origin: plugin.origin,
+        config: normalizedConfig ?? normalizePluginsConfig(params.config?.plugins),
+        rootConfig: params.config,
+        enabledByDefault: plugin.enabledByDefault,
+      }).enabled;
+    })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
