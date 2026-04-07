@@ -16,7 +16,6 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.AcpDispatchTailAfterReset = true;
 }
 
-=======
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
