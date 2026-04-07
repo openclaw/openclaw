@@ -72,8 +72,11 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   if (theme === "knot") {
     return resolvedMode === "light" ? "openknot-light" : "openknot";
   }
+  if (theme === "dash") {
+    return resolvedMode === "light" ? "dash-light" : "dash";
+  }
   if (theme === "kasai") {
     return resolvedMode === "light" ? "kasai-light" : "kasai";
   }
-  return resolvedMode === "light" ? "dash-light" : "dash";
+  return resolvedMode === "light" ? "light" : "dark";
 }

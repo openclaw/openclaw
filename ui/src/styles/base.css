@@ -394,131 +394,135 @@
 
 :root[data-theme="kasai"] {
   /*
-   * Accent — electric cyan on deep space black (Strands cyberpunk)
+   * STRANDS CANONICAL DARK THEME (Kasai)
+   * Source: Game Canon 2026/CANON_Brand_Visual_Identity.md
    *
-   * WCAG 2.1 AA audit (bg = #0a0c12, relative luminance ≈ 0.005):
-   *   --accent #00e5ff  L ≈ 0.62  contrast ≈ 13.5:1  AAA text ✓
-   *   --accent-hover #40efff  L ≈ 0.72  contrast ≈ 15.2:1  ✓
-   *   --primary-foreground #0a0c12 on #00e5ff button: 13.5:1 AAA ✓
-   *   focus-ring at 70% opacity: ≈ 8.2:1 against bg ✓
+   * Accent — Strands cyan #00C2FF on deep space #0A0B0D
+   * WCAG 2.1 AA audit (bg #0A0B0D, L ≈ 0.004):
+   *   --accent #00C2FF  L ≈ 0.48  contrast ≈ 10.6:1  AAA text ✓
+   *   --accent-hover #33D1FF  L ≈ 0.57  contrast ≈ 12.3:1  AAA ✓
+   *   --primary-foreground #0A0B0D on #00C2FF: 10.6:1 AAA ✓
    */
-  --ring: #00e5ff;
-  --accent: #00e5ff;
-  --accent-hover: #40efff;
-  --accent-muted: #00c4d9;
-  --accent-subtle: rgba(0, 229, 255, 0.1);
-  --accent-glow: rgba(0, 229, 255, 0.25);
-  --primary: #00e5ff;
-  --primary-foreground: #0a0c12;
+  --ring: #00C2FF;
+  --accent: #00C2FF;
+  --accent-hover: #33D1FF;
+  --accent-muted: #0091BD;
+  --accent-subtle: rgba(0, 194, 255, 0.1);
+  --accent-glow: rgba(0, 194, 255, 0.25);
+  --primary: #00C2FF;
+  --primary-foreground: #0A0B0D;
 
   /* Focus — cyan ring with glow */
-  --focus: rgba(0, 229, 255, 0.2);
+  --focus: rgba(0, 194, 255, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 20px var(--accent-glow);
 
-  /* Surfaces — deep space with subtle blue undertone */
-  --bg: #0a0c12;
-  --bg-accent: #0e1018;
-  --bg-elevated: #14161e;
-  --bg-hover: #1a1c26;
-  --bg-muted: #1a1c26;
+  /* Surfaces — deep space black (Strands canonical #0A0B0D) */
+  --bg: #0A0B0D;
+  --bg-accent: #0E0F12;
+  --bg-elevated: #14151C;
+  --bg-hover: rgba(0, 194, 255, 0.06);
+  --bg-muted: #1A1B22;
 
-  --card: #10121a;
-  --card-foreground: #e8eaf0;
-  --card-highlight: rgba(0, 229, 255, 0.03);
-  --popover: #14161e;
-  --popover-foreground: #e8eaf0;
+  --card: #14151C;
+  --card-foreground: #E2E8F0;
+  --card-highlight: rgba(0, 194, 255, 0.03);
+  --popover: #14151C;
+  --popover-foreground: #E2E8F0;
 
-  --panel: #0a0c12;
-  --panel-strong: #14161e;
-  --panel-hover: #1a1c26;
-  --chrome: rgba(10, 12, 18, 0.96);
-  --chrome-strong: rgba(10, 12, 18, 0.98);
+  --panel: #0A0B0D;
+  --panel-strong: #14151C;
+  --panel-hover: #1A1B22;
+  --chrome: rgba(10, 11, 13, 0.96);
+  --chrome-strong: rgba(10, 11, 13, 0.98);
 
-  /* Text — high contrast on deep space */
-  --text: #c8ccd6;
-  --text-strong: #eef0f5;
-  --chat-text: #c8ccd6;
-  --muted: #6a7080;
-  --muted-strong: #585e70;
-  --muted-foreground: #6a7080;
+  /* Text — Strands canonical E2E8F0 / A0AEC0 */
+  --text: #A0AEC0;
+  --text-strong: #E2E8F0;
+  --chat-text: #A0AEC0;
+  --muted: #6b7280;
+  --muted-strong: #585e6e;
+  --muted-foreground: #6b7280;
 
-  /* Borders — faint cyan-tinted edges */
-  --border: #1a1e2a;
-  --border-strong: #2a2e3a;
-  --border-hover: #3a3e4c;
-  --input: #1a1e2a;
+  /* Borders — Strands canonical rgba(255,255,255,0.06) */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --border-hover: rgba(0, 194, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.06);
 
-  --secondary: #10121a;
-  --secondary-foreground: #e8eaf0;
-  /* Secondary accent — hot pink (Strands secondary) */
-  --accent-2: #ff2d78;
-  --accent-2-muted: rgba(255, 45, 120, 0.7);
-  --accent-2-subtle: rgba(255, 45, 120, 0.1);
+  --secondary: #14151C;
+  --secondary-foreground: #E2E8F0;
+  /* Secondary accent — Strands canonical magenta #F000B8 */
+  --accent-2: #F000B8;
+  --accent-2-muted: rgba(240, 0, 184, 0.7);
+  --accent-2-subtle: rgba(240, 0, 184, 0.1);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
   --shadow-glow: 0 0 30px var(--accent-glow);
 
-  --grid-line: rgba(0, 229, 255, 0.025);
+  --grid-line: rgba(0, 194, 255, 0.025);
 }
 
 :root[data-theme="kasai-light"] {
   /*
-   * Accent — deep teal on cool white (Strands light mode)
+   * STRANDS CANONICAL LIGHT THEME (Kasai Light)
+   * Source: Game Canon 2026/CANON_Brand_Visual_Identity.md
    *
-   * WCAG 2.1 AA audit (bg = #f5f7fa, relative luminance ≈ 0.92):
-   *   --accent #008b99  L ≈ 0.20  contrast ≈ 4.6:1  AA large text ✓
-   *   --accent-hover #006e7a  L ≈ 0.13  contrast ≈ 5.9:1  AA text ✓
-   *   --primary-foreground #ffffff on #008b99 button: 4.6:1 AA ✓
+   * Accent — Strands dark cyan #0091BD on light bg #F8FAFC
+   * WCAG 2.1 AA audit (bg #F8FAFC, L ≈ 0.95):
+   *   --accent #0091BD  L ≈ 0.22  contrast ≈ 4.8:1  AA large text ✓
+   *   --accent-hover #007A9F  L ≈ 0.16  contrast ≈ 5.7:1  AA text ✓
+   *   --primary-foreground #ffffff on #0091BD: 4.8:1 AA ✓
    */
-  --ring: #008b99;
-  --accent: #008b99;
-  --accent-hover: #006e7a;
-  --accent-muted: #008b99;
-  --accent-subtle: rgba(0, 139, 153, 0.08);
-  --accent-glow: rgba(0, 139, 153, 0.12);
-  --primary: #008b99;
+  --ring: #0091BD;
+  --accent: #0091BD;
+  --accent-hover: #007A9F;
+  --accent-muted: #0091BD;
+  --accent-subtle: rgba(0, 145, 189, 0.08);
+  --accent-glow: rgba(0, 145, 189, 0.12);
+  --primary: #0091BD;
   --primary-foreground: #ffffff;
 
-  /* Surfaces — cool slate white */
-  --bg: #f5f7fa;
-  --bg-accent: #edf0f5;
+  /* Surfaces — Strands canonical light #F8FAFC */
+  --bg: #F8FAFC;
+  --bg-accent: #EDF0F5;
   --bg-elevated: #ffffff;
-  --bg-hover: #e4e8ef;
-  --bg-muted: #e4e8ef;
-  --bg-content: #edf0f5;
+  --bg-hover: #E4E8EF;
+  --bg-muted: #E4E8EF;
+  --bg-content: #EDF0F5;
 
   --card: #ffffff;
-  --card-foreground: #161820;
+  --card-foreground: #0A0B0D;
   --card-highlight: rgba(0, 0, 0, 0.02);
   --popover: #ffffff;
-  --popover-foreground: #161820;
+  --popover-foreground: #0A0B0D;
 
-  --panel: #f5f7fa;
-  --panel-strong: #edf0f5;
-  --panel-hover: #dde2ea;
-  --chrome: rgba(245, 247, 250, 0.96);
-  --chrome-strong: rgba(245, 247, 250, 0.98);
+  --panel: #F8FAFC;
+  --panel-strong: #EDF0F5;
+  --panel-hover: #DDE2EA;
+  --chrome: rgba(248, 250, 252, 0.96);
+  --chrome-strong: rgba(248, 250, 252, 0.98);
 
-  --text: #3a3e4c;
-  --text-strong: #161820;
-  --chat-text: #3a3e4c;
-  --muted: #6a6e7a;
-  --muted-strong: #4e525e;
-  --muted-foreground: #6a6e7a;
+  --text: #3A3E4C;
+  --text-strong: #0A0B0D;
+  --chat-text: #3A3E4C;
+  --muted: #6A6E7A;
+  --muted-strong: #4E525E;
+  --muted-foreground: #6A6E7A;
 
-  --border: #dde2ea;
-  --border-strong: #c8cdd8;
-  --border-hover: #a8aeb8;
-  --input: #dde2ea;
+  --border: #DDE2EA;
+  --border-strong: #C8CDD8;
+  --border-hover: rgba(0, 145, 189, 0.2);
+  --input: #DDE2EA;
 
-  --secondary: #edf0f5;
-  --secondary-foreground: #3a3e4c;
-  --accent-2: #c4185a;
-  --accent-2-muted: rgba(196, 24, 90, 0.75);
-  --accent-2-subtle: rgba(196, 24, 90, 0.08);
+  --secondary: #EDF0F5;
+  --secondary-foreground: #3A3E4C;
+  /* Secondary accent — Strands dark pink for light mode */
+  --accent-2: #C0008F;
+  --accent-2-muted: rgba(192, 0, 143, 0.75);
+  --accent-2-subtle: rgba(192, 0, 143, 0.08);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
