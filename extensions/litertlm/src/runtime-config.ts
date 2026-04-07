@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import { PROVIDER_ID } from "./provider-models.js";
 import type { LiteRtLmModelPreference } from "./provider-models.js";
 
 export type LiteRtLmRuntimeConfig = {
@@ -78,11 +78,17 @@ export type LiteRtLmProviderConfig = {
   backend?: string;
 };
 
+type LiteRtLmConfigShape = {
+  models?: {
+    providers?: Record<string, Record<string, unknown>>;
+  };
+};
+
 export type LiteRtLmConfigResolutionInput = {
   model: LiteRtLmModelPreference | { modelId: string };
   env?: NodeJS.ProcessEnv;
   providerConfig?: LiteRtLmProviderConfig;
-  config?: OpenClawConfig;
+  config?: LiteRtLmConfigShape;
 };
 
 export function getDefaultLiteRtLmBundledShimPath() {
@@ -92,8 +98,8 @@ export function getDefaultLiteRtLmBundledShimPath() {
   );
 }
 
-export function getLiteRtLmProviderConfig(config?: OpenClawConfig): LiteRtLmProviderConfig {
-  const raw = config?.models?.providers?.["litertlm-local"] as Record<string, unknown> | undefined;
+export function getLiteRtLmProviderConfig(config?: LiteRtLmConfigShape): LiteRtLmProviderConfig {
+  const raw = config?.models?.providers?.[PROVIDER_ID];
   if (!raw) {
     return {};
   }

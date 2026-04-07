@@ -4,7 +4,6 @@ import { promisify } from "node:util";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { PROVIDER_ID } from "./provider-models.js";
 import {
   buildLiteRtLmShimRequest,
@@ -19,6 +18,12 @@ type StreamModelDescriptor = {
   api: string;
   provider: string;
   id: string;
+};
+
+type LiteRtLmConfigShape = {
+  models?: {
+    providers?: Record<string, Record<string, unknown>>;
+  };
 };
 
 function buildUsageWithNoCost(params: {
@@ -184,7 +189,7 @@ async function invokeLiteRtLmShim(params: {
 
 export function createLiteRtLmShimStreamFn(params: {
   model: { id: string };
-  config?: OpenClawConfig;
+  config?: LiteRtLmConfigShape;
 }): StreamFn {
   return (_model, context, _options) => {
     const stream = createAssistantMessageEventStream();
