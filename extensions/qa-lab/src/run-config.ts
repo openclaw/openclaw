@@ -1,7 +1,10 @@
 import path from "node:path";
+import {
+  defaultQaModelForMode,
+  isQaFastModeEnabled,
+  type QaProviderMode,
+} from "./model-selection.js";
 import type { QaSeedScenario } from "./scenario-catalog.js";
-
-export type QaProviderMode = "mock-openai" | "live-openai";
 
 export type QaLabRunSelection = {
   providerMode: QaProviderMode;
@@ -28,20 +31,16 @@ export type QaLabRunnerSnapshot = {
 };
 
 export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabRunSelection {
+  const providerMode: QaProviderMode = "mock-openai";
+  const primaryModel = defaultQaModelForMode(providerMode);
+  const alternateModel = defaultQaModelForMode(providerMode, { alternate: true });
   return {
-    providerMode: "mock-openai",
-    primaryModel: "mock-openai/gpt-5.4",
-    alternateModel: "mock-openai/gpt-5.4-alt",
-    fastMode: false,
+    providerMode,
+    primaryModel,
+    alternateModel,
+    fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
     scenarioIds: scenarios.map((scenario) => scenario.id),
   };
-}
-
-function defaultModelForMode(mode: QaProviderMode, alternate = false) {
-  if (mode === "live-openai") {
-    return "openai/gpt-5.4";
-  }
-  return alternate ? "mock-openai/gpt-5.4-alt" : "mock-openai/gpt-5.4";
 }
 
 function normalizeProviderMode(input: unknown): QaProviderMode {
@@ -72,12 +71,16 @@ export function normalizeQaRunSelection(
 ): QaLabRunSelection {
   const payload = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const providerMode = normalizeProviderMode(payload.providerMode);
+  const primaryModel = normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode));
+  const alternateModel = normalizeModel(
+    payload.alternateModel,
+    defaultQaModelForMode(providerMode, { alternate: true }),
+  );
   return {
     providerMode,
-    primaryModel: normalizeModel(payload.primaryModel, defaultModelForMode(providerMode)),
-    alternateModel: normalizeModel(payload.alternateModel, defaultModelForMode(providerMode, true)),
-    fastMode:
-      typeof payload.fastMode === "boolean" ? payload.fastMode : providerMode === "live-openai",
+    primaryModel,
+    alternateModel,
+    fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
     scenarioIds: normalizeScenarioIds(payload.scenarioIds, scenarios),
   };
 }

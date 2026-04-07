@@ -7,7 +7,11 @@ import {
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -78,6 +82,17 @@ export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 export { isRecord };
 
+export function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
+  let current: unknown = value;
+  for (const key of keys) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[key as keyof typeof current];
+  }
+  return normalizeOptionalString(current);
+}
+
 export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -108,9 +123,9 @@ export function inferPlaceholder(params: {
   fileName?: string;
   fileType?: string;
 }): string {
-  const mime = params.contentType?.toLowerCase() ?? "";
-  const name = params.fileName?.toLowerCase() ?? "";
-  const fileType = params.fileType?.toLowerCase() ?? "";
+  const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
+  const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
+  const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
 
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
@@ -221,7 +236,7 @@ function decodeDataImageWithLimits(
   if (!match) {
     return { candidate: null, estimatedBytes: 0 };
   }
-  const contentType = match[1]?.toLowerCase();
+  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
   const isBase64 = Boolean(match[2]);
   if (!isBase64) {
     return { candidate: null, estimatedBytes: 0 };

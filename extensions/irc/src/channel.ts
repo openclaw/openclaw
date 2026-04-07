@@ -14,7 +14,6 @@ import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -29,13 +28,13 @@ import {
 import {
   buildBaseChannelStatusSummary,
   chunkTextForOutbound,
-  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "./channel-api.js";
 import { IrcChannelConfigSchema } from "./config-schema.js";
 import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
+import { startIrcGatewayAccount } from "./gateway.js";
 import {
   isChannelTarget,
   looksLikeIrcTargetId,
@@ -316,33 +315,11 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       }),
     }),
     gateway: {
-      startAccount: async (ctx) => {
-        const account = ctx.account;
-        const statusSink = createAccountStatusSink({
-          accountId: ctx.accountId,
-          setStatus: ctx.setStatus,
-        });
-        if (!account.configured) {
-          throw new Error(
-            `IRC is not configured for account "${account.accountId}" (need host and nick in channels.irc).`,
-          );
-        }
-        ctx.log?.info(
-          `[${account.accountId}] starting IRC provider (${account.host}:${account.port}${account.tls ? " tls" : ""})`,
-        );
-        const { monitorIrcProvider } = await loadIrcChannelRuntime();
-        await runStoppablePassiveMonitor({
-          abortSignal: ctx.abortSignal,
-          start: async () =>
-            await monitorIrcProvider({
-              accountId: account.accountId,
-              config: ctx.cfg as CoreConfig,
-              runtime: ctx.runtime,
-              abortSignal: ctx.abortSignal,
-              statusSink,
-            }),
-        });
-      },
+      startAccount: async (ctx) =>
+        await startIrcGatewayAccount({
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+        }),
     },
   },
   pairing: {

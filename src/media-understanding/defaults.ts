@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   bundledProviderSupportsNativePdfDocument,
   resolveBundledAutoMediaKeyProviders,
@@ -72,9 +73,12 @@ function resolveConfiguredImageProviderModel(params: {
     }
     const models = providerCfg?.models ?? [];
     const match = models.find(
-      (model) => Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("image"),
+      (model) =>
+        Boolean(normalizeOptionalString(model?.id)) &&
+        Array.isArray(model?.input) &&
+        model.input.includes("image"),
     );
-    return match?.id?.trim() || undefined;
+    return normalizeOptionalString(match?.id);
   }
   return undefined;
 }
@@ -106,7 +110,7 @@ export function resolveDefaultMediaModel(params: {
   }
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  return provider?.defaultModels?.[params.capability]?.trim() || undefined;
+  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
 
 export function resolveAutoMediaKeyProviders(params: {

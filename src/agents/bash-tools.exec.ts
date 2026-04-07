@@ -17,6 +17,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -1330,7 +1331,7 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
-  const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
+  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -1410,8 +1411,8 @@ export function createExecTool(
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
           const contextParts: string[] = [];
-          const provider = defaults?.messageProvider?.trim();
-          const sessionKey = defaults?.sessionKey?.trim();
+          const provider = normalizeOptionalString(defaults?.messageProvider);
+          const sessionKey = normalizeOptionalString(defaults?.sessionKey);
           if (provider) {
             contextParts.push(`provider=${provider}`);
           }
@@ -1478,8 +1479,8 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const explicitWorkdir = params.workdir?.trim() || undefined;
-      const defaultWorkdir = defaults?.cwd?.trim() || undefined;
+      const explicitWorkdir = normalizeOptionalString(params.workdir);
+      const defaultWorkdir = normalizeOptionalString(defaults?.cwd);
       let workdir: string | undefined;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {

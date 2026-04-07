@@ -1,5 +1,8 @@
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 let fileTypeModulePromise: Promise<typeof import("file-type")> | undefined;
@@ -71,7 +74,7 @@ const AUDIO_FILE_EXTENSIONS = new Set([
 ]);
 
 export function normalizeMimeType(mime?: string | null): string | undefined {
-  return normalizeOptionalString(mime?.split(";")[0])?.toLowerCase();
+  return normalizeOptionalLowercaseString(mime?.split(";")[0]);
 }
 
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
@@ -94,12 +97,12 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   try {
     if (/^https?:\/\//i.test(filePath)) {
       const url = new URL(filePath);
-      return path.extname(url.pathname).toLowerCase() || undefined;
+      return normalizeLowercaseStringOrEmpty(path.extname(url.pathname)) || undefined;
     }
   } catch {
     // fall back to plain path parsing
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return ext || undefined;
 }
 
@@ -123,7 +126,7 @@ function isGenericMime(mime?: string): boolean {
   if (!mime) {
     return true;
   }
-  const m = mime.toLowerCase();
+  const m = normalizeLowercaseStringOrEmpty(mime);
   return m === "application/octet-stream" || m === "application/zip";
 }
 
@@ -171,7 +174,7 @@ export function isGifMedia(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  if (opts.contentType?.toLowerCase() === "image/gif") {
+  if (normalizeOptionalLowercaseString(opts.contentType) === "image/gif") {
     return true;
   }
   const ext = getFileExtension(opts.fileName);
@@ -182,7 +185,7 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
   if (!format) {
     return undefined;
   }
-  switch (format.toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(format)) {
     case "jpg":
     case "jpeg":
       return "image/jpeg";

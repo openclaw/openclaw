@@ -7,13 +7,23 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatMemoryDreamingDay,
+  resolveSessionTranscriptsDirForAgent,
+} from "openclaw/plugin-sdk/memory-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { QaBusState } from "./bus-state.js";
+import { waitForCronRunCompletion } from "./cron-run-wait.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import {
+  defaultQaModelForMode,
+  isQaFastModeEnabled,
+  type QaProviderMode,
+} from "./model-selection.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -53,6 +63,21 @@ type QaSkillStatusEntry = {
 type QaConfigSnapshot = {
   hash?: string;
   config?: Record<string, unknown>;
+};
+
+type QaDreamingStatus = {
+  enabled?: boolean;
+  shortTermCount?: number;
+  promotedTotal?: number;
+  phaseSignalCount?: number;
+  lightPhaseHitCount?: number;
+  remPhaseHitCount?: number;
+  phases?: {
+    deep?: {
+      managedCronPresent?: boolean;
+      nextRunAtMs?: number;
+    };
+  };
 };
 
 function splitModelRef(ref: string) {
@@ -265,8 +290,8 @@ async function waitForConfigRestartSettle(
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
 ) {
-  // config.patch/config.apply schedule a delayed SIGUSR1 restart after the RPC returns.
-  // Give the restart window time to fire before treating readyz as settled.
+  // config.patch/config.apply can still restart asynchronously after the RPC returns
+  // in reload-off or restart-required hot-mode paths. Give that window time to fire.
   await sleep(restartDelayMs + 750);
   await waitForGatewayHealthy(env, timeoutMs);
 }
@@ -457,6 +482,33 @@ async function runQaCli(
     return text;
   }
   return text ? (JSON.parse(text) as unknown) : {};
+}
+
+async function listCronJobs(env: QaSuiteEnvironment) {
+  const payload = (await env.gateway.call(
+    "cron.list",
+    {
+      includeDisabled: true,
+      limit: 200,
+      sortBy: "name",
+      sortDir: "asc",
+    },
+    { timeoutMs: 30_000 },
+  )) as {
+    jobs?: Array<{
+      id?: string;
+      name?: string;
+      payload?: { kind?: string; text?: string };
+      state?: { nextRunAtMs?: number };
+    }>;
+  };
+  return payload.jobs ?? [];
+}
+
+async function readDoctorMemoryStatus(env: QaSuiteEnvironment) {
+  return (await env.gateway.call("doctor.memory.status", {}, { timeoutMs: 30_000 })) as {
+    dreaming?: QaDreamingStatus;
+  };
 }
 
 async function forceMemoryIndex(params: {
@@ -1066,6 +1118,305 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 throw new Error(`thread reply fell back to ACP error: ${outbound.text}`);
               }
               return outbound.text;
+            },
+          },
+        ]),
+    ],
+    [
+      "memory-dreaming-sweep",
+      async () =>
+        await runScenario("Memory dreaming sweep", [
+          {
+            name: "enables dreaming and registers the managed sweep cron",
+            run: async () => {
+              const original = await readConfigSnapshot(env);
+              const pluginEntries =
+                original.config.plugins && typeof original.config.plugins === "object"
+                  ? ((original.config.plugins as Record<string, unknown>).entries as
+                      | Record<string, unknown>
+                      | undefined)
+                  : undefined;
+              const memoryCoreEntry =
+                pluginEntries && typeof pluginEntries["memory-core"] === "object"
+                  ? (pluginEntries["memory-core"] as Record<string, unknown>)
+                  : undefined;
+              const memoryCoreConfig =
+                memoryCoreEntry && typeof memoryCoreEntry.config === "object"
+                  ? (memoryCoreEntry.config as Record<string, unknown>)
+                  : undefined;
+              const originalDreaming = memoryCoreConfig?.dreaming;
+              await patchConfig({
+                env,
+                patch: {
+                  plugins: {
+                    entries: {
+                      "memory-core": {
+                        config: {
+                          dreaming: {
+                            enabled: true,
+                            phases: {
+                              deep: {
+                                minScore: 0,
+                                minRecallCount: 3,
+                                minUniqueQueries: 3,
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              });
+              await waitForGatewayHealthy(env);
+              await waitForQaChannelReady(env, 60_000);
+              try {
+                const status = await waitForCondition(
+                  async () => {
+                    const payload = await readDoctorMemoryStatus(env);
+                    return payload.dreaming?.phases?.deep?.managedCronPresent === true
+                      ? payload
+                      : undefined;
+                  },
+                  30_000,
+                  500,
+                );
+                const jobs = await listCronJobs(env);
+                const managed = jobs.find(
+                  (job) =>
+                    job.name === "Memory Dreaming Promotion" &&
+                    job.payload?.kind === "systemEvent" &&
+                    job.payload.text === "__openclaw_memory_core_short_term_promotion_dream__",
+                );
+                if (!managed?.id) {
+                  throw new Error("managed dreaming cron job missing after enablement");
+                }
+                (
+                  globalThis as typeof globalThis & {
+                    __qaDreamingOriginal?: unknown;
+                    __qaDreamingCronId?: string;
+                  }
+                ).__qaDreamingOriginal = structuredClone(originalDreaming);
+                (
+                  globalThis as typeof globalThis & {
+                    __qaDreamingOriginal?: unknown;
+                    __qaDreamingCronId?: string;
+                  }
+                ).__qaDreamingCronId = managed.id;
+                return JSON.stringify({
+                  enabled: status.dreaming?.enabled ?? false,
+                  managedCronPresent: status.dreaming?.phases?.deep?.managedCronPresent ?? false,
+                  nextRunAtMs: status.dreaming?.phases?.deep?.nextRunAtMs ?? null,
+                });
+              } catch (error) {
+                await patchConfig({
+                  env,
+                  patch: {
+                    plugins: {
+                      entries: {
+                        "memory-core": {
+                          config: {
+                            dreaming:
+                              originalDreaming === undefined
+                                ? null
+                                : structuredClone(originalDreaming),
+                          },
+                        },
+                      },
+                    },
+                  },
+                });
+                await waitForGatewayHealthy(env);
+                await waitForQaChannelReady(env, 60_000);
+                throw error;
+              }
+            },
+          },
+          {
+            name: "runs the sweep after repeated recall signals and writes promotion artifacts",
+            run: async () => {
+              const globals = globalThis as typeof globalThis & {
+                __qaDreamingOriginal?: unknown;
+                __qaDreamingCronId?: string;
+              };
+              const cronId = globals.__qaDreamingCronId;
+              if (!cronId) {
+                throw new Error("missing managed dreaming cron id");
+              }
+              const dreamingDay = formatMemoryDreamingDay(Date.now());
+              const dailyPath = path.join(env.gateway.workspaceDir, "memory", `${dreamingDay}.md`);
+              const memoryPath = path.join(env.gateway.workspaceDir, "MEMORY.md");
+              const homeDir =
+                env.gateway.runtimeEnv.HOME ??
+                env.gateway.runtimeEnv.OPENCLAW_HOME ??
+                env.gateway.tempRoot;
+              const sessionsDir = resolveSessionTranscriptsDirForAgent(
+                "qa",
+                env.gateway.runtimeEnv,
+                () => homeDir,
+              );
+              const transcriptPath = path.join(sessionsDir, "dreaming-qa-sweep.jsonl");
+              try {
+                const dailyCanary = "Dreaming QA canary: NEBULA-73 belongs in durable memory.";
+                const queries = [
+                  "dreaming qa canary nebula-73",
+                  "durable memory canary nebula 73",
+                  "which canary belongs to the dreaming qa check",
+                ];
+                await fs.mkdir(path.dirname(dailyPath), { recursive: true });
+                await fs.mkdir(sessionsDir, { recursive: true });
+                await fs.writeFile(
+                  dailyPath,
+                  [
+                    `# ${dreamingDay}`,
+                    "",
+                    `- ${dailyCanary}`,
+                    "- Keep the durable-memory note tied to repeated recall instead of one-off mention.",
+                  ].join("\n") + "\n",
+                  "utf8",
+                );
+                const now = Date.now();
+                await fs.writeFile(
+                  transcriptPath,
+                  [
+                    JSON.stringify({
+                      type: "session",
+                      id: "dreaming-qa-sweep",
+                      timestamp: new Date(now - 120_000).toISOString(),
+                    }),
+                    JSON.stringify({
+                      type: "message",
+                      message: {
+                        role: "user",
+                        timestamp: new Date(now - 90_000).toISOString(),
+                        content: [
+                          {
+                            type: "text",
+                            text: "Dream over recurring memory themes and watch for the NEBULA-73 canary.",
+                          },
+                        ],
+                      },
+                    }),
+                    JSON.stringify({
+                      type: "message",
+                      message: {
+                        role: "assistant",
+                        timestamp: new Date(now - 60_000).toISOString(),
+                        content: [
+                          {
+                            type: "text",
+                            text: "I keep circling back to NEBULA-73 as the durable-memory canary for this QA run.",
+                          },
+                        ],
+                      },
+                    }),
+                  ].join("\n") + "\n",
+                  "utf8",
+                );
+                await fs.rm(memoryPath, { force: true });
+                await forceMemoryIndex({
+                  env,
+                  query: queries[0],
+                  expectedNeedle: "NEBULA-73",
+                });
+                await sleep(1_000);
+                for (const query of queries) {
+                  const payload = (await runQaCli(
+                    env,
+                    ["memory", "search", "--agent", "qa", "--json", "--query", query],
+                    {
+                      timeoutMs: liveTurnTimeoutMs(env, 60_000),
+                      json: true,
+                    },
+                  )) as { results?: Array<{ snippet?: string; text?: string }> };
+                  if (!JSON.stringify(payload.results ?? []).includes("NEBULA-73")) {
+                    throw new Error(`memory search missed dreaming canary for query: ${query}`);
+                  }
+                }
+                const cronRunStartedAt = Date.now();
+                const cronRun = (await env.gateway.call(
+                  "cron.run",
+                  {
+                    id: cronId,
+                    mode: "force",
+                  },
+                  { timeoutMs: liveTurnTimeoutMs(env, 30_000) },
+                )) as { enqueued?: boolean; runId?: string; ran?: boolean; reason?: string };
+                if (cronRun.enqueued !== true || !cronRun.runId) {
+                  throw new Error(
+                    `dreaming cron did not enqueue a background run: ${JSON.stringify(cronRun)}`,
+                  );
+                }
+                const finishedRun = await waitForCronRunCompletion({
+                  callGateway: (method, rpcParams, opts) =>
+                    env.gateway.call(method, rpcParams, opts),
+                  jobId: cronId,
+                  afterTs: cronRunStartedAt,
+                  timeoutMs: liveTurnTimeoutMs(env, 90_000),
+                });
+                if (finishedRun.status !== "ok") {
+                  throw new Error(
+                    `dreaming cron finished with ${finishedRun.status ?? "unknown"}: ${JSON.stringify(finishedRun)}`,
+                  );
+                }
+                const promoted = await waitForCondition(
+                  async () => {
+                    const status = await readDoctorMemoryStatus(env);
+                    const dailyMemory = await fs.readFile(dailyPath, "utf8").catch(() => "");
+                    const promotedMemory = await fs.readFile(memoryPath, "utf8").catch(() => "");
+                    if (
+                      !dailyMemory.includes("## Light Sleep") ||
+                      !dailyMemory.includes("## REM Sleep")
+                    ) {
+                      return undefined;
+                    }
+                    if (!promotedMemory.includes("NEBULA-73")) {
+                      return undefined;
+                    }
+                    if (status.dreaming?.phases?.deep?.managedCronPresent !== true) {
+                      return undefined;
+                    }
+                    if ((status.dreaming?.promotedTotal ?? 0) < 1) {
+                      return undefined;
+                    }
+                    if ((status.dreaming?.phaseSignalCount ?? 0) < 1) {
+                      return undefined;
+                    }
+                    return { status, dailyMemory, promotedMemory };
+                  },
+                  liveTurnTimeoutMs(env, 90_000),
+                  1_000,
+                );
+                return JSON.stringify({
+                  promotedTotal: promoted.status.dreaming?.promotedTotal ?? 0,
+                  shortTermCount: promoted.status.dreaming?.shortTermCount ?? 0,
+                  phaseSignalCount: promoted.status.dreaming?.phaseSignalCount ?? 0,
+                  lightSleep: promoted.dailyMemory.includes("## Light Sleep"),
+                  remSleep: promoted.dailyMemory.includes("## REM Sleep"),
+                });
+              } finally {
+                await patchConfig({
+                  env,
+                  patch: {
+                    plugins: {
+                      entries: {
+                        "memory-core": {
+                          config: {
+                            dreaming:
+                              globals.__qaDreamingOriginal === undefined
+                                ? null
+                                : structuredClone(globals.__qaDreamingOriginal),
+                          },
+                        },
+                      },
+                    },
+                  },
+                });
+                await waitForGatewayHealthy(env);
+                await waitForQaChannelReady(env, 60_000);
+                delete globals.__qaDreamingOriginal;
+                delete globals.__qaDreamingCronId;
+              }
             },
           },
         ]),
@@ -1752,22 +2103,18 @@ When the user asks for the drift skill marker exactly, reply with exactly: DRIFT
 
 export async function runQaSuite(params?: {
   outputDir?: string;
-  providerMode?: "mock-openai" | "live-openai";
+  providerMode?: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
   scenarioIds?: string[];
   lab?: Awaited<ReturnType<typeof startQaLabServer>>;
 }) {
   const startedAt = new Date();
   const providerMode = params?.providerMode ?? "mock-openai";
-  const fastMode = params?.fastMode ?? providerMode === "live-openai";
-  const primaryModel =
-    params?.primaryModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4");
+  const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
-    params?.alternateModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
+    params?.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const fastMode = isQaFastModeEnabled({ primaryModel, alternateModel });
   const outputDir =
     params?.outputDir ??
     path.join(process.cwd(), ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
@@ -1795,7 +2142,6 @@ export async function runQaSuite(params?: {
     providerMode,
     primaryModel,
     alternateModel,
-    fastMode,
     controlUiEnabled: true,
   });
   lab.setControlUi({

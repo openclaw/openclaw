@@ -17,7 +17,11 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -87,15 +91,6 @@ export function _setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | 
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
-function readConfigString(config: ComfyProviderConfig, key: string): string | undefined {
-  const value = config[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
   const value = config[key];
   return typeof value === "boolean" ? value : undefined;
@@ -161,11 +156,11 @@ export function getComfyCapabilityConfig(
 }
 
 export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
-  return readConfigString(config, "mode") === "cloud" ? "cloud" : "local";
+  return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
 }
 
 function getRequiredConfigString(config: ComfyProviderConfig, key: string): string {
-  const value = readConfigString(config, key);
+  const value = normalizeOptionalString(config[key]);
   if (!value) {
     throw new Error(`models.providers.comfy.${key} is required`);
   }
@@ -180,7 +175,7 @@ function resolveComfyWorkflowSource(config: ComfyProviderConfig): {
   if (isRecord(workflow)) {
     return { workflow: structuredClone(workflow) };
   }
-  const workflowPath = readConfigString(config, "workflowPath");
+  const workflowPath = normalizeOptionalString(config.workflowPath);
   return { workflowPath };
 }
 
@@ -230,7 +225,7 @@ function resolveComfyNetworkPolicy(params: {
     return {};
   }
 
-  const hostname = parsed.hostname.trim().toLowerCase();
+  const hostname = normalizeOptionalString(parsed.hostname)?.toLowerCase() ?? "";
   if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
     return {};
   }
@@ -555,9 +550,9 @@ export function isComfyCapabilityConfigured(params: {
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
     resolveComfyWorkflowSource(capabilityConfig).workflow ||
-    readConfigString(capabilityConfig, "workflowPath"),
+    normalizeOptionalString(capabilityConfig.workflowPath),
   );
-  const hasPromptNode = Boolean(readConfigString(capabilityConfig, "promptNodeId"));
+  const hasPromptNode = Boolean(normalizeOptionalString(capabilityConfig.promptNodeId));
   if (!hasWorkflow || !hasPromptNode) {
     return false;
   }
@@ -587,11 +582,11 @@ export async function runComfyWorkflow(params: {
   const workflow = await loadComfyWorkflow(capabilityConfig);
   const promptNodeId = getRequiredConfigString(capabilityConfig, "promptNodeId");
   const promptInputName =
-    readConfigString(capabilityConfig, "promptInputName") ?? DEFAULT_PROMPT_INPUT_NAME;
-  const inputImageNodeId = readConfigString(capabilityConfig, "inputImageNodeId");
+    normalizeOptionalString(capabilityConfig.promptInputName) ?? DEFAULT_PROMPT_INPUT_NAME;
+  const inputImageNodeId = normalizeOptionalString(capabilityConfig.inputImageNodeId);
   const inputImageInputName =
-    readConfigString(capabilityConfig, "inputImageInputName") ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
-  const outputNodeId = readConfigString(capabilityConfig, "outputNodeId");
+    normalizeOptionalString(capabilityConfig.inputImageInputName) ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
+  const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
   const pollIntervalMs =
     readConfigInteger(capabilityConfig, "pollIntervalMs") ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs =
@@ -620,7 +615,7 @@ export async function runComfyWorkflow(params: {
 
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
-      baseUrl: readConfigString(capabilityConfig, "baseUrl"),
+      baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
       allowPrivateNetwork:

@@ -9,14 +9,15 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
-ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex}}"
+ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
 
 openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
     claude) printf '%s\n' "claude-cli" ;;
     codex) printf '%s\n' "codex-cli" ;;
+    gemini) printf '%s\n' "google-gemini-cli" ;;
     *)
-      echo "Unsupported OPENCLAW_LIVE_ACP_BIND agent: ${1:-} (expected claude or codex)" >&2
+      echo "Unsupported OPENCLAW_LIVE_ACP_BIND agent: ${1:-} (expected claude, codex, or gemini)" >&2
       return 1
       ;;
   esac
@@ -26,6 +27,7 @@ openclaw_live_acp_bind_resolve_agent_command() {
   case "${1:-}" in
     claude) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_CLAUDE:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     codex) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_CODEX:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
+    gemini) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_GEMINI:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     *) return 1 ;;
   esac
 }
@@ -94,6 +96,12 @@ WRAP
       npm_config_prefix="$HOME/.npm-global" npm install -g @openai/codex
     fi
     ;;
+  gemini)
+    mkdir -p "$HOME/.gemini"
+    if [ ! -x "$HOME/.npm-global/bin/gemini" ]; then
+      npm_config_prefix="$HOME/.npm-global" npm install -g @google/gemini-cli
+    fi
+    ;;
   *)
     echo "Unsupported OPENCLAW_LIVE_ACP_BIND_AGENT: $agent" >&2
     exit 1
@@ -134,7 +142,7 @@ for token in "${ACP_AGENT_TOKENS[@]}"; do
 done
 
 if ((${#ACP_AGENTS[@]} == 0)); then
-  echo "No ACP bind agents selected. Use OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex." >&2
+  echo "No ACP bind agents selected. Use OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini." >&2
   exit 1
 fi
 

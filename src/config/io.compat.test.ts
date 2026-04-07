@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
+import { describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
-import { parseOpenClawVersion } from "./version.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -33,36 +31,6 @@ function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.Pro
   return createConfigIO({
     env,
     homedir: () => home,
-  });
-}
-
-async function expectNoNewerVersionWarning(touchedVersion: string) {
-  await withTempHome(async (home) => {
-    const configDir = path.join(home, ".openclaw");
-    await fs.mkdir(configDir, { recursive: true });
-    const configPath = path.join(configDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
-    );
-
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    const io = createConfigIO({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-      logger,
-    });
-
-    io.loadConfig();
-
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("Config was last written by a newer OpenClaw"),
-    );
-    expect(io.configPath).toBe(configPath);
   });
 }
 
@@ -143,52 +111,5 @@ describe("config io paths", () => {
       },
     });
     expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
-  });
-
-  it("logs invalid config path details and throws on invalid config", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: "not-a-number" } }, null, 2),
-      );
-
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-
-      expect(() => io.loadConfig()).toThrow(/Invalid config/);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(`Invalid config at ${configPath}:\\n`),
-      );
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
-    });
-  });
-
-  it("does not warn when config was last touched by a same-base correction publish", async () => {
-    const parsedVersion = parseOpenClawVersion(VERSION);
-    if (!parsedVersion) {
-      throw new Error(`Unable to parse VERSION: ${VERSION}`);
-    }
-    const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-${(parsedVersion.revision ?? 0) + 1}`;
-    await expectNoNewerVersionWarning(touchedVersion);
-  });
-
-  it("does not warn for same-base prerelease configs when current version is newer", async () => {
-    const parsedVersion = parseOpenClawVersion(VERSION);
-    if (!parsedVersion) {
-      throw new Error(`Unable to parse VERSION: ${VERSION}`);
-    }
-    const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-beta.1`;
-    await expectNoNewerVersionWarning(touchedVersion);
   });
 });

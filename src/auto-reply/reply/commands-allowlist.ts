@@ -13,7 +13,10 @@ import {
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import {
   rejectNonOwnerCommand,
@@ -75,7 +78,8 @@ function resolveAllowlistAccountId(params: {
 
 function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/allowlist")) {
+  const trimmedLower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  if (!trimmedLower.startsWith("/allowlist")) {
     return null;
   }
   const rest = trimmed.slice("/allowlist".length).trim();
@@ -93,18 +97,20 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const entryTokens: string[] = [];
 
   let i = 0;
-  if (tokens[i] && ACTIONS.has(tokens[i].toLowerCase())) {
-    action = tokens[i].toLowerCase() as AllowlistAction;
+  const firstAction = normalizeOptionalLowercaseString(tokens[i]);
+  if (firstAction && ACTIONS.has(firstAction)) {
+    action = firstAction as AllowlistAction;
     i += 1;
   }
-  if (tokens[i] && SCOPES.has(tokens[i].toLowerCase() as AllowlistScope)) {
-    scope = tokens[i].toLowerCase() as AllowlistScope;
+  const firstScope = normalizeOptionalLowercaseString(tokens[i]);
+  if (firstScope && SCOPES.has(firstScope as AllowlistScope)) {
+    scope = firstScope as AllowlistScope;
     i += 1;
   }
 
   for (; i < tokens.length; i += 1) {
     const token = tokens[i];
-    const lowered = token.toLowerCase();
+    const lowered = normalizeOptionalLowercaseString(token) ?? "";
     if (lowered === "--resolve" || lowered === "resolve") {
       resolve = true;
       continue;
@@ -129,7 +135,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     }
     const kv = token.split("=");
     if (kv.length === 2) {
-      const key = normalizeOptionalString(kv[0])?.toLowerCase();
+      const key = normalizeOptionalLowercaseString(kv[0]);
       const value = normalizeOptionalString(kv[1]);
       if (key === "channel") {
         if (value) {
@@ -143,8 +149,9 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
         }
         continue;
       }
-      if (key === "scope" && value && SCOPES.has(value.toLowerCase() as AllowlistScope)) {
-        scope = value.toLowerCase() as AllowlistScope;
+      const normalizedValue = normalizeOptionalLowercaseString(value);
+      if (key === "scope" && normalizedValue && SCOPES.has(normalizedValue as AllowlistScope)) {
+        scope = normalizedValue as AllowlistScope;
         continue;
       }
     }

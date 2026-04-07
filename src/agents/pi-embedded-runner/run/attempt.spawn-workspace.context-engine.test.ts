@@ -1,5 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMemorySystemPromptAddition } from "../../../plugin-sdk/core.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptSection,
+} from "../../../plugins/memory-state.js";
 import {
   type AttemptContextEngine,
   assembleAttemptContextEngine,
@@ -65,7 +70,7 @@ async function runAssemble(
   contextEngine: AttemptContextEngine,
   overrides: Partial<Parameters<typeof assembleAttemptContextEngine>[0]> = {},
 ) {
-  await assembleAttemptContextEngine({
+  return await assembleAttemptContextEngine({
     contextEngine,
     sessionId: embeddedSessionId,
     sessionKey,
@@ -106,10 +111,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
+    clearMemoryPluginState();
     await cleanupTempPaths(tempPaths);
   });
 
@@ -143,6 +150,59 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         model: "gpt-test",
       }),
     );
+  });
+
+  it("forwards availableTools and citationsMode to assemble", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const contextEngine = createTestContextEngine({ bootstrap, assemble });
+
+    await runBootstrap(sessionKey, contextEngine);
+    await runAssemble(sessionKey, contextEngine, {
+      availableTools: new Set(["memory_search", "wiki_search"]),
+      citationsMode: "on",
+    });
+
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        availableTools: new Set(["memory_search", "wiki_search"]),
+        citationsMode: "on",
+      }),
+    );
+  });
+
+  it("lets non-legacy engines opt into the active memory prompt helper", async () => {
+    registerMemoryPromptSection(({ availableTools, citationsMode }) => {
+      if (!availableTools.has("memory_search")) {
+        return [];
+      }
+      return [
+        "## Memory Recall",
+        `tools=${[...availableTools].toSorted().join(",")}`,
+        `citations=${citationsMode ?? "auto"}`,
+        "",
+      ];
+    });
+
+    const contextEngine = createTestContextEngine({
+      assemble: async ({ messages, availableTools, citationsMode }) => ({
+        messages,
+        estimatedTokens: messages.length,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      }),
+    });
+
+    const result = await runAssemble(sessionKey, contextEngine, {
+      availableTools: new Set(["wiki_search", "memory_search"]),
+      citationsMode: "on",
+    });
+
+    expect(result).toMatchObject({
+      estimatedTokens: 1,
+      systemPromptAddition: "## Memory Recall\ntools=memory_search,wiki_search\ncitations=on",
+    });
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {

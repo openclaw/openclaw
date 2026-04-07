@@ -1,16 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { listSupportedMusicGenerationModes } from "../music-generation/capabilities.js";
 import {
-  musicGenerationProviderContractRegistry,
-  videoGenerationProviderContractRegistry,
-} from "../plugins/contracts/media-provider-registry.js";
+  loadBundledMusicGenerationProviders,
+  loadBundledVideoGenerationProviders,
+} from "../../test/helpers/media-generation/bundled-provider-builders.js";
+import { listSupportedMusicGenerationModes } from "../music-generation/capabilities.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../plugins/contracts/inventory/bundled-capability-metadata.js";
 import { listSupportedVideoGenerationModes } from "../video-generation/capabilities.js";
+
+function expectedBundledVideoProviderPluginIds(): string[] {
+  return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.videoGenerationProviderIds.length > 0,
+  )
+    .map((entry) => entry.pluginId)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function expectedBundledMusicProviderPluginIds(): string[] {
+  return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.musicGenerationProviderIds.length > 0,
+  )
+    .map((entry) => entry.pluginId)
+    .toSorted((left, right) => left.localeCompare(right));
+}
 
 describe("bundled media-generation provider capabilities", () => {
   it("declares explicit mode support for every bundled video-generation provider", () => {
-    expect(videoGenerationProviderContractRegistry.length).toBeGreaterThan(0);
+    const entries = loadBundledVideoGenerationProviders();
+    expect(entries.map((entry) => entry.pluginId).toSorted()).toEqual(
+      expectedBundledVideoProviderPluginIds(),
+    );
 
-    for (const entry of videoGenerationProviderContractRegistry) {
+    for (const entry of entries) {
       const { provider } = entry;
       expect(
         provider.capabilities.generate,
@@ -47,9 +67,12 @@ describe("bundled media-generation provider capabilities", () => {
   });
 
   it("declares explicit generate/edit support for every bundled music-generation provider", () => {
-    expect(musicGenerationProviderContractRegistry.length).toBeGreaterThan(0);
+    const entries = loadBundledMusicGenerationProviders();
+    expect(entries.map((entry) => entry.pluginId).toSorted()).toEqual(
+      expectedBundledMusicProviderPluginIds(),
+    );
 
-    for (const entry of musicGenerationProviderContractRegistry) {
+    for (const entry of entries) {
       const { provider } = entry;
       expect(
         provider.capabilities.generate,

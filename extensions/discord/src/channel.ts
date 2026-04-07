@@ -25,6 +25,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -344,7 +345,7 @@ function resolveDiscordConversationIdFromTargets(
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  const sessionKey = normalizeLowercaseStringOrEmpty(raw);
   if (!sessionKey) {
     return undefined;
   }

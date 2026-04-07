@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
+import {
+  resolveMemoryCorePluginConfig,
+  resolveMemoryLightDreamingConfig,
+  resolveMemoryRemDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
-import { registerMemoryDreamingPhases } from "./dreaming-phases.js";
+import { __testing } from "./dreaming-phases.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
@@ -21,6 +26,7 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
         config: {
           dreaming: {
             enabled: true,
+            timezone: "UTC",
             phases: {
               light: {
                 enabled: true,
@@ -36,45 +42,65 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
 };
 
 function createHarness(config: OpenClawConfig, workspaceDir?: string) {
-  let beforeAgentReply:
-    | ((
-        event: { cleanedBody: string },
-        ctx: { trigger?: string; workspaceDir?: string },
-      ) => Promise<unknown>)
-    | undefined;
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   };
 
-  const api = {
-    config: workspaceDir
-      ? {
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              workspace: workspaceDir,
-            },
+  const resolvedConfig = workspaceDir
+    ? {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            workspace: workspaceDir,
+            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
           },
-        }
-      : config,
-    pluginConfig: {},
-    logger,
-    registerHook: vi.fn(),
-    on: vi.fn((name: string, handler: unknown) => {
-      if (name === "before_agent_reply") {
-        beforeAgentReply = handler as typeof beforeAgentReply;
+        },
       }
-    }),
-  } as unknown as OpenClawPluginApi;
-
-  registerMemoryDreamingPhases(api);
-  if (!beforeAgentReply) {
-    throw new Error("before_agent_reply hook not registered");
-  }
+    : {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+          },
+        },
+      };
+  const pluginConfig = resolveMemoryCorePluginConfig(resolvedConfig) ?? {};
+  const beforeAgentReply = async (
+    event: { cleanedBody: string },
+    ctx: { trigger?: string; workspaceDir?: string },
+  ) => {
+    const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
+    const lightResult = await __testing.runPhaseIfTriggered({
+      cleanedBody: event.cleanedBody,
+      trigger: ctx.trigger,
+      workspaceDir: ctx.workspaceDir,
+      cfg: resolvedConfig,
+      logger,
+      phase: "light",
+      eventText: __testing.constants.LIGHT_SLEEP_EVENT_TEXT,
+      config: light,
+    });
+    if (lightResult) {
+      return lightResult;
+    }
+    const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
+    return await __testing.runPhaseIfTriggered({
+      cleanedBody: event.cleanedBody,
+      trigger: ctx.trigger,
+      workspaceDir: ctx.workspaceDir,
+      cfg: resolvedConfig,
+      logger,
+      phase: "rem",
+      eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+      config: rem,
+    });
+  };
   return { beforeAgentReply, logger };
 }
 
@@ -168,6 +194,44 @@ describe("memory-core dreaming phases", () => {
       expect(dailyContent).toContain("## Light Sleep");
       expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
+    });
+  });
+
+  it("triggers light dreaming when the token is embedded in a reminder body", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      setDreamingTestTime(1);
+      await beforeAgentReply(
+        {
+          cleanedBody: [
+            "System: rotate logs",
+            "System: __openclaw_memory_core_light_sleep__",
+            "",
+            "A scheduled reminder has been triggered. The reminder content is:",
+            "",
+            "rotate logs",
+            "__openclaw_memory_core_light_sleep__",
+            "",
+            "Handle this reminder internally. Do not relay it to the user unless explicitly requested.",
+          ].join("\n"),
+        },
+        { trigger: "heartbeat", workspaceDir },
+      );
+
+      const dailyContent = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      expect(dailyContent).toContain("## Light Sleep");
+      expect(dailyContent).toContain("Move backups to S3 Glacier.");
     });
   });
 

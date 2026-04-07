@@ -6,7 +6,10 @@ import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -63,7 +66,7 @@ function formatOutputBlock(text: string) {
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
   let restSource = "";
-  if (trimmed.toLowerCase().startsWith("/bash")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
     if (!match) {
       return null;
@@ -85,7 +88,7 @@ function parseBashRequest(raw: string): BashRequest | null {
   const tokenMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
   const token = normalizeOptionalString(tokenMatch?.[1]) ?? "";
   const remainder = normalizeOptionalString(tokenMatch?.[2]) ?? "";
-  const lowered = token.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(token);
   if (lowered === "poll") {
     return { action: "poll", sessionId: remainder || undefined };
   }

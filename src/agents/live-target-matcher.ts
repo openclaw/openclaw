@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type ModelTarget = {
@@ -124,10 +125,13 @@ export function createLiveTargetMatcher(params: {
         return true;
       }
       const normalizedProvider = normalizeProviderId(provider);
-      const normalizedModelId = modelId.trim().toLowerCase();
+      const normalizedModelId = normalizeOptionalLowercaseString(modelId);
+      if (!normalizedModelId) {
+        return false;
+      }
       const directRef = `${normalizedProvider}/${normalizedModelId}`;
       for (const target of modelTargets) {
-        if (target.raw.toLowerCase() === directRef) {
+        if (normalizeOptionalLowercaseString(target.raw) === directRef) {
           return true;
         }
         if (target.modelId !== normalizedModelId) {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isDispatchWrapperExecutable } from "./dispatch-wrapper-resolution.js";
 import {
   analyzeShellCommand,
@@ -149,12 +150,12 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
 }
 
 function normalizeSkillBinName(value: string | undefined): string | null {
-  const trimmed = value?.trim().toLowerCase();
+  const trimmed = normalizeOptionalString(value)?.toLowerCase();
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 function normalizeSkillBinResolvedPath(value: string | undefined): string | null {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return null;
   }

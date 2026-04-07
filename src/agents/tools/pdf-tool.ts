@@ -45,6 +45,23 @@ const DEFAULT_MAX_PAGES = 20;
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
 
+export const PdfToolSchema = Type.Object({
+  prompt: Type.Optional(Type.String()),
+  pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
+  pdfs: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Multiple PDF paths or URLs (up to 10).",
+    }),
+  ),
+  pages: Type.Optional(
+    Type.String({
+      description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
+    }),
+  ),
+  model: Type.Optional(Type.String()),
+  maxBytesMb: Type.Optional(Type.Number()),
+});
+
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
 // ---------------------------------------------------------------------------
@@ -258,22 +275,7 @@ export function createPdfTool(options?: {
     label: "PDF",
     name: "pdf",
     description,
-    parameters: Type.Object({
-      prompt: Type.Optional(Type.String()),
-      pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
-      pdfs: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Multiple PDF paths or URLs (up to 10).",
-        }),
-      ),
-      pages: Type.Optional(
-        Type.String({
-          description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
-        }),
-      ),
-      model: Type.Optional(Type.String()),
-      maxBytesMb: Type.Optional(Type.Number()),
-    }),
+    parameters: PdfToolSchema,
     execute: async (_toolCallId, args) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 

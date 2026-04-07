@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
@@ -196,7 +196,7 @@ function normalizeHookMapping(
   const transform = mapping.transform
     ? {
         modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
-        exportName: mapping.transform.export?.trim() || undefined,
+        exportName: normalizeOptionalString(mapping.transform.export),
       }
     : undefined;
 
@@ -207,7 +207,7 @@ function normalizeHookMapping(
     action,
     wakeMode,
     name: mapping.name,
-    agentId: mapping.agentId?.trim() || undefined,
+    agentId: normalizeOptionalString(mapping.agentId),
     sessionKey: mapping.sessionKey,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,

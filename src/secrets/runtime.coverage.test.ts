@@ -53,6 +53,10 @@ const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
+const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
+  "channels.googlechat.accounts.*.serviceAccount",
+  "tools.web.fetch.firecrawl.apiKey",
+]);
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
 let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
@@ -215,6 +219,18 @@ function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boole
       entry.id.startsWith("tools.web.") ||
       (entry.id.startsWith("plugins.entries.") &&
         (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+  );
+}
+
+function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): boolean {
+  return (
+    batch.length > 0 &&
+    batch.every(
+      (entry) =>
+        entry.id.startsWith("tools.web.") ||
+        (entry.id.startsWith("plugins.entries.") &&
+          (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+    )
   );
 }
 
@@ -397,6 +413,7 @@ async function prepareConfigCoverageSnapshot(params: {
   env: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   includeRuntimeWebTools?: boolean;
+  skipConfigCollectors?: boolean;
 }) {
   await ensureConfigCoverageRuntimeLoaded();
   const sourceConfig = structuredClone(params.config);
@@ -406,11 +423,13 @@ async function prepareConfigCoverageSnapshot(params: {
     env: params.env,
   });
 
-  collectConfigAssignments({
-    config: resolvedConfig,
-    context,
-    loadablePluginOrigins: params.loadablePluginOrigins,
-  });
+  if (!params.skipConfigCollectors) {
+    collectConfigAssignments({
+      config: resolvedConfig,
+      context,
+      loadablePluginOrigins: params.loadablePluginOrigins,
+    });
+  }
 
   if (context.assignments.length > 0) {
     const resolved = await resolveSecretRefValues(
@@ -498,7 +517,9 @@ describe("secrets runtime target coverage", () => {
 
   it("handles every openclaw.json registry target when configured as active", async () => {
     const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) => entry.configFile === "openclaw.json",
+      (entry) =>
+        entry.configFile === "openclaw.json" &&
+        !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
     );
     for (const batch of buildCoverageBatches(entries)) {
       logCoverageBatch("openclaw.json", batch);
@@ -517,6 +538,7 @@ describe("secrets runtime target coverage", () => {
         env,
         loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
         includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
+        skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
       });
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(

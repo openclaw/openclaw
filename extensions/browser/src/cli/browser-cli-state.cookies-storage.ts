@@ -146,7 +146,7 @@ export function registerBrowserCookiesAndStorageCommands(
               method: "GET",
               path: `/storage/${kind}`,
               query: {
-                key: key?.trim() || undefined,
+                key: normalizeOptionalString(key),
                 targetId,
                 profile,
               },

@@ -8,6 +8,10 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -43,10 +47,6 @@ export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
-
-function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function sanitizeModelWarningValue(value: string): string {
   const stripped = value ? stripAnsi(value) : "";
@@ -280,7 +280,7 @@ export function buildModelAliasIndex(params: {
     if (!alias) {
       continue;
     }
-    const aliasKey = normalizeAliasKey(alias);
+    const aliasKey = normalizeLowercaseStringOrEmpty(alias);
     byAlias.set(aliasKey, { alias, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
@@ -302,7 +302,7 @@ export function resolveModelRefFromString(params: {
     return null;
   }
   if (!model.includes("/")) {
-    const aliasKey = normalizeAliasKey(model);
+    const aliasKey = normalizeLowercaseStringOrEmpty(model);
     const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
     if (aliasMatch) {
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
@@ -332,7 +332,7 @@ export function resolveConfiguredModelRef(params: {
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
-      const aliasKey = normalizeAliasKey(trimmed);
+      const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
         return aliasMatch.ref;
@@ -725,14 +725,13 @@ export function resolveThinkingDefault(params: {
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
   const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
-  const normalizedPrimarySelection =
-    typeof primarySelection === "string" ? primarySelection.trim().toLowerCase() : undefined;
+  const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
   const explicitModelConfigured =
     (configuredModels ? canonicalKey in configuredModels : false) ||
     Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
     normalizedPrimarySelection === canonicalKey.toLowerCase() ||
     Boolean(legacyKey && normalizedPrimarySelection === legacyKey.toLowerCase()) ||
-    normalizedPrimarySelection === params.model.trim().toLowerCase();
+    normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);

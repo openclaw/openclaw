@@ -5,6 +5,7 @@ import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import * as sendModule from "./send.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
@@ -214,7 +215,6 @@ describe("discordPlugin outbound", () => {
       channelId: "channel:thread-123",
       messageId: "poll-1",
     }));
-    const sendModule = await import("./send.js");
     const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
     try {
       const result = await discordPlugin.outbound!.sendPoll!({

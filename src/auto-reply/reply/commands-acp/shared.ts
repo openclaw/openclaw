@@ -5,10 +5,13 @@ import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
-export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
+export { resolveAcpInstallCommandHint } from "./install-hints.js";
 
 export const COMMAND = "/acp";
 export const ACP_SPAWN_USAGE =
@@ -91,7 +94,7 @@ export function stopWithText(text: string): CommandHandlerResult {
 }
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
-  const action = normalizeOptionalString(tokens[0])?.toLowerCase();
+  const action = normalizeOptionalLowercaseString(tokens[0]);
   if (
     action === "spawn" ||
     action === "cancel" ||
@@ -200,7 +203,7 @@ export function parseSpawnInput(
       if (modeOption.error) {
         return { ok: false, error: `${modeOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalString(modeOption.value)?.toLowerCase();
+      const raw = normalizeOptionalLowercaseString(modeOption.value);
       if (raw !== "persistent" && raw !== "oneshot") {
         return {
           ok: false,
@@ -217,7 +220,7 @@ export function parseSpawnInput(
       if (bindOption.error) {
         return { ok: false, error: `${bindOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalString(bindOption.value)?.toLowerCase();
+      const raw = normalizeOptionalLowercaseString(bindOption.value);
       if (raw !== "here" && raw !== "off") {
         return {
           ok: false,
@@ -238,7 +241,7 @@ export function parseSpawnInput(
       if (threadOption.error) {
         return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalString(threadOption.value)?.toLowerCase();
+      const raw = normalizeOptionalLowercaseString(threadOption.value);
       if (raw !== "auto" && raw !== "here" && raw !== "off") {
         return {
           ok: false,

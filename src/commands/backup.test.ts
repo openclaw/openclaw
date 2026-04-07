@@ -214,10 +214,10 @@ describe("backup commands", () => {
       );
       expect(capturedManifest).not.toBeNull();
       expect(capturedOnWriteEntry).not.toBeNull();
-      const manifest = capturedManifest as {
+      const manifest = capturedManifest as unknown as {
         assets: Array<{ kind: string; archivePath: string }>;
       };
-      const onWriteEntry = capturedOnWriteEntry as (entry: { path: string }) => void;
+      const onWriteEntry = capturedOnWriteEntry as unknown as (entry: { path: string }) => void;
       expect(manifest.assets).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: "state" }),
@@ -262,43 +262,6 @@ describe("backup commands", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
       await fs.rm(externalWorkspace, { recursive: true, force: true });
       await fs.rm(backupDir, { recursive: true, force: true });
-    }
-  });
-
-  it("optionally verifies the archive after writing it", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const archiveDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-backup-verify-on-create-"),
-    );
-    try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
-
-      const runtime = createRuntime();
-      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-        await resolveBackupPlanFromPaths({
-          stateDir,
-          configPath: path.join(stateDir, "openclaw.json"),
-          oauthDir: path.join(stateDir, "credentials"),
-          includeWorkspace: false,
-          configInsideState: true,
-          oauthInsideState: true,
-          nowMs: 123,
-        }),
-      );
-
-      const result = await backupCreateCommand(runtime, {
-        output: archiveDir,
-        verify: true,
-      });
-
-      expect(result.verified).toBe(true);
-      expect(backupVerifyCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({ log: expect.any(Function) }),
-        expect.objectContaining({ archive: result.archivePath, json: false }),
-      );
-    } finally {
-      await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
 

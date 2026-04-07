@@ -12,7 +12,10 @@ import {
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -120,7 +123,7 @@ async function ensureDockerNetwork(
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
   });
-  const normalized = network.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(network) ?? "";
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
@@ -151,7 +154,7 @@ export async function ensureSandboxBrowser(params: {
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
-  const cdpSourceRange = params.cfg.browser.cdpSourceRange?.trim() || undefined;
+  const cdpSourceRange = normalizeOptionalString(params.cfg.browser.cdpSourceRange);
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },

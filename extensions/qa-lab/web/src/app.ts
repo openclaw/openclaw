@@ -1,3 +1,4 @@
+import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   type Bootstrap,
@@ -12,6 +13,14 @@ import {
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return (await response.json()) as T;
+}
+
+async function getJsonNoStore<T>(path: string): Promise<T> {
+  const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
@@ -35,18 +44,22 @@ function defaultModelsForProviderMode(
   mode: RunnerSelection["providerMode"],
   bootstrap?: Bootstrap | null,
 ): Pick<RunnerSelection, "primaryModel" | "alternateModel" | "fastMode"> {
+  const preferredLiveModel = bootstrap?.runnerCatalog.real[0]?.key;
   if (mode === "live-openai") {
-    const preferred = bootstrap?.runnerCatalog.real[0]?.key;
+    const primaryModel = defaultQaModelForMode(mode, { preferredLiveModel });
+    const alternateModel = defaultQaModelForMode(mode, { alternate: true, preferredLiveModel });
     return {
-      primaryModel: preferred ?? "openai/gpt-5.4",
-      alternateModel: preferred ?? "openai/gpt-5.4",
-      fastMode: true,
+      primaryModel,
+      alternateModel,
+      fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
     };
   }
+  const primaryModel = defaultQaModelForMode(mode);
+  const alternateModel = defaultQaModelForMode(mode, { alternate: true });
   return {
-    primaryModel: "mock-openai/gpt-5.4",
-    alternateModel: "mock-openai/gpt-5.4-alt",
-    fastMode: false,
+    primaryModel,
+    alternateModel,
+    fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
   };
 }
 
@@ -90,6 +103,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   let lastFingerprint = "";
   let renderDeferred = false;
+  let previousRunnerStatus: string | null = null;
+  let currentUiVersion: string | null = null;
 
   function stateFingerprint(): string {
     const msgs = state.snapshot?.messages;
@@ -161,6 +176,14 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.error = formatErrorMessage(error);
     }
 
+    /* Auto-switch to chat when a run starts so user can watch live */
+    const currentRunnerStatus = state.bootstrap?.runner.status ?? null;
+    if (currentRunnerStatus === "running" && previousRunnerStatus !== "running") {
+      state.activeTab = "chat";
+      chatScrollLocked = true;
+    }
+    previousRunnerStatus = currentRunnerStatus;
+
     /* Only re-render when data actually changed; defer if a <select> is open */
     const fp = stateFingerprint();
     if (fp !== lastFingerprint) {
@@ -170,6 +193,24 @@ export async function createQaLabApp(root: HTMLDivElement) {
     if (renderDeferred && !isSelectOpen()) {
       renderDeferred = false;
       render();
+    }
+  }
+
+  async function pollUiVersion() {
+    if (document.visibilityState === "hidden") {
+      return;
+    }
+    try {
+      const payload = await getJsonNoStore<{ version: string | null }>("/api/ui-version");
+      if (!currentUiVersion) {
+        currentUiVersion = payload.version;
+        return;
+      }
+      if (payload.version && payload.version !== currentUiVersion) {
+        window.location.reload();
+      }
+    } catch {
+      // Ignore transient rebuild windows while the dist dir is being rewritten.
     }
   }
 
@@ -284,7 +325,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
           providerMode: state.runnerDraft.providerMode,
           primaryModel: state.runnerDraft.primaryModel,
           alternateModel: state.runnerDraft.alternateModel,
-          fastMode: state.runnerDraft.fastMode,
           scenarioIds: state.runnerDraft.scenarioIds,
         },
       );
@@ -495,19 +535,20 @@ export async function createQaLabApp(root: HTMLDivElement) {
         ...defaultModelsForProviderMode(mode, state.bootstrap),
       }));
     });
-    root.querySelector<HTMLInputElement>("#fast-mode")?.addEventListener("change", (e) => {
-      updateRunnerDraft((d) => ({ ...d, fastMode: (e.currentTarget as HTMLInputElement).checked }));
-    });
     root.querySelector<HTMLSelectElement>("#primary-model")?.addEventListener("change", (e) => {
+      const primaryModel = (e.currentTarget as HTMLSelectElement).value;
       updateRunnerDraft((d) => ({
         ...d,
-        primaryModel: (e.currentTarget as HTMLSelectElement).value,
+        primaryModel,
+        fastMode: isQaFastModeEnabled({ primaryModel, alternateModel: d.alternateModel }),
       }));
     });
     root.querySelector<HTMLSelectElement>("#alternate-model")?.addEventListener("change", (e) => {
+      const alternateModel = (e.currentTarget as HTMLSelectElement).value;
       updateRunnerDraft((d) => ({
         ...d,
-        alternateModel: (e.currentTarget as HTMLSelectElement).value,
+        alternateModel,
+        fastMode: isQaFastModeEnabled({ primaryModel: d.primaryModel, alternateModel }),
       }));
     });
 
@@ -581,5 +622,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   render();
   await refresh();
+  void pollUiVersion();
   setInterval(() => void refresh(), 1_000);
+  setInterval(() => void pollUiVersion(), 1_000);
 }

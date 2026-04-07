@@ -28,7 +28,7 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
-vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
 

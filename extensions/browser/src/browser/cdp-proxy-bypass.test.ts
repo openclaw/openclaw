@@ -1,6 +1,6 @@
 import http from "node:http";
 import https from "node:https";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDirectAgentForCdp,
   hasProxyEnv,
@@ -9,6 +9,10 @@ import {
 } from "./cdp-proxy-bypass.js";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   const origNoProxy = process.env.NO_PROXY;

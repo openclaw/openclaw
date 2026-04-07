@@ -10,6 +10,7 @@ import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { extractArchive } from "./skills-install-extract.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
@@ -43,7 +44,7 @@ function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): st
 }
 
 function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
-  const explicit = spec.archive?.trim().toLowerCase();
+  const explicit = normalizeOptionalLowercaseString(spec.archive);
   if (explicit) {
     return explicit;
   }

@@ -438,7 +438,9 @@ export async function startGatewayServer(
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
 
-  const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
+  const autoEnable = minimalTestGateway
+    ? { config: configSnapshot.config, changes: [] as string[] }
+    : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
     try {
       await writeConfigFile(autoEnable.config);
@@ -558,11 +560,13 @@ export async function startGatewayServer(
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
-  const controlUiSeed = await maybeSeedControlUiAllowedOriginsAtStartup({
-    config: cfgAtStart,
-    writeConfig: writeConfigFile,
-    log,
-  });
+  const controlUiSeed = minimalTestGateway
+    ? { config: cfgAtStart, persistedAllowedOriginsSeed: false }
+    : await maybeSeedControlUiAllowedOriginsAtStartup({
+        config: cfgAtStart,
+        writeConfig: writeConfigFile,
+        log,
+      });
   cfgAtStart = controlUiSeed.config;
   if (authBootstrap.persistedGeneratedToken || controlUiSeed.persistedAllowedOriginsSeed) {
     const startupSnapshot = await readConfigFileSnapshot();
@@ -575,21 +579,25 @@ export async function startGatewayServer(
           channels: startupRuntimeConfig.channels,
         }
       : cfgAtStart;
-  await runChannelPluginStartupMaintenance({
-    cfg: startupMaintenanceConfig,
-    env: process.env,
-    log,
-  });
-  await runStartupSessionMigration({
-    cfg: cfgAtStart,
-    env: process.env,
-    log,
-  });
+  if (!minimalTestGateway) {
+    await runChannelPluginStartupMaintenance({
+      cfg: startupMaintenanceConfig,
+      env: process.env,
+      log,
+    });
+    await runStartupSessionMigration({
+      cfg: cfgAtStart,
+      env: process.env,
+      log,
+    });
+  }
   initSubagentRegistry();
-  const gatewayPluginConfigAtStart = applyPluginAutoEnable({
-    config: cfgAtStart,
-    env: process.env,
-  }).config;
+  const gatewayPluginConfigAtStart = minimalTestGateway
+    ? cfgAtStart
+    : applyPluginAutoEnable({
+        config: cfgAtStart,
+        env: process.env,
+      }).config;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfigAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfigAtStart, defaultAgentId);
   const deferredConfiguredChannelPluginIds = minimalTestGateway

@@ -701,7 +701,7 @@ for usage/billing and raise limits as needed.
        - npm: `npm install -g @google/gemini-cli`
     2. Enable the plugin: `openclaw plugins enable google`
     3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. Default model after login: `google-gemini-cli/gemini-3-flash-preview`
     5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -1816,8 +1816,8 @@ for usage/billing and raise limits as needed.
 
     - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
     - `config.get`: fetch the current snapshot + hash
-    - `config.patch`: safe partial update (preferred for most RPC edits)
-    - `config.apply`: validate + replace the full config, then restart
+    - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
+    - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
     - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>

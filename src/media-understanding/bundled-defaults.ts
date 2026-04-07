@@ -1,5 +1,5 @@
-import type { MediaUnderstandingCapability } from "./types.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 
 type BundledMediaProviderDefaults = {
   defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
@@ -66,7 +66,9 @@ const BUNDLED_MEDIA_PROVIDER_DEFAULTS: Record<string, BundledMediaProviderDefaul
   },
 };
 
-export function getBundledMediaProviderDefaults(providerId: string): BundledMediaProviderDefaults | null {
+export function getBundledMediaProviderDefaults(
+  providerId: string,
+): BundledMediaProviderDefaults | null {
   return BUNDLED_MEDIA_PROVIDER_DEFAULTS[normalizeMediaProviderId(providerId)] ?? null;
 }
 
@@ -74,16 +76,23 @@ export function resolveBundledDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
 }): string | undefined {
-  return getBundledMediaProviderDefaults(params.providerId)?.defaultModels?.[params.capability]?.trim();
+  return getBundledMediaProviderDefaults(params.providerId)?.defaultModels?.[
+    params.capability
+  ]?.trim();
 }
 
-export function resolveBundledAutoMediaKeyProviders(capability: MediaUnderstandingCapability): string[] {
+export function resolveBundledAutoMediaKeyProviders(
+  capability: MediaUnderstandingCapability,
+): string[] {
   return Object.entries(BUNDLED_MEDIA_PROVIDER_DEFAULTS)
     .map(([providerId, defaults]) => ({
       providerId,
       priority: defaults.autoPriority?.[capability],
     }))
-    .filter((entry): entry is { providerId: string; priority: number } => typeof entry.priority === "number")
+    .filter(
+      (entry): entry is { providerId: string; priority: number } =>
+        typeof entry.priority === "number",
+    )
     .toSorted((left, right) => {
       if (left.priority !== right.priority) {
         return left.priority - right.priority;
@@ -94,5 +103,7 @@ export function resolveBundledAutoMediaKeyProviders(capability: MediaUnderstandi
 }
 
 export function bundledProviderSupportsNativePdfDocument(providerId: string): boolean {
-  return getBundledMediaProviderDefaults(providerId)?.nativeDocumentInputs?.includes("pdf") ?? false;
+  return (
+    getBundledMediaProviderDefaults(providerId)?.nativeDocumentInputs?.includes("pdf") ?? false
+  );
 }

@@ -22,10 +22,11 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
+let PdfToolSchema: PdfToolModule["PdfToolSchema"];
 
 async function loadCreatePdfTool() {
-  if (!createPdfTool) {
-    ({ createPdfTool } = await import("./pdf-tool.js"));
+  if (!createPdfTool || !PdfToolSchema) {
+    ({ createPdfTool, PdfToolSchema } = await import("./pdf-tool.js"));
   }
   return createPdfTool;
 }
@@ -62,17 +63,6 @@ function requirePdfTool(
 
 type PdfToolInstance = ReturnType<typeof requirePdfTool>;
 
-async function withAnthropicPdfTool(
-  run: (tool: PdfToolInstance, agentDir: string) => Promise<void>,
-) {
-  await withTempAgentDir(async (agentDir) => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-    const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
-    const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
-    await run(tool, agentDir);
-  });
-}
-
 async function withConfiguredPdfTool(
   run: (tool: PdfToolInstance, agentDir: string) => Promise<void>,
 ) {
@@ -95,12 +85,6 @@ function resetAuthEnv() {
   vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
   vi.stubEnv("GH_TOKEN", "");
   vi.stubEnv("GITHUB_TOKEN", "");
-}
-
-function withDefaultModel(primary: string): OpenClawConfig {
-  return {
-    agents: { defaults: { model: { primary } } },
-  } as OpenClawConfig;
 }
 
 function withPdfModel(primary: string): OpenClawConfig {
@@ -299,17 +283,16 @@ describe("createPdfTool", () => {
   });
 
   it("tool parameters have correct schema shape", async () => {
-    await withAnthropicPdfTool(async (tool) => {
-      const schema = tool.parameters;
-      expect(schema.type).toBe("object");
-      expect(schema.properties).toBeDefined();
-      const props = schema.properties as Record<string, { type?: string }>;
-      expect(props.prompt).toBeDefined();
-      expect(props.pdf).toBeDefined();
-      expect(props.pdfs).toBeDefined();
-      expect(props.pages).toBeDefined();
-      expect(props.model).toBeDefined();
-      expect(props.maxBytesMb).toBeDefined();
-    });
+    await loadCreatePdfTool();
+    const schema = PdfToolSchema;
+    expect(schema.type).toBe("object");
+    expect(schema.properties).toBeDefined();
+    const props = schema.properties as Record<string, { type?: string }>;
+    expect(props.prompt).toBeDefined();
+    expect(props.pdf).toBeDefined();
+    expect(props.pdfs).toBeDefined();
+    expect(props.pages).toBeDefined();
+    expect(props.model).toBeDefined();
+    expect(props.maxBytesMb).toBeDefined();
   });
 });

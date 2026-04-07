@@ -9,6 +9,7 @@ export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
 export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
+export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -308,15 +309,32 @@ function formatLocalIsoDay(epochMs: number): string {
   return `${year}-${month}-${day}`;
 }
 
-export function resolveMemoryCorePluginConfig(
+export function resolveMemoryDreamingPluginId(
+  cfg: OpenClawConfig | Record<string, unknown> | undefined,
+): string {
+  const root = asNullableRecord(cfg);
+  const plugins = asNullableRecord(root?.plugins);
+  const slots = asNullableRecord(plugins?.slots);
+  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
+    return configuredSlot;
+  }
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+export function resolveMemoryDreamingPluginConfig(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const entries = asNullableRecord(plugins?.entries);
-  const memoryCore = asNullableRecord(entries?.["memory-core"]);
-  return asNullableRecord(memoryCore?.config) ?? undefined;
+  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
+  return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
+
+// Keep the legacy helper name exported until downstream memory plugins migrate.
+export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;

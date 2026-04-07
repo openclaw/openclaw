@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([
@@ -59,13 +63,7 @@ export type ToolActionRef = {
 };
 
 function normalizeActionName(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
+  const normalized = normalizeOptionalLowercaseString(value)?.replace(/[\s-]+/g, "_");
   return normalized || undefined;
 }
 
@@ -98,7 +96,7 @@ function appendFingerprintAlias(
 }
 
 export function isLikelyMutatingToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (!normalized) {
     return false;
   }
@@ -111,7 +109,7 @@ export function isLikelyMutatingToolName(toolName: string): boolean {
 }
 
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
 
@@ -159,7 +157,7 @@ export function buildToolActionFingerprint(
   if (!isMutatingToolCall(toolName, args)) {
     return undefined;
   }
-  const normalizedTool = toolName.trim().toLowerCase();
+  const normalizedTool = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
   const parts = [`tool=${normalizedTool}`];

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { Static, Type } from "@sinclair/typebox";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
@@ -427,20 +428,15 @@ function buildArtifactContext(
   }
 
   const artifactContext = {
-    agentId: normalizeContextString(context.agentId),
-    sessionId: normalizeContextString(context.sessionId),
-    messageChannel: normalizeContextString(context.messageChannel),
-    agentAccountId: normalizeContextString(context.agentAccountId),
+    agentId: normalizeOptionalString(context.agentId),
+    sessionId: normalizeOptionalString(context.sessionId),
+    messageChannel: normalizeOptionalString(context.messageChannel),
+    agentAccountId: normalizeOptionalString(context.agentAccountId),
   };
 
   return Object.values(artifactContext).some((value) => value !== undefined)
     ? artifactContext
     : undefined;
-}
-
-function normalizeContextString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
@@ -469,9 +465,9 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   }
   assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
   assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
-  const path = params.path?.trim() || undefined;
-  const lang = params.lang?.trim() || undefined;
-  const title = params.title?.trim() || undefined;
+  const path = normalizeOptionalString(params.path);
+  const lang = normalizeOptionalString(params.lang);
+  const title = normalizeOptionalString(params.title);
   if (path) {
     assertMaxBytes(path, "path", MAX_PATH_BYTES);
   }

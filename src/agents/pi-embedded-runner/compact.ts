@@ -7,7 +7,6 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -34,6 +33,7 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -56,6 +56,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
@@ -92,6 +93,7 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
@@ -636,10 +638,12 @@ export async function compactEmbeddedPiSessionDirect(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()),
+        runtimeCapabilities
+          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
+          .filter(Boolean),
       );
       for (const capability of promptCapabilities) {
-        const normalizedCapability = capability.trim().toLowerCase();
+        const normalizedCapability = normalizeOptionalLowercaseString(capability);
         if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
           continue;
         }
@@ -707,7 +711,6 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
@@ -738,36 +741,42 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) =>
       createSystemPromptOverride(
-        buildEmbeddedSystemPrompt({
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          ownerDisplay: ownerDisplay.ownerDisplay,
-          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-          reasoningTagHint,
-          heartbeatPrompt: isDefaultAgent
-            ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-            : undefined,
-          skillsPrompt,
-          docsPath: docsPath ?? undefined,
-          ttsHint,
-          promptMode,
-          acpEnabled: params.config?.acp?.enabled !== false,
-          runtimeInfo,
-          reactionGuidance,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          modelAliasLines: buildModelAliasLines(params.config),
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          memoryCitationsMode: params.config?.memory?.citations,
-          promptContribution,
-        }),
+        resolveSystemPromptOverride({
+          config: params.config,
+          agentId: sessionAgentId,
+        }) ??
+          buildEmbeddedSystemPrompt({
+            workspaceDir: effectiveWorkspace,
+            defaultThinkLevel,
+            reasoningLevel: params.reasoningLevel ?? "off",
+            extraSystemPrompt: params.extraSystemPrompt,
+            ownerNumbers: params.ownerNumbers,
+            ownerDisplay: ownerDisplay.ownerDisplay,
+            ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+            reasoningTagHint,
+            heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
+              config: params.config,
+              agentId: sessionAgentId,
+              defaultAgentId,
+            }),
+            skillsPrompt,
+            docsPath: docsPath ?? undefined,
+            ttsHint,
+            promptMode,
+            acpEnabled: params.config?.acp?.enabled !== false,
+            runtimeInfo,
+            reactionGuidance,
+            messageToolHints,
+            sandboxInfo,
+            tools: effectiveTools,
+            modelAliasLines: buildModelAliasLines(params.config),
+            userTimezone,
+            userTime,
+            userTimeFormat,
+            contextFiles,
+            memoryCitationsMode: params.config?.memory?.citations,
+            promptContribution,
+          }),
       );
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);

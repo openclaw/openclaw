@@ -112,7 +112,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
 
   const merged: IrcNickServConfig = {
     ...base,
-    service: base.service?.trim() || undefined,
+    service: normalizeOptionalString(base.service),
     passwordFile: passwordFile || undefined,
     password: resolvedPassword || undefined,
     registerEmail: base.registerEmail?.trim() || envRegisterEmail || undefined,

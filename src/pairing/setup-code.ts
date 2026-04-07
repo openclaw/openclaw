@@ -6,6 +6,7 @@ import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.j
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -78,7 +79,7 @@ function describeSecureMobilePairingFix(source?: string): string {
 }
 
 function isPrivateLanHostname(host: string): boolean {
-  const normalized = host.trim().toLowerCase().replace(/\.+$/, "");
+  const normalized = normalizeHostname(host);
   if (!normalized) {
     return false;
   }
@@ -214,14 +215,6 @@ function pickTailnetIPv4(
   return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
-function resolveGatewayTokenFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
-}
-
-function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
-}
-
 function resolvePairingSetupAuthLabel(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -236,8 +229,8 @@ function resolvePairingSetupAuthLabel(
     value: cfg.gateway?.auth?.password,
     defaults,
   }).ref;
-  const envToken = resolveGatewayTokenFromEnv(env);
-  const envPassword = resolveGatewayPasswordFromEnv(env);
+  const envToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
   const token =
     envToken || (tokenRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.token));
   const password =
@@ -343,8 +336,8 @@ export async function resolvePairingSetupFromConfig(
     cfg,
     env,
     mode: cfg.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(resolveGatewayTokenFromEnv(env)),
-    hasPasswordCandidate: Boolean(resolveGatewayPasswordFromEnv(env)),
+    hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
   if (authLabel.error) {

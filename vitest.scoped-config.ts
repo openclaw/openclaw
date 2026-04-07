@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
@@ -59,7 +60,7 @@ export function createScopedVitestConfig(
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv);
   const exclude = relativizeScopedPatterns(
-    [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])],
+    [...(baseTest.exclude ?? []), ...unitFastTestFiles, ...(options?.exclude ?? [])],
     scopedDir,
   );
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);

@@ -20,7 +20,7 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -63,7 +63,7 @@ function isCronAddAction(args: unknown): boolean {
     return false;
   }
   const action = (args as Record<string, unknown>).action;
-  return typeof action === "string" && action.trim().toLowerCase() === "add";
+  return normalizeOptionalLowercaseString(action) === "add";
 }
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
@@ -180,7 +180,7 @@ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
     return meta;
   }

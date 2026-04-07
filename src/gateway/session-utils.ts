@@ -655,14 +655,14 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     }
     const identity = entry.identity
       ? {
-          name: entry.identity.name?.trim() || undefined,
-          theme: entry.identity.theme?.trim() || undefined,
-          emoji: entry.identity.emoji?.trim() || undefined,
-          avatar: entry.identity.avatar?.trim() || undefined,
+          name: normalizeOptionalString(entry.identity.name),
+          theme: normalizeOptionalString(entry.identity.theme),
+          emoji: normalizeOptionalString(entry.identity.emoji),
+          avatar: normalizeOptionalString(entry.identity.avatar),
           avatarUrl: resolveIdentityAvatarUrl(
             cfg,
             normalizeAgentId(entry.id),
-            entry.identity.avatar?.trim(),
+            normalizeOptionalString(entry.identity.avatar),
           ),
         }
       : undefined;

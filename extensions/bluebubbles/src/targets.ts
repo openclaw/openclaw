@@ -6,7 +6,6 @@ import {
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
 } from "openclaw/plugin-sdk/channel-targets";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
@@ -28,6 +27,18 @@ const SERVICE_PREFIXES: Array<{ prefix: string; service: BlueBubblesService }> =
 ];
 const CHAT_IDENTIFIER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHAT_IDENTIFIER_HEX_RE = /^[0-9a-f]{24,64}$/i;
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalString(value)?.toLowerCase() ?? "";
+}
 
 function parseRawChatGuid(value: string): string | null {
   const trimmed = normalizeOptionalString(value);
@@ -59,7 +70,7 @@ function stripBlueBubblesPrefix(value: string): string {
   if (!trimmed) {
     return "";
   }
-  if (!trimmed.toLowerCase().startsWith("bluebubbles:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("bluebubbles:")) {
     return trimmed;
   }
   return trimmed.slice("bluebubbles:".length).trim();
@@ -115,7 +126,7 @@ export function normalizeBlueBubblesHandle(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered.startsWith("imessage:")) {
     return normalizeBlueBubblesHandle(trimmed.slice(9));
   }
@@ -126,7 +137,7 @@ export function normalizeBlueBubblesHandle(raw: string): string {
     return normalizeBlueBubblesHandle(trimmed.slice(5));
   }
   if (trimmed.includes("@")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return trimmed.replace(/\s+/g, "");
 }
@@ -197,7 +208,7 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
   if (parseRawChatGuid(candidate)) {
     return true;
   }
-  const lowered = candidate.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(candidate);
   if (/^(imessage|sms|auto):/.test(lowered)) {
     return true;
   }
@@ -227,7 +238,7 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
     if (!normalizedTrimmed) {
       return false;
     }
-    const normalizedLower = normalizedTrimmed.toLowerCase();
+    const normalizedLower = normalizeLowercaseStringOrEmpty(normalizedTrimmed);
     if (
       /^(imessage|sms|auto):/.test(normalizedLower) ||
       /^(chat_id|chat_guid|chat_identifier):/.test(normalizedLower)
@@ -247,7 +258,7 @@ export function looksLikeBlueBubblesExplicitTargetId(raw: string, normalized?: s
   if (!candidate) {
     return false;
   }
-  const lowered = candidate.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(candidate);
   if (/^(imessage|sms|auto):/.test(lowered)) {
     return true;
   }
@@ -266,7 +277,7 @@ export function looksLikeBlueBubblesExplicitTargetId(raw: string, normalized?: s
     if (!normalizedTrimmed) {
       return false;
     }
-    const normalizedLower = normalizedTrimmed.toLowerCase();
+    const normalizedLower = normalizeLowercaseStringOrEmpty(normalizedTrimmed);
     if (
       /^(imessage|sms|auto):/.test(normalizedLower) ||
       /^(chat_id|chat_guid|chat_identifier):/.test(normalizedLower)
@@ -300,7 +311,7 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   if (!trimmed) {
     throw new Error("BlueBubbles target is required");
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
 
   const servicePrefixed = resolveServicePrefixedTarget({
     trimmed,
@@ -351,7 +362,7 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
   if (!trimmed) {
     return { kind: "handle", handle: "" };
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
 
   const servicePrefixed = resolveServicePrefixedAllowTarget({
     trimmed,
