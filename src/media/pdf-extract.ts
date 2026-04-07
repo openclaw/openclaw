@@ -1,32 +1,39 @@
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, sep } from "node:path";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 
 let canvasModulePromise: Promise<CanvasModule> | null = null;
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
-let standardFontDataUrlCache: string | null = null;
+let standardFontDataPathCache: string | null = null;
 
 // pdf.js needs `standardFontDataUrl` to render PDFs that reference the 14
 // standard PDF fonts (Helvetica, Times, Courier, etc.). Without it, every such
 // document throws `UnknownErrorException: Ensure that the standardFontDataUrl
 // API parameter is provided`, which then yields empty/garbled text extraction.
+//
 // The font files ship inside `pdfjs-dist/standard_fonts/`, so we resolve that
-// path through the actual module resolver (works regardless of bundling).
-function getStandardFontDataUrl(): string | undefined {
-  if (standardFontDataUrlCache !== null) {
-    return standardFontDataUrlCache || undefined;
+// directory through the actual module resolver (works regardless of bundling).
+//
+// IMPORTANT: pdf.js's Node-side font fetcher reads via `fs.promises.readFile`
+// and expects a plain filesystem path with a trailing separator — not a
+// `file://` URL. Passing a `file://` URL triggers
+// `Unable to load font data at: file:///...` warnings even though the file
+// exists. This module is server-side only (the gateway runs in Node), so we
+// always pass a filesystem path.
+function getStandardFontDataPath(): string | undefined {
+  if (standardFontDataPathCache !== null) {
+    return standardFontDataPathCache || undefined;
   }
   try {
     const require = createRequire(import.meta.url);
     const pkgPath = require.resolve("pdfjs-dist/package.json");
-    const fontDir = join(dirname(pkgPath), "standard_fonts/");
-    standardFontDataUrlCache = pathToFileURL(fontDir).href;
-    return standardFontDataUrlCache;
+    const fontDir = join(dirname(pkgPath), "standard_fonts") + sep;
+    standardFontDataPathCache = fontDir;
+    return standardFontDataPathCache;
   } catch {
-    standardFontDataUrlCache = "";
+    standardFontDataPathCache = "";
     return undefined;
   }
 }
@@ -87,7 +94,7 @@ export async function extractPdfContent(params: {
   const getDocumentParams: GetDocumentParams = {
     data: new Uint8Array(buffer),
     disableWorker: true,
-    standardFontDataUrl: getStandardFontDataUrl(),
+    standardFontDataUrl: getStandardFontDataPath(),
   };
   const pdf = await getDocument(getDocumentParams).promise;
 
