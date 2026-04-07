@@ -1600,12 +1600,22 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  it("keeps env cmd.exe transport wrappers approval-gated on Windows", async () => {
+  it.each([
+    {
+      name: "keeps env cmd.exe transport wrappers approval-gated on Windows",
+      command: ["env", "cmd.exe", "/d", "/s", "/c"],
+    },
+    {
+      name: "keeps env-assignment cmd.exe transport wrappers approval-gated on Windows",
+      command: ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c"],
+    },
+  ])("$name", async ({ command }) => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-cmd-wrapper-allow-"));
     try {
       const scriptPath = path.join(tempDir, "check_mail.cmd");
       fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
+      const wrappedCommand = [...command, `${scriptPath} --limit 5`];
 
       await withTempApprovalsHome({
         approvals: createAllowlistOnMissApprovals({
@@ -1619,7 +1629,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           const seenArgv: string[][] = [];
           const invoke = await runSystemInvoke({
             preferMacAppExecHost: false,
-            command: ["env", "cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
+            command: wrappedCommand,
             cwd: tempDir,
             security: "allowlist",
             ask: "on-miss",

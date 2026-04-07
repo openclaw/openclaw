@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { unwrapDispatchWrappersForResolution } from "../infra/dispatch-wrapper-resolution.js";
 import {
   addDurableCommandApproval,
   hasDurableExecApproval,
@@ -21,6 +20,7 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { resolveShellWrapperTransportArgv } from "../infra/exec-wrapper-resolution.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
@@ -360,10 +360,11 @@ async function evaluateSystemRunPolicyPhase(
         .find((entry) => entry !== null) ?? null)
     : null;
   const isWindows = process.platform === "win32";
-  // Detect Windows wrapper transport from the request argv after transparently
-  // unwrapping dispatch carriers like `env`. Shell parsing already recognizes
-  // the inner `cmd.exe /c ...` wrapper through that same transport view.
-  const cmdInvocation = opts.isCmdExeInvocation(unwrapDispatchWrappersForResolution(parsed.argv));
+  // Detect Windows wrapper transport from the same shell-wrapper view used to
+  // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
+  // dispatch carriers like `env FOO=bar ...` wrap the shell invocation.
+  const cmdDetectionArgv = resolveShellWrapperTransportArgv(parsed.argv) ?? parsed.argv;
+  const cmdInvocation = opts.isCmdExeInvocation(cmdDetectionArgv);
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries,
