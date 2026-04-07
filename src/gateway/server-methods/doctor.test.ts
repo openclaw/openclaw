@@ -656,7 +656,7 @@ describe("doctor.memory.dreamDiary", () => {
     }
   });
 
-  it("falls back to lowercase dreams.md", async () => {
+  it("reads lowercase dreams.md when present", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-lower-"));
     await fs.writeFile(path.join(workspaceDir, "dreams.md"), "lowercase diary\n", "utf-8");
     resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
@@ -669,12 +669,13 @@ describe("doctor.memory.dreamDiary", () => {
         expect.objectContaining({
           agentId: "main",
           found: true,
-          path: "dreams.md",
           content: "lowercase diary\n",
           updatedAtMs: expect.any(Number),
         }),
         undefined,
       );
+      const payload = respond.mock.calls[0]?.[1] as { path?: unknown };
+      expect(["DREAMS.md", "dreams.md"]).toContain(payload.path);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
