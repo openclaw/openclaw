@@ -211,7 +211,9 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
-  const validated = validateConfigObjectWithPlugins(restored.result);
+  const migrated = applyRuntimeLegacyConfigMigrations(restored.result);
+  const restoredConfig = (migrated.next ?? restored.result) as OpenClawConfig;
+  const validated = validateConfigObjectWithPlugins(restoredConfig);
   if (!validated.ok) {
     respond(
       false,

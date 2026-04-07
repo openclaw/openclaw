@@ -1221,52 +1221,6 @@ export function collectCombinedSessionStoreStatFingerprint(cfg: OpenClawConfig):
   return markers.join("\n");
 }
 
-export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
-  storePath: string;
-  store: Record<string, SessionEntry>;
-} {
-  const storeConfig = cfg.session?.store;
-  if (storeConfig && !isStorePathTemplate(storeConfig)) {
-    const storePath = resolveStorePath(storeConfig);
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath);
-    const combined: Record<string, SessionEntry> = {};
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId: defaultAgentId,
-        canonicalKey,
-      });
-    }
-    return { storePath, store: combined };
-  }
-
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
-  const combined: Record<string, SessionEntry> = {};
-  for (const target of targets) {
-    const agentId = target.agentId;
-    const storePath = target.storePath;
-    const store = loadSessionStore(storePath);
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId,
-        canonicalKey,
-      });
-    }
-  }
-
-  const storePath =
-    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
-  return { storePath, store: combined };
-}
-
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],

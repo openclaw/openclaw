@@ -115,15 +115,9 @@ import {
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
 export {
-  clearRuntimeConfigSnapshotState as clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadataState as getRuntimeConfigSnapshotMetadata,
-  getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
-  resetConfigRuntimeStateState as resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
-  setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
 };
 
 // Re-export for backwards compatibility
