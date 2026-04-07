@@ -17,6 +17,29 @@ export type SessionMemory = {
     modelOverride?: string;
     providerOverride?: string;
   };
+
+import { createSubsystemLogger } from "../../infra/logger.js";
+import { z } from "zod";
+
+const log = createSubsystemLogger("session-memory-persist");
+
+// Zod schema for validating persisted session memory
+const UserPreferencesSchema = z.object({
+  thinkingLevel: z.string().optional(),
+  verboseLevel: z.string().optional(),
+  reasoningLevel: z.string().optional(),
+  ttsAuto: z.string().optional(),
+  modelOverride: z.string().optional(),
+  providerOverride: z.string().optional(),
+});
+
+const SessionMemorySchema = z.object({
+  lastSessionId: z.string().optional(),
+  lastSessionKey: z.string().optional(),
+  summary: z.string().optional(),
+  lastActiveAt: z.number().optional(),
+  userPreferences: UserPreferencesSchema.optional(),
+});
 };
 
 function resolveSessionMemoryPath(): string {
@@ -32,7 +55,7 @@ export async function saveSessionMemory(memory: SessionMemory): Promise<void> {
     await fs.promises.writeFile(memoryPath, JSON.stringify(memory, null, 2), "utf-8");
   } catch (error) {
     // Log but don't fail - session memory is best-effort
-    console.warn(`Failed to save session memory: ${error}`);
+    log.warn({ error: String(error) }, "Failed to save session memory");
   }
 }
 
@@ -40,7 +63,14 @@ export async function loadSessionMemory(): Promise<SessionMemory | null> {
   const memoryPath = resolveSessionMemoryPath();
   try {
     const content = await fs.promises.readFile(memoryPath, "utf-8");
-    return JSON.parse(content) as SessionMemory;
+    const parsed = JSON.parse(content);
+    // Validate with Zod - return null on validation failure
+    const result = SessionMemorySchema.safeParse(parsed);
+    if (!result.success) {
+      log.warn({ error: result.error.message }, "Invalid session memory JSON, discarding");
+      return null;
+    }
+    return result.data;
   } catch {
     return null;
   }
