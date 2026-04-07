@@ -42,6 +42,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "./channel-api.js";
+import { resolveDiscordCurrentConversationIdentity } from "./conversation-identity.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -357,6 +358,8 @@ function resolveDiscordCommandConversation(params: {
   threadId?: string;
   threadParentId?: string;
   parentSessionKey?: string;
+  from?: string;
+  chatType?: string;
   originatingTo?: string;
   commandTo?: string;
   fallbackTo?: string;
@@ -374,7 +377,13 @@ function resolveDiscordCommandConversation(params: {
         : {}),
     };
   }
-  const conversationId = resolveDiscordConversationIdFromTargets(targets);
+  const conversationId = resolveDiscordCurrentConversationIdentity({
+    from: params.from,
+    chatType: params.chatType,
+    originatingTo: params.originatingTo,
+    commandTo: params.commandTo,
+    fallbackTo: params.fallbackTo,
+  });
   return conversationId ? { conversationId } : null;
 }
 
@@ -384,19 +393,13 @@ function resolveDiscordInboundConversation(params: {
   conversationId?: string;
   isGroup: boolean;
 }) {
-  const rawSender = params.from?.trim() || "";
-  if (!params.isGroup && rawSender) {
-    const senderTarget = parseDiscordTarget(rawSender, { defaultKind: "user" });
-    if (senderTarget?.kind === "user") {
-      return { conversationId: `user:${senderTarget.id}` };
-    }
-  }
-  const rawTarget = params.to?.trim() || params.conversationId?.trim() || "";
-  if (!rawTarget) {
-    return null;
-  }
-  const target = parseDiscordTarget(rawTarget, { defaultKind: "channel" });
-  return target ? { conversationId: `${target.kind}:${target.id}` } : null;
+  const conversationId = resolveDiscordCurrentConversationIdentity({
+    from: params.from,
+    chatType: params.isGroup ? "group" : "direct",
+    originatingTo: params.to,
+    fallbackTo: params.conversationId,
+  });
+  return conversationId ? { conversationId } : null;
 }
 
 function toConversationLifecycleBinding(binding: {
@@ -546,6 +549,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           threadId,
           threadParentId,
           parentSessionKey,
+          from,
+          chatType,
           originatingTo,
           commandTo,
           fallbackTo,
@@ -554,6 +559,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             threadId,
             threadParentId,
             parentSessionKey,
+            from,
+            chatType,
             originatingTo,
             commandTo,
             fallbackTo,

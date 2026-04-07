@@ -10,14 +10,23 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "../../../test/helpers/plugins/plugin-registry.js";
+import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
-import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 
 type AgentBinding = NonNullable<OpenClawConfig["bindings"]>[number];
+
+const lineBindingsPlugin = {
+  id: "line",
+  bindings: lineBindingsAdapter,
+  conversationBindings: {
+    defaultTopLevelPlacement: "current",
+    supportsCurrentConversationBinding: true,
+  },
+};
 
 describe("buildLineMessageContext", () => {
   let tmpDir: string;
@@ -68,8 +77,8 @@ describe("buildLineMessageContext", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: linePlugin.id,
-          plugin: linePlugin,
+          pluginId: lineBindingsPlugin.id,
+          plugin: lineBindingsPlugin,
           source: "test",
         },
       ]),
@@ -321,7 +330,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", async () => {
-    const compiled = linePlugin.bindings?.compileConfiguredBinding({
+    const compiled = lineBindingsAdapter.compileConfiguredBinding({
       binding: {
         type: "acp",
         agentId: "codex",
@@ -334,7 +343,7 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.matchInboundConversation({
+      lineBindingsAdapter.matchInboundConversation({
         binding: {
           type: "acp",
           agentId: "codex",
@@ -350,7 +359,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
-    const compiled = linePlugin.bindings?.compileConfiguredBinding({
+    const compiled = lineBindingsAdapter.compileConfiguredBinding({
       binding: {
         type: "acp",
         agentId: "codex",
@@ -363,7 +372,7 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.resolveCommandConversation?.({
+      lineBindingsAdapter.resolveCommandConversation({
         accountId: "default",
         originatingTo: "line:U1234567890abcdef1234567890abcdef",
       }),
@@ -371,7 +380,7 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.matchInboundConversation({
+      lineBindingsAdapter.matchInboundConversation({
         binding: {
           type: "acp",
           agentId: "codex",
