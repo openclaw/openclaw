@@ -29,6 +29,7 @@ import {
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
+import { buildChatShapingNote } from "./chat-shaping.js";
 import type { buildCommandContext } from "./commands.js";
 import { buildDeicticResolutionNote } from "./deictic-context.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -318,8 +319,17 @@ export async function runPreparedReply(
     threadHistoryBody,
     threadStarterBody,
   });
+  const chatShapingNote = buildChatShapingNote({
+    userText: rawBodyTrimmed,
+    replyToBody,
+    threadHistoryBody,
+    threadStarterBody,
+    groupSystemPrompt,
+    isGroupChat,
+  });
   const threadContextNote = [
     deicticResolutionNote,
+    chatShapingNote,
     threadHistoryBody
       ? `[Thread history - for context]\n${threadHistoryBody}`
       : threadStarterBody
