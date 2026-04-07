@@ -41,6 +41,8 @@ export type AgentRouteBinding = {
   agentId: string;
   comment?: string;
   match: AgentBindingMatch;
+  /** When "main", group/channel messages matching this binding route to the agent's main session. */
+  groupScope?: "main" | "per-channel";
 };
 
 export type AgentAcpBinding = {

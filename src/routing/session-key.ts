@@ -134,6 +134,8 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** Group/channel session scope. When "main", group messages route to the main session. */
+  groupScope?: "main" | "per-channel";
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
@@ -163,6 +165,14 @@ export function buildAgentPeerSessionKey(params: {
     if (dmScope === "per-peer" && peerId) {
       return `agent:${normalizeAgentId(params.agentId)}:direct:${peerId}`;
     }
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: params.mainKey,
+    });
+  }
+  // For group/channel peer kinds: if groupScope is "main", collapse to main session
+  const groupScope = params.groupScope ?? "per-channel";
+  if (groupScope === "main") {
     return buildAgentMainSessionKey({
       agentId: params.agentId,
       mainKey: params.mainKey,
