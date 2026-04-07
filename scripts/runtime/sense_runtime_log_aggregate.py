@@ -276,6 +276,25 @@ def derive_digest_bucket_badge_tuple(
     }
 
 
+def derive_digest_bucket_ui_hint(
+    digest_bucket_badge_tuple: object,
+    digest_bucket_percent: object,
+    digest_bucket_leader: object,
+) -> dict[str, object]:
+    badge = digest_bucket_badge_tuple if isinstance(digest_bucket_badge_tuple, dict) else {
+        'palette': 'muted',
+        'short': 'UNK',
+        'order': 0,
+    }
+    percent = digest_bucket_percent if isinstance(digest_bucket_percent, str) else '0.0%'
+    leader = digest_bucket_leader is True
+    return {
+        'badge': badge,
+        'percent': percent,
+        'leader': leader,
+    }
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -628,6 +647,12 @@ def main() -> int:
         digest_bucket_badge_order = derive_digest_bucket_badge_order(
             digest_bucket_dominance_band
         )
+        digest_bucket_percent = derive_digest_bucket_percent(digest_bucket_share)
+        digest_bucket_badge_tuple = derive_digest_bucket_badge_tuple(
+            digest_bucket_palette_key,
+            digest_bucket_badge_short,
+            digest_bucket_badge_order,
+        )
         notification_digest_summary.append(
             {
                 'notification_group_key': aggregate['notification_group_key'],
@@ -646,7 +671,7 @@ def main() -> int:
                 'count': aggregate['count'],
                 'digest_bucket_total': aggregate['digest_bucket_total'],
                 'digest_bucket_share': digest_bucket_share,
-                'digest_bucket_percent': derive_digest_bucket_percent(digest_bucket_share),
+                'digest_bucket_percent': digest_bucket_percent,
                 'digest_bucket_dominance_band': digest_bucket_dominance_band,
                 'digest_bucket_palette_key': digest_bucket_palette_key,
                 'digest_bucket_badge': derive_digest_bucket_badge(
@@ -654,11 +679,7 @@ def main() -> int:
                 ),
                 'digest_bucket_badge_short': digest_bucket_badge_short,
                 'digest_bucket_badge_order': digest_bucket_badge_order,
-                'digest_bucket_badge_tuple': derive_digest_bucket_badge_tuple(
-                    digest_bucket_palette_key,
-                    digest_bucket_badge_short,
-                    digest_bucket_badge_order,
-                ),
+                'digest_bucket_badge_tuple': digest_bucket_badge_tuple,
                 'digest_bucket_rank': 0,
                 'digest_bucket_leader': False,
                 'digest_bucket_leader_count': 0,
@@ -682,6 +703,11 @@ def main() -> int:
         leader_count = sum(1 for item in bucket_items if item.get('digest_bucket_leader') is True)
         for item in bucket_items:
             item['digest_bucket_leader_count'] = leader_count
+            item['digest_bucket_ui_hint'] = derive_digest_bucket_ui_hint(
+                item.get('digest_bucket_badge_tuple'),
+                item.get('digest_bucket_percent'),
+                item.get('digest_bucket_leader'),
+            )
 
     notification_digest_summary.sort(key=derive_digest_order_key)
 
