@@ -8,7 +8,7 @@
 #   ANTHROPIC_API_KEY, OPENAI_API_KEY, BRAVE_API_KEY
 #
 # Before first deploy:
-#   1. Copy openclaw.render.json5 to /data/.openclaw/openclaw.json on the Render disk
+#   1. Seed /data/.openclaw/openclaw.json via Render Shell (see openclaw.render.json5)
 #   2. Set all secrets in Render dashboard
 #   3. Create Discord bot with Message Content + Server Members intents
 #   4. Invite bot to private server with Connect, Speak, View Channels,
@@ -20,6 +20,10 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
+    # The gateway starts with --allow-unconfigured so it survives
+    # first boot before the config file is seeded via Render Shell.
+    # --control-ui-allowed-origins * is required for non-loopback bind.
+    dockerCommand: node openclaw.mjs gateway --bind lan --port 8080 --allow-unconfigured --control-ui-allowed-origins *
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
@@ -31,8 +35,10 @@ services:
         value: /data/.openclaw/openclaw.json
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
-      # Render passes env vars matching Dockerfile ARG names as build args,
-      # so these are used at both build time and runtime.
+      # These env vars are also declared as Dockerfile ARGs, so they
+      # are available at build time to bake extensions and apt packages
+      # into the image. Render should forward them as --build-arg, but
+      # as a safety net the Dockerfile also sets matching defaults.
       - key: OPENCLAW_EXTENSIONS
         value: "discord whatsapp elevenlabs deepgram anthropic media-understanding-core memory-core speech-core"
       - key: OPENCLAW_DOCKER_APT_PACKAGES
