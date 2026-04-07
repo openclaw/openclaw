@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
-function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
+type SlackActionsBlock = { type?: string; elements?: unknown[] };
+type SlackPendingPayload = { text: string; blocks: SlackActionsBlock[] };
+type SlackResolvedPayload = { text: string; blocks: Array<{ type?: string }> };
+
+function findSlackActionsBlock(blocks: SlackActionsBlock[]) {
   return blocks.find((block) => block.type === "actions");
 }
 
 describe("slackApprovalNativeRuntime", () => {
   it("renders only the allowed pending actions", async () => {
-    const payload = await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
       accountId: "default",
       context: {
@@ -44,12 +48,10 @@ describe("slackApprovalNativeRuntime", () => {
           },
         ],
       } as never,
-    });
+    })) as SlackPendingPayload;
 
     expect(payload.text).toContain("*Exec approval required*");
-    const actionsBlock = findSlackActionsBlock(
-      payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
-    );
+    const actionsBlock = findSlackActionsBlock(payload.blocks);
     const labels = (actionsBlock?.elements ?? []).map((element) =>
       typeof element === "object" &&
       element &&
@@ -96,15 +98,13 @@ describe("slackApprovalNativeRuntime", () => {
         messageTs: "1712345678.999999",
       },
     });
-
     expect(result.kind).toBe("update");
     if (result.kind !== "update") {
       throw new Error("expected Slack resolved update payload");
     }
-    expect(result.payload.text).toContain("*Exec approval: Allowed once*");
-    expect(result.payload.text).toContain("Resolved by <@U123APPROVER>.");
-    expect(
-      (result.payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
-    ).toBe(false);
+    const resolvedPayload = result.payload as SlackResolvedPayload;
+    expect(resolvedPayload.text).toContain("*Exec approval: Allowed once*");
+    expect(resolvedPayload.text).toContain("Resolved by <@U123APPROVER>.");
+    expect(resolvedPayload.blocks.some((block) => block.type === "actions")).toBe(false);
   });
 });
