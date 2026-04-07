@@ -9,7 +9,10 @@ import {
   resolveExecApprovalsFromFile,
   type ExecutableResolution,
 } from "../exec-approvals.js";
-import { resolveExecSafeBinRuntimePolicy } from "../exec-safe-bin-runtime-policy.js";
+import {
+  resolveExecSafeBinRuntimePolicy,
+  type ExecSafeBinConfigScope,
+} from "../exec-safe-bin-runtime-policy.js";
 
 function buildSegment(params: {
   argv: string[];
@@ -27,21 +30,23 @@ function buildSegment(params: {
 }
 
 describe.runIf(process.platform !== "win32")("Finn hybrid exec rollout", () => {
+  const globalExecConfig: ExecSafeBinConfigScope = {
+    safeBins: ["jq", "grep", "wc"],
+    safeBinTrustedDirs: ["/usr/bin", "/usr/local/bin", "/home/finn/.nvm/versions/node/v22/bin"],
+  };
+  const localExecConfig: ExecSafeBinConfigScope = {
+    safeBinTrustedDirs: ["/usr/libexec", "./scripts"],
+  };
   const finnConfig = {
     tools: {
-      exec: {
-        safeBins: ["jq", "grep", "wc"],
-        safeBinTrustedDirs: ["/usr/bin", "/usr/local/bin", "/home/finn/.nvm/versions/node/v22/bin"],
-      },
+      exec: globalExecConfig,
     },
     agents: {
       list: [
         {
           id: "finn",
           tools: {
-            exec: {
-              safeBinTrustedDirs: ["/usr/libexec", "./scripts"],
-            },
+            exec: localExecConfig,
           },
         },
       ],
