@@ -588,7 +588,9 @@ describe("handleDiscordGuildAction - event create", () => {
       },
       eventsEnabled,
     );
-    expect(resolveEventCoverImage).toHaveBeenCalledWith("https://example.com/cover.png");
+    expect(resolveEventCoverImage).toHaveBeenCalledWith("https://example.com/cover.png", {
+      localRoots: undefined,
+    });
     expect(createScheduledEventDiscord).toHaveBeenCalledWith(
       "G1",
       expect.objectContaining({
@@ -629,13 +631,33 @@ describe("handleDiscordGuildAction - event create", () => {
       },
       eventsEnabled,
     );
-    expect(resolveEventCoverImage).toHaveBeenCalledWith("data:image/jpeg;base64,/9j/4AAQ");
+    expect(resolveEventCoverImage).toHaveBeenCalledWith("data:image/jpeg;base64,/9j/4AAQ", {
+      localRoots: undefined,
+    });
     expect(createScheduledEventDiscord).toHaveBeenCalledWith(
       "G1",
       expect.objectContaining({
         image: "data:image/jpeg;base64,/9j/4AAQ",
       }),
     );
+  });
+
+  it("forwards mediaLocalRoots to resolveEventCoverImage", async () => {
+    await handleDiscordGuildAction(
+      "eventCreate",
+      {
+        guildId: "G1",
+        name: "Local Image Event",
+        startTime: "2026-09-01T20:00:00Z",
+        image: "/workspace/cover.png",
+      },
+      eventsEnabled,
+      undefined,
+      { mediaLocalRoots: ["/workspace"] },
+    );
+    expect(resolveEventCoverImage).toHaveBeenCalledWith("/workspace/cover.png", {
+      localRoots: ["/workspace"],
+    });
   });
 
   it("respects event gating", async () => {

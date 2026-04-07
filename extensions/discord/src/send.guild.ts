@@ -83,7 +83,7 @@ const ALLOWED_EVENT_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "imag
 
 function validateEventImageType(contentType: string | undefined): asserts contentType is string {
   if (!contentType || !ALLOWED_EVENT_IMAGE_TYPES.includes(contentType)) {
-    throw new Error("Discord event cover images must be PNG, JPG, or GIF (max 8 MB)");
+    throw new Error("Discord event cover images must be PNG, JPG, or GIF");
   }
 }
 
@@ -95,16 +95,19 @@ function validateEventImageType(contentType: string | undefined): asserts conten
  *   - HTTPS/HTTP URL
  *   - Local file path
  *   - `data:<mime>;base64,<payload>` (returned as-is after validation)
- *   - Raw base64 string (assumed PNG when no MIME is detectable)
  */
-export async function resolveEventCoverImage(imageUrl: string): Promise<string> {
+export async function resolveEventCoverImage(
+  imageUrl: string,
+  options?: { localRoots?: readonly string[] },
+): Promise<string> {
   // Already a data URI — validate and pass through.
   const dataUriMatch = imageUrl.match(/^data:(image\/[^;]+);base64,/);
   if (dataUriMatch) {
     const mime = dataUriMatch[1].toLowerCase();
     validateEventImageType(mime);
     const payload = imageUrl.slice(imageUrl.indexOf(",") + 1);
-    const size = Math.ceil((payload.length * 3) / 4);
+    const padding = (payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0);
+    const size = Math.floor((payload.length * 3) / 4) - padding;
     if (size > DISCORD_MAX_EVENT_COVER_BYTES) {
       throw new Error(
         `Event cover image exceeds 8 MB limit (${(size / 1024 / 1024).toFixed(1)} MB)`,
@@ -114,7 +117,9 @@ export async function resolveEventCoverImage(imageUrl: string): Promise<string> 
   }
 
   // URL or local file — load via the standard media pipeline.
-  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES);
+  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES, {
+    localRoots: options?.localRoots,
+  });
   const contentType = media.contentType?.toLowerCase();
   validateEventImageType(contentType);
   return `data:${contentType};base64,${media.buffer.toString("base64")}`;
