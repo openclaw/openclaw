@@ -4,7 +4,6 @@ import os from "node:os";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
-import type { GatewayWsClient } from "../ws-types.js";
 import { loadConfig } from "../../../config/config.js";
 import {
   getBoundDeviceBootstrapProfile,
