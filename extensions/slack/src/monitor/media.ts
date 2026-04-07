@@ -45,7 +45,17 @@ function createSlackMediaFetch(token: string): FetchLike {
     if (!url) {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
-    const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
+    // Strip `dispatcher` – the SSRF guard may attach an undici dispatcher that
+    // is incompatible with the ambient `globalThis.fetch` (Node built-in).  We
+    // must not forward it because `globalThis.fetch` uses the Node-bundled
+    // undici runtime whose dispatcher shape can differ from the project-level
+    // undici dependency.
+    const {
+      headers: initHeaders,
+      redirect: _redirect,
+      dispatcher: _dispatcher,
+      ...rest
+    } = (init ?? {}) as RequestInit & { dispatcher?: unknown };
     const headers = new Headers(initHeaders);
 
     if (includeAuth) {

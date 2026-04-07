@@ -471,6 +471,34 @@ describe("resolveSlackMedia", () => {
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
   });
+
+  it("does not forward undici dispatcher to globalThis.fetch", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+
+    mockFetch.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      // Verify that the dispatcher property is NOT present in the init
+      // passed to globalThis.fetch.  Before the fix, the SSRF guard's
+      // undici 8.x dispatcher leaked through `...rest` in
+      // createSlackMediaFetch and caused an InvalidArgumentError.
+      const rawInit = init as RequestInit & { dispatcher?: unknown };
+      expect(rawInit?.dispatcher).toBeUndefined();
+      return new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      });
+    });
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(mockFetch).toHaveBeenCalled();
+  });
 });
 
 describe("Slack media SSRF policy", () => {
