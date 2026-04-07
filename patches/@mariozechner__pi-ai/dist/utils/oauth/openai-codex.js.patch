@@ -1,0 +1,10 @@
+--- a/node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js
++++ b/node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js
+@@ -21,7 +21,7 @@ const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
+ const TOKEN_URL = "https://auth.openai.com/oauth/token";
+ const REDIRECT_URI = "http://localhost:1455/auth/callback";
+-const SCOPE = "openid profile email offline_access";
++const SCOPE = "openid profile email offline_access model.request api.responses.write";
+ const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+ function createState() {
+     if (!_randomBytes) {

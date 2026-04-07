@@ -183,6 +183,78 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 }
 
+// Apply patches to node_modules packages (e.g. fixing scopes in @mariozechner/pi-ai OAuth flow).
+function applyPatches(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const patchesDir = join(packageRoot, "patches");
+  const spawn = params.spawnSync ?? spawnSync;
+  const pathExists = params.existsSync ?? existsSync;
+  const log = params.log ?? console;
+
+  if (!pathExists(patchesDir)) {
+    return;
+  }
+
+  let patchEntries;
+  try {
+    patchEntries = readdirSync(patchesDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of patchEntries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const pkgPatchDir = join(patchesDir, entry.name);
+    let subEntries;
+    try {
+      subEntries = readdirSync(pkgPatchDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const subEntry of subEntries) {
+      if (!subEntry.isFile() || !subEntry.name.endsWith(".patch")) {
+        continue;
+      }
+      const patchPath = join(pkgPatchDir, subEntry.name);
+      // The patch file name encodes the path inside node_modules, e.g.:
+      // @mariozechner__pi-ai/dist/utils/oauth/openai-codex.js.patch
+      // -> node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js
+      const nodeModulesPath = subEntry.name
+        .replace(/__/g, "/")
+        .replace(/\/\/+/g, "/")
+        .replace(/\.patch$/, "");
+      const targetPath = join(packageRoot, "node_modules", nodeModulesPath);
+
+      if (!pathExists(targetPath)) {
+        log.warn(`[postinstall] patch target missing, skipping: ${patchPath}`);
+        continue;
+      }
+
+      const result = spawn(
+        "patch",
+        ["-p1", "--forward", "--no-backup-if-mismatch", "-i", patchPath],
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          stdio: "pipe",
+          shell: false,
+        },
+      );
+
+      if (result.status !== 0) {
+        const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+        log.warn(`[postinstall] patch failed (may already be applied): ${patchPath}\n${output}`);
+      } else {
+        log.log(`[postinstall] applied patch: ${subEntry.name}`);
+      }
+    }
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runBundledPluginPostinstall();
+  applyPatches();
 }
