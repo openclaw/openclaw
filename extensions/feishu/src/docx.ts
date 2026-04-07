@@ -38,18 +38,19 @@ function json(data: unknown) {
 function resolveDocToolLocalRoots(ctx: {
   workspaceDir?: string;
   fsPolicy?: { workspaceOnly: boolean };
-  runtimeConfig?: OpenClawPluginApi["config"];
-  config?: OpenClawPluginApi["config"];
 }): string[] | undefined {
-  const workspaceOnly =
-    ctx.fsPolicy?.workspaceOnly === true ||
-    ctx.runtimeConfig?.tools?.fs?.workspaceOnly === true ||
-    ctx.config?.tools?.fs?.workspaceOnly === true;
-  if (!workspaceOnly) {
+  if (ctx.fsPolicy?.workspaceOnly !== true) {
     return undefined;
   }
   const workspaceDir = ctx.workspaceDir?.trim();
-  return workspaceDir ? [resolve(workspaceDir)] : [];
+  // Fail closed: workspace-only with no resolved workspace must not fall back
+  // to default managed roots.
+  if (!workspaceDir) {
+    return [];
+  }
+  // Workspace paths are expected to be absolute; resolve() normalizes any
+  // accidental relative input before passing roots to loadWebMedia.
+  return [resolve(workspaceDir)];
 }
 
 /** Extract image URLs from markdown content */

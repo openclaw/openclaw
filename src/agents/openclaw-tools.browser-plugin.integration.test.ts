@@ -67,4 +67,29 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     expect(tools.map((tool) => tool.name)).not.toContain("browser");
   });
+
+  it("forwards fsPolicy into plugin tool context", async () => {
+    const tools = resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: {
+          plugins: {
+            allow: ["browser"],
+          },
+        } as OpenClawConfig,
+        fsPolicy: { workspaceOnly: true },
+      },
+      resolvedConfig: {
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+    });
+
+    const browserTool = tools.find((tool) => tool.name === "browser");
+    expect(browserTool).toBeDefined();
+
+    const result = await browserTool!.execute("tool-call", {});
+    const details = (result.details ?? {}) as { workspaceOnly?: boolean | null };
+    expect(details.workspaceOnly).toBe(true);
+  });
 });
