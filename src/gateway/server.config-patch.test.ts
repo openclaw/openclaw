@@ -68,6 +68,15 @@ async function sendConfigApply(params: { raw: unknown; baseHash?: string }, time
   return await rpcReq(requireWs(), "config.apply", params, timeoutMs);
 }
 
+const sendConfigPatch = async (params: { raw: unknown; baseHash?: string }, timeoutMs?: number) => {
+  return await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+    requireWs(),
+    "config.patch",
+    params,
+    timeoutMs,
+  );
+};
+
 async function expectSchemaLookupInvalid(path: unknown) {
   const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { path });
   expect(res.ok).toBe(false);
@@ -469,9 +478,7 @@ describe("gateway config methods", () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
     delete process.env[missingEnvVar];
     const beforeHash = await getConfigHash();
-    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
-      requireWs(),
-      "config.patch",
+    const res = await sendConfigPatch(
       {
         raw: JSON.stringify({
           gateway: {
