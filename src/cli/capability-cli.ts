@@ -1161,8 +1161,9 @@ function registerCapabilityListAndInspect(capability: Command) {
 
 export function registerCapabilityCli(program: Command) {
   const capability = program
-    .command("capability")
-    .description("Run provider-backed capabilities through a stable CLI surface")
+    .command("infer")
+    .alias("capability")
+    .description("Run provider-backed inference commands through a stable CLI surface")
     .addHelpText(
       "after",
       () =>

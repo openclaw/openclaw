@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- CLI/capabilities: add a first-class `openclaw capability ...` hub for provider-backed inference workflows across model, media, web, and embedding tasks, with capability inspection, provider discovery, and consistent JSON output. Thanks @Takhoffman.
+- CLI/capabilities: add a first-class `openclaw infer ...` hub for provider-backed inference workflows across model, media, web, and embedding tasks, while keeping `openclaw capability ...` as a compatibility fallback. Thanks @Takhoffman.
 - Providers/Anthropic: restore Claude CLI as the preferred local Anthropic path in onboarding, model-auth guidance, and doctor flows again, and keep the Docker Claude CLI live lane aligned with the restored guidance.
 - Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
 - Tools/media: document per-provider music and video generation capabilities, and add shared live video-to-video sweep coverage for providers that support local reference clips.

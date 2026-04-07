@@ -1,21 +1,23 @@
 ---
-summary: "Capability-first CLI for provider-backed model, media, web, and embedding workflows"
+summary: "Infer-first CLI for provider-backed model, media, web, and embedding workflows"
 read_when:
-  - Adding or modifying `openclaw capability` commands
+  - Adding or modifying `openclaw infer` commands
   - Designing stable headless capability automation
-title: "Capability CLI"
+title: "Inference CLI"
 ---
 
-# Capability CLI
+# Inference CLI
 
-`openclaw capability` is the canonical headless surface for provider-backed capabilities.
+`openclaw infer` is the canonical headless surface for provider-backed inference workflows.
+
+`openclaw capability` remains supported as a fallback alias for compatibility.
 
 It intentionally exposes capability families, not raw gateway RPC names and not raw agent tool ids.
 
 ## Command tree
 
 ```text
-openclaw capability
+ openclaw infer
   list
   inspect
 
@@ -77,10 +79,10 @@ Default transport is implicit auto at the command-family level:
 Examples:
 
 ```bash
-openclaw capability model run --prompt "hello" --json
-openclaw capability media image generate --prompt "friendly lobster" --json
-openclaw capability media tts status --json
-openclaw capability embedding create --text "hello world" --json
+openclaw infer model run --prompt "hello" --json
+openclaw infer media image generate --prompt "friendly lobster" --json
+openclaw infer media tts status --json
+openclaw infer embedding create --text "hello world" --json
 ```
 
 ## JSON output

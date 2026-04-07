@@ -35,7 +35,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`logs`](/cli/logs)
 - [`system`](/cli/system)
 - [`models`](/cli/models)
-- [`capability`](/cli/capability)
+- [`infer`](/cli/capability)
 - [`memory`](/cli/memory)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
@@ -249,7 +249,7 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
-  capability
+  infer (alias: capability)
     list
     inspect
     model run|list|inspect|providers|auth login|logout|status
