@@ -626,7 +626,7 @@ export async function monitorWebInbox(options: {
   let activeProbeTimeout: ReturnType<typeof setTimeout> | null = null;
   let probeInFlight = false;
 
-  if (selfJid) {
+  if (selfJid && typeof sock.fetchStatus === "function") {
     const doProbe = async () => {
       if (probeClosed || probeInFlight) {
         return;
