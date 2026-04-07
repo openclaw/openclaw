@@ -106,19 +106,20 @@ export async function resolveSlackThreadContextData(params: {
     threadStarterBody = starter.text;
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
-    if (!params.effectiveDirectMedia && starter.files && starter.files.length > 0) {
-      threadStarterMedia = await resolveSlackMedia({
-        files: starter.files,
-        token: params.ctx.botToken,
-        maxBytes: params.ctx.mediaMaxBytes,
-      });
-      if (threadStarterMedia) {
-        const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
-        logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
-      }
-    }
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
+  }
+
+  if (!params.effectiveDirectMedia && includeStarterContext && starter?.files?.length) {
+    threadStarterMedia = await resolveSlackMedia({
+      files: starter.files,
+      token: params.ctx.botToken,
+      maxBytes: params.ctx.mediaMaxBytes,
+    });
+    if (threadStarterMedia) {
+      const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
+      logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
+    }
   }
   if (starter?.text && !includeStarterContext) {
     logVerbose(

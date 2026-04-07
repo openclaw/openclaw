@@ -6,8 +6,17 @@ import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inboun
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
+import * as mediaModule from "../media.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+
+vi.mock("../media.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media.js")>();
+  return {
+    ...actual,
+    resolveSlackMedia: vi.fn(actual.resolveSlackMedia),
+  };
+});
 
 describe("resolveSlackThreadContextData", () => {
   let fixtureRoot = "";
@@ -144,5 +153,58 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toContain("starter from Alice");
     expect(result.threadHistoryBody).toContain("starter from Alice");
     expect(result.threadHistoryBody).not.toContain("blocked follow-up");
+  });
+
+  it("hydrates starter files for file-only thread roots", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "current message", user: "U1", ts: "101.000" }],
+      response_metadata: { next_cursor: "" },
+    });
+    const ctx = createThreadContext({ replies });
+    const resolveSlackMediaMock = vi.mocked(mediaModule.resolveSlackMedia);
+    resolveSlackMediaMock.mockResolvedValueOnce([
+      {
+        path: "/tmp/root.har",
+        contentType: "application/json",
+        placeholder: "[Slack file: root.har]",
+      },
+    ]);
+
+    const result = await resolveSlackThreadContextData({
+      ctx,
+      account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
+      message: createThreadMessage(),
+      isThreadReply: true,
+      threadTs: "100.000",
+      threadStarter: {
+        text: "",
+        userId: "U1",
+        ts: "100.000",
+        files: [{ id: "F1", name: "root.har" }],
+      },
+      roomLabel: "#general",
+      storePath,
+      sessionKey: "thread-session",
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+      contextVisibilityMode: "allowlist",
+      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
+      effectiveDirectMedia: null,
+    });
+
+    expect(result.threadStarterBody).toBeUndefined();
+    expect(result.threadStarterMedia).toEqual([
+      {
+        path: "/tmp/root.har",
+        contentType: "application/json",
+        placeholder: "[Slack file: root.har]",
+      },
+    ]);
+    expect(resolveSlackMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: expect.arrayContaining([expect.objectContaining({ id: "F1", name: "root.har" })]),
+      }),
+    );
   });
 });
