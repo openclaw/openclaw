@@ -204,6 +204,9 @@ export function resolveSystemEventDeliveryContext(
  * Used as a fallback cleanup when poll returns an exit result — if
  * maybeNotifyOnExit raced ahead of the pollWaiting flag and already
  * enqueued an event, this removes the now-redundant notification.
+ *
+ * Matches on `(${sessionId},` to avoid collisions between sessions
+ * that share a common slug prefix (e.g. "oceanic-harbor" vs "oceanic-reef").
  */
 export function removeExecEventsForSession(sessionKey: string, sessionId: string): number {
   const key = requireSessionKey(sessionKey);
@@ -211,9 +214,9 @@ export function removeExecEventsForSession(sessionKey: string, sessionId: string
   if (!entry || entry.queue.length === 0) {
     return 0;
   }
-  const prefix = sessionId.slice(0, 8);
+  const marker = `(${sessionId},`;
   const before = entry.queue.length;
-  entry.queue = entry.queue.filter((e) => !e.text.includes(prefix));
+  entry.queue = entry.queue.filter((e) => !e.text.includes(marker));
   const removed = before - entry.queue.length;
   if (entry.queue.length === 0) {
     entry.lastText = null;

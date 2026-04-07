@@ -376,10 +376,10 @@ describe("removeExecEventsForSession", () => {
     resetSystemEventsForTest();
   });
 
-  it("removes exec-completion events matching the session id prefix", () => {
+  it("removes exec-completion events matching the session id", () => {
     const key = "agent:main:test-remove-exec";
-    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-    enqueueSystemEvent(`Exec completed (${sessionId.slice(0, 8)}, code 0)`, { sessionKey: key });
+    const sessionId = "oceanic-harbor";
+    enqueueSystemEvent(`Exec completed (${sessionId}, code 0)`, { sessionKey: key });
     enqueueSystemEvent("Model switched to sonnet-4.6", { sessionKey: key });
 
     const removed = removeExecEventsForSession(key, sessionId);
@@ -398,8 +398,8 @@ describe("removeExecEventsForSession", () => {
 
   it("cleans up queue entry when all events are removed", () => {
     const key = "agent:main:test-remove-cleanup";
-    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-    enqueueSystemEvent(`Exec completed (${sessionId.slice(0, 8)}, code 0)`, { sessionKey: key });
+    const sessionId = "oceanic-harbor";
+    enqueueSystemEvent(`Exec completed (${sessionId}, code 0)`, { sessionKey: key });
 
     removeExecEventsForSession(key, sessionId);
     expect(hasSystemEvents(key)).toBe(false);
@@ -412,26 +412,25 @@ describe("removeExecEventsForSession", () => {
 
   it("removes multiple events for the same session", () => {
     const key = "agent:main:test-remove-multi";
-    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-    const prefix = sessionId.slice(0, 8);
-    enqueueSystemEvent(`Exec completed (${prefix}, code 0) :: output line`, { sessionKey: key });
+    const sessionId = "oceanic-harbor";
+    enqueueSystemEvent(`Exec completed (${sessionId}, code 0) :: output line`, { sessionKey: key });
     enqueueSystemEvent("Unrelated event", { sessionKey: key });
-    enqueueSystemEvent(`Exec failed (${prefix}, signal SIGTERM)`, { sessionKey: key });
+    enqueueSystemEvent(`Exec failed (${sessionId}, signal SIGTERM)`, { sessionKey: key });
 
     const removed = removeExecEventsForSession(key, sessionId);
     expect(removed).toBe(2);
     expect(peekSystemEvents(key)).toEqual(["Unrelated event"]);
   });
 
-  it("does not affect events from other sessions", () => {
+  it("does not affect events from other sessions with shared prefix", () => {
     const key = "agent:main:test-remove-isolation";
-    const sessionA = "aaaaaaaa-0000-0000-0000-000000000000";
-    const sessionB = "bbbbbbbb-0000-0000-0000-000000000000";
-    enqueueSystemEvent(`Exec completed (${sessionA.slice(0, 8)}, code 0)`, { sessionKey: key });
-    enqueueSystemEvent(`Exec completed (${sessionB.slice(0, 8)}, code 1)`, { sessionKey: key });
+    const sessionA = "oceanic-harbor";
+    const sessionB = "oceanic-reef";
+    enqueueSystemEvent(`Exec completed (${sessionA}, code 0)`, { sessionKey: key });
+    enqueueSystemEvent(`Exec completed (${sessionB}, code 1)`, { sessionKey: key });
 
     removeExecEventsForSession(key, sessionA);
-    expect(peekSystemEvents(key)).toEqual([`Exec completed (${sessionB.slice(0, 8)}, code 1)`]);
+    expect(peekSystemEvents(key)).toEqual([`Exec completed (${sessionB}, code 1)`]);
   });
 });
 

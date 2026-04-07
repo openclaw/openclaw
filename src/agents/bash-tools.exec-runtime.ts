@@ -346,8 +346,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${status} (${session.id}, ${exitLabel}) :: ${output}`
+    : `Exec ${status} (${session.id}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey, trusted: false, wakeRequested: true });
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
