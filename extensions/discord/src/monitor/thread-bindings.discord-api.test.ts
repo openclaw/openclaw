@@ -23,11 +23,28 @@ const createDiscordRestClient = vi.fn<typeof discordClientModule.createDiscordRe
 );
 
 let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
+let normalizeDiscordBindingChannelRef: typeof import("./thread-bindings.discord-api.js").normalizeDiscordBindingChannelRef;
 let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
 
 beforeAll(async () => {
-  ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
+  ({ maybeSendBindingMessage, normalizeDiscordBindingChannelRef, resolveChannelIdForBinding } =
     await import("./thread-bindings.discord-api.js"));
+});
+
+describe("normalizeDiscordBindingChannelRef", () => {
+  it("strips OpenClaw conversation prefixes from numeric snowflakes", () => {
+    expect(normalizeDiscordBindingChannelRef("channel:1234567890")).toBe("1234567890");
+    expect(normalizeDiscordBindingChannelRef("user:9876543210")).toBe("9876543210");
+    expect(normalizeDiscordBindingChannelRef("  CHANNEL:55555  ")).toBe("55555");
+  });
+
+  it("keeps non-prefixed or non-numeric refs unchanged", () => {
+    expect(normalizeDiscordBindingChannelRef("thread-1")).toBe("thread-1");
+    expect(normalizeDiscordBindingChannelRef("channel:not-a-snowflake")).toBe(
+      "channel:not-a-snowflake",
+    );
+    expect(normalizeDiscordBindingChannelRef(undefined)).toBe("");
+  });
 });
 
 describe("resolveChannelIdForBinding", () => {
@@ -70,6 +87,18 @@ describe("resolveChannelIdForBinding", () => {
     expect(restGet).not.toHaveBeenCalled();
   });
 
+  it("normalizes explicit prefixed channel ids without resolving route", async () => {
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "thread-1",
+      channelId: "channel:1234567890",
+    });
+
+    expect(resolved).toBe("1234567890");
+    expect(createDiscordRestClient).not.toHaveBeenCalled();
+    expect(restGet).not.toHaveBeenCalled();
+  });
+
   it("returns parent channel for thread channels", async () => {
     restGet.mockResolvedValueOnce({
       id: "thread-1",
@@ -83,6 +112,23 @@ describe("resolveChannelIdForBinding", () => {
     });
 
     expect(resolved).toBe("channel-parent");
+  });
+
+  it("normalizes prefixed thread ids before Discord lookup", async () => {
+    restGet.mockResolvedValueOnce({
+      id: "1234567890",
+      type: ChannelType.PublicThread,
+      parent_id: "channel-parent",
+    });
+
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "channel:1234567890",
+    });
+
+    expect(resolved).toBe("channel-parent");
+    expect(restGet).toHaveBeenCalledTimes(1);
+    expect(restGet.mock.calls[0]?.[0]).toBe("/channels/1234567890");
   });
 
   it("forwards cfg when resolving channel id through Discord client", async () => {

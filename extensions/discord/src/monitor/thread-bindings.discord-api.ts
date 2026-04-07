@@ -21,6 +21,13 @@ function buildThreadTarget(threadId: string): string {
   return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
 }
 
+/** Strip OpenClaw conversation-id prefixes (`channel:`, `user:`) so bare Discord snowflake IDs reach the REST layer. */
+export function normalizeDiscordBindingChannelRef(raw: string | undefined): string {
+  const trimmed = raw?.trim() || "";
+  const match = trimmed.match(/^(?:channel|user):(\d+)$/i);
+  return match?.[1] ?? trimmed;
+}
+
 export function isThreadArchived(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") {
     return false;
@@ -233,9 +240,13 @@ export async function resolveChannelIdForBinding(params: {
   threadId: string;
   channelId?: string;
 }): Promise<string | null> {
-  const explicit = params.channelId?.trim();
+  const explicit = normalizeDiscordBindingChannelRef(params.channelId);
   if (explicit) {
     return explicit;
+  }
+  const lookupId = normalizeDiscordBindingChannelRef(params.threadId);
+  if (!lookupId) {
+    return null;
   }
   try {
     const rest = createDiscordRestClient(
@@ -245,7 +256,7 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const channel = (await rest.get(Routes.channel(lookupId))) as {
       id?: string;
       type?: number;
       parent_id?: string;
@@ -267,7 +278,7 @@ export async function resolveChannelIdForBinding(params: {
     return channelId || null;
   } catch (err) {
     logVerbose(
-      `discord thread binding channel resolve failed for ${params.threadId}: ${summarizeDiscordError(err)}`,
+      `discord thread binding channel resolve failed for ${lookupId}: ${summarizeDiscordError(err)}`,
     );
     return null;
   }
