@@ -383,6 +383,43 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("keeps Telegram policy fallback top-level while still seeding default auth", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: "legacy-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["123"],
+          groupPolicy: "allowlist",
+          accounts: {
+            bot1: {
+              enabled: true,
+              botToken: "bot-1-token",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.telegram?.accounts?.default).toMatchObject({
+      botToken: "legacy-token",
+    });
+    expect(res.config.channels?.telegram?.botToken).toBeUndefined();
+    expect(res.config.channels?.telegram?.dmPolicy).toBe("allowlist");
+    expect(res.config.channels?.telegram?.allowFrom).toEqual(["123"]);
+    expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(mergeTelegramAccountConfig(res.config, "default")).toMatchObject({
+      botToken: "legacy-token",
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      groupPolicy: "allowlist",
+    });
+    expect(res.changes).toContain(
+      "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
+    );
+  });
+
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {

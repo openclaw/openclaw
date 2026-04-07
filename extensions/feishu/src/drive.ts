@@ -1,4 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { encodeQuery, extractReplyText, isRecord, readString } from "./comment-shared.js";
@@ -687,7 +688,7 @@ export async function deliverCommentThreadText(
       console.warn(
         `[feishu_drive] comment metadata preflight failed ` +
           `comment=${params.comment_id} file_type=${params.file_type} ` +
-          `error=${error instanceof Error ? error.message : String(error)}`,
+          `error=${formatErrorMessage(error)}`,
       );
       isWholeComment = false;
     }

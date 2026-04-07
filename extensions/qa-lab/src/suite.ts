@@ -6,6 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { QaBusState } from "./bus-state.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
@@ -179,7 +180,7 @@ async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteS
         ...(details ? { details } : {}),
       });
     } catch (error) {
-      const details = error instanceof Error ? error.message : String(error);
+      const details = formatErrorMessage(error);
       if (process.env.OPENCLAW_QA_DEBUG === "1") {
         console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
       }
@@ -271,7 +272,7 @@ async function waitForConfigRestartSettle(
 }
 
 function isGatewayRestartRace(error: unknown) {
-  const text = error instanceof Error ? error.message : String(error);
+  const text = formatErrorMessage(error);
   return (
     text.includes("gateway closed (1012)") ||
     text.includes("gateway closed (1006") ||
@@ -1484,7 +1485,7 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                   250,
                 ).catch((error) => {
                   throw new Error(
-                    `image provider was never invoked: ${error instanceof Error ? error.message : String(error)}; toolOutput=${String(imageRequest.toolOutput ?? "")}`,
+                    `image provider was never invoked: ${formatErrorMessage(error)}; toolOutput=${String(imageRequest.toolOutput ?? "")}`,
                   );
                 });
                 return `${outbound.text}\nIMAGE_PROMPT:${generated.prompt ?? ""}`;
@@ -1568,7 +1569,7 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 200,
               ).catch((error) => {
                 throw new Error(
-                  `hot-disable skill never became eligible: ${error instanceof Error ? error.message : String(error)}`,
+                  `hot-disable skill never became eligible: ${formatErrorMessage(error)}`,
                 );
               });
               const beforeSkills = await readSkillStatus(env);
@@ -1595,9 +1596,9 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
               };
               await waitForQaChannelReady(env, 60_000).catch((error) => {
                 throw new Error(
-                  `qa-channel never returned ready after config.patch: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
+                  `qa-channel never returned ready after config.patch: ${formatErrorMessage(
+                    error,
+                  )}`,
                 );
               });
               await waitForCondition(
@@ -1609,9 +1610,7 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 200,
               ).catch((error) => {
                 throw new Error(
-                  `hot-disable skill never flipped to disabled: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
+                  `hot-disable skill never flipped to disabled: ${formatErrorMessage(error)}`,
                 );
               });
               const afterSkills = await readSkillStatus(env);
@@ -1667,16 +1666,14 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
               });
               await waitForGatewayHealthy(env, 60_000).catch((error) => {
                 throw new Error(
-                  `gateway never returned healthy after config.apply: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
+                  `gateway never returned healthy after config.apply: ${formatErrorMessage(error)}`,
                 );
               });
               await waitForQaChannelReady(env, 60_000).catch((error) => {
                 throw new Error(
-                  `qa-channel never returned ready after config.apply: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
+                  `qa-channel never returned ready after config.apply: ${formatErrorMessage(
+                    error,
+                  )}`,
                 );
               });
               const outbound = await waitForOutboundMessage(
@@ -1685,9 +1682,9 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 60_000,
               ).catch((error) => {
                 throw new Error(
-                  `restart sentinel never appeared: ${
-                    error instanceof Error ? error.message : String(error)
-                  }; outbound=${recentOutboundSummary(state)}`,
+                  `restart sentinel never appeared: ${formatErrorMessage(
+                    error,
+                  )}; outbound=${recentOutboundSummary(state)}`,
                 );
               });
               return `${outbound.conversation.id}: ${outbound.text}`;

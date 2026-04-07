@@ -13,6 +13,16 @@ export function trimBundledPluginString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+export function normalizeBundledPluginStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const normalized = trimBundledPluginString(entry);
+    return normalized ? [normalized] : [];
+  });
+}
+
 export function rewriteBundledPluginEntryToBuiltPath(
   entry: string | undefined,
 ): string | undefined {

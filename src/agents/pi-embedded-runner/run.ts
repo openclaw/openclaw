@@ -7,6 +7,7 @@ import {
 } from "../../context-engine/index.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -101,7 +102,6 @@ import {
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
-import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
@@ -139,7 +139,7 @@ function backfillSessionKey(params: {
     return resolved.sessionKey?.trim() || undefined;
   } catch (err) {
     log.warn(
-      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${describeUnknownError(err)}`,
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
@@ -850,7 +850,7 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
-                  const errorText = describeUnknownError(promptError);
+                  const errorText = formatErrorMessage(promptError);
                   if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
                   }
@@ -1092,7 +1092,7 @@ export async function runEmbeddedPiAgent(
             const promptErrorDetails = normalizedPromptFailover
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
-            const errorText = promptErrorDetails.message || describeUnknownError(promptError);
+            const errorText = promptErrorDetails.message || formatErrorMessage(promptError);
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
               continue;
@@ -1584,7 +1584,7 @@ export async function runEmbeddedPiAgent(
         if (params.cleanupBundleMcpOnRunEnd === true) {
           await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
             log.warn(
-              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
+              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${formatErrorMessage(error)}`,
             );
           });
         }

@@ -34,6 +34,7 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -901,8 +902,8 @@ export async function runAgentTurnWithFallback(params: {
                   // Trigger typing when tools start executing.
                   // Must await to ensure typing indicator starts before tool summaries are emitted.
                   if (evt.stream === "tool") {
-                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                    const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                    const phase = readStringValue(evt.data.phase) ?? "";
+                    const name = readStringValue(evt.data.name);
                     if (phase === "start" || phase === "update") {
                       await params.typingSignals.signalToolStart();
                       await params.opts?.onToolStart?.({ name, phase });
@@ -910,85 +911,70 @@ export async function runAgentTurnWithFallback(params: {
                   }
                   if (evt.stream === "item") {
                     await params.opts?.onItemEvent?.({
-                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
-                      kind: typeof evt.data.kind === "string" ? evt.data.kind : undefined,
-                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
-                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
-                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
-                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
-                      summary: typeof evt.data.summary === "string" ? evt.data.summary : undefined,
-                      progressText:
-                        typeof evt.data.progressText === "string"
-                          ? evt.data.progressText
-                          : undefined,
-                      approvalId:
-                        typeof evt.data.approvalId === "string" ? evt.data.approvalId : undefined,
-                      approvalSlug:
-                        typeof evt.data.approvalSlug === "string"
-                          ? evt.data.approvalSlug
-                          : undefined,
+                      itemId: readStringValue(evt.data.itemId),
+                      kind: readStringValue(evt.data.kind),
+                      title: readStringValue(evt.data.title),
+                      name: readStringValue(evt.data.name),
+                      phase: readStringValue(evt.data.phase),
+                      status: readStringValue(evt.data.status),
+                      summary: readStringValue(evt.data.summary),
+                      progressText: readStringValue(evt.data.progressText),
+                      approvalId: readStringValue(evt.data.approvalId),
+                      approvalSlug: readStringValue(evt.data.approvalSlug),
                     });
                   }
                   if (evt.stream === "plan") {
                     await params.opts?.onPlanUpdate?.({
-                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
-                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
-                      explanation:
-                        typeof evt.data.explanation === "string" ? evt.data.explanation : undefined,
+                      phase: readStringValue(evt.data.phase),
+                      title: readStringValue(evt.data.title),
+                      explanation: readStringValue(evt.data.explanation),
                       steps: Array.isArray(evt.data.steps)
                         ? evt.data.steps.filter((step): step is string => typeof step === "string")
                         : undefined,
-                      source: typeof evt.data.source === "string" ? evt.data.source : undefined,
+                      source: readStringValue(evt.data.source),
                     });
                   }
                   if (evt.stream === "approval") {
                     await params.opts?.onApprovalEvent?.({
-                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
-                      kind: typeof evt.data.kind === "string" ? evt.data.kind : undefined,
-                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
-                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
-                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
-                      toolCallId:
-                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
-                      approvalId:
-                        typeof evt.data.approvalId === "string" ? evt.data.approvalId : undefined,
-                      approvalSlug:
-                        typeof evt.data.approvalSlug === "string"
-                          ? evt.data.approvalSlug
-                          : undefined,
-                      command: typeof evt.data.command === "string" ? evt.data.command : undefined,
-                      host: typeof evt.data.host === "string" ? evt.data.host : undefined,
-                      reason: typeof evt.data.reason === "string" ? evt.data.reason : undefined,
-                      message: typeof evt.data.message === "string" ? evt.data.message : undefined,
+                      phase: readStringValue(evt.data.phase),
+                      kind: readStringValue(evt.data.kind),
+                      status: readStringValue(evt.data.status),
+                      title: readStringValue(evt.data.title),
+                      itemId: readStringValue(evt.data.itemId),
+                      toolCallId: readStringValue(evt.data.toolCallId),
+                      approvalId: readStringValue(evt.data.approvalId),
+                      approvalSlug: readStringValue(evt.data.approvalSlug),
+                      command: readStringValue(evt.data.command),
+                      host: readStringValue(evt.data.host),
+                      reason: readStringValue(evt.data.reason),
+                      message: readStringValue(evt.data.message),
                     });
                   }
                   if (evt.stream === "command_output") {
                     await params.opts?.onCommandOutput?.({
-                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
-                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
-                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
-                      toolCallId:
-                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
-                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
-                      output: typeof evt.data.output === "string" ? evt.data.output : undefined,
-                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      itemId: readStringValue(evt.data.itemId),
+                      phase: readStringValue(evt.data.phase),
+                      title: readStringValue(evt.data.title),
+                      toolCallId: readStringValue(evt.data.toolCallId),
+                      name: readStringValue(evt.data.name),
+                      output: readStringValue(evt.data.output),
+                      status: readStringValue(evt.data.status),
                       exitCode:
                         typeof evt.data.exitCode === "number" || evt.data.exitCode === null
                           ? evt.data.exitCode
                           : undefined,
                       durationMs:
                         typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
-                      cwd: typeof evt.data.cwd === "string" ? evt.data.cwd : undefined,
+                      cwd: readStringValue(evt.data.cwd),
                     });
                   }
                   if (evt.stream === "patch") {
                     await params.opts?.onPatchSummary?.({
-                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
-                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
-                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
-                      toolCallId:
-                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
-                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      itemId: readStringValue(evt.data.itemId),
+                      phase: readStringValue(evt.data.phase),
+                      title: readStringValue(evt.data.title),
+                      toolCallId: readStringValue(evt.data.toolCallId),
+                      name: readStringValue(evt.data.name),
                       added: Array.isArray(evt.data.added)
                         ? evt.data.added.filter(
                             (entry): entry is string => typeof entry === "string",
@@ -1004,12 +990,12 @@ export async function runAgentTurnWithFallback(params: {
                             (entry): entry is string => typeof entry === "string",
                           )
                         : undefined,
-                      summary: typeof evt.data.summary === "string" ? evt.data.summary : undefined,
+                      summary: readStringValue(evt.data.summary),
                     });
                   }
                   // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
-                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    const phase = readStringValue(evt.data.phase) ?? "";
                     if (phase === "start") {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.

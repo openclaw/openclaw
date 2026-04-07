@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -281,7 +282,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
   } catch (error) {
     return {
       handled: true,
-      warnings: [error instanceof Error ? error.message : String(error)],
+      warnings: [formatErrorMessage(error)],
     };
   }
 }

@@ -36,7 +36,6 @@ import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
-  describeUnknownError,
   extractGatewayMiskeys,
   maybeExplainGatewayServiceStop,
   parsePort,
@@ -559,7 +558,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     }
   } catch (err) {
     if (isGatewayLockError(err)) {
-      const errMessage = describeUnknownError(err);
+      const errMessage = formatErrorMessage(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );

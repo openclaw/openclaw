@@ -4,6 +4,7 @@ import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
 
@@ -163,13 +164,6 @@ export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
-
 function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -180,7 +174,7 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
     if (!providerId) {
       continue;
     }
-    const values = normalizeStringList(rawValues);
+    const values = normalizeTrimmedStringList(rawValues);
     if (values.length === 0) {
       continue;
     }
@@ -194,17 +188,19 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     return undefined;
   }
 
-  const memoryEmbeddingProviders = normalizeStringList(value.memoryEmbeddingProviders);
-  const speechProviders = normalizeStringList(value.speechProviders);
-  const realtimeTranscriptionProviders = normalizeStringList(value.realtimeTranscriptionProviders);
-  const realtimeVoiceProviders = normalizeStringList(value.realtimeVoiceProviders);
-  const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
-  const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
-  const videoGenerationProviders = normalizeStringList(value.videoGenerationProviders);
-  const musicGenerationProviders = normalizeStringList(value.musicGenerationProviders);
-  const webFetchProviders = normalizeStringList(value.webFetchProviders);
-  const webSearchProviders = normalizeStringList(value.webSearchProviders);
-  const tools = normalizeStringList(value.tools);
+  const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
+  const speechProviders = normalizeTrimmedStringList(value.speechProviders);
+  const realtimeTranscriptionProviders = normalizeTrimmedStringList(
+    value.realtimeTranscriptionProviders,
+  );
+  const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
+  const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
+  const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
+  const musicGenerationProviders = normalizeTrimmedStringList(value.musicGenerationProviders);
+  const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
+  const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
@@ -309,8 +305,8 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
     return undefined;
   }
 
-  const modelPrefixes = normalizeStringList(value.modelPrefixes);
-  const modelPatterns = normalizeStringList(value.modelPatterns);
+  const modelPrefixes = normalizeTrimmedStringList(value.modelPrefixes);
+  const modelPatterns = normalizeTrimmedStringList(value.modelPatterns);
   const modelSupport = {
     ...(modelPrefixes.length > 0 ? { modelPrefixes } : {}),
     ...(modelPatterns.length > 0 ? { modelPatterns } : {}),
@@ -346,7 +342,7 @@ function normalizeProviderAuthChoices(
       entry.assistantVisibility === "manual-only" || entry.assistantVisibility === "visible"
         ? entry.assistantVisibility
         : undefined;
-    const deprecatedChoiceIds = normalizeStringList(entry.deprecatedChoiceIds);
+    const deprecatedChoiceIds = normalizeTrimmedStringList(entry.deprecatedChoiceIds);
     const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
     const groupLabel = typeof entry.groupLabel === "string" ? entry.groupLabel.trim() : "";
     const groupHint = typeof entry.groupHint === "string" ? entry.groupHint.trim() : "";
@@ -355,7 +351,7 @@ function normalizeProviderAuthChoices(
     const cliOption = typeof entry.cliOption === "string" ? entry.cliOption.trim() : "";
     const cliDescription =
       typeof entry.cliDescription === "string" ? entry.cliDescription.trim() : "";
-    const onboardingScopes = normalizeStringList(entry.onboardingScopes).filter(
+    const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation",
     );
@@ -406,7 +402,7 @@ function normalizeChannelConfigs(
         : undefined;
     const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
     const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
-    const preferOver = normalizeStringList(rawEntry.preferOver);
+    const preferOver = normalizeTrimmedStringList(rawEntry.preferOver);
     normalized[channelId] = {
       schema,
       ...(uiHints ? { uiHints } : {}),
@@ -490,21 +486,21 @@ export function loadPluginManifest(
 
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
-  const legacyPluginIds = normalizeStringList(raw.legacyPluginIds);
-  const autoEnableWhenConfiguredProviders = normalizeStringList(
+  const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
+  const autoEnableWhenConfiguredProviders = normalizeTrimmedStringList(
     raw.autoEnableWhenConfiguredProviders,
   );
   const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
   const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
-  const channels = normalizeStringList(raw.channels);
-  const providers = normalizeStringList(raw.providers);
+  const channels = normalizeTrimmedStringList(raw.channels);
+  const providers = normalizeTrimmedStringList(raw.providers);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
-  const cliBackends = normalizeStringList(raw.cliBackends);
+  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
-  const skills = normalizeStringList(raw.skills);
+  const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);

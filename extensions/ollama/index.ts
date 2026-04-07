@@ -7,6 +7,7 @@ import {
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -118,7 +119,7 @@ export default definePluginEntry({
             return null;
           }
           const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          const explicitApiKey = typeof explicit?.apiKey === "string" ? explicit.apiKey : undefined;
+          const explicitApiKey = readStringValue(explicit?.apiKey);
           if (hasExplicitModels && explicit) {
             return {
               provider: {

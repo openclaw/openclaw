@@ -1,17 +1,16 @@
-import { isProviderApiKeyConfigured } from "@openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "@openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
-} from "@openclaw/plugin-sdk/provider-http";
+} from "openclaw/plugin-sdk/provider-http";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationRequest,
-  VideoGenerationSourceAsset,
-} from "@openclaw/plugin-sdk/video-generation";
+} from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
@@ -40,6 +39,12 @@ type XaiVideoStatusResponse = {
   } | null;
 };
 
+type VideoGenerationSourceInput = {
+  url?: string;
+  buffer?: Buffer;
+  mimeType?: string;
+};
+
 function resolveXaiVideoBaseUrl(req: VideoGenerationRequest): string {
   return req.cfg?.models?.providers?.xai?.baseUrl?.trim() || DEFAULT_XAI_VIDEO_BASE_URL;
 }
@@ -48,7 +53,7 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function resolveImageUrl(input: VideoGenerationSourceAsset | undefined): string | undefined {
+function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
   }
@@ -61,7 +66,7 @@ function resolveImageUrl(input: VideoGenerationSourceAsset | undefined): string 
   return toDataUrl(input.buffer, input.mimeType?.trim() || "image/png");
 }
 
-function resolveInputVideoUrl(input: VideoGenerationSourceAsset | undefined): string | undefined {
+function resolveInputVideoUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
   }

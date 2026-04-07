@@ -1,3 +1,4 @@
+import { normalizeOptionalTrimmedStringList } from "openclaw/plugin-sdk/text-runtime";
 import {
   type BrowserConfig,
   type BrowserProfileConfig,
@@ -112,15 +113,7 @@ function resolveCdpPortRangeStart(
   return start;
 }
 
-function normalizeStringList(raw: string[] | undefined): string[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return undefined;
-  }
-  const values = raw
-    .map((value) => value.trim())
-    .filter((value): value is string => value.length > 0);
-  return values.length > 0 ? values : undefined;
-}
+const normalizeStringList = normalizeOptionalTrimmedStringList;
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as

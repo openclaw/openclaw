@@ -1,2 +1,2 @@
 export const singleAccountKeysToMove = ["streaming"];
-export const namedAccountPromotionKeys: string[] = [];
+export const namedAccountPromotionKeys = ["botToken", "tokenFile"] as const;

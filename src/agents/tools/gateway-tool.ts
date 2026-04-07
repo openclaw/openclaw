@@ -11,6 +11,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -27,8 +28,8 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   const hashValue = (snapshot as { hash?: unknown }).hash;
   const rawValue = (snapshot as { raw?: unknown }).raw;
   const hash = resolveConfigSnapshotHash({
-    hash: typeof hashValue === "string" ? hashValue : undefined,
-    raw: typeof rawValue === "string" ? rawValue : undefined,
+    hash: readStringValue(hashValue),
+    raw: readStringValue(rawValue),
   });
   return hash ?? undefined;
 }

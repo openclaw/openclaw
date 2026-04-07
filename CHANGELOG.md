@@ -53,7 +53,7 @@ Docs: https://docs.openclaw.ai
 - Slack/thread mentions: add `channels.slack.thread.requireExplicitMention` so Slack channels that already require mentions can also require explicit `@bot` mentions inside bot-participated threads. (#58276) Thanks @praktika-engineer.
 - UI/light mode: target both root and nested WebKit scrollbar thumbs in the light theme so page-level and container scrollbars stay visible on light backgrounds. (#61753) Thanks @chziyue.
 - Matrix/onboarding: add an invite auto-join setup step with explicit off warnings and strict stable-target validation so new Matrix accounts stop silently ignoring invited rooms and fresh DM-style invites unless operators opt in. (#62168) Thanks @gumadeiras.
-- Telegram/doctor: stop moving top-level access-control fallback into `accounts.default` during multi-account doctor normalization, so existing named bots keep their inherited allowlist and policy config. (#62263) Thanks @obviyus.
+- Telegram/doctor: keep top-level access-control fallback in place during multi-account normalization while still promoting legacy default auth into `accounts.default`, so existing named bots keep inherited allowlists without dropping the legacy default bot. (#62263) Thanks @obviyus.
 
 ## 2026.4.5
 

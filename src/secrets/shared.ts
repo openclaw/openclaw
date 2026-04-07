@@ -59,24 +59,3 @@ export function writeTextFileAtomic(pathname: string, value: string, mode = 0o60
   fs.chmodSync(tempPath, mode);
   fs.renameSync(tempPath, pathname);
 }
-
-export function describeUnknownError(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message;
-  }
-  if (typeof err === "string" && err.trim().length > 0) {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "bigint") {
-    return err.toString();
-  }
-  if (typeof err === "boolean") {
-    return err ? "true" : "false";
-  }
-  try {
-    const serialized = JSON.stringify(err);
-    return serialized ?? "unknown error";
-  } catch {
-    return "unknown error";
-  }
-}

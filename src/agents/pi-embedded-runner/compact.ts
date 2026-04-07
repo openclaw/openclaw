@@ -143,7 +143,7 @@ import {
 } from "./tool-schema-runtime.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
-import { describeUnknownError, mapThinkingLevel } from "./utils.js";
+import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export type CompactEmbeddedPiSessionParams = {
@@ -395,7 +395,7 @@ export async function compactEmbeddedPiSessionDirect(
       authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
     }
   } catch (err) {
-    const reason = describeUnknownError(err);
+    const reason = formatErrorMessage(err);
     return fail(reason);
   }
 
@@ -993,7 +993,7 @@ export async function compactEmbeddedPiSessionDirect(
               }
             } catch (err) {
               log.warn("[compaction] failed to harden manual compaction boundary", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
               });
             }
           }
@@ -1028,7 +1028,7 @@ export async function compactEmbeddedPiSessionDirect(
               checkpointSnapshotRetained = storedCheckpoint !== null;
             } catch (err) {
               log.warn("failed to persist compaction checkpoint", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
               });
             }
           }
@@ -1103,7 +1103,7 @@ export async function compactEmbeddedPiSessionDirect(
           };
         } catch (err) {
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: describeUnknownError(err),
+            message: formatErrorMessage(err),
             attempted: attemptedThinking,
           });
           if (fallbackThinking) {
@@ -1149,7 +1149,7 @@ export async function compactEmbeddedPiSessionDirect(
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({
-      reason: describeUnknownError(err),
+      reason: formatErrorMessage(err),
       safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
     });
     return fail(reason);
@@ -1319,7 +1319,7 @@ export async function compactEmbeddedPiSession(
               checkpointSnapshotRetained = storedCheckpoint !== null;
             } catch (err) {
               log.warn("failed to persist compaction checkpoint", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
               });
             }
           }

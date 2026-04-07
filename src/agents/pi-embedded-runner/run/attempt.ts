@@ -9,6 +9,7 @@ import {
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
@@ -151,7 +152,7 @@ import {
   normalizeProviderToolSchemas,
 } from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
-import { describeUnknownError, mapThinkingLevel } from "../utils.js";
+import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   assembleAttemptContextEngine,
@@ -1992,7 +1993,7 @@ export async function runEmbeddedAttempt(
               provider: params.provider,
               model: params.modelId,
               api: params.model.api,
-              error: describeUnknownError(promptError),
+              error: formatErrorMessage(promptError),
             });
           } catch (entryErr) {
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
@@ -2071,7 +2072,7 @@ export async function runEmbeddedAttempt(
               {
                 messages: messagesSnapshot,
                 success: !aborted && !promptError,
-                error: promptError ? describeUnknownError(promptError) : undefined,
+                error: promptError ? formatErrorMessage(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
               },
               {

@@ -8,6 +8,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -157,9 +158,9 @@ export function createAnthropicFastModeWrapper(
     }
 
     const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       serviceTier,
     });
     if (!payloadPolicy.allowsServiceTier) {
@@ -183,9 +184,9 @@ export function createAnthropicServiceTierWrapper(
     }
 
     const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       serviceTier,
     });
     if (!payloadPolicy.allowsServiceTier) {

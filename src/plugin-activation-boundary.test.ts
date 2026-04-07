@@ -26,7 +26,7 @@ describe("plugin activation boundary", () => {
     | undefined;
   let modelSelectionPromise:
     | Promise<{
-        normalizeModelRef: typeof import("./agents/model-selection.js").normalizeModelRef;
+        normalizeModelRef: typeof import("./agents/model-selection-normalize.js").normalizeModelRef;
       }>
     | undefined;
   let browserHelpersPromise:
@@ -68,7 +68,7 @@ describe("plugin activation boundary", () => {
   }
 
   function importModelSelection() {
-    modelSelectionPromise ??= import("./agents/model-selection.js").then((module) => ({
+    modelSelectionPromise ??= import("./agents/model-selection-normalize.js").then((module) => ({
       normalizeModelRef: module.normalizeModelRef,
     }));
     return modelSelectionPromise;

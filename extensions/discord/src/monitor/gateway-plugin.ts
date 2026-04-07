@@ -211,7 +211,7 @@ function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; error: u
   if (!isTransientGatewayMetadataError(params.error)) {
     throw params.error;
   }
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   params.runtime?.log?.(
     `discord: gateway metadata lookup failed transiently; using default gateway url (${message})`,
   );

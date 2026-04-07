@@ -248,10 +248,14 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
 async function collectChannelSecurityConfigFixMutation(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  channelPlugins?: ChannelPlugin[];
 }) {
   let nextCfg = params.cfg;
   const changes: string[] = [];
   const collectPlugins = (): ChannelPlugin[] => {
+    if (params.channelPlugins) {
+      return params.channelPlugins;
+    }
     try {
       const pluginIds = Object.keys(params.cfg.channels ?? {}).filter(Boolean);
       if (pluginIds.length === 0) {
@@ -358,6 +362,7 @@ export async function fixSecurityFootguns(opts?: {
   configPath?: string;
   platform?: NodeJS.Platform;
   exec?: ExecFn;
+  channelPlugins?: ChannelPlugin[];
 }): Promise<SecurityFixResult> {
   const env = opts?.env ?? process.env;
   const platform = opts?.platform ?? process.platform;
@@ -381,6 +386,7 @@ export async function fixSecurityFootguns(opts?: {
     const channelFixes = await collectChannelSecurityConfigFixMutation({
       cfg: fixed.cfg,
       env,
+      channelPlugins: opts?.channelPlugins,
     });
     changes = [...fixed.changes, ...channelFixes.changes];
 
