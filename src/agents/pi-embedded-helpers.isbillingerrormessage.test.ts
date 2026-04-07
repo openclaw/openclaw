@@ -652,6 +652,25 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
   });
 
+  it("classifies HTTP 404 assistant errors as model_not_found so model fallback can continue", () => {
+    expect(classifyFailoverReason("404 status code (no body)")).toBe("model_not_found");
+    expect(classifyFailoverReason("HTTP 404: No body")).toBe("model_not_found");
+  });
+
+  it("preserves session and auth billing signals on HTTP 404 text", () => {
+    expect(classifyFailoverReason("HTTP 404: session not found")).toBe("session_expired");
+    expect(classifyFailoverReason("HTTP 404: invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
+  });
+
+  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+    expect(
+      classifyFailoverReason(
+        "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
     expect(
       classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),

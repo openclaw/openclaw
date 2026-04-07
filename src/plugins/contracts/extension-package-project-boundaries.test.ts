@@ -132,7 +132,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/text-runtime.d.ts",
     );
-    );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
       "./dist/src/plugin-sdk/video-generation.d.ts",
     );

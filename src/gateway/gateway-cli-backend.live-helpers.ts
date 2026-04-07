@@ -100,6 +100,7 @@ export type CliBackendLiveEnvSnapshot = {
   skipCron?: string;
   skipCanvas?: string;
   skipBrowserControl?: string;
+  minimalGateway?: string;
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
 };
@@ -301,9 +302,9 @@ async function connectClientOnce(params: {
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
+      clientDisplayName: "vitest-live",
       clientVersion: "dev",
-      mode: "test",
-      requestTimeoutMs: params.timeoutMs,
+      mode: GATEWAY_CLIENT_MODES.TEST,
       connectChallengeTimeoutMs: params.timeoutMs,
       deviceIdentity: params.deviceIdentity,
       onHelloOk: () => finish({ client }),
@@ -341,6 +342,7 @@ export function snapshotCliBackendLiveEnv(): CliBackendLiveEnvSnapshot {
     skipCron: process.env.OPENCLAW_SKIP_CRON,
     skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
     skipBrowserControl: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
+    minimalGateway: process.env.OPENCLAW_TEST_MINIMAL_GATEWAY,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     anthropicApiKeyOld: process.env.ANTHROPIC_API_KEY_OLD,
   };
@@ -352,6 +354,7 @@ export function applyCliBackendLiveEnv(preservedEnv: ReadonlySet<string>): void 
   process.env.OPENCLAW_SKIP_CRON = "1";
   process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
   process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
   if (!preservedEnv.has("ANTHROPIC_API_KEY")) {
     delete process.env.ANTHROPIC_API_KEY;
   }
@@ -369,6 +372,7 @@ export function restoreCliBackendLiveEnv(snapshot: CliBackendLiveEnvSnapshot): v
   restoreEnvVar("OPENCLAW_SKIP_CRON", snapshot.skipCron);
   restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", snapshot.skipCanvas);
   restoreEnvVar("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", snapshot.skipBrowserControl);
+  restoreEnvVar("OPENCLAW_TEST_MINIMAL_GATEWAY", snapshot.minimalGateway);
   restoreEnvVar("ANTHROPIC_API_KEY", snapshot.anthropicApiKey);
   restoreEnvVar("ANTHROPIC_API_KEY_OLD", snapshot.anthropicApiKeyOld);
 }
