@@ -104,6 +104,17 @@ const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
   "--unset",
 ]);
 
+const SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES = new Set([
+  "EACCES",
+  "EISDIR",
+  "ELOOP",
+  "EINVAL",
+  "ENAMETOOLONG",
+  "ENOENT",
+  "ENOTDIR",
+  "EPERM",
+]);
+
 function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
 }
@@ -936,6 +947,13 @@ async function validateScriptFileForShellBleed(params: {
       if (error instanceof SafeOpenError) {
         // Preflight validation is best-effort: skip any safe-open failure and
         // continue to execute the command normally.
+        continue;
+      }
+      const errorCode =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : undefined;
+      if (errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode)) {
         continue;
       }
       throw error;
