@@ -66,7 +66,7 @@ describe("resolveApprovalCommandAuthorization", () => {
     ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
   });
 
-  it("prefers approvalCapability over legacy auth wiring when present", () => {
+  it("uses approvalCapability as the canonical approval auth contract", () => {
     getChannelPluginMock.mockReturnValue({
       approvalCapability: {
         authorizeActorAction: () => ({ authorized: true }),

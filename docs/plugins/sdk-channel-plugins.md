@@ -83,8 +83,8 @@ Most channel plugins do not need approval-specific code.
 - Different approval kinds can intentionally expose different native surfaces.
   Current bundled examples:
   - Slack keeps native approval routing available for both exec and plugin ids.
-  - Matrix keeps native DM/channel routing for exec approvals only and leaves
-    plugin approvals on the shared same-chat `/approve` path.
+  - Matrix keeps the same native DM/channel routing and reaction UX for exec
+    and plugin approvals, while still letting auth differ by approval kind.
 - `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
 For hot channel entrypoints, prefer the narrower runtime subpaths when you only

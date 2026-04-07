@@ -13,7 +13,7 @@ function formatHumanList(values: readonly string[]): string {
   return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
 }
 
-export function describeExecApprovalDeliveryDestination(params: {
+export function describeApprovalDeliveryDestination(params: {
   channelLabel: string;
   deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
 }): string {
@@ -23,7 +23,7 @@ export function describeExecApprovalDeliveryDestination(params: {
     : params.channelLabel;
 }
 
-export function resolveExecApprovalRoutedElsewhereNoticeText(
+export function resolveApprovalRoutedElsewhereNoticeText(
   destinations: readonly string[],
 ): string | null {
   const uniqueDestinations = Array.from(new Set(destinations.map((value) => value.trim()))).filter(

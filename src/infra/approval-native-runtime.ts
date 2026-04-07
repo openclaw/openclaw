@@ -8,11 +8,12 @@ import {
   type ChannelApprovalNativePlannedTarget,
   type ChannelApprovalNativeDeliveryPlan,
 } from "./approval-native-delivery.js";
-import { createExecApprovalNativeRouteReporter } from "./approval-native-route-coordinator.js";
+import { createApprovalNativeRouteReporter } from "./approval-native-route-coordinator.js";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntimeAdapter,
+  type ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalResolved } from "./exec-approvals.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
@@ -221,9 +222,11 @@ export function createChannelNativeApprovalRuntime<
   let runtimeRequest:
     | ((method: string, params: Record<string, unknown>) => Promise<unknown>)
     | null = null;
-  const handledEventKinds = new Set(adapter.eventKinds ?? ["exec"]);
-  const routeReporter = createExecApprovalNativeRouteReporter({
-    handlesExec: handledEventKinds.has("exec"),
+  const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
+    adapter.eventKinds ?? ["exec"],
+  );
+  const routeReporter = createApprovalNativeRouteReporter({
+    handledKinds: handledEventKinds,
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
@@ -244,10 +247,13 @@ export function createChannelNativeApprovalRuntime<
     isConfigured: adapter.isConfigured,
     shouldHandle: (request) => {
       const shouldHandle = adapter.shouldHandle(request);
-      if (shouldHandle || resolveApprovalKind(request) !== "exec") {
+      if (shouldHandle) {
         return shouldHandle;
       }
-      void routeReporter.reportSkipped(request as ExecApprovalRequest);
+      void routeReporter.reportSkipped({
+        approvalKind: resolveApprovalKind(request),
+        request,
+      });
       return false;
     },
     finalizeResolved: adapter.finalizeResolved,
@@ -328,13 +334,12 @@ export function createChannelNativeApprovalRuntime<
         deliveredTargets = deliveryResult.deliveredTargets;
         return deliveryResult.entries;
       } finally {
-        if (approvalKind === "exec") {
-          await routeReporter.reportDelivery({
-            request: request as ExecApprovalRequest,
-            deliveryPlan,
-            deliveredTargets,
-          });
-        }
+        await routeReporter.reportDelivery({
+          approvalKind,
+          request,
+          deliveryPlan,
+          deliveredTargets,
+        });
       }
     },
   });

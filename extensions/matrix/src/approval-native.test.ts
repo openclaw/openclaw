@@ -117,7 +117,7 @@ describe("matrix native approval adapter", () => {
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
   });
 
-  it("keeps plugin forwarding fallback active when native delivery is exec-only", () => {
+  it("suppresses same-channel plugin forwarding when Matrix native delivery is available", () => {
     const shouldSuppress = matrixNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
       throw new Error("delivery suppression helper unavailable");
@@ -135,9 +135,11 @@ describe("matrix native approval adapter", () => {
           accountId: "default",
         },
         request: {
-          id: "req-1",
+          id: "plugin:req-1",
           request: {
-            command: "echo hi",
+            title: "Plugin Approval Required",
+            description: "Allow plugin action",
+            pluginId: "git-tools",
             turnSourceChannel: "matrix",
             turnSourceTo: "room:!ops:example.org",
             turnSourceAccountId: "default",

@@ -1,31 +1,35 @@
+import type { ChannelApprovalKind } from "../channels/plugins/types.adapters.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
 } from "./approval-native-delivery.js";
 import {
-  describeExecApprovalDeliveryDestination,
-  resolveExecApprovalRoutedElsewhereNoticeText,
+  describeApprovalDeliveryDestination,
+  resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 type GatewayRequestFn = <T = unknown>(
   method: string,
   params: Record<string, unknown>,
 ) => Promise<T>;
 
-type ExecRouteRuntimeRecord = {
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+
+type ApprovalRouteRuntimeRecord = {
   runtimeId: string;
-  handlesExec: boolean;
+  handledKinds: ReadonlySet<ChannelApprovalKind>;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
   requestGateway: GatewayRequestFn;
 };
 
-type ExecRouteReport = {
+type ApprovalRouteReport = {
   runtimeId: string;
-  request: ExecApprovalRequest;
+  request: ApprovalRequest;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
@@ -34,10 +38,11 @@ type ExecRouteReport = {
   requestGateway: GatewayRequestFn;
 };
 
-type PendingExecRouteNotice = {
-  request: ExecApprovalRequest;
+type PendingApprovalRouteNotice = {
+  request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
   expectedRuntimeIds: Set<string>;
-  reports: Map<string, ExecRouteReport>;
+  reports: Map<string, ApprovalRouteReport>;
   cleanupTimeout: NodeJS.Timeout | null;
   finalized: boolean;
 };
@@ -49,38 +54,42 @@ type RouteNoticeTarget = {
   threadId?: string | number | null;
 };
 
-const activeExecRouteRuntimes = new Map<string, ExecRouteRuntimeRecord>();
-const pendingExecRouteNotices = new Map<string, PendingExecRouteNotice>();
-let execRouteRuntimeSeq = 0;
+const activeApprovalRouteRuntimes = new Map<string, ApprovalRouteRuntimeRecord>();
+const pendingApprovalRouteNotices = new Map<string, PendingApprovalRouteNotice>();
+let approvalRouteRuntimeSeq = 0;
 
 function normalizeChannel(value?: string | null): string {
   return value?.trim().toLowerCase() || "";
 }
 
-function clearPendingExecRouteNotice(approvalId: string): void {
-  const entry = pendingExecRouteNotices.get(approvalId);
+function clearPendingApprovalRouteNotice(approvalId: string): void {
+  const entry = pendingApprovalRouteNotices.get(approvalId);
   if (!entry) {
     return;
   }
-  pendingExecRouteNotices.delete(approvalId);
+  pendingApprovalRouteNotices.delete(approvalId);
   if (entry.cleanupTimeout) {
     clearTimeout(entry.cleanupTimeout);
   }
 }
 
-function createPendingExecRouteNotice(request: ExecApprovalRequest): PendingExecRouteNotice {
-  const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
+function createPendingApprovalRouteNotice(params: {
+  request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
+}): PendingApprovalRouteNotice {
+  const timeoutMs = Math.max(0, params.request.expiresAtMs - Date.now());
   const cleanupTimeout = setTimeout(() => {
-    clearPendingExecRouteNotice(request.id);
+    clearPendingApprovalRouteNotice(params.request.id);
   }, timeoutMs);
   cleanupTimeout.unref?.();
   return {
-    request,
-    // Snapshot the active exec runtimes so we emit one notice only after every
-    // sibling runtime has reported its actual delivery outcome for this approval.
+    request: params.request,
+    approvalKind: params.approvalKind,
+    // Snapshot the active native runtimes that handle this approval kind so we
+    // emit one notice only after every sibling runtime has reported.
     expectedRuntimeIds: new Set(
-      Array.from(activeExecRouteRuntimes.values())
-        .filter((runtime) => runtime.handlesExec)
+      Array.from(activeApprovalRouteRuntimes.values())
+        .filter((runtime) => runtime.handledKinds.has(params.approvalKind))
         .map((runtime) => runtime.runtimeId),
     ),
     reports: new Map(),
@@ -89,9 +98,7 @@ function createPendingExecRouteNotice(request: ExecApprovalRequest): PendingExec
   };
 }
 
-function resolveRouteNoticeTargetFromRequest(
-  request: ExecApprovalRequest,
-): RouteNoticeTarget | null {
+function resolveRouteNoticeTargetFromRequest(request: ApprovalRequest): RouteNoticeTarget | null {
   const channel = request.request.turnSourceChannel?.trim();
   const to = request.request.turnSourceTo?.trim();
   if (!channel || !to) {
@@ -105,7 +112,7 @@ function resolveRouteNoticeTargetFromRequest(
   };
 }
 
-function resolveFallbackRouteNoticeTarget(report: ExecRouteReport): RouteNoticeTarget | null {
+function resolveFallbackRouteNoticeTarget(report: ApprovalRouteReport): RouteNoticeTarget | null {
   const channel = report.channel?.trim();
   const to = report.deliveryPlan.originTarget?.to?.trim();
   if (!channel || !to) {
@@ -119,7 +126,7 @@ function resolveFallbackRouteNoticeTarget(report: ExecRouteReport): RouteNoticeT
   };
 }
 
-function didReportDeliverToOrigin(report: ExecRouteReport): boolean {
+function didReportDeliverToOrigin(report: ApprovalRouteReport): boolean {
   const originTarget = report.deliveryPlan.originTarget;
   if (!originTarget) {
     return false;
@@ -130,9 +137,9 @@ function didReportDeliverToOrigin(report: ExecRouteReport): boolean {
   );
 }
 
-function resolveExecRouteNotice(params: {
-  request: ExecApprovalRequest;
-  reports: readonly ExecRouteReport[];
+function resolveApprovalRouteNotice(params: {
+  request: ApprovalRequest;
+  reports: readonly ApprovalRouteReport[];
 }): { requestGateway: GatewayRequestFn; target: RouteNoticeTarget; text: string } | null {
   const explicitTarget = resolveRouteNoticeTargetFromRequest(params.request);
   const originChannel = normalizeChannel(
@@ -173,19 +180,19 @@ function resolveExecRouteNotice(params: {
       return [];
     }
     return [
-      describeExecApprovalDeliveryDestination({
+      describeApprovalDeliveryDestination({
         channelLabel: report.channelLabel,
         deliveredTargets: report.deliveredTargets,
       }),
     ];
   });
-  const text = resolveExecApprovalRoutedElsewhereNoticeText(destinations);
+  const text = resolveApprovalRoutedElsewhereNoticeText(destinations);
   if (!text) {
     return null;
   }
 
   const requestGateway =
-    params.reports.find((report) => activeExecRouteRuntimes.has(report.runtimeId))
+    params.reports.find((report) => activeApprovalRouteRuntimes.has(report.runtimeId))
       ?.requestGateway ?? params.reports[0]?.requestGateway;
   if (!requestGateway) {
     return null;
@@ -198,8 +205,8 @@ function resolveExecRouteNotice(params: {
   };
 }
 
-async function maybeFinalizeExecRouteNotice(approvalId: string): Promise<void> {
-  const entry = pendingExecRouteNotices.get(approvalId);
+async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<void> {
+  const entry = pendingApprovalRouteNotices.get(approvalId);
   if (!entry || entry.finalized) {
     return;
   }
@@ -211,11 +218,11 @@ async function maybeFinalizeExecRouteNotice(approvalId: string): Promise<void> {
 
   entry.finalized = true;
   const reports = Array.from(entry.reports.values());
-  const notice = resolveExecRouteNotice({
+  const notice = resolveApprovalRouteNotice({
     request: entry.request,
     reports,
   });
-  clearPendingExecRouteNotice(approvalId);
+  clearPendingApprovalRouteNotice(approvalId);
   if (!notice) {
     return;
   }
@@ -234,27 +241,31 @@ async function maybeFinalizeExecRouteNotice(approvalId: string): Promise<void> {
   }
 }
 
-export function createExecApprovalNativeRouteReporter(params: {
-  handlesExec: boolean;
+export function createApprovalNativeRouteReporter(params: {
+  handledKinds: ReadonlySet<ChannelApprovalKind>;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
   requestGateway: GatewayRequestFn;
 }) {
-  const runtimeId = `native-approval-route:${++execRouteRuntimeSeq}`;
+  const runtimeId = `native-approval-route:${++approvalRouteRuntimeSeq}`;
   let registered = false;
 
   const report = async (payload: {
-    request: ExecApprovalRequest;
+    approvalKind: ChannelApprovalKind;
+    request: ApprovalRequest;
     deliveryPlan: ChannelApprovalNativeDeliveryPlan;
     deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
   }): Promise<void> => {
-    if (!registered || !params.handlesExec) {
+    if (!registered || !params.handledKinds.has(payload.approvalKind)) {
       return;
     }
     const entry =
-      pendingExecRouteNotices.get(payload.request.id) ??
-      createPendingExecRouteNotice(payload.request);
+      pendingApprovalRouteNotices.get(payload.request.id) ??
+      createPendingApprovalRouteNotice({
+        request: payload.request,
+        approvalKind: payload.approvalKind,
+      });
     entry.expectedRuntimeIds.add(runtimeId);
     entry.reports.set(runtimeId, {
       runtimeId,
@@ -266,8 +277,8 @@ export function createExecApprovalNativeRouteReporter(params: {
       deliveredTargets: payload.deliveredTargets,
       requestGateway: params.requestGateway,
     });
-    pendingExecRouteNotices.set(payload.request.id, entry);
-    await maybeFinalizeExecRouteNotice(payload.request.id);
+    pendingApprovalRouteNotices.set(payload.request.id, entry);
+    await maybeFinalizeApprovalRouteNotice(payload.request.id);
   };
 
   return {
@@ -275,9 +286,9 @@ export function createExecApprovalNativeRouteReporter(params: {
       if (registered) {
         return;
       }
-      activeExecRouteRuntimes.set(runtimeId, {
+      activeApprovalRouteRuntimes.set(runtimeId, {
         runtimeId,
-        handlesExec: params.handlesExec,
+        handledKinds: params.handledKinds,
         channel: params.channel,
         channelLabel: params.channelLabel,
         accountId: params.accountId,
@@ -285,9 +296,13 @@ export function createExecApprovalNativeRouteReporter(params: {
       });
       registered = true;
     },
-    async reportSkipped(request: ExecApprovalRequest): Promise<void> {
+    async reportSkipped(params: {
+      approvalKind: ChannelApprovalKind;
+      request: ApprovalRequest;
+    }): Promise<void> {
       await report({
-        request,
+        approvalKind: params.approvalKind,
+        request: params.request,
         deliveryPlan: {
           targets: [],
           originTarget: null,
@@ -297,7 +312,8 @@ export function createExecApprovalNativeRouteReporter(params: {
       });
     },
     async reportDelivery(params: {
-      request: ExecApprovalRequest;
+      approvalKind: ChannelApprovalKind;
+      request: ApprovalRequest;
       deliveryPlan: ChannelApprovalNativeDeliveryPlan;
       deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
     }): Promise<void> {
@@ -308,23 +324,23 @@ export function createExecApprovalNativeRouteReporter(params: {
         return;
       }
       registered = false;
-      activeExecRouteRuntimes.delete(runtimeId);
-      for (const entry of pendingExecRouteNotices.values()) {
+      activeApprovalRouteRuntimes.delete(runtimeId);
+      for (const entry of pendingApprovalRouteNotices.values()) {
         entry.expectedRuntimeIds.delete(runtimeId);
         if (entry.expectedRuntimeIds.size === 0) {
-          clearPendingExecRouteNotice(entry.request.id);
+          clearPendingApprovalRouteNotice(entry.request.id);
           continue;
         }
-        await maybeFinalizeExecRouteNotice(entry.request.id);
+        await maybeFinalizeApprovalRouteNotice(entry.request.id);
       }
     },
   };
 }
 
-export function clearExecApprovalNativeRouteStateForTest(): void {
-  for (const approvalId of Array.from(pendingExecRouteNotices.keys())) {
-    clearPendingExecRouteNotice(approvalId);
+export function clearApprovalNativeRouteStateForTest(): void {
+  for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
+    clearPendingApprovalRouteNotice(approvalId);
   }
-  activeExecRouteRuntimes.clear();
-  execRouteRuntimeSeq = 0;
+  activeApprovalRouteRuntimes.clear();
+  approvalRouteRuntimeSeq = 0;
 }

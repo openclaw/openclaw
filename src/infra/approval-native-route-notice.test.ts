@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  describeExecApprovalDeliveryDestination,
-  resolveExecApprovalRoutedElsewhereNoticeText,
+  describeApprovalDeliveryDestination,
+  resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 
-describe("describeExecApprovalDeliveryDestination", () => {
+describe("describeApprovalDeliveryDestination", () => {
   it("labels approver-DM-only delivery as channel DMs", () => {
     expect(
-      describeExecApprovalDeliveryDestination({
+      describeApprovalDeliveryDestination({
         channelLabel: "Telegram",
         deliveredTargets: [
           {
@@ -22,7 +22,7 @@ describe("describeExecApprovalDeliveryDestination", () => {
 
   it("labels mixed-surface delivery as the channel itself", () => {
     expect(
-      describeExecApprovalDeliveryDestination({
+      describeApprovalDeliveryDestination({
         channelLabel: "Matrix",
         deliveredTargets: [
           {
@@ -36,16 +36,16 @@ describe("describeExecApprovalDeliveryDestination", () => {
   });
 });
 
-describe("resolveExecApprovalRoutedElsewhereNoticeText", () => {
+describe("resolveApprovalRoutedElsewhereNoticeText", () => {
   it("reports sorted unique destinations", () => {
     expect(
-      resolveExecApprovalRoutedElsewhereNoticeText(["Telegram DMs", "Matrix DMs", "Telegram DMs"]),
+      resolveApprovalRoutedElsewhereNoticeText(["Telegram DMs", "Matrix DMs", "Telegram DMs"]),
     ).toBe(
       "Approval required. I sent the approval request to Matrix DMs or Telegram DMs, not this chat.",
     );
   });
 
   it("suppresses the notice when there are no destinations", () => {
-    expect(resolveExecApprovalRoutedElsewhereNoticeText([])).toBeNull();
+    expect(resolveApprovalRoutedElsewhereNoticeText([])).toBeNull();
   });
 });
