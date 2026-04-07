@@ -18,6 +18,11 @@ export type GatewayMemoryProbe = {
    * probes, not for transport failures.
    */
   skipped: boolean;
+  fts?: {
+    enabled: boolean;
+    available: boolean;
+    error?: string;
+  };
 };
 
 function isGatewayCallTimeout(message: string): boolean {
@@ -106,6 +111,7 @@ export async function probeGatewayMemoryStatus(params: {
       ready: payload.embedding.ok,
       error: payload.embedding.error,
       skipped: !gatewayChecked,
+      fts: payload.fts,
     };
   } catch (err) {
     const message = formatErrorMessage(err);

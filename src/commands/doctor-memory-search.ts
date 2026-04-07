@@ -317,6 +317,11 @@ export async function noteMemorySearchHealth(
       ready: boolean;
       error?: string;
       skipped?: boolean;
+      fts?: {
+        enabled: boolean;
+        available: boolean;
+        error?: string;
+      };
     };
   },
 ): Promise<void> {
@@ -364,6 +369,11 @@ export async function noteMemorySearchHealth(
       );
     }
     return;
+  }
+
+  const ftsWarning = buildGatewayFtsWarning(opts?.gatewayMemoryProbe?.fts);
+  if (ftsWarning) {
+    note(ftsWarning, "Memory search");
   }
 
   // If a specific provider is configured (not "auto"), check only that one.
@@ -601,4 +611,31 @@ function buildGatewayProbeWarning(
   return detail
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
+}
+
+function buildGatewayFtsWarning(
+  fts:
+    | {
+        enabled: boolean;
+        available: boolean;
+        error?: string;
+      }
+    | undefined,
+): string | null {
+  if (!fts?.enabled || fts.available) {
+    return null;
+  }
+  const detail = fts.error?.trim();
+  return [
+    "Gateway reports SQLite FTS5 is unavailable for memory search.",
+    "Keyword/BM25 fallback in hybrid memory search is disabled until FTS5 is available.",
+    detail ? `Gateway probe: ${detail}` : null,
+    detail?.toLowerCase().includes("no such module: fts5")
+      ? "This usually means your Node.js SQLite build was compiled without FTS5 (ENABLE_FTS5)."
+      : null,
+    "",
+    `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
