@@ -1290,7 +1290,6 @@
     "@aws-sdk/client-bedrock": "3.1024.0",
     "@aws-sdk/client-bedrock-runtime": "3.1024.0",
     "@aws-sdk/credential-provider-node": "3.972.29",
-    "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.2.0",
     "@homebridge/ciao": "^1.3.6",
     "@line/bot-sdk": "^11.0.0",

@@ -9,7 +9,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
-export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
+export const BUNDLED_PLUGIN_INSTALL_TARGETS = [
+  {
+    name: "@buape/carbon",
+    version: "0.14.0",
+    pluginIds: ["discord"],
+  },
+];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
