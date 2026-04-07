@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
@@ -198,7 +199,7 @@ export function resolveExecApprovalsSocketPath(): string {
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
   const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? trimmed.toLowerCase() : null;
+  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
 }
 
 function mergeLegacyAgent(

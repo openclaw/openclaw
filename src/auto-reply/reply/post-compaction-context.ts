@@ -202,7 +202,9 @@ export function extractSections(
 
         if (!inSection) {
           // Check if this is our target section (case-insensitive)
-          if (headingText.toLowerCase() === name.toLowerCase()) {
+          if (
+            normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
+          ) {
             inSection = true;
             sectionLevel = level;
             sectionLines = [line];

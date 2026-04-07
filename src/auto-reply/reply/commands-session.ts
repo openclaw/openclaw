@@ -13,6 +13,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -262,7 +263,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
-  if (rawArgs.toLowerCase().startsWith("cost")) {
+  if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
     const sessionSummary = await loadSessionCostSummary({
       sessionId: params.sessionEntry?.sessionId,
       sessionEntry: params.sessionEntry,
@@ -347,7 +348,7 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   }
 
   const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
-  const rawMode = rawArgs.toLowerCase();
+  const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
   if (!rawMode || rawMode === "status") {
     const state = resolveFastModeState({
       cfg: params.cfg,
@@ -406,7 +407,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const rest = normalized.slice(SESSION_COMMAND_PREFIX.length).trim();
   const tokens = rest.split(/\s+/).filter(Boolean);
-  const action = tokens[0]?.toLowerCase();
+  const action = normalizeOptionalLowercaseString(tokens[0]);
   if (action !== SESSION_ACTION_IDLE && action !== SESSION_ACTION_MAX_AGE) {
     return {
       shouldContinue: false,

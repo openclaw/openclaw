@@ -1,4 +1,5 @@
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { isAnthropicFamilyCacheTtlEligible } from "./anthropic-family-cache-semantics.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
@@ -22,8 +23,8 @@ export function isCacheTtlEligibleProvider(
   modelId: string,
   modelApi?: string,
 ): boolean {
-  const normalizedProvider = provider.toLowerCase();
-  const normalizedModelId = modelId.toLowerCase();
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const pluginEligibility = resolveProviderCacheTtlEligibility({
     provider: normalizedProvider,
     context: {

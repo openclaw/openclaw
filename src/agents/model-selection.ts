@@ -176,7 +176,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!model) {
     return undefined;
   }
-  const normalized = model.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(model);
   const providers = new Set<string>();
   const addProvider = (provider: string) => {
     const normalizedProvider = normalizeProviderId(provider);
@@ -198,7 +198,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       if (!parsed) {
         continue;
       }
-      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+      if (parsed.model === model || normalizeLowercaseStringOrEmpty(parsed.model) === normalized) {
         addProvider(parsed.provider);
         if (providers.size > 1) {
           return undefined;
@@ -218,7 +218,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || modelId.toLowerCase() === normalized) {
+        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
           addProvider(providerId);
         }
       }
@@ -717,20 +717,22 @@ export function resolveThinkingDefault(params: {
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModel = params.model.toLowerCase().replace(/\./g, "-");
+  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
   const catalogCandidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
   const configuredModels = params.cfg.agents?.defaults?.models;
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
+  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
+  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
   const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
   const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
   const explicitModelConfigured =
     (configuredModels ? canonicalKey in configuredModels : false) ||
     Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
-    normalizedPrimarySelection === canonicalKey.toLowerCase() ||
-    Boolean(legacyKey && normalizedPrimarySelection === legacyKey.toLowerCase()) ||
+    normalizedPrimarySelection === normalizedCanonicalKey ||
+    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
     normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??

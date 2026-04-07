@@ -991,7 +991,9 @@ export async function handleToolExecutionEnd(
           const approvalData: AgentApprovalEventData = {
             phase: "resolved",
             kind: "exec",
-            status: parsedApprovalResult.metadata.toLowerCase().includes("approval-request-failed")
+            status: normalizeOptionalLowercaseString(parsedApprovalResult.metadata)?.includes(
+              "approval-request-failed",
+            )
               ? "failed"
               : "denied",
             title: "Command approval resolved",

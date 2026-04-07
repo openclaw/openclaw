@@ -13,6 +13,7 @@ import {
   resolvePluginLoaderJitiConfig,
 } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
 
@@ -68,7 +69,7 @@ const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedModuleExports = new Map<string, unknown>();
 
 function resolveSpecifierCandidates(modulePath: string): string[] {
-  const ext = path.extname(modulePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(modulePath));
   if (ext === ".js") {
     return [modulePath, modulePath.slice(0, -3) + ".ts"];
   }
@@ -279,7 +280,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   if (
     process.platform === "win32" &&
     modulePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase())
+    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
   ) {
     try {
       loaded = nodeRequire(modulePath);

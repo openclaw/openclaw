@@ -42,6 +42,16 @@ export type EmbeddedRunAttemptResult = {
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
   promptError: unknown;
+  /**
+   * Identifies which phase produced the promptError.
+   * - "prompt": the LLM call itself failed and may be eligible for retry/fallback.
+   * - "compaction": the prompt succeeded, but waiting for compaction/retry teardown was aborted;
+   *   this must not be retried as a fresh prompt or the same tool turn can replay.
+   * - "precheck": pre-prompt overflow recovery intentionally short-circuited the prompt so the
+   *   outer run loop can recover via compaction/truncation before any model call is made.
+   * - null: no promptError.
+   */
+  promptErrorSource: "prompt" | "compaction" | "precheck" | null;
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;

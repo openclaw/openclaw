@@ -5,6 +5,7 @@ import {
   createPreCryptoDirectDmAuthorizer,
   DEFAULT_ACCOUNT_ID,
   dispatchInboundDirectDmWithRuntime,
+  type ChannelOutboundAdapter,
   resolveInboundDirectDmAccessWithRuntime,
   type ChannelPlugin,
 } from "./channel-api.js";
@@ -16,7 +17,12 @@ import { resolveDefaultNostrAccountId, type ResolvedNostrAccount } from "./types
 type NostrGatewayStart = NonNullable<
   NonNullable<ChannelPlugin<ResolvedNostrAccount>["gateway"]>["startAccount"]
 >;
-type NostrOutbound = NonNullable<ChannelPlugin<ResolvedNostrAccount>["outbound"]>;
+type NostrOutboundAdapter = Pick<
+  ChannelOutboundAdapter,
+  "deliveryMode" | "textChunkLimit" | "sendText"
+> & {
+  sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+};
 
 const activeBuses = new Map<string, NostrBusHandle>();
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
@@ -266,10 +272,7 @@ export const nostrPairingTextAdapter = {
   },
 };
 
-export const nostrOutboundAdapter: Pick<
-  NostrOutbound,
-  "deliveryMode" | "textChunkLimit" | "sendText"
-> = {
+export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {

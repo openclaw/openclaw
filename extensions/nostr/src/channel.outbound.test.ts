@@ -64,7 +64,7 @@ describe("nostr outbound cfg threading", () => {
     )) as { stop: () => void };
 
     const cfg = createCfg();
-    await nostrOutboundAdapter.sendText!({
+    await nostrOutboundAdapter.sendText({
       cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "|a|b|",
@@ -121,7 +121,7 @@ describe("nostr outbound cfg threading", () => {
       },
     };
 
-    await nostrOutboundAdapter.sendText!({
+    await nostrOutboundAdapter.sendText({
       cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "hello",

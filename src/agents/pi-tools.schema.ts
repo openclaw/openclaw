@@ -2,6 +2,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
 import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
@@ -145,10 +146,10 @@ export function normalizeToolParameterSchema(
   // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const isGeminiProvider =
-    options?.modelProvider?.toLowerCase().includes("google") ||
-    options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
+    normalizedProvider.includes("google") || normalizedProvider.includes("gemini");
+  const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): unknown {

@@ -293,7 +293,7 @@ function normalizePathForComparison(input: string): string {
     // Keep lexical path for non-existent directories.
   }
   if (process.platform === "win32") {
-    return normalized.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(normalized);
   }
   return normalized;
 }

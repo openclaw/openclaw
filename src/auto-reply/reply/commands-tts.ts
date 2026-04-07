@@ -47,7 +47,7 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
     return { action: "status", args: "" };
   }
   const [action, ...tail] = rest.split(/\s+/);
-  return { action: action.toLowerCase(), args: tail.join(" ").trim() };
+  return { action: normalizeOptionalLowercaseString(action) ?? "", args: tail.join(" ").trim() };
 }
 
 function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
