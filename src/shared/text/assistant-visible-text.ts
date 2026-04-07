@@ -525,7 +525,7 @@ function stripRelevantMemoriesTags(text: string): string {
 
 const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff]/u;
 const SUSPICIOUS_PREAMBLE_QUICK_RE =
-  /<\s*final\b|<\s*think\b|\b(?:let me|i need to|i should|i'm going to|i am going to|the user|sophie[, ]|cybera[, ]|shodan[, ]|for the record)\b|[\u3400-\u9fff\uf900-\ufaff]/iu;
+  /<\s*final\b|<\s*think\b|\b(?:let me|i need to|need to|i should|i'm going to|i am going to|now i|supporting evidence|root cause|the user|sophie[, ]|cybera[, ]|shodan[, ]|for the record)\b|[\u3400-\u9fff\uf900-\ufaff]/iu;
 const SUSPICIOUS_LINE_RE =
   /^\s*(?:[-*]\s+)?(?:let me\b|i need to\b|i should\b|i'm going to\b|i am going to\b|need to\b|sophie[, :]?\b|cybera[, :]?\b|shodan[, :]?\b|for the record\b|now i\b|supporting evidence\b|root cause\b)/iu;
 
