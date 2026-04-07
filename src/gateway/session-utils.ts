@@ -400,8 +400,19 @@ export function loadSessionEntry(sessionKey: string) {
     store,
   });
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = freshestMatch?.key !== canonicalKey ? freshestMatch?.key : undefined;
-  return { cfg, storePath, store, entry: freshestMatch?.entry, canonicalKey, legacyKey };
+  // Prefer an exact key match over the freshest-updatedAt match. Without this,
+  // clicking an archived compound-key session (e.g. agent:main:main:<oldId>)
+  // returns the NEW primary-key session because it has a newer updatedAt.
+  const trimmedKey = sessionKey.trim();
+  const exactEntry = store[trimmedKey] ?? store[canonicalKey];
+  const resolvedEntry = exactEntry ?? freshestMatch?.entry;
+  const resolvedKey = exactEntry
+    ? store[trimmedKey]
+      ? trimmedKey
+      : canonicalKey
+    : freshestMatch?.key;
+  const legacyKey = resolvedKey !== canonicalKey ? resolvedKey : undefined;
+  return { cfg, storePath, store, entry: resolvedEntry, canonicalKey, legacyKey };
 }
 
 export function resolveFreshestSessionStoreMatchFromStoreKeys(
