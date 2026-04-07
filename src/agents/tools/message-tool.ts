@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { POLL_CREATION_PARAM_DEFS } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
@@ -207,7 +207,10 @@ function buildPollSchema() {
       ),
     ),
   };
-  for (const name of SHARED_POLL_CREATION_PARAM_NAMES) {
+  // Shared poll creation param names are inlined here to avoid a jiti ESM TDZ issue
+  // on Node 22.16.0 + ARM64 where importing from poll-params.js can cause
+  // "Cannot access '...' before initialization" errors in bundled builds.
+  for (const name of ["pollQuestion", "pollOption", "pollDurationHours", "pollMulti"] as const) {
     const def = POLL_CREATION_PARAM_DEFS[name];
     switch (def.kind) {
       case "string":
