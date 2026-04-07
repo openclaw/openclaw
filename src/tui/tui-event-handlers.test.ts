@@ -116,6 +116,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     state?: Partial<TuiStateAccess>;
     chatLog?: HandlerChatLog;
     btw?: HandlerBtwPresenter;
+    refreshSessionInfo?: () => Promise<void>;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
@@ -126,6 +127,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       tui: context.tui,
       state,
       setActivityStatus: context.setActivityStatus,
+      refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
       isLocalRunId: context.isLocalRunId,
@@ -585,6 +587,20 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("fresh", "run-fresh");
   });
 
+  it("does not clear optimistic local messages when a gap arrives before first run event", () => {
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const { state, loadHistory, handleEventGap } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+      refreshSessionInfo,
+    });
+
+    handleEventGap();
+
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+  });
+
   it("does not clear active streaming run while still receiving events", () => {
     const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -641,13 +657,134 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.pendingOptimisticUserMessage).toBe(true);
     expect(isLocalRunId("run-a")).toBe(false);
 
-    // First delta from the actual new run should claim optimistic local binding.
+    // Pre-gap run reaches a terminal state; pending optimistic binding is still intact.
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done A" }] },
+    });
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+
+    // First delta from the next run should now claim optimistic local binding.
     handleChatEvent({
       runId: "run-b",
       sessionKey: state.currentSessionKey,
       state: "delta",
       message: { content: "B1" },
     });
+    expect(state.activeChatRunId).toBe("run-b");
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(isLocalRunId("run-b")).toBe(true);
+  });
+
+  it("does not let a foreign post-gap run consume pending optimistic binding", () => {
+    const { state, isLocalRunId, handleChatEvent, handleEventGap } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: false },
+    });
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "A1" },
+    });
+    state.pendingOptimisticUserMessage = true;
+
+    handleEventGap();
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+
+    handleChatEvent({
+      runId: "run-foreign",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "foreign" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-foreign");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(isLocalRunId("run-foreign")).toBe(false);
+
+    handleChatEvent({
+      runId: "run-foreign",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "foreign done" }] },
+    });
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+
+    handleChatEvent({
+      runId: "run-foreign-2",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "foreign 2" },
+    });
+    expect(state.activeChatRunId).toBe("run-foreign-2");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(isLocalRunId("run-foreign-2")).toBe(false);
+  });
+
+  it("preserves gap guard across repeated gap callbacks without an active run", () => {
+    const { state, isLocalRunId, handleChatEvent, handleEventGap } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: false },
+    });
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "A1" },
+    });
+    state.pendingOptimisticUserMessage = true;
+
+    handleEventGap({ reload: false });
+    handleEventGap({ reload: false });
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "late A" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-a");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(isLocalRunId("run-a")).toBe(false);
+  });
+
+  it("allows a known local post-gap run to claim pending optimistic binding", () => {
+    const { state, isLocalRunId, noteLocalRunId, handleChatEvent, handleEventGap } =
+      createHandlersHarness({
+        state: { activeChatRunId: null, pendingOptimisticUserMessage: false },
+      });
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "A1" },
+    });
+    state.pendingOptimisticUserMessage = true;
+
+    handleEventGap({ reload: false });
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+
+    // Simulate a locally-sent run id that arrives after the pre-gap run never terminated.
+    noteLocalRunId("run-b");
+
+    handleChatEvent({
+      runId: "run-b",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "B1" },
+    });
+
     expect(state.activeChatRunId).toBe("run-b");
     expect(state.pendingOptimisticUserMessage).toBe(false);
     expect(isLocalRunId("run-b")).toBe(true);

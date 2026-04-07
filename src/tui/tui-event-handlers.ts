@@ -242,27 +242,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     noteSessionRun(evt.runId);
     const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
-    if (
-      state.pendingOptimisticUserMessage &&
-      gapClearedRunId &&
-      state.activeChatRunId === gapClearedRunId &&
-      evt.runId !== gapClearedRunId &&
-      !isLocalBtwRun
-    ) {
-      state.activeChatRunId = evt.runId;
-      noteLocalRunId?.(evt.runId);
-      state.pendingOptimisticUserMessage = false;
-      gapClearedRunId = null;
-    }
+    const isKnownLocalRun = isLocalRunId?.(evt.runId) ?? false;
     if (!state.activeChatRunId && !isLocalBtwRun) {
       state.activeChatRunId = evt.runId;
       const isGapRecoveredRun = gapClearedRunId != null && evt.runId === gapClearedRunId;
-      if (state.pendingOptimisticUserMessage && !isGapRecoveredRun) {
+      const canClaimOptimisticRun =
+        state.pendingOptimisticUserMessage &&
+        !isGapRecoveredRun &&
+        (!gapClearedRunId || isKnownLocalRun);
+      if (canClaimOptimisticRun) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = false;
-        gapClearedRunId = null;
-      } else if (!isGapRecoveredRun) {
-        gapClearedRunId = null;
       }
     }
     if (evt.state === "delta") {
@@ -439,13 +429,23 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const handleEventGap = (opts?: { reload?: boolean }) => {
     const shouldReload = opts?.reload !== false;
+    const refreshAfterGap = () => {
+      if (loadHistory) {
+        void loadHistory();
+        return;
+      }
+      void refreshSessionInfo?.();
+    };
     syncSessionKey();
     const previousRunId = state.activeChatRunId;
     if (!previousRunId) {
-      gapClearedRunId = null;
       if (shouldReload) {
-        void loadHistory?.();
-        void refreshSessionInfo?.();
+        if (state.pendingOptimisticUserMessage) {
+          // Preserve optimistic local user messages until the first bound run event.
+          void refreshSessionInfo?.();
+        } else {
+          refreshAfterGap();
+        }
       }
       return;
     }
@@ -459,8 +459,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     forgetLocalRunId?.(previousRunId);
     setActivityStatus("idle");
     if (shouldReload) {
-      void loadHistory?.();
-      void refreshSessionInfo?.();
+      refreshAfterGap();
     }
   };
 

@@ -162,12 +162,15 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
   });
 
-  it("defers local run binding until gateway events provide a real run id", async () => {
-    const { handleCommand, noteLocalRunId, state } = createHarness();
+  it("pre-tags outbound non-BTW sends with the local run id", async () => {
+    const { handleCommand, sendChat, noteLocalRunId, state } = createHarness();
 
     await handleCommand("/context");
 
-    expect(noteLocalRunId).not.toHaveBeenCalled();
+    const sentRunId = sendChat.mock.calls[0]?.[0]?.runId;
+    expect(typeof sentRunId).toBe("string");
+    expect(noteLocalRunId).toHaveBeenCalledTimes(1);
+    expect(noteLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(true);
   });
