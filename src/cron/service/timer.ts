@@ -1170,7 +1170,7 @@ async function executeMainSessionCronJob(
     agentId: job.agentId,
     sessionKey: targetMainSessionKey,
     contextKey: `cron:${job.id}`,
-    wakeRequested: job.wakeMode === "now",
+    wakeRequested: true,
   });
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
