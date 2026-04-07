@@ -21,6 +21,7 @@ import {
 import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
+  type XSearchToolDefinition,
 } from "./x-search-tool-shared.js";
 
 class PluginToolInputError extends Error {
@@ -122,7 +123,7 @@ function buildXSearchCacheKey(params: {
 export function createXSearchTool(options?: {
   config?: unknown;
   runtimeConfig?: Record<string, unknown> | null;
-}) {
+}): XSearchToolDefinition | null {
   const xSearchConfig = resolveXSearchConfig(options?.config);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   if (

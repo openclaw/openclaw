@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { TArray, TBoolean, TObject, TOptional, TString } from "@sinclair/typebox";
 
 export function buildMissingXSearchApiKeyPayload() {
   return {
@@ -10,9 +11,27 @@ export function buildMissingXSearchApiKeyPayload() {
   };
 }
 
+type XSearchToolParameters = TObject<{
+  query: TString;
+  allowed_x_handles: TOptional<TArray<TString>>;
+  excluded_x_handles: TOptional<TArray<TString>>;
+  from_date: TOptional<TString>;
+  to_date: TOptional<TString>;
+  enable_image_understanding: TOptional<TBoolean>;
+  enable_video_understanding: TOptional<TBoolean>;
+}>;
+
+export type XSearchToolDefinition = {
+  label: string;
+  name: string;
+  description: string;
+  parameters: XSearchToolParameters;
+  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>;
+};
+
 export function createXSearchToolDefinition(
   execute: (toolCallId: string, args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>,
-) {
+): XSearchToolDefinition {
   return {
     label: "X Search",
     name: "x_search",

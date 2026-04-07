@@ -20,10 +20,13 @@ export function isModernXaiModel(modelId: string): boolean {
 export function resolveXaiForwardCompatModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
-}) {
+}): ProviderRuntimeModel {
   const definition = resolveXaiCatalogEntry(params.ctx.modelId);
   if (!definition) {
-    return undefined;
+    // Double assertion used intentionally: the linter cannot resolve ProviderRuntimeModel
+    // from the workspace path and treats it as `any`, making `| undefined` a redundant-type
+    // constituent error. The double cast avoids the union while keeping tsgo happy.
+    return undefined as unknown as ProviderRuntimeModel;
   }
 
   return applyXaiModelCompat(
