@@ -97,11 +97,20 @@ function runNodeStep(label, args, timeoutMs) {
   throw failure;
 }
 
-function runNodeStepAsync(label, args, timeoutMs) {
+function abortSiblingSteps(abortController) {
+  if (abortController && !abortController.signal.aborted) {
+    abortController.abort();
+  }
+}
+
+export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
+  const abortController = params.abortController;
+  const onFailure = params.onFailure;
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
+      signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -114,9 +123,12 @@ function runNodeStepAsync(label, args, timeoutMs) {
       }
       child.kill("SIGTERM");
       settled = true;
-      rejectPromise(
-        new Error(`${label}\n${stdout}${stderr}\n${label} timed out after ${timeoutMs}ms`.trim()),
+      const error = new Error(
+        `${label}\n${stdout}${stderr}\n${label} timed out after ${timeoutMs}ms`.trim(),
       );
+      onFailure?.(error);
+      abortSiblingSteps(abortController);
+      rejectPromise(error);
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
@@ -133,7 +145,14 @@ function runNodeStepAsync(label, args, timeoutMs) {
       }
       clearTimeout(timer);
       settled = true;
-      rejectPromise(new Error(`${label}\n${stdout}${stderr}\n${error.message}`.trim()));
+      if (error.name === "AbortError" && abortController?.signal.aborted) {
+        rejectPromise(new Error(`${label} canceled after sibling failure`));
+        return;
+      }
+      const failure = new Error(`${label}\n${stdout}${stderr}\n${error.message}`.trim());
+      onFailure?.(failure);
+      abortSiblingSteps(abortController);
+      rejectPromise(failure);
     });
     child.on("close", (code) => {
       if (settled) {
@@ -145,9 +164,42 @@ function runNodeStepAsync(label, args, timeoutMs) {
         resolvePromise({ stdout, stderr });
         return;
       }
-      rejectPromise(new Error(`${label}\n${stdout}${stderr}`.trim()));
+      const error = new Error(`${label}\n${stdout}${stderr}`.trim());
+      onFailure?.(error);
+      abortSiblingSteps(abortController);
+      rejectPromise(error);
     });
   });
+}
+
+export async function runNodeStepsWithConcurrency(steps, concurrency) {
+  const abortController = new AbortController();
+  let firstFailure = null;
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, steps.length) }, async () => {
+    while (true) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= steps.length) {
+        return;
+      }
+      const step = steps[index];
+      step.onStart?.();
+      await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
+        abortController,
+        onFailure(error) {
+          firstFailure ??= error;
+        },
+      });
+    }
+  });
+  await Promise.allSettled(workers);
+  if (firstFailure) {
+    throw firstFailure;
+  }
 }
 
 export function resolveCanaryArtifactPaths(extensionId, rootDir = repoRoot) {
@@ -194,34 +246,27 @@ async function runCompileCheck(extensionIds) {
   runNodeStep("plugin-sdk boundary prep", [prepareBoundaryArtifactsBin], 420_000);
   const concurrency = resolveCompileConcurrency();
   process.stdout.write(`compile concurrency ${concurrency}\n`);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, extensionIds.length) }, async () => {
-    while (true) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= extensionIds.length) {
-        return;
-      }
-      const extensionId = extensionIds[index];
-      const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
-      mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
-      process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
-      await runNodeStepAsync(
-        extensionId,
-        [
-          tscBin,
-          "-p",
-          resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
-          "--noEmit",
-          "--incremental",
-          "--tsBuildInfoFile",
-          tsBuildInfoPath,
-        ],
-        120_000,
-      );
-    }
+  const steps = extensionIds.map((extensionId, index) => {
+    const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
+    mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
+    return {
+      label: extensionId,
+      onStart() {
+        process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
+      },
+      args: [
+        tscBin,
+        "-p",
+        resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
+        "--noEmit",
+        "--incremental",
+        "--tsBuildInfoFile",
+        tsBuildInfoPath,
+      ],
+      timeoutMs: 120_000,
+    };
   });
-  await Promise.all(workers);
+  await runNodeStepsWithConcurrency(steps, concurrency);
 }
 
 function runCanaryCheck(extensionIds) {
