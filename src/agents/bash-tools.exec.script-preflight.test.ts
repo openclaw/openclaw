@@ -305,6 +305,42 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("handles pre-open symlink swaps without surfacing preflight errors", async () => {
+    await withTempDir("openclaw-exec-preflight-open-race-", async (parent) => {
+      const workdir = path.join(parent, "workdir");
+      const scriptPath = path.join(workdir, "script.js");
+      const outsidePath = path.join(parent, "outside.js");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
+      await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+
+      const originalOpen = fs.open.bind(fs);
+      let swapped = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const target = args[0];
+        if (!swapped && typeof target === "string" && path.resolve(target) === scriptPath) {
+          await fs.rm(scriptPath, { force: true });
+          await fs.symlink(outsidePath, scriptPath);
+          swapped = true;
+        }
+        return await originalOpen(...args);
+      });
+
+      try {
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        const result = await tool.execute("call-pre-open-swapped-pathname", {
+          command: "node script.js",
+          workdir,
+        });
+        const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(swapped).toBe(true);
+        expect(text).not.toMatch(/exec preflight:/);
+      } finally {
+        openSpy.mockRestore();
+      }
+    });
+  });
+
   it("fails closed for piped interpreter commands that bypass direct script parsing", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");

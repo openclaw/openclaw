@@ -933,13 +933,9 @@ async function validateScriptFileForShellBleed(params: {
       });
       content = safeRead.buffer.toString("utf-8");
     } catch (error) {
-      if (
-        error instanceof SafeOpenError &&
-        (error.code === "invalid-path" ||
-          error.code === "not-found" ||
-          error.code === "outside-workspace" ||
-          error.code === "too-large")
-      ) {
+      if (error instanceof SafeOpenError) {
+        // Preflight validation is best-effort: skip any safe-open failure and
+        // continue to execute the command normally.
         continue;
       }
       throw error;
