@@ -1,5 +1,5 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeAll, beforeEach, type Mock, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());

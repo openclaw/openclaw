@@ -3,6 +3,7 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 
 export type ChannelsLogsOptions = {
@@ -20,7 +21,7 @@ const getChannelSet = () =>
   new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
 
 function parseChannelFilter(raw?: string) {
-  const trimmed = raw?.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     return "all";
   }

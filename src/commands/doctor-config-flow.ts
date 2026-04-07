@@ -13,7 +13,6 @@ import { emitDoctorNotes } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
 import {
-  collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorMutableAllowlistWarnings,
   collectChannelDoctorStaleConfigMutations,
   runChannelDoctorConfigSequences,
@@ -105,19 +104,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: normalized,
-      shouldRepair,
-      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
-    }));
-  }
-
-  for (const compatibility of collectChannelDoctorCompatibilityMutations(candidate)) {
-    if (compatibility.changes.length === 0) {
-      continue;
-    }
-    note(compatibility.changes.join("\n"), "Doctor changes");
-    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-      state: { cfg, candidate, pendingChanges, fixHints },
-      mutation: compatibility,
       shouldRepair,
       fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     }));

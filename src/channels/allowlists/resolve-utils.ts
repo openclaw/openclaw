@@ -1,5 +1,6 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -16,7 +17,7 @@ function dedupeAllowlistEntries(entries: string[]): string[] {
     if (!normalized) {
       continue;
     }
-    const key = normalized.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized);
     if (seen.has(key)) {
       continue;
     }

@@ -3,15 +3,20 @@ import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  type ChannelSetupWizard,
-  type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const channel = "zalo" as const;
+
+type ZaloAccountSetupConfig = {
+  enabled?: boolean;
+  dmPolicy?: string;
+  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
+};
 
 export const zaloSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
@@ -40,10 +45,10 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
   policyKey: "channels.zalo.dmPolicy",
   allowFromKey: "channels.zalo.allowFrom",
   resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)) !== DEFAULT_ACCOUNT_ID
+    (accountId ?? resolveDefaultZaloAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.dmPolicy`,
-          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.allowFrom`,
+          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg)}.allowFrom`,
         }
       : {
           policyKey: "channels.zalo.dmPolicy",
@@ -51,16 +56,16 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
   getCurrent: (cfg, accountId) =>
     resolveZaloAccount({
-      cfg: cfg as OpenClawConfig,
-      accountId: accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig),
+      cfg: cfg,
+      accountId: accountId ?? resolveDefaultZaloAccountId(cfg),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
     const resolvedAccountId =
       accountId && normalizeAccountId(accountId)
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg as OpenClawConfig);
+        : resolveDefaultZaloAccountId(cfg);
     const resolved = resolveZaloAccount({
-      cfg: cfg as OpenClawConfig,
+      cfg: cfg,
       accountId: resolvedAccountId,
     });
     if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
@@ -79,6 +84,9 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
       };
     }
+    const currentAccount = cfg.channels?.zalo?.accounts?.[resolvedAccountId] as
+      | ZaloAccountSetupConfig
+      | undefined;
     return {
       ...cfg,
       channels: {
@@ -89,8 +97,8 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
           accounts: {
             ...cfg.channels?.zalo?.accounts,
             [resolvedAccountId]: {
-              ...cfg.channels?.zalo?.accounts?.[resolvedAccountId],
-              enabled: cfg.channels?.zalo?.accounts?.[resolvedAccountId]?.enabled ?? true,
+              ...currentAccount,
+              enabled: currentAccount?.enabled ?? true,
               dmPolicy: policy,
               ...(policy === "open"
                 ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }

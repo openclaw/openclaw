@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/routing";
 import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { TelegramTransport } from "./fetch.js";
 import { resolveTelegramToken } from "./token.js";
 
@@ -222,7 +223,7 @@ export function resolveTelegramAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: tokenResolution.token,
       tokenSource: tokenResolution.source,
       config: merged,

@@ -38,6 +38,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     onConversationBindingResolved() {},
     registerCommand() {},
     registerContextEngine() {},
+    registerMemoryCapability() {},
     registerMemoryPromptSection() {},
     registerMemoryPromptSupplement() {},
     registerMemoryCorpusSupplement() {},

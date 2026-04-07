@@ -7,8 +7,10 @@ import {
 } from "../../context-engine/index.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -19,6 +21,10 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import {
+  resolveSessionKeyForRequest,
+  resolveStoredSessionKeyForSessionId,
+} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   coerceToFailoverError,
@@ -97,13 +103,63 @@ import {
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
-import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+
+/**
+ * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
+ * The return value is normalized: whitespace-only inputs collapse to undefined, and
+ * successful resolution returns a trimmed session key. This is a read-only lookup
+ * with no side effects.
+ * See: https://github.com/openclaw/openclaw/issues/60552
+ */
+function backfillSessionKey(params: {
+  config: RunEmbeddedPiAgentParams["config"];
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string | undefined {
+  const trimmed = normalizeOptionalString(params.sessionKey);
+  if (trimmed) {
+    return trimmed;
+  }
+  if (!params.config || !params.sessionId) {
+    return undefined;
+  }
+  try {
+    const resolved = normalizeOptionalString(params.agentId)
+      ? resolveStoredSessionKeyForSessionId({
+          cfg: params.config,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        })
+      : resolveSessionKeyForRequest({
+          cfg: params.config,
+          sessionId: params.sessionId,
+        });
+    return normalizeOptionalString(resolved.sessionKey);
+  } catch (err) {
+    log.warn(
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
+    );
+    return undefined;
+  }
+}
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
+  // receive a non-null key even when callers omit it. See #60552.
+  const effectiveSessionKey = backfillSessionKey({
+    config: params.config,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (effectiveSessionKey !== params.sessionKey) {
+    params = { ...params, sessionKey: effectiveSessionKey };
+  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
@@ -167,17 +223,19 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+      const normalizedSessionKey = params.sessionKey?.trim();
       const fallbackConfigured = hasConfiguredModelFallbacks({
         cfg: params.config,
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: normalizedSessionKey,
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
+      const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
         agentId: workspaceResolution.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         modelProviderId: provider,
@@ -526,7 +584,7 @@ export async function runEmbeddedPiAgent(
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: resolvedSessionKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -608,6 +666,8 @@ export async function runEmbeddedPiAgent(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
+            bootstrapContextMode: params.bootstrapContextMode,
+            bootstrapContextRunKind: params.bootstrapContextRunKind,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
@@ -649,7 +709,7 @@ export async function runEmbeddedPiAgent(
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
-                sessionKey: params.sessionKey ?? params.sessionId,
+                sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
               })
@@ -673,7 +733,7 @@ export async function runEmbeddedPiAgent(
           }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
-            sessionKey: params.sessionKey,
+            sessionKey: resolvedSessionKey,
             agentId: params.agentId,
             defaultProvider: DEFAULT_PROVIDER,
             defaultModel: DEFAULT_MODEL,
@@ -685,7 +745,7 @@ export async function runEmbeddedPiAgent(
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({
               cfg: params.config,
-              sessionKey: params.sessionKey,
+              sessionKey: resolvedSessionKey,
               agentId: params.agentId,
             });
             log.info(
@@ -793,7 +853,7 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
-                  const errorText = describeUnknownError(promptError);
+                  const errorText = formatErrorMessage(promptError);
                   if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
                   }
@@ -1035,7 +1095,7 @@ export async function runEmbeddedPiAgent(
             const promptErrorDetails = normalizedPromptFailover
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
-            const errorText = promptErrorDetails.message || describeUnknownError(promptError);
+            const errorText = promptErrorDetails.message || formatErrorMessage(promptError);
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
               continue;
@@ -1527,7 +1587,7 @@ export async function runEmbeddedPiAgent(
         if (params.cleanupBundleMcpOnRunEnd === true) {
           await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
             log.warn(
-              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
+              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${formatErrorMessage(error)}`,
             );
           });
         }

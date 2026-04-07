@@ -5,7 +5,7 @@ import {
   resolveServicePrefixedTarget,
   type ParsedChatTarget,
 } from "./channel-targets.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 // Narrow plugin-sdk surface for the bundled BlueBubbles plugin.
 // Keep this list additive and scoped to the conversation-binding seam only.

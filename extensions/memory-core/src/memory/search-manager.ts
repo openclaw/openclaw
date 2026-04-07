@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   resolveAgentWorkspaceDir,
@@ -104,7 +105,7 @@ export async function getMemorySearchManager(params: {
           return { manager: wrapper };
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
       }
     }
@@ -115,7 +116,7 @@ export async function getMemorySearchManager(params: {
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { manager: null, error: message };
   }
 }
@@ -197,7 +198,7 @@ class FallbackMemoryManager implements MemorySearchManager {
         return await this.deps.primary.search(query, opts);
       } catch (err) {
         this.primaryFailed = true;
-        this.lastError = err instanceof Error ? err.message : String(err);
+        this.lastError = formatErrorMessage(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
         await this.deps.primary.close?.().catch(() => {});
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
@@ -302,7 +303,7 @@ class FallbackMemoryManager implements MemorySearchManager {
         return null;
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       log.warn(`memory fallback unavailable: ${message}`);
       return null;
     }

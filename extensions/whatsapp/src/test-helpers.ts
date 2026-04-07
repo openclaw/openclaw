@@ -392,6 +392,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
+  implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
     const digits = String(value).replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
@@ -409,17 +410,54 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
     const next = [...current, params.entry].slice(-params.limit);
     params.historyMap.set(params.historyKey, next);
   },
-  resolveMentionGating: (params: {
-    requireMention: boolean;
-    wasMentioned: boolean;
-    implicitMention?: boolean;
-    shouldBypassMention?: boolean;
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      implicitMentionKinds?: string[];
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    implicitMentionKinds?: string[];
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
   }) => {
-    const effectiveWasMentioned =
-      params.wasMentioned || Boolean(params.implicitMention) || Boolean(params.shouldBypassMention);
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            implicitMentionKinds: params.implicitMentionKinds,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    const effectiveWasMentioned = facts.wasMentioned || Boolean(facts.implicitMentionKinds?.length);
     return {
       effectiveWasMentioned,
-      shouldSkip: params.requireMention && !effectiveWasMentioned,
+      shouldSkip:
+        policy.isGroup && policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
+      shouldBypassMention: false,
+      implicitMention: Boolean(facts.implicitMentionKinds?.length),
+      matchedImplicitMentionKinds: facts.implicitMentionKinds ?? [],
     };
   },
 }));

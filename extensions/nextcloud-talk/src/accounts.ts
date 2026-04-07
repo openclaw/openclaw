@@ -1,5 +1,6 @@
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -10,7 +11,7 @@ import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 function isTruthyEnvValue(value?: string): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase() ?? "";
   return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 
@@ -66,7 +67,7 @@ function resolveNextcloudTalkSecret(
   const resolvedAccountId = opts.accountId ?? resolveDefaultNextcloudTalkAccountId(cfg);
   const merged = mergeNextcloudTalkAccountConfig(cfg, resolvedAccountId);
 
-  const envSecret = process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim();
+  const envSecret = normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET);
   if (envSecret && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     return { secret: envSecret, source: "env" };
   }
@@ -117,7 +118,7 @@ export function resolveNextcloudTalkAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       baseUrl,
       secret: secretResolution.secret,
       secretSource: secretResolution.source,

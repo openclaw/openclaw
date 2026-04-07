@@ -3,13 +3,20 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const [ircSecrets, slackSecrets, googleChatSecrets] = await Promise.all([
-    import("../../extensions/irc/src/secret-contract.ts"),
-    import("../../extensions/slack/src/secret-contract.ts"),
-    import("../../extensions/googlechat/src/secret-contract.ts"),
-  ]);
+const googleChatSecrets = loadBundledChannelSecretContractApi("googlechat");
+const ircSecrets = loadBundledChannelSecretContractApi("irc");
+const slackSecrets = loadBundledChannelSecretContractApi("slack");
+if (
+  !googleChatSecrets?.collectRuntimeConfigAssignments ||
+  !ircSecrets?.collectRuntimeConfigAssignments ||
+  !slackSecrets?.collectRuntimeConfigAssignments
+) {
+  throw new Error("Missing channel secret contract api");
+}
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) => {
       if (id === "irc") {
@@ -31,6 +38,24 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
           secrets: {
             collectRuntimeConfigAssignments: googleChatSecrets.collectRuntimeConfigAssignments,
           },
+        };
+      }
+      return undefined;
+    },
+    getBootstrapChannelSecrets: (id: string) => {
+      if (id === "irc") {
+        return {
+          collectRuntimeConfigAssignments: ircSecrets.collectRuntimeConfigAssignments,
+        };
+      }
+      if (id === "slack") {
+        return {
+          collectRuntimeConfigAssignments: slackSecrets.collectRuntimeConfigAssignments,
+        };
+      }
+      if (id === "googlechat") {
+        return {
+          collectRuntimeConfigAssignments: googleChatSecrets.collectRuntimeConfigAssignments,
         };
       }
       return undefined;

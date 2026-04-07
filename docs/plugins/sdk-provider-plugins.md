@@ -643,10 +643,15 @@ API key auth, and dynamic model resolution.
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
 
     For video generation, prefer the mode-aware capability shape shown above:
-    `generate`, `imageToVideo`, and `videoToVideo`. The older flat fields such
-    as `maxInputImages`, `maxInputVideos`, and `maxDurationSeconds` still work
-    as aggregate fallback caps, but they cannot describe per-mode limits or
-    disabled transform modes as cleanly.
+    `generate`, `imageToVideo`, and `videoToVideo`. Flat aggregate fields such
+    as `maxInputImages`, `maxInputVideos`, and `maxDurationSeconds` are not
+    enough to advertise transform-mode support or disabled modes cleanly.
+
+    Music-generation providers should follow the same pattern:
+    `generate` for prompt-only generation and `edit` for reference-image-based
+    generation. Flat aggregate fields such as `maxInputImages`,
+    `supportsLyrics`, and `supportsFormat` are not enough to advertise edit
+    support; explicit `generate` / `edit` blocks are the expected contract.
 
   </Step>
 

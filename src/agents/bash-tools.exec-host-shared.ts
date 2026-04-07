@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { loadConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
   hasConfiguredExecApprovalDmRoute,
@@ -341,6 +342,33 @@ export function createExecApprovalDecisionState(params: {
   };
 }
 
+export function enforceStrictInlineEvalApprovalBoundary(params: {
+  baseDecision: {
+    timedOut: boolean;
+  };
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  requiresInlineEvalApproval: boolean;
+}): {
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+} {
+  if (
+    !params.baseDecision.timedOut ||
+    !params.requiresInlineEvalApproval ||
+    !params.approvedByAsk
+  ) {
+    return {
+      approvedByAsk: params.approvedByAsk,
+      deniedReason: params.deniedReason,
+    };
+  }
+  return {
+    approvedByAsk: false,
+    deniedReason: params.deniedReason ?? "approval-timeout",
+  };
+}
+
 export function shouldResolveExecApprovalUnavailableInline(params: {
   trigger?: string;
   unavailableReason: ExecApprovalUnavailableReason | null;
@@ -386,7 +414,7 @@ export async function sendExecApprovalFollowupResult(
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
   }).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {
       return;

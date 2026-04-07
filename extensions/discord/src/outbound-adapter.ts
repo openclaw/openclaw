@@ -13,6 +13,7 @@ import {
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -67,10 +68,10 @@ function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
   binding: ThreadBindingRecord;
 }): { username?: string; avatarUrl?: string } {
-  const usernameRaw = params.identity?.name?.trim();
-  const fallbackUsername = params.binding.label?.trim() || params.binding.agentId;
+  const usernameRaw = normalizeOptionalString(params.identity?.name);
+  const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
   const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
-  const avatarUrl = params.identity?.avatarUrl?.trim() || undefined;
+  const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
   return { username, avatarUrl };
 }
 

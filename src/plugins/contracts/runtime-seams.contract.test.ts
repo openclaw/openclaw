@@ -8,57 +8,81 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../infra/net/undici-runtime.js";
-import type { PluginManifestRecord } from "../manifest-registry.js";
-
-const loadPluginManifestRegistryMock = vi.fn();
+import { clearPluginDiscoveryCache } from "../discovery.js";
+import { clearPluginManifestRegistryCache } from "../manifest-registry.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalGlobalFetch = globalThis.fetch;
 const tempDirs: string[] = [];
 
-function createRuntimePluginDir(pluginId: string, marker: string): string {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-runtime-contract-${pluginId}-`));
-  tempDirs.push(rootDir);
-  const pluginRoot = path.join(rootDir, pluginId);
+function createInstalledRuntimePluginDir(
+  pluginId: string,
+  marker: string,
+): {
+  bundledDir: string;
+  stateDir: string;
+  pluginRoot: string;
+} {
+  const bundledDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `openclaw-runtime-contract-bundled-${pluginId}-`),
+  );
+  const stateDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `openclaw-runtime-contract-state-${pluginId}-`),
+  );
+  tempDirs.push(bundledDir, stateDir);
+  const pluginRoot = path.join(stateDir, "extensions", pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
   fs.writeFileSync(
     path.join(pluginRoot, "runtime-api.js"),
     `export const marker = ${JSON.stringify(marker)};\n`,
     "utf8",
   );
-  return pluginRoot;
-}
-
-function buildPluginManifestRecord(params: {
-  id: string;
-  origin: PluginManifestRecord["origin"];
-  rootDir: string;
-}): PluginManifestRecord {
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${pluginId}`,
+      version: "0.0.0",
+      openclaw: {
+        extensions: ["./runtime-api.js"],
+        channel: { id: pluginId },
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      channels: [pluginId],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+    "utf8",
+  );
   return {
-    id: params.id,
-    origin: params.origin,
-    rootDir: params.rootDir,
-    source: params.rootDir,
-    manifestPath: path.join(params.rootDir, "openclaw.plugin.json"),
-    channels: [params.id],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
+    bundledDir,
+    stateDir,
+    pluginRoot,
   };
 }
 
 afterEach(() => {
-  loadPluginManifestRegistryMock.mockReset();
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.resetModules();
-  vi.doUnmock("../manifest-registry.js");
+  vi.doUnmock("../../config/plugin-auto-enable.js");
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
   if (originalGlobalFetch) {
     (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
@@ -72,48 +96,45 @@ afterEach(() => {
 
 describe("shared runtime seam contracts", () => {
   it("allows activated runtime facades when the resolved plugin root matches an installed-style manifest record", async () => {
-    const pluginRoot = createRuntimePluginDir("line", "line-ok");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoot);
+    const pluginId = "line-contract-fixture";
+    const { bundledDir, stateDir } = createInstalledRuntimePluginDir(pluginId, "line-ok");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     setRuntimeConfigSnapshot({
       plugins: {
         entries: {
-          line: {
+          [pluginId]: {
             enabled: true,
           },
         },
       },
     });
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [buildPluginManifestRecord({ id: "line", origin: "global", rootDir: pluginRoot })],
-      diagnostics: [],
-    });
-    vi.doMock("../manifest-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("../manifest-registry.js")>("../manifest-registry.js");
-      return {
-        ...actual,
-        loadPluginManifestRegistry: (
-          ...args: Parameters<typeof actual.loadPluginManifestRegistry>
-        ) => loadPluginManifestRegistryMock(...args),
-      };
-    });
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
+    vi.resetModules();
+    vi.doMock("../../config/plugin-auto-enable.js", () => ({
+      applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
+        config: config ?? {},
+        autoEnabledReasons: {},
+      }),
+    }));
 
     const facadeRuntime = await import("../../plugin-sdk/facade-runtime.js");
     facadeRuntime.resetFacadeRuntimeStateForTest();
 
     expect(
       facadeRuntime.canLoadActivatedBundledPluginPublicSurface({
-        dirName: "line",
+        dirName: pluginId,
         artifactBasename: "runtime-api.js",
       }),
     ).toBe(true);
     expect(
       facadeRuntime.loadActivatedBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
-        dirName: "line",
+        dirName: pluginId,
         artifactBasename: "runtime-api.js",
       }).marker,
     ).toBe("line-ok");
-    expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual(["line"]);
+    expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual([pluginId]);
   });
 
   it("keeps guarded fetch on mocked global fetches even when a dispatcher is attached", async () => {

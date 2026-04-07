@@ -38,6 +38,7 @@ export function withBundledPluginEnablementCompat(params: {
   pluginIds: readonly string[];
 }): PluginLoadOptions["config"] {
   const existingEntries = params.config?.plugins?.entries ?? {};
+  const forcePluginsEnabled = params.config?.plugins?.enabled === false;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
 
@@ -50,13 +51,16 @@ export function withBundledPluginEnablementCompat(params: {
   }
 
   if (!changed) {
-    return params.config;
+    if (!forcePluginsEnabled) {
+      return params.config;
+    }
   }
 
   return {
     ...params.config,
     plugins: {
       ...params.config?.plugins,
+      ...(forcePluginsEnabled ? { enabled: true } : {}),
       entries: {
         ...existingEntries,
         ...nextEntries,

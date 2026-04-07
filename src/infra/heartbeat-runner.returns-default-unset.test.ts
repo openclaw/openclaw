@@ -6,6 +6,7 @@ import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
 } from "../../test/helpers/channels/command-contract.js";
+import { whatsappOutbound } from "../../test/helpers/infra/deliver-test-outbounds.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -25,7 +26,6 @@ import {
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
-import { whatsappOutbound } from "./outbound/deliver.test-outbounds.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,

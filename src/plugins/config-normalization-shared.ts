@@ -1,5 +1,6 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
@@ -41,10 +42,7 @@ function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): st
 }
 
 function normalizeSlotValue(value: unknown): string | null | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -97,8 +95,8 @@ function normalizePluginEntries(
             ),
             allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
               ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
-                  .map((model) => (typeof model === "string" ? model.trim() : ""))
-                  .filter(Boolean)
+                  .map((model) => normalizeOptionalString(model))
+                  .filter((model): model is string => Boolean(model))
               : undefined,
           }
         : undefined;

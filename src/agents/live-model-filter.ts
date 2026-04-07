@@ -1,4 +1,5 @@
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ModelRef = {
@@ -53,7 +54,7 @@ function isHighSignalClaudeModelId(id: string): boolean {
 
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
-  const id = ref.id?.trim().toLowerCase() ?? "";
+  const id = normalizeLowercaseStringOrEmpty(ref.id);
   if (!provider || !id) {
     return false;
   }
@@ -72,7 +73,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
 }
 
 export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
-  const id = ref.id?.trim().toLowerCase() ?? "";
+  const id = normalizeLowercaseStringOrEmpty(ref.id);
   if (!isModernModelRef(ref) || !id) {
     return false;
   }
@@ -81,7 +82,7 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
 
 function toCanonicalHighSignalLiveModelKey(ref: ModelRef): string | null {
   const provider = normalizeProviderId(ref.provider ?? "");
-  const rawId = ref.id?.trim().toLowerCase() ?? "";
+  const rawId = normalizeLowercaseStringOrEmpty(ref.id);
   if (!provider || !rawId) {
     return null;
   }

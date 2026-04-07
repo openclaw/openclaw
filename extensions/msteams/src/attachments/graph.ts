@@ -7,7 +7,7 @@ import {
   applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
   inferPlaceholder,
-  isRecord,
+  readNestedString,
   isUrlAllowed,
   type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
@@ -37,17 +37,6 @@ type GraphAttachment = {
   thumbnailUrl?: string | null;
   content?: unknown;
 };
-
-function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return typeof current === "string" && current.trim() ? current.trim() : undefined;
-}
 
 export function buildMSTeamsGraphMessageUrls(params: {
   conversationType?: string | null;

@@ -1485,7 +1485,7 @@ production, prefer an Anthropic API key or another supported
 subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
 Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
 
-Anthropic setup-token is available again as a legacy/manual auth path.
+Anthropic setup-token remains available as a supported token-auth path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ### `models` (root)
 
@@ -1595,7 +1595,7 @@ Notes:
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth method.
 - `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
-- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path.
+- Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ### `models auth order get|set|clear`
 

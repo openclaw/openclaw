@@ -64,6 +64,8 @@ export type AgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
+  /** Optional per-agent full system prompt replacement. */
+  systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";

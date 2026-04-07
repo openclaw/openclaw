@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -9,6 +9,7 @@ export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
 export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
+export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -143,13 +144,6 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function normalizeTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -280,7 +274,7 @@ function resolveExecutionConfig(
   value: unknown,
   fallback: MemoryDreamingExecutionConfig,
 ): MemoryDreamingExecutionConfig {
-  const record = asRecord(value);
+  const record = asNullableRecord(value);
   const maxOutputTokens = normalizeOptionalPositiveInt(record?.maxOutputTokens);
   const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs);
   const temperatureRaw = record?.temperature;
@@ -315,30 +309,47 @@ function formatLocalIsoDay(epochMs: number): string {
   return `${year}-${month}-${day}`;
 }
 
-export function resolveMemoryCorePluginConfig(
+export function resolveMemoryDreamingPluginId(
+  cfg: OpenClawConfig | Record<string, unknown> | undefined,
+): string {
+  const root = asNullableRecord(cfg);
+  const plugins = asNullableRecord(root?.plugins);
+  const slots = asNullableRecord(plugins?.slots);
+  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
+    return configuredSlot;
+  }
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+export function resolveMemoryDreamingPluginConfig(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  const root = asRecord(cfg);
-  const plugins = asRecord(root?.plugins);
-  const entries = asRecord(plugins?.entries);
-  const memoryCore = asRecord(entries?.["memory-core"]);
-  return asRecord(memoryCore?.config) ?? undefined;
+  const root = asNullableRecord(cfg);
+  const plugins = asNullableRecord(root?.plugins);
+  const entries = asNullableRecord(plugins?.entries);
+  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
+  return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
+
+// Keep the legacy helper name exported until downstream memory plugins migrate.
+export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
 }): MemoryDreamingConfig {
-  const dreaming = asRecord(params.pluginConfig?.dreaming);
+  const dreaming = asNullableRecord(params.pluginConfig?.dreaming);
   const frequency =
     normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ??
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
-  const storage = asRecord(dreaming?.storage);
-  const execution = asRecord(dreaming?.execution);
-  const phases = asRecord(dreaming?.phases);
+  const storage = asNullableRecord(dreaming?.storage);
+  const execution = asNullableRecord(dreaming?.execution);
+  const phases = asNullableRecord(dreaming?.phases);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -346,10 +357,10 @@ export function resolveMemoryDreamingConfig(params: {
     budget: DEFAULT_MEMORY_DREAMING_BUDGET,
   });
 
-  const light = asRecord(phases?.light);
-  const deep = asRecord(phases?.deep);
-  const rem = asRecord(phases?.rem);
-  const deepRecovery = asRecord(deep?.recovery);
+  const light = asNullableRecord(phases?.light);
+  const deep = asNullableRecord(phases?.deep);
+  const rem = asNullableRecord(phases?.rem);
+  const deepRecovery = asNullableRecord(deep?.recovery);
   const maxAgeDays = normalizeOptionalPositiveInt(deep?.maxAgeDays);
 
   return {
@@ -593,9 +604,6 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   for (const agentId of agentIds) {
-    if (!resolveMemorySearchConfig(cfg, agentId)) {
-      continue;
-    }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
     if (!workspaceDir) {
       continue;

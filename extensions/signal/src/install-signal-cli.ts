@@ -4,6 +4,7 @@ import { request } from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
@@ -258,7 +259,7 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
   try {
     await extractSignalCliArchive(archivePath, installRoot, 60_000);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       error: `Failed to extract ${asset.name}: ${message}`,

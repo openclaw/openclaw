@@ -116,4 +116,29 @@ describe("tryDispatchAcpReplyHook", () => {
     expect(result).toBeUndefined();
     expect(dispatchMock).toHaveBeenCalledOnce();
   });
+
+  it("does not let ACP claim reset commands before local command handling", async () => {
+    bypassMock.mockResolvedValue(true);
+    dispatchMock.mockResolvedValue(undefined);
+
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          CommandBody: "/new",
+          BodyForCommands: "/new",
+          BodyForAgent: "/new",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bypassForCommand: true,
+      }),
+    );
+  });
 });

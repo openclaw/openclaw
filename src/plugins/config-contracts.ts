@@ -112,6 +112,7 @@ export function resolvePluginConfigContractsById(params: {
     return matches;
   }
 
+  const resolvedPluginIds = new Set<string>();
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -122,6 +123,7 @@ export function resolvePluginConfigContractsById(params: {
     if (!pluginIds.includes(plugin.id)) {
       continue;
     }
+    resolvedPluginIds.add(plugin.id);
     if (!plugin.configContracts) {
       continue;
     }
@@ -132,7 +134,7 @@ export function resolvePluginConfigContractsById(params: {
   }
 
   for (const pluginId of pluginIds) {
-    if (matches.has(pluginId)) {
+    if (matches.has(pluginId) || resolvedPluginIds.has(pluginId)) {
       continue;
     }
     const bundled = findBundledPluginMetadataById(pluginId);

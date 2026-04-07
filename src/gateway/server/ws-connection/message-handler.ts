@@ -737,6 +737,7 @@ export function attachGatewayWsMessageHandler(params: {
           connectParams,
           isLocalClient,
           requestHost,
+          requestOrigin,
           remoteAddress: remoteAddr,
           hasProxyHeaders,
           hasBrowserOriginHeader,

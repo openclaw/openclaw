@@ -139,6 +139,125 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
   });
 
+  it("keeps empty default-ish provider stubs quiet", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      env: { NODE_ENV: "development" },
+      resolveProviderApiKey: () => ({ apiKey: "" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://127.0.0.1:11434", {
+      quiet: true,
+    });
+  });
+
+  it("treats non-default baseUrl as explicit discovery config", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://remote-ollama:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://remote-ollama:11434",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      env: { NODE_ENV: "development" },
+      resolveProviderApiKey: () => ({ apiKey: "" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
+      quiet: false,
+    });
+  });
+
+  it("keeps stored ollama-local marker auth on the quiet ambient path", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {},
+      env: { NODE_ENV: "development" },
+      resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
+    } as never);
+
+    expect(result).toMatchObject({
+      provider: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        apiKey: "ollama-local",
+        models: [],
+      },
+    });
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
+      quiet: true,
+    });
+  });
+
+  it("does not mint synthetic auth for empty default-ish provider stubs", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
+  });
+
+  it("mints synthetic auth for non-default explicit ollama config", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://remote-ollama:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toEqual({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("wraps OpenAI-compatible payloads with num_ctx for Ollama compat routes", () => {
     const provider = registerProvider();
     let payloadSeen: Record<string, unknown> | undefined;

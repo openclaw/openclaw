@@ -192,7 +192,7 @@ openclaw onboard --non-interactive \
   </Accordion>
 </AccordionGroup>
 
-Anthropic setup-token is available again as a legacy/manual onboarding path.
+Anthropic setup-token remains available as a supported onboarding token path, but OpenClaw now prefers Claude CLI reuse when available.
 For production, prefer an Anthropic API key.
 
 ## Add another agent

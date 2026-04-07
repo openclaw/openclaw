@@ -485,7 +485,7 @@ function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {
     },
     pluginConfig,
     runtime: {} as OpenClawPluginApi["runtime"],
-  }) as OpenClawPluginApi;
+  });
 }
 
 function createToolWithScreenshotter(

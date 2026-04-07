@@ -3,9 +3,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const discordSecrets = await import("../../extensions/discord/src/secret-config-contract.ts");
+const discordSecrets = loadBundledChannelSecretContractApi("discord");
+if (!discordSecrets?.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Discord secret contract api");
+}
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "discord"
@@ -13,6 +18,12 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
             secrets: {
               collectRuntimeConfigAssignments: discordSecrets.collectRuntimeConfigAssignments,
             },
+          }
+        : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "discord"
+        ? {
+            collectRuntimeConfigAssignments: discordSecrets.collectRuntimeConfigAssignments,
           }
         : undefined,
   };
