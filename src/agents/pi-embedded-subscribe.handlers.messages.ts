@@ -275,9 +275,18 @@ export function handleMessageUpdate(
     } else if (content) {
       // KNOWN: Some providers resend full content on `text_end`.
       // We only append a suffix (or nothing) to keep output monotonic.
-      chunk = appendUniqueSuffix(ctx.state.deltaBuffer, content, { minOverlap: 10 }).slice(
-        ctx.state.deltaBuffer.length,
-      );
+      // NOTE: This logic intentionally discards `content` if it is already
+      // present anywhere in the `deltaBuffer` to prevent catastrophic
+      // duplication during heuristic merging.
+      if (content.startsWith(ctx.state.deltaBuffer)) {
+        chunk = content.slice(ctx.state.deltaBuffer.length);
+      } else if (ctx.state.deltaBuffer.startsWith(content)) {
+        chunk = "";
+      } else if (!ctx.state.deltaBuffer.includes(content)) {
+        chunk = appendUniqueSuffix(ctx.state.deltaBuffer, content, { minOverlap: 10 }).slice(
+          ctx.state.deltaBuffer.length,
+        );
+      }
     }
   }
 
