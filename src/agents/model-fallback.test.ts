@@ -2291,6 +2291,46 @@ describe("runWithModelFallback", () => {
       expect(result.result).toBe("ok");
       expect(run).toHaveBeenCalledTimes(2);
     });
+
+    it("rethrows terminal abort even when error resembles a failover-normalizable error", async () => {
+      // Edge case flagged by greptile review on openclaw/openclaw#62682:
+      // If the signal is aborted with a terminal reason (run-budget timeout)
+      // BUT the thrown error also looks like a rate-limit error that
+      // coerceToFailoverError would normalize (e.g. Google Vertex RESOURCE_EXHAUSTED
+      // abort racing with the run-budget timer), the old `shouldRethrowAbort && !normalizedFailover`
+      // guard would fall through and try the next candidate. Fix: check isTerminalAbort
+      // BEFORE coerceToFailoverError.
+      const cfg = makeCfg();
+
+      // Construct an error that coerceToFailoverError may recognize as a
+      // retryable FailoverError (rate-limit shape). We use a generic error
+      // with a 429 status property, which matches multiple provider coercions.
+      const rateLimitLikeError = Object.assign(new Error("RESOURCE_EXHAUSTED: quota exceeded"), {
+        status: 429,
+        name: "AbortError",
+      });
+
+      const run = vi.fn().mockRejectedValue(rateLimitLikeError);
+
+      const timeoutReason = new Error("request timed out");
+      timeoutReason.name = "TimeoutError";
+      const controller = new AbortController();
+      controller.abort(timeoutReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(rateLimitLikeError);
+
+      // Critical: only the first candidate should run. The terminal signal
+      // must override the failover normalization.
+      expect(run).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

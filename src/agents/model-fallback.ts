@@ -278,6 +278,14 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
+    // Terminal aborts (run-budget exhausted, HTTP client disconnect) must always
+    // propagate regardless of whether the error also resembles a retryable failover
+    // (e.g. a Google Vertex RESOURCE_EXHAUSTED abort that races with the run-budget
+    // timer). Check this BEFORE coerceToFailoverError so the normalization path
+    // cannot mask a terminal reason. Flagged by greptile review on openclaw/openclaw#62682.
+    if (isTerminalAbort(params.abortSignal)) {
+      throw err;
+    }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {
