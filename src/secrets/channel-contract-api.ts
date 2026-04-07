@@ -24,17 +24,31 @@ type BundledChannelContractApi = {
   ) => UnsupportedSecretRefConfigCandidate[];
 };
 
+let bundledChannelDirNameByChannelId: Map<string, string> | null = null;
+
+function getBundledChannelDirName(channelId: string): string | undefined {
+  if (!bundledChannelDirNameByChannelId) {
+    bundledChannelDirNameByChannelId = new Map(
+      loadPluginManifestRegistry({})
+        .plugins.filter((entry) => entry.origin === "bundled")
+        .flatMap((entry) =>
+          entry.channels.map(
+            (candidateChannelId) => [candidateChannelId, path.basename(entry.rootDir)] as const,
+          ),
+        ),
+    );
+  }
+  return bundledChannelDirNameByChannelId.get(channelId);
+}
+
 function loadBundledChannelPublicArtifact(
   channelId: string,
   artifactBasenames: readonly string[],
 ): BundledChannelContractApi | undefined {
-  const record = loadPluginManifestRegistry({})
-    .plugins.filter((entry) => entry.origin === "bundled")
-    .find((entry) => entry.channels.includes(channelId));
-  if (!record) {
+  const dirName = getBundledChannelDirName(channelId);
+  if (!dirName) {
     return undefined;
   }
-  const dirName = path.basename(record.rootDir);
 
   for (const artifactBasename of artifactBasenames) {
     try {
@@ -80,8 +94,5 @@ export type BundledChannelSecurityContractApi = Pick<
 export function loadBundledChannelSecurityContractApi(
   channelId: string,
 ): BundledChannelSecurityContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, [
-    "security-contract-api.js",
-    "contract-api.js",
-  ]);
+  return loadBundledChannelPublicArtifact(channelId, ["security-contract-api.js"]);
 }

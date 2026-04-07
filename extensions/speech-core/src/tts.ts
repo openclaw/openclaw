@@ -24,7 +24,12 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
-import { CONFIG_DIR, resolveUserPath, stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
+import {
+  CONFIG_DIR,
+  normalizeOptionalString,
+  resolveUserPath,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -324,7 +329,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       normalizeConfiguredSpeechProviderId(raw.provider) ??
       (providerSource === "config" ? raw.provider?.trim().toLowerCase() || "" : ""),
     providerSource,
-    summaryModel: raw.summaryModel?.trim() || undefined,
+    summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     providerConfigs: collectDirectProviderConfigEntries(raw),
     prefsPath: raw.prefsPath,

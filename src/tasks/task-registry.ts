@@ -592,7 +592,7 @@ function pickPreferredRunIdTask(matches: TaskRecord[]): TaskRecord | undefined {
 }
 
 function normalizeComparableText(value: string | undefined): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function compareTasksNewestFirst(

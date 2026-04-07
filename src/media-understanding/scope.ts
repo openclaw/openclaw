@@ -1,10 +1,11 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type MediaUnderstandingScopeDecision = "allow" | "deny";
 
 function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   if (normalized === "allow") {
     return "allow";
   }
@@ -15,7 +16,7 @@ function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecisi
 }
 
 function normalizeMatch(value?: string | null): string | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized || undefined;
 }
 

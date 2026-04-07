@@ -109,11 +109,45 @@ export type MemoryPluginRuntime = {
   closeAllMemorySearchManagers?(): Promise<void>;
 };
 
-type MemoryPluginState = {
-  corpusSupplements: MemoryCorpusSupplementRegistration[];
+export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
+
+export type MemoryPluginPublicArtifact = {
+  kind: string;
+  workspaceDir: string;
+  relativePath: string;
+  absolutePath: string;
+  agentIds: string[];
+  contentType: MemoryPluginPublicArtifactContentType;
+};
+
+export type MemoryPluginPublicArtifactsProvider = {
+  listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
+};
+
+export type MemoryPluginCapability = {
   promptBuilder?: MemoryPromptSectionBuilder;
-  promptSupplements: MemoryPromptSupplementRegistration[];
   flushPlanResolver?: MemoryFlushPlanResolver;
+  runtime?: MemoryPluginRuntime;
+  publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+};
+
+export type MemoryPluginCapabilityRegistration = {
+  pluginId: string;
+  capability: MemoryPluginCapability;
+};
+
+type MemoryPluginState = {
+  capability?: MemoryPluginCapabilityRegistration;
+  corpusSupplements: MemoryCorpusSupplementRegistration[];
+  promptSupplements: MemoryPromptSupplementRegistration[];
+  // LEGACY(memory-v1): kept for external plugins still registering the older
+  // split memory surfaces. Prefer `registerMemoryCapability(...)`.
+  promptBuilder?: MemoryPromptSectionBuilder;
+  // LEGACY(memory-v1): remove after external memory plugins migrate to the
+  // unified capability registration path.
+  flushPlanResolver?: MemoryFlushPlanResolver;
+  // LEGACY(memory-v1): remove after external memory plugins migrate to the
+  // unified capability registration path.
   runtime?: MemoryPluginRuntime;
 };
 
@@ -133,10 +167,27 @@ export function registerMemoryCorpusSupplement(
   memoryPluginState.corpusSupplements = next;
 }
 
+export function registerMemoryCapability(
+  pluginId: string,
+  capability: MemoryPluginCapability,
+): void {
+  memoryPluginState.capability = { pluginId, capability: { ...capability } };
+}
+
+export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
+  return memoryPluginState.capability
+    ? {
+        pluginId: memoryPluginState.capability.pluginId,
+        capability: { ...memoryPluginState.capability.capability },
+      }
+    : undefined;
+}
+
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
   return [...memoryPluginState.corpusSupplements];
 }
 
+/** @deprecated Use registerMemoryCapability(pluginId, { promptBuilder }) instead. */
 export function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
   memoryPluginState.promptBuilder = builder;
 }
@@ -156,7 +207,10 @@ export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }): string[] {
-  const primary = memoryPluginState.promptBuilder?.(params) ?? [];
+  const primary =
+    memoryPluginState.capability?.capability.promptBuilder?.(params) ??
+    memoryPluginState.promptBuilder?.(params) ??
+    [];
   const supplements = memoryPluginState.promptSupplements
     // Keep supplement order stable even if plugin registration order changes.
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
@@ -165,13 +219,14 @@ export function buildMemoryPromptSection(params: {
 }
 
 export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.promptBuilder;
+  return memoryPluginState.capability?.capability.promptBuilder ?? memoryPluginState.promptBuilder;
 }
 
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...memoryPluginState.promptSupplements];
 }
 
+/** @deprecated Use registerMemoryCapability(pluginId, { flushPlanResolver }) instead. */
 export function registerMemoryFlushPlanResolver(resolver: MemoryFlushPlanResolver): void {
   memoryPluginState.flushPlanResolver = resolver;
 }
@@ -180,26 +235,79 @@ export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): MemoryFlushPlan | null {
-  return memoryPluginState.flushPlanResolver?.(params) ?? null;
+  return (
+    memoryPluginState.capability?.capability.flushPlanResolver?.(params) ??
+    memoryPluginState.flushPlanResolver?.(params) ??
+    null
+  );
 }
 
 export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return memoryPluginState.flushPlanResolver;
+  return (
+    memoryPluginState.capability?.capability.flushPlanResolver ??
+    memoryPluginState.flushPlanResolver
+  );
 }
 
+/** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
 export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
   memoryPluginState.runtime = runtime;
 }
 
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
-  return memoryPluginState.runtime;
+  return memoryPluginState.capability?.capability.runtime ?? memoryPluginState.runtime;
 }
 
 export function hasMemoryRuntime(): boolean {
-  return memoryPluginState.runtime !== undefined;
+  return getMemoryRuntime() !== undefined;
+}
+
+function cloneMemoryPublicArtifact(
+  artifact: MemoryPluginPublicArtifact,
+): MemoryPluginPublicArtifact {
+  return {
+    ...artifact,
+    agentIds: [...artifact.agentIds],
+  };
+}
+
+export async function listActiveMemoryPublicArtifacts(params: {
+  cfg: OpenClawConfig;
+}): Promise<MemoryPluginPublicArtifact[]> {
+  const artifacts =
+    (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
+  return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
+    const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
+    if (workspaceOrder !== 0) {
+      return workspaceOrder;
+    }
+    const relativePathOrder = left.relativePath.localeCompare(right.relativePath);
+    if (relativePathOrder !== 0) {
+      return relativePathOrder;
+    }
+    const kindOrder = left.kind.localeCompare(right.kind);
+    if (kindOrder !== 0) {
+      return kindOrder;
+    }
+    const contentTypeOrder = left.contentType.localeCompare(right.contentType);
+    if (contentTypeOrder !== 0) {
+      return contentTypeOrder;
+    }
+    const agentOrder = left.agentIds.join("\0").localeCompare(right.agentIds.join("\0"));
+    if (agentOrder !== 0) {
+      return agentOrder;
+    }
+    return left.absolutePath.localeCompare(right.absolutePath);
+  });
 }
 
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
+  memoryPluginState.capability = state.capability
+    ? {
+        pluginId: state.capability.pluginId,
+        capability: { ...state.capability.capability },
+      }
+    : undefined;
   memoryPluginState.corpusSupplements = [...state.corpusSupplements];
   memoryPluginState.promptBuilder = state.promptBuilder;
   memoryPluginState.promptSupplements = [...state.promptSupplements];
@@ -208,6 +316,7 @@ export function restoreMemoryPluginState(state: MemoryPluginState): void {
 }
 
 export function clearMemoryPluginState(): void {
+  memoryPluginState.capability = undefined;
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptBuilder = undefined;
   memoryPluginState.promptSupplements = [];

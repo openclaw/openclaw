@@ -142,6 +142,28 @@ describe("buildCliArgs", () => {
       }),
     ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
   });
+
+  it("replaces prompt placeholders before falling back to a trailing positional prompt", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "gemini",
+          modelArg: "--model",
+        },
+        baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
+        modelId: "gemini-3.1-pro-preview",
+        promptArg: "describe the image",
+        useResume: false,
+      }),
+    ).toEqual([
+      "--output-format",
+      "json",
+      "--prompt",
+      "describe the image",
+      "--model",
+      "gemini-3.1-pro-preview",
+    ]);
+  });
 });
 
 describe("writeCliImages", () => {

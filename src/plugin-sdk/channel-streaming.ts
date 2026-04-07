@@ -7,6 +7,7 @@ import type {
   SlackChannelStreamingConfig,
   TextChunkMode,
 } from "../config/types.base.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -47,7 +48,7 @@ function normalizeStreamingMode(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized || null;
 }
 

@@ -198,17 +198,6 @@ function esc(text: string) {
     .replaceAll('"', "&quot;");
 }
 
-const AVATAR_COLORS = [
-  "#7c6cff",
-  "#f59e0b",
-  "#34d399",
-  "#f87171",
-  "#60a5fa",
-  "#a78bfa",
-  "#fb923c",
-  "#e879f9",
-];
-
 const MOCK_MODELS: RunnerModelOption[] = [
   {
     key: "mock-openai/gpt-5.4",
@@ -225,18 +214,6 @@ const MOCK_MODELS: RunnerModelOption[] = [
     preferred: false,
   },
 ];
-
-function avatarColor(name: string): string {
-  let h = 0;
-  for (const ch of name) {
-    h = (h * 31 + ch.charCodeAt(0)) | 0;
-  }
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
-
-function avatarInitial(name: string): string {
-  return (name[0] ?? "?").toUpperCase();
-}
 
 export function deriveSelectedConversation(state: UiState): string | null {
   return state.selectedConversationId ?? state.snapshot?.conversations[0]?.id ?? null;
@@ -579,6 +556,7 @@ function renderChatView(state: UiState): string {
         <div class="chat-channel-header">
           <span class="chat-channel-name">${esc(activeConversation?.title || selectedConv || "No conversation")}</span>
           ${activeConversation ? `<span class="chat-channel-kind">${activeConversation.kind}</span>` : ""}
+          ${state.bootstrap?.runner.status === "running" ? '<span class="live-indicator"><span class="live-dot"></span>LIVE</span>' : ""}
         </div>
 
         <!-- Messages -->
@@ -612,12 +590,17 @@ function renderChatView(state: UiState): string {
     </div>`;
 }
 
+function messageAvatar(m: Message): { emoji: string; bg: string; role: string } {
+  if (m.direction === "outbound") {
+    return { emoji: "\uD83E\uDD80", bg: "#7c6cff", role: "Claw" }; // 🦀
+  }
+  return { emoji: "\uD83E\uDD9E", bg: "#d97706", role: "Clawfather" }; // 🦞
+}
+
 function renderMessage(m: Message): string {
   const name = m.senderName || m.senderId;
-  const color = avatarColor(name);
-  const initial = avatarInitial(name);
+  const avatar = messageAvatar(m);
   const dirClass = m.direction === "inbound" ? "msg-direction-inbound" : "msg-direction-outbound";
-  const dirLabel = m.direction === "inbound" ? "user" : "bot";
 
   const metaTags: string[] = [];
   if (m.threadId) {
@@ -637,11 +620,12 @@ function renderMessage(m: Message): string {
 
   return `
     <div class="msg msg-${m.direction}">
-      <div class="msg-avatar" style="background:${color}">${initial}</div>
+      <div class="msg-avatar" style="background:${avatar.bg}">${avatar.emoji}</div>
       <div class="msg-body">
         <div class="msg-header">
           <span class="msg-sender">${esc(name)}</span>
-          <span class="msg-direction ${dirClass}">${dirLabel}</span>
+          <span class="msg-role">${esc(avatar.role)}</span>
+          <span class="msg-direction ${dirClass}">${m.direction === "inbound" ? "\u2B06" : "\u2B07"}</span>
           <span class="msg-time">${formatTime(m.timestamp)}</span>
         </div>
         <div class="msg-text">${esc(m.text)}</div>

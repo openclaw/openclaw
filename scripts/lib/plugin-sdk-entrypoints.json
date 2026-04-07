@@ -213,6 +213,7 @@
   "provider-stream",
   "provider-tools",
   "provider-usage",
+  "provider-web-fetch-contract",
   "provider-web-fetch",
   "provider-web-search-contract",
   "provider-web-search",

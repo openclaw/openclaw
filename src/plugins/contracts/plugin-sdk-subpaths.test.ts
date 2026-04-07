@@ -351,6 +351,15 @@ describe("plugin-sdk subpath exports", () => {
         "resolveCitationRedirectUrl",
       ],
     });
+    expectSourceContract("provider-web-fetch-contract", {
+      mentions: ["enablePluginInConfig", "WebFetchProviderPlugin"],
+      omits: [
+        "withTrustedWebToolsEndpoint",
+        "readResponseText",
+        "resolveCacheTtlMs",
+        "wrapExternalContent",
+      ],
+    });
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",

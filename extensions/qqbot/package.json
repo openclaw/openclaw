@@ -10,6 +10,7 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "@types/ws": "^8.18.1",
     "openclaw": "workspace:*"
   },

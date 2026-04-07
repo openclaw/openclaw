@@ -3,16 +3,12 @@ import type { OpenClawConfig } from "./config-runtime.js";
 
 type ApprovalKind = "exec" | "plugin";
 
-function defaultNormalizeSenderId(value: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 export function createResolvedApproverActionAuthAdapter(params: {
   channelLabel: string;
   resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   normalizeSenderId?: (value: string) => string | undefined;
 }) {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
 
   return {
     authorizeActorAction({

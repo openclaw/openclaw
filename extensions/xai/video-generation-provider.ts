@@ -6,6 +6,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -93,7 +94,7 @@ function resolveDurationSeconds(params: {
 }
 
 function resolveAspectRatio(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || !XAI_VIDEO_ASPECT_RATIOS.has(trimmed)) {
     return undefined;
   }

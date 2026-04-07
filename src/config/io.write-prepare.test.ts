@@ -7,6 +7,7 @@ import {
   resolveWriteEnvSnapshotForPath,
   unsetPathForWrite,
 } from "./io.write-prepare.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("config io write prepare", () => {
   it("persists caller changes onto resolved config without leaking runtime defaults", () => {
@@ -61,10 +62,10 @@ describe("config io write prepare", () => {
   });
 
   it("does not mutate caller config when unsetting existing config objects", () => {
-    const input = {
+    const input: OpenClawConfig = {
       gateway: { mode: "local" },
       commands: { ownerDisplay: "hash" },
-    };
+    } satisfies OpenClawConfig;
 
     const next = unsetPathForWrite(input, ["commands", "ownerDisplay"]);
 
@@ -76,14 +77,14 @@ describe("config io write prepare", () => {
   });
 
   it("keeps caller arrays immutable when unsetting array entries", () => {
-    const input = {
+    const input: OpenClawConfig = {
       gateway: { mode: "local" },
       tools: { alsoAllow: ["exec", "fetch", "read"] },
-    };
+    } satisfies OpenClawConfig;
 
     const next = unsetPathForWrite(input, ["tools", "alsoAllow", "1"]);
 
-    expect(input.tools.alsoAllow).toEqual(["exec", "fetch", "read"]);
+    expect(input.tools!.alsoAllow).toEqual(["exec", "fetch", "read"]);
     expect((next.next.tools as { alsoAllow?: string[] } | undefined)?.alsoAllow).toEqual([
       "exec",
       "read",
@@ -91,10 +92,10 @@ describe("config io write prepare", () => {
   });
 
   it("treats missing unset paths as no-op without mutating caller config", () => {
-    const input = {
+    const input: OpenClawConfig = {
       gateway: { mode: "local" },
       commands: { ownerDisplay: "hash" },
-    };
+    } satisfies OpenClawConfig;
 
     const next = unsetPathForWrite(input, ["commands", "missingKey"]);
 
@@ -107,10 +108,10 @@ describe("config io write prepare", () => {
   });
 
   it("ignores blocked prototype-key unset path segments", () => {
-    const input = {
+    const input: OpenClawConfig = {
       gateway: { mode: "local" },
       commands: { ownerDisplay: "hash" },
-    };
+    } satisfies OpenClawConfig;
 
     const blocked = [
       ["commands", "__proto__"],
@@ -278,9 +279,9 @@ describe("config io write prepare", () => {
           password: "test-password",
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
-    const runtimeConfig = {
+    const runtimeConfig: OpenClawConfig = {
       gateway: { port: 18789 },
       channels: {
         bluebubbles: {
@@ -289,9 +290,9 @@ describe("config io write prepare", () => {
           enrichGroupParticipantsFromContacts: true,
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
-    const nextConfig = structuredClone(runtimeConfig);
+    const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {
       ...nextConfig.gateway,
       auth: { mode: "token" },
@@ -315,7 +316,7 @@ describe("config io write prepare", () => {
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
-    const sourceConfig = {
+    const sourceConfig: OpenClawConfig = {
       channels: {
         discord: {
           dmPolicy: "pairing",
@@ -327,11 +328,13 @@ describe("config io write prepare", () => {
         },
       },
       gateway: { port: 18789 },
-    };
+    } satisfies OpenClawConfig;
 
     const nextConfig = structuredClone(sourceConfig);
-    delete nextConfig.channels.discord.dm.policy;
-    delete nextConfig.channels.slack.dm.policy;
+    delete (nextConfig.channels?.discord?.dm as { enabled?: boolean; policy?: string } | undefined)
+      ?.policy;
+    delete (nextConfig.channels?.slack?.dm as { enabled?: boolean; policy?: string } | undefined)
+      ?.policy;
 
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: sourceConfig,
@@ -379,9 +382,9 @@ describe("config io write prepare", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
-    const nextConfig = {
+    const nextConfig: OpenClawConfig = {
       ...structuredClone(sourceConfig),
       gateway: {
         auth: { mode: "token" },

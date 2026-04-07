@@ -25,11 +25,12 @@ export const fullSuiteVitestShards = [
   {
     config: "vitest.full-core-unit-support.config.ts",
     name: "core-unit-support",
-    projects: [
-      "vitest.unit-support.config.ts",
-      "vitest.boundary.config.ts",
-      "vitest.tooling.config.ts",
-    ],
+    projects: ["vitest.unit-support.config.ts"],
+  },
+  {
+    config: "vitest.full-core-support-boundary.config.ts",
+    name: "core-support-boundary",
+    projects: ["vitest.boundary.config.ts", "vitest.tooling.config.ts"],
   },
   {
     config: "vitest.full-core-contracts.config.ts",

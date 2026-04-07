@@ -611,10 +611,10 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createExaToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "exa",
           resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
-        ) as SearchConfigRecord | undefined,
+        ),
       ),
   };
 }

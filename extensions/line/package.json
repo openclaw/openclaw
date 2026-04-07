@@ -5,6 +5,7 @@
   "description": "OpenClaw LINE channel plugin",
   "type": "module",
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

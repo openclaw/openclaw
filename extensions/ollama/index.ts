@@ -10,7 +10,7 @@ import {
   buildProviderReplayFamilyHooks,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -51,8 +51,8 @@ function resolveOllamaDiscoveryApiKey(params: {
   resolvedApiKey?: string;
 }): string {
   const envApiKey = params.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_API_KEY" : undefined;
-  const explicitApiKey = params.explicitApiKey?.trim() || undefined;
-  const resolvedApiKey = params.resolvedApiKey?.trim() || undefined;
+  const explicitApiKey = normalizeOptionalString(params.explicitApiKey);
+  const resolvedApiKey = normalizeOptionalString(params.resolvedApiKey);
   return envApiKey ?? explicitApiKey ?? resolvedApiKey ?? DEFAULT_API_KEY;
 }
 

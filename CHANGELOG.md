@@ -18,6 +18,12 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: add persisted compaction checkpoints plus Sessions UI branch/restore actions so operators can inspect and recover pre-compaction session state. (#62146) Thanks @scoootscooob.
 - Providers/Ollama: detect vision capability from the `/api/show` response and set image input on models that support it so Ollama vision models accept image attachments. (#62193) Thanks @BruceMacD.
 - Memory/dreaming: ingest redacted session transcripts into the dreaming corpus with per-day session-corpus notes, cursor checkpointing, and promotion/doctor support. (#62227) Thanks @vignesh07.
+- Plugins/memory: add a public memory-artifact export seam to the unified memory capability so companion plugins like `memory-wiki` can bridge the active memory plugin without reaching into `memory-core` internals. Thanks @vincentkoc.
+- Memory/wiki: add structured claim/evidence fields plus compiled agent digest artifacts so `memory-wiki` behaves more like a persistent knowledge layer and less like markdown-only page storage. Thanks @vincentkoc.
+- Memory/wiki: add claim-health linting, contradiction clustering, staleness-aware dashboards, and freshness-weighted wiki search so `memory-wiki` can act more like a maintained belief layer than a passive markdown dump. Thanks @vincentkoc.
+- Memory/wiki: use compiled digest artifacts as the first-pass wiki index for search/get flows, and resolve claim ids back to owning pages so agents can retrieve knowledge by belief identity instead of only by file path. Thanks @vincentkoc.
+- Memory/wiki: add an opt-in `context.includeCompiledDigestPrompt` flag so memory prompt supplements can append a compact compiled wiki snapshot for legacy prompt assembly and context engines that explicitly consume memory prompt sections. Thanks @vincentkoc.
+- Plugin SDK/context engines: pass `availableTools` and `citationsMode` into `assemble()`, and expose `buildMemorySystemPromptAddition(...)` so non-legacy context engines can adopt the active memory prompt path without reimplementing it. Thanks @vincentkoc.
 
 ### Fixes
 
@@ -61,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - Cron: load `jobId` into `id` when the on-disk store omits `id`, matching doctor migration and fixing `unknown cron job id` for hand-edited `jobs.json`. (#62246) Thanks @neeravmakwana.
 - Agents/model fallback: classify minimal HTTP 404 API errors (for example `404 status code (no body)`) as `model_not_found` so assistant failures throw into the fallback chain instead of stopping at the first fallback candidate. (#62119) Thanks @neeravmakwana.
 - Providers/Mistral: send `reasoning_effort` for `mistral/mistral-small-latest` (Mistral Small 4) with thinking-level mapping, and mark the catalog entry as reasoning-capable so adjustable reasoning matches Mistral’s Chat Completions API. (#62162) Thanks @neeravmakwana.
+- OpenAI TTS/Groq: send `wav` to Groq-compatible speech endpoints, honor explicit `responseFormat` overrides on OpenAI-compatible paths, and only mark voice-note output as voice-compatible when the actual format is `opus`. (#62233) Thanks @neeravmakwana.
 
 ## 2026.4.5
 

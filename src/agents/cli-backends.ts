@@ -11,6 +11,13 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
+export type ResolvedCliBackendLiveTest = {
+  defaultModelRef?: string;
+  defaultImageProbe: boolean;
+  dockerNpmPackage?: string;
+  dockerBinaryName?: string;
+};
+
 export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
   const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
   return normalizeConfig ? normalizeConfig(config) : config;
@@ -116,6 +123,23 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
     ids.add(normalizeBackendKey(key));
   }
   return ids;
+}
+
+export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
+  const normalized = normalizeBackendKey(provider);
+  const entry =
+    resolvePluginSetupCliBackend({ backend: normalized }) ??
+    resolveRuntimeCliBackends().find((backend) => normalizeBackendKey(backend.id) === normalized);
+  if (!entry) {
+    return null;
+  }
+  const backend = "backend" in entry ? entry.backend : entry;
+  return {
+    defaultModelRef: backend.liveTest?.defaultModelRef,
+    defaultImageProbe: backend.liveTest?.defaultImageProbe === true,
+    dockerNpmPackage: backend.liveTest?.docker?.npmPackage,
+    dockerBinaryName: backend.liveTest?.docker?.binaryName,
+  };
 }
 
 export function resolveCliBackendConfig(

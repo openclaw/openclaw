@@ -9,14 +9,23 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
   flash: "gemini-3.1-flash-preview",
   "flash-lite": "gemini-3.1-flash-lite-preview",
 };
+const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3.1-pro-preview";
 
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
+    liveTest: {
+      defaultModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
+      defaultImageProbe: true,
+      docker: {
+        npmPackage: "@google/gemini-cli",
+        binaryName: "gemini",
+      },
+    },
     config: {
       command: "gemini",
-      args: ["--prompt", "--output-format", "json"],
-      resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"],
+      args: ["--output-format", "json", "--prompt", "{prompt}"],
+      resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
       output: "json",
       input: "arg",
       modelArg: "--model",

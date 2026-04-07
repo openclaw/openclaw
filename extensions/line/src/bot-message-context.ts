@@ -22,6 +22,7 @@ import {
   resolveAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
@@ -291,7 +292,7 @@ function resolveLineGroupSystemPrompt(
     groupId: source.groupId,
     roomId: source.roomId,
   });
-  return entry?.systemPrompt?.trim() || undefined;
+  return normalizeOptionalString(entry?.systemPrompt);
 }
 
 async function finalizeLineInboundContext(params: {

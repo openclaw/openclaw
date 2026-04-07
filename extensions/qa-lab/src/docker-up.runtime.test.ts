@@ -9,7 +9,7 @@ describe("runQaDockerUp", () => {
   it("builds the QA UI, writes the harness, starts compose, and waits for health", async () => {
     const calls: string[] = [];
     const fetchCalls: string[] = [];
-    const responseQueue = [false, true, false, true];
+    const responseQueue = [false, true, true];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
 
     try {
@@ -23,6 +23,9 @@ describe("runQaDockerUp", () => {
         {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
+            if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
+              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+            }
             return { stdout: "", stderr: "" };
           },
           fetchImpl: vi.fn(async (input: string) => {
@@ -39,11 +42,11 @@ describe("runQaDockerUp", () => {
         expect.stringContaining(
           `docker compose -f ${outputDir}/docker-compose.qa.yml up --build -d @/repo/openclaw`,
         ),
+        `docker compose -f ${outputDir}/docker-compose.qa.yml ps --format json openclaw-qa-gateway @/repo/openclaw`,
       ]);
       expect(fetchCalls).toEqual([
         "http://127.0.0.1:43124/healthz",
         "http://127.0.0.1:43124/healthz",
-        "http://127.0.0.1:18889/healthz",
         "http://127.0.0.1:18889/healthz",
       ]);
       expect(result.qaLabUrl).toBe("http://127.0.0.1:43124");
@@ -70,6 +73,9 @@ describe("runQaDockerUp", () => {
         {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
+            if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
+              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+            }
             return { stdout: "", stderr: "" };
           },
           fetchImpl: vi.fn(async () => ({ ok: true })),
@@ -80,6 +86,7 @@ describe("runQaDockerUp", () => {
       expect(calls).toEqual([
         `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
         `docker compose -f ${outputDir}/docker-compose.qa.yml up -d @/repo/openclaw`,
+        `docker compose -f ${outputDir}/docker-compose.qa.yml ps --format json openclaw-qa-gateway @/repo/openclaw`,
       ]);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
@@ -104,7 +111,10 @@ describe("runQaDockerUp", () => {
         },
         {
           async runCommand() {
-            return { stdout: "", stderr: "" };
+            return {
+              stdout: '{"Health":"healthy","State":"running"}\n',
+              stderr: "",
+            };
           },
           fetchImpl: vi.fn(async () => ({ ok: true })),
           sleepImpl: vi.fn(async () => {}),
@@ -120,6 +130,66 @@ describe("runQaDockerUp", () => {
       await new Promise<void>((resolve, reject) =>
         labServer.close((error) => (error ? reject(error) : resolve())),
       );
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the container IP when the host gateway port is unreachable", async () => {
+    const calls: string[] = [];
+    const fetchCalls: string[] = [];
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
+
+    try {
+      const result = await runQaDockerUp(
+        {
+          repoRoot: "/repo/openclaw",
+          outputDir,
+          gatewayPort: 18889,
+          qaLabPort: 43124,
+          skipUiBuild: true,
+          usePrebuiltImage: true,
+        },
+        {
+          async runCommand(command, args, cwd) {
+            calls.push([command, ...args, `@${cwd}`].join(" "));
+            const joined = args.join(" ");
+            if (joined.includes("ps --format json openclaw-qa-gateway")) {
+              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+            }
+            if (joined.includes("ps -q openclaw-qa-gateway")) {
+              return { stdout: "gateway-container\n", stderr: "" };
+            }
+            if (command === "docker" && args[0] === "inspect") {
+              return { stdout: "192.168.165.4\n", stderr: "" };
+            }
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async (input: string) => {
+            fetchCalls.push(input);
+            return {
+              ok:
+                input === "http://127.0.0.1:43124/healthz" ||
+                input === "http://192.168.165.4:18789/healthz",
+            };
+          }),
+          sleepImpl: vi.fn(async () => {}),
+        },
+      );
+
+      expect(calls).toEqual([
+        `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
+        `docker compose -f ${outputDir}/docker-compose.qa.yml up -d @/repo/openclaw`,
+        `docker compose -f ${outputDir}/docker-compose.qa.yml ps --format json openclaw-qa-gateway @/repo/openclaw`,
+        `docker compose -f ${outputDir}/docker-compose.qa.yml ps -q openclaw-qa-gateway @/repo/openclaw`,
+        "docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} gateway-container @/repo/openclaw",
+      ]);
+      expect(fetchCalls).toEqual([
+        "http://127.0.0.1:43124/healthz",
+        "http://127.0.0.1:18889/healthz",
+        "http://192.168.165.4:18789/healthz",
+      ]);
+      expect(result.gatewayUrl).toBe("http://192.168.165.4:18789/");
+    } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
   });

@@ -90,6 +90,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   let lastFingerprint = "";
   let renderDeferred = false;
+  let previousRunnerStatus: string | null = null;
 
   function stateFingerprint(): string {
     const msgs = state.snapshot?.messages;
@@ -160,6 +161,14 @@ export async function createQaLabApp(root: HTMLDivElement) {
     } catch (error) {
       state.error = formatErrorMessage(error);
     }
+
+    /* Auto-switch to chat when a run starts so user can watch live */
+    const currentRunnerStatus = state.bootstrap?.runner.status ?? null;
+    if (currentRunnerStatus === "running" && previousRunnerStatus !== "running") {
+      state.activeTab = "chat";
+      chatScrollLocked = true;
+    }
+    previousRunnerStatus = currentRunnerStatus;
 
     /* Only re-render when data actually changed; defer if a <select> is open */
     const fp = stateFingerprint();
