@@ -124,6 +124,15 @@ export async function callZaloApi<T = unknown>(
       signal: controller.signal,
     });
 
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      throw new ZaloApiError(
+        errBody || `Zalo API HTTP error: ${method}`,
+        response.status,
+        `HTTP ${response.status}`,
+      );
+    }
+
     const data = (await response.json()) as ZaloApiResponse<T>;
 
     if (!data.ok) {
