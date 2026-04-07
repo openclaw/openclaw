@@ -108,6 +108,10 @@
       "types": "./dist/src/plugin-sdk/provider-web-search.d.ts",
       "default": "./src/provider-web-search.ts"
     },
+    "./provider-web-search-contract": {
+      "types": "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
+      "default": "./src/provider-web-search-contract.ts"
+    },
     "./runtime-doctor": {
       "types": "./dist/src/plugin-sdk/runtime-doctor.d.ts",
       "default": "./src/runtime-doctor.ts"

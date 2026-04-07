@@ -6,35 +6,71 @@ const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
 const tscBin = require.resolve("typescript/bin/tsc");
 
-function runNodeStep(label, args, timeoutMs) {
+export function createPrefixedOutputWriter(label, target) {
+  let buffered = "";
+  const prefix = `[${label}] `;
+
+  return {
+    write(chunk) {
+      buffered += chunk;
+      while (true) {
+        const newlineIndex = buffered.indexOf("\n");
+        if (newlineIndex === -1) {
+          return;
+        }
+        const line = buffered.slice(0, newlineIndex + 1);
+        buffered = buffered.slice(newlineIndex + 1);
+        target.write(`${prefix}${line}`);
+      }
+    },
+    flush() {
+      if (!buffered) {
+        return;
+      }
+      target.write(`${prefix}${buffered}`);
+      buffered = "";
+    },
+  };
+}
+
+function abortSiblingSteps(abortController) {
+  if (abortController && !abortController.signal.aborted) {
+    abortController.abort();
+  }
+}
+
+export function runNodeStep(label, args, timeoutMs, params = {}) {
+  const abortController = params.abortController;
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
+      signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
     let settled = false;
+    const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
+    const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
     const timer = setTimeout(() => {
       if (settled) {
         return;
       }
       child.kill("SIGTERM");
       settled = true;
-      rejectPromise(
-        new Error(`${label}\n${stdout}${stderr}\n${label} timed out after ${timeoutMs}ms`.trim()),
-      );
+      stdoutWriter.flush();
+      stderrWriter.flush();
+      abortSiblingSteps(abortController);
+      rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdoutWriter.write(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderrWriter.write(chunk);
     });
     child.on("error", (error) => {
       if (settled) {
@@ -42,7 +78,14 @@ function runNodeStep(label, args, timeoutMs) {
       }
       clearTimeout(timer);
       settled = true;
-      rejectPromise(new Error(`${label}\n${stdout}${stderr}\n${error.message}`.trim()));
+      stdoutWriter.flush();
+      stderrWriter.flush();
+      if (error.name === "AbortError" && abortController?.signal.aborted) {
+        rejectPromise(new Error(`${label} canceled after sibling failure`));
+        return;
+      }
+      abortSiblingSteps(abortController);
+      rejectPromise(new Error(`${label} failed to start: ${error.message}`));
     });
     child.on("close", (code) => {
       if (settled) {
@@ -50,28 +93,42 @@ function runNodeStep(label, args, timeoutMs) {
       }
       clearTimeout(timer);
       settled = true;
+      stdoutWriter.flush();
+      stderrWriter.flush();
       if (code === 0) {
         resolvePromise();
         return;
       }
-      rejectPromise(new Error(`${label}\n${stdout}${stderr}`.trim()));
+      abortSiblingSteps(abortController);
+      rejectPromise(new Error(`${label} failed with exit code ${code ?? 1}`));
     });
   });
 }
 
-async function main() {
+export async function runNodeStepsInParallel(steps) {
+  const abortController = new AbortController();
+  const results = await Promise.allSettled(
+    steps.map((step) => runNodeStep(step.label, step.args, step.timeoutMs, { abortController })),
+  );
+  const firstFailure = results.find((result) => result.status === "rejected");
+  if (firstFailure) {
+    throw firstFailure.reason;
+  }
+}
+
+export async function main() {
   try {
-    await Promise.all([
-      runNodeStep(
-        "plugin-sdk boundary dts",
-        [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
-        300_000,
-      ),
-      runNodeStep(
-        "plugin-sdk package boundary dts",
-        [tscBin, "-p", "packages/plugin-sdk/tsconfig.json"],
-        300_000,
-      ),
+    await runNodeStepsInParallel([
+      {
+        label: "plugin-sdk boundary dts",
+        args: [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
+        timeoutMs: 300_000,
+      },
+      {
+        label: "plugin-sdk package boundary dts",
+        args: [tscBin, "-p", "packages/plugin-sdk/tsconfig.json"],
+        timeoutMs: 300_000,
+      },
     ]);
     await runNodeStep(
       "plugin-sdk boundary root shims",
@@ -84,4 +141,6 @@ async function main() {
   }
 }
 
-await main();
+if (import.meta.main) {
+  await main();
+}

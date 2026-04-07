@@ -7,6 +7,7 @@ import {
   cleanupCanaryArtifactsForExtensions,
   installCanaryArtifactCleanup,
   resolveCanaryArtifactPaths,
+  runNodeStepsWithConcurrency,
 } from "../../scripts/check-extension-package-tsc-boundary.mjs";
 
 const tempRoots = new Set<string>();
@@ -77,5 +78,29 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fs.existsSync(demoA.tsconfigPath)).toBe(false);
     expect(fs.existsSync(demoB.canaryPath)).toBe(false);
     expect(fs.existsSync(demoB.tsconfigPath)).toBe(false);
+  });
+
+  it("aborts concurrent sibling steps after the first failure", async () => {
+    const startedAt = Date.now();
+
+    await expect(
+      runNodeStepsWithConcurrency(
+        [
+          {
+            label: "fail-fast",
+            args: ["--eval", "setTimeout(() => process.exit(2), 10)"],
+            timeoutMs: 5_000,
+          },
+          {
+            label: "slow-step",
+            args: ["--eval", "setTimeout(() => {}, 10_000)"],
+            timeoutMs: 5_000,
+          },
+        ],
+        2,
+      ),
+    ).rejects.toThrow("fail-fast");
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 });
