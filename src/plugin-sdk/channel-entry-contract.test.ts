@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { loadBundledEntryExportSync } from "./channel-entry-contract.js";
@@ -14,6 +14,7 @@ afterEach(() => {
   vi.doUnmock("jiti");
   vi.doUnmock("node:fs");
   vi.doUnmock("node:module");
+  vi.doUnmock("node:url");
   vi.doUnmock("../infra/boundary-file-read.js");
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -26,6 +27,8 @@ afterEach(() => {
 describe("loadBundledEntryExportSync", () => {
   it("converts Windows absolute paths to file URLs before handing them to jiti", async () => {
     const importerUrl = "file:///C:/openclaw/dist/extensions/signal/setup-entry.js";
+    const importerPath = fileURLToPath(importerUrl);
+    const resolvedAbsolutePath = path.resolve(path.dirname(importerPath), "./api.js");
     const modulePath = String.raw`C:\openclaw\dist\extensions\signal\api.js`;
     const safeImportPath = "file:///C:/openclaw/dist/extensions/signal/api.js";
 
@@ -43,11 +46,20 @@ describe("loadBundledEntryExportSync", () => {
         closeSync: vi.fn(),
       },
     }));
+    vi.doMock("node:url", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:url")>();
+      return {
+        ...actual,
+        pathToFileURL: vi.fn((value: string) =>
+          value === modulePath ? new URL(safeImportPath) : actual.pathToFileURL(value),
+        ),
+      };
+    });
     vi.doMock("../infra/boundary-file-read.js", () => ({
       openBoundaryFileSync: vi.fn(({ absolutePath }: { absolutePath: string }) => ({
         ok: true,
         fd: 1,
-        path: absolutePath === "./api.js" ? modulePath : absolutePath,
+        path: absolutePath === resolvedAbsolutePath ? modulePath : absolutePath,
       })),
     }));
 
