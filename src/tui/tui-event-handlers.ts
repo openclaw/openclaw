@@ -423,7 +423,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       return;
     }
-    streamAssembler.drop(previousRunId);
+    // Mark the previous active run finalized so late-arriving events from that
+    // run are ignored and cannot consume optimistic binding for a newer run.
+    noteFinalizedRun(previousRunId);
     sessionRuns.clear();
     state.activeChatRunId = null;
     pendingHistoryRefresh = false;

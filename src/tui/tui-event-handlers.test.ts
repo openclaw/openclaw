@@ -610,6 +610,49 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("second", "run-live");
   });
 
+  it("keeps pending optimistic binding for the next real run after an event gap", () => {
+    const { state, isLocalRunId, handleChatEvent, handleEventGap } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: false },
+    });
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "A1" },
+    });
+    expect(state.activeChatRunId).toBe("run-a");
+
+    // User submitted another message while run-a was active.
+    state.pendingOptimisticUserMessage = true;
+
+    handleEventGap();
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+
+    // Late stale delta for run-a must be ignored and must not consume the pending flag.
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "late A" },
+    });
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(isLocalRunId("run-a")).toBe(false);
+
+    // First delta from the actual new run should claim optimistic local binding.
+    handleChatEvent({
+      runId: "run-b",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "B1" },
+    });
+    expect(state.activeChatRunId).toBe("run-b");
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(isLocalRunId("run-b")).toBe(true);
+  });
+
   it("renders final error text when chat final has no content but includes event errorMessage", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
