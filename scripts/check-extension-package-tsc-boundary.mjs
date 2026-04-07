@@ -68,6 +68,23 @@ function formatFailureFooter(params = {}) {
   return footerLines.join("\n");
 }
 
+export function formatBoundaryCheckSuccessSummary(params = {}) {
+  const lines = ["extension package boundary check passed"];
+  if (params.mode) {
+    lines.push(`mode: ${params.mode}`);
+  }
+  if (Number.isInteger(params.compileCount)) {
+    lines.push(`compiled plugins: ${params.compileCount}`);
+  }
+  if (Number.isInteger(params.canaryCount)) {
+    lines.push(`canary plugins: ${params.canaryCount}`);
+  }
+  if (Number.isFinite(params.elapsedMs)) {
+    lines.push(`elapsed: ${params.elapsedMs}ms`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export function formatStepFailure(label, params = {}) {
   const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
   const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
@@ -486,6 +503,7 @@ function runCanaryCheck(extensionIds) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  const startedAt = Date.now();
   const mode = parseMode(argv);
   const optInExtensionIds = collectOptInExtensionIds();
   const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
@@ -502,6 +520,14 @@ export async function main(argv = process.argv.slice(2)) {
     if (shouldRunCanary) {
       runCanaryCheck(canaryExtensionIds);
     }
+    process.stdout.write(
+      formatBoundaryCheckSuccessSummary({
+        mode,
+        compileCount: mode === "canary" ? 0 : optInExtensionIds.length,
+        canaryCount: shouldRunCanary ? canaryExtensionIds.length : 0,
+        elapsedMs: Date.now() - startedAt,
+      }),
+    );
   } finally {
     releaseBoundaryLock?.();
     teardownCanaryCleanup?.();

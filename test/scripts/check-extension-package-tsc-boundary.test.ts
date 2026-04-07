@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireBoundaryCheckLock,
   cleanupCanaryArtifactsForExtensions,
+  formatBoundaryCheckSuccessSummary,
   formatStepFailure,
   installCanaryArtifactCleanup,
   resolveBoundaryCheckLockPath,
@@ -131,6 +132,26 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(messageLines).not.toContain("stdout 1");
     expect(message).toContain("stderr:\nstderr 1\nstderr 2\nstderr 3");
     expect(message).toContain("demo-plugin timed out after 5000ms");
+  });
+
+  it("formats a success summary with counts and elapsed time", () => {
+    expect(
+      formatBoundaryCheckSuccessSummary({
+        mode: "all",
+        compileCount: 97,
+        canaryCount: 12,
+        elapsedMs: 54_321,
+      }),
+    ).toBe(
+      [
+        "extension package boundary check passed",
+        "mode: all",
+        "compiled plugins: 97",
+        "canary plugins: 12",
+        "elapsed: 54321ms",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("keeps full failure output on the thrown error for canary detection", async () => {
