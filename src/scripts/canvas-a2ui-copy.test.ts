@@ -100,4 +100,35 @@ describe("canvas a2ui copy", () => {
       await expect(fs.readFile(path.join(outDir, "keep.txt"), "utf8")).resolves.toBe("keep");
     });
   });
+
+  it("rejects overlapping source and output directories", async () => {
+    await withA2uiFixture(async (dir) => {
+      await fs.writeFile(path.join(dir, "index.html"), "<html></html>", "utf8");
+      await fs.writeFile(path.join(dir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+
+      await expect(copyA2uiAssets({ srcDir: dir, outDir: dir })).rejects.toThrow(
+        "overlapping source/output directories",
+      );
+      await expect(fs.readFile(path.join(dir, "index.html"), "utf8")).resolves.toBe(
+        "<html></html>",
+      );
+    });
+  });
+
+  it("rejects nested output directories inside the source tree", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      const outDir = path.join(srcDir, "dist");
+      await fs.mkdir(srcDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html></html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+
+      await expect(copyA2uiAssets({ srcDir, outDir })).rejects.toThrow(
+        "overlapping source/output directories",
+      );
+      await expect(fs.readFile(path.join(srcDir, "a2ui.bundle.js"), "utf8")).resolves.toBe(
+        "console.log(1);",
+      );
+    });
+  });
 });

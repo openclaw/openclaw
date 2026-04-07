@@ -14,6 +14,19 @@ export function shouldSkipMissingA2uiAssets(env = process.env): boolean {
   return env.OPENCLAW_A2UI_SKIP_MISSING === "1" || Boolean(env.OPENCLAW_SPARSE_PROFILE);
 }
 
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function assertNonOverlappingPaths(srcDir: string, outDir: string): void {
+  if (isPathInside(srcDir, outDir) || isPathInside(outDir, srcDir)) {
+    throw new Error(
+      `Refusing to copy A2UI assets between overlapping source/output directories: ${path.resolve(srcDir)} -> ${path.resolve(outDir)}`,
+    );
+  }
+}
+
 export async function copyA2uiAssets({ srcDir, outDir }: { srcDir: string; outDir: string }) {
   const skipMissing = shouldSkipMissingA2uiAssets(process.env);
   try {
@@ -29,6 +42,7 @@ export async function copyA2uiAssets({ srcDir, outDir }: { srcDir: string; outDi
     }
     throw new Error(message, { cause: err });
   }
+  assertNonOverlappingPaths(srcDir, outDir);
   await fs.mkdir(outDir, { recursive: true });
   for (const entry of await fs.readdir(srcDir, { withFileTypes: true })) {
     const srcPath = path.join(srcDir, entry.name);
