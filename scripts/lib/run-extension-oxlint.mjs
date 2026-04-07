@@ -86,8 +86,19 @@ function collectTypeScriptFiles(directoryPath) {
   const files = [];
 
   for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
     const entryPath = path.join(directoryPath, entry.name);
     if (entry.isDirectory()) {
+      if (
+        entry.name === "node_modules" ||
+        entry.name === "dist" ||
+        entry.name === ".turbo" ||
+        entry.name === ".git"
+      ) {
+        continue;
+      }
       files.push(...collectTypeScriptFiles(entryPath));
       continue;
     }
