@@ -17,6 +17,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAIAttributionHeadersWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -392,6 +393,7 @@ function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAIAttributionHeadersWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
 
   if (!ctx.providerWrapperHandled) {
