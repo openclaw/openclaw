@@ -535,6 +535,7 @@ def main() -> int:
                 'count': aggregate['count'],
                 'digest_bucket_total': aggregate['digest_bucket_total'],
                 'digest_bucket_rank': 0,
+                'digest_bucket_leader': False,
                 'latest_timestamp': aggregate['latest_timestamp'],
                 'max_recovery_rank': aggregate['max_recovery_rank'],
                 'band': aggregate['band'],
@@ -551,6 +552,7 @@ def main() -> int:
         bucket_items.sort(key=derive_digest_order_key)
         for index, item in enumerate(bucket_items, start=1):
             item['digest_bucket_rank'] = index
+            item['digest_bucket_leader'] = index == 1
 
     notification_digest_summary.sort(key=derive_digest_order_key)
 
