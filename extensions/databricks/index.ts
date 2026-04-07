@@ -1,4 +1,4 @@
-import { definePluginEntry, type ProviderAuthMethodNonInteractiveContext, type ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type ProviderAuthContext, type ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { applyDatabricksConfig, DATABRICKS_DEFAULT_MODEL_REF } from "./api.js";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 
@@ -27,14 +27,15 @@ export default definePluginEntry({
     });
 
     const originalRun = defaultAuth.run;
-    defaultAuth.run = async (ctx: ProviderAuthMethodNonInteractiveContext) => {
+    defaultAuth.run = async (ctx: ProviderAuthContext) => {
       const opts = ctx.opts as Record<string, unknown> | undefined;
       let baseUrl = typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined;
       if (!baseUrl) {
-        baseUrl = await ctx.prompter.prompt({
+        baseUrl = await ctx.prompter.text({
           message: "Enter Databricks Workspace Base URL (e.g. https://dbc-xxxx.cloud.databricks.com)",
         });
       }
+      if (!baseUrl) return originalRun(ctx);
       
       const result = await originalRun(ctx);
       
@@ -49,8 +50,8 @@ export default definePluginEntry({
            providers: {
              ...providersPatch,
              [PROVIDER_ID]: {
-               baseUrl: baseUrl.trim(),
-               ...databricksPatch
+               ...databricksPatch,
+               baseUrl: baseUrl.trim()
              }
            }
          }
@@ -97,10 +98,13 @@ export default definePluginEntry({
                  .map((ep) => ({
                     id: ep.name,
                     name: ep.name,
-                    api: "openai-completions",
+                    api: "openai-completions" as const,
                     reasoning: false,
-                    input: ["text"],
-                 } as const));
+                    input: ["text"] as ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 4096,
+                    maxTokens: 4096,
+                 }));
                  
                return {
                  provider: {
@@ -119,11 +123,11 @@ export default definePluginEntry({
          if (!streamFn) {
            return undefined;
          }
-         return async (req: { url?: string; method?: string; headers?: Record<string, string>; body?: string | Buffer | null }, extra: unknown) => {
+         return async (req: { url?: string; method?: string; headers?: Record<string, string>; body?: string | null | unknown }, extra: unknown) => {
             const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID] as undefined | { baseUrl?: string };
             const baseUrl = typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
             if (baseUrl) {
-                const urlObj = new URL(`/serving-endpoints/${ctx.modelId}/invocations`, baseUrl);
+                const urlObj = new URL(`/serving-endpoints/${encodeURIComponent(ctx.modelId)}/invocations`, baseUrl);
                 req.url = urlObj.toString();
             }
             if (typeof req.body === "string") {
@@ -143,8 +147,6 @@ export default definePluginEntry({
                    // Ignore parsing errors for non-JSON payloads
                 }
             }
-            // TypeScript compilation needs streamFn to match expected types, use any casting carefully
-            // @ts-expect-error StreamFn expects a strictly typed Pick<Request, ...> parameter
             return streamFn(req, extra);
          };
       }
