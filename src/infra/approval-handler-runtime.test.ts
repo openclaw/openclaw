@@ -167,4 +167,48 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
       view,
     });
   });
+
+  it("keeps observe hooks synchronous and only uses the already-loaded runtime", async () => {
+    const onDelivered = vi.fn();
+    const load = vi.fn().mockResolvedValue({
+      availability: {
+        isConfigured: vi.fn(),
+        shouldHandle: vi.fn(),
+      },
+      presentation: {
+        buildPendingPayload: vi.fn().mockResolvedValue({ text: "pending" }),
+        buildResolvedResult: vi.fn(),
+        buildExpiredResult: vi.fn(),
+      },
+      transport: {
+        prepareTarget: vi.fn(),
+        deliverPending: vi.fn(),
+      },
+      observe: {
+        onDelivered,
+      },
+    });
+    const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
+      isConfigured: vi.fn().mockReturnValue(true),
+      shouldHandle: vi.fn().mockReturnValue(true),
+      load,
+    });
+
+    adapter.observe?.onDelivered?.({ request: { id: "exec:1" } } as never);
+    expect(load).not.toHaveBeenCalled();
+    expect(onDelivered).not.toHaveBeenCalled();
+
+    await adapter.presentation.buildPendingPayload({
+      cfg: {} as never,
+      request: { id: "exec:1" } as never,
+      approvalKind: "exec",
+      nowMs: 1,
+      view: {} as never,
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    adapter.observe?.onDelivered?.({ request: { id: "exec:1" } } as never);
+    expect(onDelivered).toHaveBeenCalledWith({ request: { id: "exec:1" } });
+    expect(load).toHaveBeenCalledTimes(1);
+  });
 });

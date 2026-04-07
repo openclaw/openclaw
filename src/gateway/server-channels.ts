@@ -300,17 +300,31 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = new AbortController();
         store.aborts.set(id, abort);
         let handedOffTask = false;
-        const scopedChannelRuntime = createTaskScopedChannelRuntime({
-          channelRuntime: getChannelRuntime(),
-        });
-        const channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
+        const log = channelLogs[channelId];
+        let scopedChannelRuntime: ReturnType<typeof createTaskScopedChannelRuntime> | null = null;
+        let channelRuntimeForTask: PluginRuntime["channel"] | undefined;
         let stopApprovalBootstrap: () => Promise<void> = async () => {};
         const stopTaskScopedApprovalRuntime = async () => {
-          scopedChannelRuntime.dispose();
-          await stopApprovalBootstrap();
+          const scopedRuntime = scopedChannelRuntime;
+          scopedChannelRuntime = null;
+          const stopBootstrap = stopApprovalBootstrap;
+          stopApprovalBootstrap = async () => {};
+          scopedRuntime?.dispose();
+          await stopBootstrap();
+        };
+        const cleanupTaskScopedApprovalRuntime = async (label: string) => {
+          try {
+            await stopTaskScopedApprovalRuntime();
+          } catch (error) {
+            log.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
+          }
         };
 
         try {
+          scopedChannelRuntime = createTaskScopedChannelRuntime({
+            channelRuntime: getChannelRuntime(),
+          });
+          channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
@@ -372,7 +386,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
 
-          const log = channelLogs[channelId];
           stopApprovalBootstrap = await startChannelApprovalHandlerBootstrap({
             plugin,
             cfg,
@@ -400,7 +413,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .finally(async () => {
-              await stopTaskScopedApprovalRuntime();
+              await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
               setRuntime(channelId, id, {
                 accountId: id,
                 running: false,
@@ -466,7 +479,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.starting.delete(id);
           }
           if (!handedOffTask) {
-            await stopTaskScopedApprovalRuntime();
+            await cleanupTaskScopedApprovalRuntime("channel startup cleanup failed");
           }
           if (!handedOffTask && store.aborts.get(id) === abort) {
             store.aborts.delete(id);

@@ -534,12 +534,18 @@ export function createLazyChannelApprovalNativeRuntimeAdapter(
   params: LazyChannelApprovalNativeRuntimeParams,
 ): ChannelApprovalNativeRuntimeAdapter {
   const loadRuntime = createLazyRuntimeModule(params.load);
+  let loadedRuntime: ChannelApprovalNativeRuntimeAdapter | null = null;
+  const loadResolvedRuntime = async (): Promise<ChannelApprovalNativeRuntimeAdapter> => {
+    const runtime = await loadRuntime();
+    loadedRuntime = runtime;
+    return runtime;
+  };
   const loadRequired = async <TResult>(
     select: (runtime: ChannelApprovalNativeRuntimeAdapter) => TResult,
-  ): Promise<TResult> => select(await loadRuntime());
+  ): Promise<TResult> => select(await loadResolvedRuntime());
   const loadOptional = async <TResult>(
     select: (runtime: ChannelApprovalNativeRuntimeAdapter) => TResult | undefined,
-  ): Promise<TResult | undefined> => select(await loadRuntime());
+  ): Promise<TResult | undefined> => select(await loadResolvedRuntime());
 
   return {
     ...(params.eventKinds ? { eventKinds: params.eventKinds } : {}),
@@ -583,12 +589,12 @@ export function createLazyChannelApprovalNativeRuntimeAdapter(
         )?.(runtimeParams),
     },
     observe: {
-      onDeliveryError: async (runtimeParams) =>
-        (await loadOptional((runtime) => runtime.observe?.onDeliveryError))?.(runtimeParams),
-      onDuplicateSkipped: async (runtimeParams) =>
-        (await loadOptional((runtime) => runtime.observe?.onDuplicateSkipped))?.(runtimeParams),
-      onDelivered: async (runtimeParams) =>
-        (await loadOptional((runtime) => runtime.observe?.onDelivered))?.(runtimeParams),
+      // Observe hooks are fire-and-forget at call sites. Reuse the already
+      // loaded runtime instead of introducing unawaited lazy-load promises.
+      onDeliveryError: (runtimeParams) => loadedRuntime?.observe?.onDeliveryError?.(runtimeParams),
+      onDuplicateSkipped: (runtimeParams) =>
+        loadedRuntime?.observe?.onDuplicateSkipped?.(runtimeParams),
+      onDelivered: (runtimeParams) => loadedRuntime?.observe?.onDelivered?.(runtimeParams),
     },
   };
 }
