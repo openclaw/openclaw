@@ -368,4 +368,24 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
+
+  it("ignores malformed persisted outbox entries", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        suppressPrimaryNotice: true,
+        outbox: [null, { foo: "bar" }, { kind: "notify-session", message: "ok" }],
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "ok",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
 });

@@ -127,6 +127,9 @@ function executePersistedRestartOutbox(params: {
     return;
   }
   for (const task of tasks) {
+    if (!task || typeof task !== "object") {
+      continue;
+    }
     if (task.kind !== "notify-session" && task.kind !== "message" && task.kind !== "system_event") {
       continue;
     }
