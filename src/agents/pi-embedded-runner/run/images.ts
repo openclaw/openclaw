@@ -6,7 +6,7 @@ import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/lo
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { resolveMediaBufferPath } from "../../../media/store.js";
 import { detectMime } from "../../../media/mime.js";
-import { loadWebMedia } from "../../../media/web-media.js";
+import { loadWebMedia, optimizeImageToJpeg } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
@@ -382,37 +382,42 @@ export async function loadImageFromRef(
       return null;
     }
 
-    const ext = path.extname(physicalPath).toLowerCase();
-    let mimeType = MEDIA_EXT_TO_MIME[ext];
+        const ext = path.extname(physicalPath).toLowerCase();
+        let mimeType = MEDIA_EXT_TO_MIME[ext];
+        
+        const detected = await detectMime({ buffer, filePath: physicalPath });
+        if (detected?.startsWith("image/")) {
+          mimeType = detected;
+        }
 
-    if (!mimeType) {
-      const detected = await detectMime({ buffer, filePath: physicalPath });
-      if (detected?.startsWith("image/")) {
-        mimeType = detected;
-      }
-<<<<<<< fix-media-uri-keyring-deadlock
-    }
+        if (!mimeType) {
+          log.debug(`Native image: media store entry is not an image: ${mediaId}`);
+          return null;
+        }
 
-    if (!mimeType) {
-      log.debug(`Native image: media store entry is not an image: ${mediaId}`);
-=======
-      const mimeType = media.contentType ?? "image/jpeg";
-      const data = media.buffer.toString("base64");
-      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-      return { type: "image", data, mimeType };
-    } catch (err) {
-      log.debug(
-        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
-      );
->>>>>>> main
-      return null;
-    }
+        const cap = options?.maxBytes ?? 5 * 1024 * 1024;
+        let finalBuffer: Buffer = buffer;
+        let finalMime = mimeType;
+        
+        if (mimeType === "image/jpeg" || mimeType === "image/heic" || mimeType === "image/heif") {
+           try {
+              const optimized = await optimizeImageToJpeg(buffer, cap, { 
+                fileName: path.basename(physicalPath), 
+                contentType: mimeType 
+              });
+              finalBuffer = Buffer.from(optimized.buffer);
+              finalMime = "image/jpeg";
+           } catch (optimizeErr) {
+              log.debug(`Native image: failed to optimize ${physicalPath}, falling back to original bytes. Err: ${String(optimizeErr)}`);
+           }
+        }
 
-    log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-    return { type: "image", data: buffer.toString("base64"), mimeType };
+        log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+        return { type: "image", data: finalBuffer.toString("base64"), mimeType: finalMime };
+
       } catch (err) {
         log.debug(
-          `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+          `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
         );
         return null;
       }
