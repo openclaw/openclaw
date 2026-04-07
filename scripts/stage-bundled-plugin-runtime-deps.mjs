@@ -143,60 +143,18 @@ function shouldStageRuntimeDeps(packageJson) {
   return packageJson.openclaw?.bundle?.stageRuntimeDependencies === true;
 }
 
-function removeSanitizedDependencyEntries(entries, shouldRemove) {
-  if (!entries || typeof entries !== "object") {
-    return { changed: false, nextEntries: entries };
-  }
-
-  const nextEntries = Object.fromEntries(
-    Object.entries(entries).filter(([depName, spec]) => !shouldRemove(depName, spec)),
-  );
-  const changed = Object.keys(nextEntries).length !== Object.keys(entries).length;
-  return {
-    changed,
-    nextEntries: changed
-      ? Object.keys(nextEntries).length > 0
-        ? nextEntries
-        : undefined
-      : entries,
-  };
-}
-
-function shouldRemoveLocalWorkspaceDependency(depName, spec) {
-  return depName === "openclaw" || (typeof spec === "string" && spec.startsWith("workspace:"));
-}
-
 function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   const manifestPath = path.join(pluginDir, "package.json");
   const packageJson = readJson(manifestPath);
   let changed = false;
 
-  const { changed: peerDependenciesChanged, nextEntries: nextPeerDependencies } =
-    removeSanitizedDependencyEntries(
-      packageJson.peerDependencies,
-      shouldRemoveLocalWorkspaceDependency,
-    );
-  if (peerDependenciesChanged) {
-    if (nextPeerDependencies) {
-      packageJson.peerDependencies = nextPeerDependencies;
-    } else {
-      delete packageJson.peerDependencies;
-    }
+  if (packageJson.peerDependencies) {
+    delete packageJson.peerDependencies;
     changed = true;
   }
 
-  if (peerDependenciesChanged && packageJson.peerDependenciesMeta) {
-    const allowedPeerNames = new Set(Object.keys(packageJson.peerDependencies ?? {}));
-    const nextPeerDependenciesMeta = Object.fromEntries(
-      Object.entries(packageJson.peerDependenciesMeta).filter(([depName]) =>
-        allowedPeerNames.has(depName),
-      ),
-    );
-    if (Object.keys(nextPeerDependenciesMeta).length === 0) {
-      delete packageJson.peerDependenciesMeta;
-    } else {
-      packageJson.peerDependenciesMeta = nextPeerDependenciesMeta;
-    }
+  if (packageJson.peerDependenciesMeta) {
+    delete packageJson.peerDependenciesMeta;
     changed = true;
   }
 

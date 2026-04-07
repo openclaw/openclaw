@@ -18,10 +18,14 @@ function runNode(args: string[], timeout: number) {
 }
 
 describe("opt-in extension package TypeScript boundaries", () => {
-  it("typechecks each opt-in extension cleanly through @openclaw/plugin-sdk", () => {
-    const result = runNode([CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN, "--mode=compile"], 420_000);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  }, 300_000);
+  it(
+    "typechecks each opt-in extension cleanly through @openclaw/plugin-sdk",
+    () => {
+      const result = runNode([CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN, "--mode=compile"], 420_000);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    },
+    300_000,
+  );
 
   it("fails when opt-in extensions import src/cli through a relative path", () => {
     const result = runNode([CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN, "--mode=canary"], 180_000);

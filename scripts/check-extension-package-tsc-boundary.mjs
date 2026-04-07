@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -93,16 +93,30 @@ function cleanupCanaryArtifacts(extensionId) {
   rmSync(resolve(extensionRoot, "tsconfig.rootdir-canary.json"), { force: true });
 }
 
+function resolveBoundaryTsBuildInfoPath(extensionId) {
+  return resolve(repoRoot, "extensions", extensionId, "dist", ".boundary-tsc.tsbuildinfo");
+}
+
 function runCompileCheck(extensionIds) {
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
   runNodeStep("plugin-sdk boundary prep", [prepareBoundaryArtifactsBin], 420_000);
   for (const [index, extensionId] of extensionIds.entries()) {
+    const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
+    mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
     process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
     runNodeStep(
       extensionId,
-      [tscBin, "-p", resolve(repoRoot, "extensions", extensionId, "tsconfig.json"), "--noEmit"],
+      [
+        tscBin,
+        "-p",
+        resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
+        "--noEmit",
+        "--incremental",
+        "--tsBuildInfoFile",
+        tsBuildInfoPath,
+      ],
       120_000,
     );
   }

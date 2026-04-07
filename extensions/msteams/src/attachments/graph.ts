@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
@@ -8,7 +7,7 @@ import {
   applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
   inferPlaceholder,
-  isRecord,
+  readNestedString,
   isUrlAllowed,
   type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
@@ -38,17 +37,6 @@ type GraphAttachment = {
   thumbnailUrl?: string | null;
   content?: unknown;
 };
-
-function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return normalizeOptionalString(current);
-}
 
 export function buildMSTeamsGraphMessageUrls(params: {
   conversationType?: string | null;

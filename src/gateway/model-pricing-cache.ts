@@ -12,7 +12,7 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -65,13 +65,6 @@ function clearRefreshTimer(): void {
   }
   clearTimeout(refreshTimer);
   refreshTimer = null;
-}
-
-function listLikePrimary(value: ModelListLike): string | undefined {
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  return normalizeOptionalString(value?.primary);
 }
 
 function listLikeFallbacks(value: ModelListLike): string[] {
@@ -224,7 +217,7 @@ function addModelListLike(params: {
   refs: Map<string, ModelRef>;
 }): void {
   addResolvedModelRef({
-    raw: listLikePrimary(params.value),
+    raw: resolvePrimaryStringValue(params.value),
     aliasIndex: params.aliasIndex,
     refs: params.refs,
   });

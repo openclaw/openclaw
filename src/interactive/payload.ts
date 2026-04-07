@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
@@ -39,7 +42,7 @@ export type InteractiveReply = {
 };
 
 function normalizeButtonStyle(value: unknown): InteractiveButtonStyle | undefined {
-  const style = normalizeOptionalString(value)?.toLowerCase();
+  const style = normalizeOptionalLowercaseString(value);
   return style === "primary" || style === "secondary" || style === "success" || style === "danger"
     ? style
     : undefined;
@@ -83,7 +86,7 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const type = normalizeOptionalString(record.type)?.toLowerCase();
+  const type = normalizeOptionalLowercaseString(record.type);
   if (type === "text") {
     const text = normalizeOptionalString(record.text);
     return text ? { type: "text", text } : undefined;

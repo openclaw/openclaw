@@ -12,6 +12,7 @@ import {
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { matrixNativeApprovalAdapter } from "./approval-native.js";
 import {
   buildMatrixApprovalReactionHint,
@@ -93,11 +94,6 @@ function buildReactionTargetRefKey(params: ReactionTargetRef): string | null {
 
 function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
   return isMatrixExecApprovalClientEnabled(params);
-}
-
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  const trimmed = value == null ? "" : String(value).trim();
-  return trimmed || undefined;
 }
 
 function buildPendingApprovalContent(params: {
@@ -290,7 +286,7 @@ export class MatrixExecApprovalHandler {
     if (!target) {
       return null;
     }
-    const threadId = normalizeThreadId(rawTarget.threadId);
+    const threadId = normalizeOptionalStringifiedId(rawTarget.threadId);
     if (target.kind === "user") {
       const account = resolveMatrixAccount({
         cfg: this.opts.cfg as CoreConfig,

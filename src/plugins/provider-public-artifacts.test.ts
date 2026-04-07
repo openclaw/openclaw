@@ -18,7 +18,6 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
     maxTokens: 8_192,
   };
 }
-
 describe("provider public artifacts", () => {
   it("loads bundled provider policy surfaces for anthropic", () => {
     const surface = resolveBundledProviderPolicySurface("anthropic");

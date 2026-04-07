@@ -184,7 +184,12 @@ describe("gateway e2e", () => {
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "mock openai test complete" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         restore();
         envSnapshot.restore();
       }

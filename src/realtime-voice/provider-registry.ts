@@ -1,14 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { buildCapabilityProviderMaps } from "../plugins/provider-registry-shared.js";
+import {
+  buildCapabilityProviderMaps,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { RealtimeVoiceProviderId } from "./provider-types.js";
 
 export function normalizeRealtimeVoiceProviderId(
   providerId: string | undefined,
 ): RealtimeVoiceProviderId | undefined {
-  return normalizeOptionalString(providerId)?.toLowerCase();
+  return normalizeCapabilityProviderId(providerId);
 }
 
 function resolveRealtimeVoiceProviderEntries(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {

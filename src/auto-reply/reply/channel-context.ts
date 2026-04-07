@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 type CommandSurfaceParams = {
   ctx: {
@@ -33,7 +36,7 @@ export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): stri
     params.command.channel ??
     params.ctx.Surface ??
     params.ctx.Provider;
-  return normalizeOptionalString(channel)?.toLowerCase() ?? "";
+  return normalizeOptionalLowercaseString(channel) ?? "";
 }
 
 export function resolveChannelAccountId(params: ChannelAccountParams): string {

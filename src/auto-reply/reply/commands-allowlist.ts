@@ -13,7 +13,10 @@ import {
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import {
   rejectNonOwnerCommand,
@@ -129,7 +132,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     }
     const kv = token.split("=");
     if (kv.length === 2) {
-      const key = normalizeOptionalString(kv[0])?.toLowerCase();
+      const key = normalizeOptionalLowercaseString(kv[0]);
       const value = normalizeOptionalString(kv[1]);
       if (key === "channel") {
         if (value) {

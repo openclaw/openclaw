@@ -5,7 +5,10 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { CommandContext } from "./commands-types.js";
@@ -155,8 +158,8 @@ export function buildFastReplyCommandContext(params: {
 }): CommandContext {
   const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized, commandAuthorized } =
     params;
-  const surface = normalizeOptionalString(ctx.Surface ?? ctx.Provider)?.toLowerCase() ?? "";
-  const channel = normalizeOptionalString(ctx.Provider ?? surface)?.toLowerCase() ?? "";
+  const surface = normalizeOptionalLowercaseString(ctx.Surface ?? ctx.Provider) ?? "";
+  const channel = normalizeOptionalLowercaseString(ctx.Provider ?? surface) ?? "";
   const from = normalizeOptionalString(ctx.From);
   const to = normalizeOptionalString(ctx.To);
   return {

@@ -87,6 +87,8 @@ export type CliBackendConfig = {
   imageArg?: string;
   /** How to pass multiple images. */
   imageMode?: "repeat" | "list";
+  /** Where staged image files should live before handing them to the CLI. */
+  imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
