@@ -119,7 +119,13 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
       if (!Number.isFinite(speed) || speed < 0.5 || speed > 2.0) {
         return { handled: true, warnings: [`invalid MiniMax speed "${ctx.value}" (0.5-2.0)`] };
       }
-      return { handled: true, overrides: { speed } };
+      const warnings: string[] = [];
+      if (Math.round(speed) !== speed) {
+        warnings.push(
+          `MiniMax speed "${ctx.value}" rounded to ${Math.round(speed)} (API requires integers)`,
+        );
+      }
+      return { handled: true, overrides: { speed }, ...(warnings.length > 0 && { warnings }) };
     }
     case "vol":
     case "volume": {
