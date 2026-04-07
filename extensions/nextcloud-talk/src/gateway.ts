@@ -1,6 +1,6 @@
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
-import { resolveNextcloudTalkAccount } from "./accounts.js";
+import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -9,7 +9,7 @@ import {
 } from "./channel-api.js";
 import { monitorNextcloudTalkProvider } from "./monitor.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig, ResolvedNextcloudTalkAccount } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 export const nextcloudTalkGatewayAdapter: NonNullable<
   ChannelPlugin<ResolvedNextcloudTalkAccount>["gateway"]
