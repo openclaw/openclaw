@@ -310,6 +310,20 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerGeneration = -1;
+
+  // Long-lived subsystem loggers (most callers do `const log =
+  // createSubsystemLogger(...)` at module scope) cache their child file
+  // logger. The base file logger can be rebuilt — for example when the daily
+  // rolling-log path turns over — so we re-fetch the child whenever the
+  // generation counter advances.
+  const ensureFileLogger = (): TsLogger<LogObj> => {
+    if (!fileLogger || fileLoggerGeneration !== loggingState.loggerGeneration) {
+      fileLogger = getChildLogger({ subsystem });
+      fileLoggerGeneration = loggingState.loggerGeneration;
+    }
+    return fileLogger;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -332,10 +346,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
-        fileLogger = getChildLogger({ subsystem });
-      }
-      logToFile(fileLogger, level, message, fileMeta);
+      logToFile(ensureFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -398,10 +409,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(ensureFileLogger(), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&

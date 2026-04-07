@@ -1,6 +1,11 @@
 export const loggingState = {
   cachedLogger: null as unknown,
   cachedSettings: null as unknown,
+  // Bumped whenever the base file logger is rebuilt (settings change or daily
+  // rolling-log path turning over). Long-lived subsystem loggers compare their
+  // own captured generation against this to know when to refetch the child
+  // logger and pick up the new file transport.
+  loggerGeneration: 0,
   cachedConsoleSettings: null as unknown,
   overrideSettings: null as unknown,
   invalidEnvLogLevelValue: null as string | null,

@@ -241,6 +241,9 @@ export function getLogger(): TsLogger<LogObj> {
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
+    // Invalidate subsystem-cached child loggers so they refetch and pick up
+    // the new file transport (for example after a daily rolling-log turnover).
+    loggingState.loggerGeneration += 1;
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
@@ -303,6 +306,7 @@ export function setLoggerOverride(settings: LoggerSettings | null) {
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
+  loggingState.loggerGeneration += 1;
 }
 
 export function resetLogger() {
@@ -310,6 +314,7 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
+  loggingState.loggerGeneration += 1;
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
