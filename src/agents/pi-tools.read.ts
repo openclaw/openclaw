@@ -58,6 +58,8 @@ type ReadTruncationDetails = {
 
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
+const READ_OFFSET_BEYOND_EOF_RE =
+  /Offset\s+(-?\d+)\s+is beyond end of file\s+\((\d+) lines total\)/i;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -203,6 +205,60 @@ function stripReadTruncationContentDetails(
   };
 }
 
+function createEmptyReadResult(): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: "" }],
+    details: {},
+  };
+}
+
+function parseOffsetBeyondEofError(
+  error: unknown,
+): { requestedOffset: number; totalLines: number } | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+  const match = READ_OFFSET_BEYOND_EOF_RE.exec(error.message);
+  if (!match) {
+    return null;
+  }
+  const requestedOffset = Number.parseInt(match[1] ?? "", 10);
+  const totalLines = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(requestedOffset) || !Number.isFinite(totalLines)) {
+    return null;
+  }
+  return { requestedOffset, totalLines };
+}
+
+async function executeReadPageWithOffsetClamp(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  try {
+    return await params.base.execute(params.toolCallId, params.args, params.signal);
+  } catch (error) {
+    const parsed = parseOffsetBeyondEofError(error);
+    const currentOffsetRaw = params.args.offset;
+    const currentOffset =
+      typeof currentOffsetRaw === "number" && Number.isFinite(currentOffsetRaw)
+        ? Math.floor(currentOffsetRaw)
+        : undefined;
+    if (!parsed || currentOffset === undefined || currentOffset <= parsed.totalLines) {
+      throw error;
+    }
+    if (parsed.totalLines <= 0) {
+      return createEmptyReadResult();
+    }
+    return await params.base.execute(
+      params.toolCallId,
+      { ...params.args, offset: parsed.totalLines },
+      params.signal,
+    );
+  }
+}
+
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -214,7 +270,12 @@ async function executeReadWithAdaptivePaging(params: {
   const hasExplicitLimit =
     typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
   if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPageWithOffsetClamp({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: params.args,
+      signal: params.signal,
+    });
   }
 
   const offsetRaw = params.args.offset;
@@ -230,7 +291,12 @@ async function executeReadWithAdaptivePaging(params: {
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    const pageResult = await executeReadPageWithOffsetClamp({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: pageArgs,
+      signal: params.signal,
+    });
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -271,7 +337,12 @@ async function executeReadWithAdaptivePaging(params: {
   }
 
   if (!firstResult) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPageWithOffsetClamp({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: params.args,
+      signal: params.signal,
+    });
   }
 
   let finalText = aggregatedText;
