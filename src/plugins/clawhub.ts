@@ -12,6 +12,7 @@ import {
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
@@ -81,7 +82,7 @@ function mapClawHubRequestError(
       CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
     );
   }
-  return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
+  return buildClawHubInstallFailure(formatErrorMessage(error));
 }
 
 function resolveRequestedVersion(params: {
@@ -300,7 +301,7 @@ export async function installPluginFromClawHub(
       token: params.token,
     });
   } catch (error) {
-    return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
+    return buildClawHubInstallFailure(formatErrorMessage(error));
   }
   try {
     params.logger?.info?.(

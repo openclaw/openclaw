@@ -10,11 +10,13 @@ import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
 } from "../../plugins/bundle-mcp.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  env?: Record<string, string>;
 };
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
@@ -33,12 +35,10 @@ function findMcpConfigPath(args?: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
     if (arg === "--mcp-config") {
-      const next = args[i + 1];
-      return typeof next === "string" && next.trim() ? next.trim() : undefined;
+      return normalizeOptionalString(args[i + 1]);
     }
     if (arg.startsWith("--mcp-config=")) {
-      const inline = arg.slice("--mcp-config=".length).trim();
-      return inline || undefined;
+      return normalizeOptionalString(arg.slice("--mcp-config=".length));
     }
   }
   return undefined;
@@ -69,10 +69,12 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  additionalConfig?: BundleMcpConfig;
+  env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
   if (!params.enabled) {
-    return { backend: params.backend };
+    return { backend: params.backend, env: params.env };
   }
 
   const existingMcpConfigPath =
@@ -97,6 +99,9 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  if (params.additionalConfig) {
+    mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
+  }
 
   // Always pass an explicit strict MCP config for background claude-cli runs.
   // Otherwise Claude may inherit ambient user/global MCP servers (for example
@@ -116,6 +121,7 @@ export async function prepareCliBundleMcpConfig(params: {
       ),
     },
     mcpConfigHash: crypto.createHash("sha256").update(serializedConfig).digest("hex"),
+    env: params.env,
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     },

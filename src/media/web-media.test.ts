@@ -3,22 +3,37 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createJpegBufferWithDimensions, createPngBufferWithDimensions } from "./test-helpers.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
+const mediaRootTracker = createSuiteTempRootTracker({
+  prefix: "web-media-core-",
+  parentDir: resolvePreferredOpenClawTmpDir(),
+});
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
 let fixtureRoot = "";
+let fakePdfFile = "";
 let oversizedJpegFile = "";
+let realPdfFile = "";
 let tinyPngFile = "";
 
 beforeAll(async () => {
   ({ loadWebMedia } = await import("./web-media.js"));
-  fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
+  await mediaRootTracker.setup();
+  fixtureRoot = await mediaRootTracker.make("case");
+  fakePdfFile = path.join(fixtureRoot, "fake.pdf");
+  realPdfFile = path.join(fixtureRoot, "real.pdf");
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
   oversizedJpegFile = path.join(fixtureRoot, "oversized.jpg");
+  await fs.writeFile(fakePdfFile, "TOP_SECRET_TEXT", "utf8");
+  await fs.writeFile(
+    realPdfFile,
+    Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"),
+  );
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
   await fs.writeFile(
     oversizedJpegFile,
@@ -27,9 +42,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
+  await mediaRootTracker.cleanup();
 });
 
 describe("loadWebMedia", () => {
@@ -169,6 +182,32 @@ describe("loadWebMedia", () => {
       });
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("host read capability", () => {
+    it("rejects document uploads that only match by file extension", async () => {
+      await expect(
+        loadWebMedia(fakePdfFile, {
+          maxBytes: 1024 * 1024,
+          localRoots: [fixtureRoot],
+          hostReadCapability: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+    });
+
+    it("still allows real PDF uploads detected from file content", async () => {
+      const result = await loadWebMedia(realPdfFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: [fixtureRoot],
+        hostReadCapability: true,
+      });
+
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe("application/pdf");
+      expect(result.fileName).toBe("real.pdf");
     });
   });
 });

@@ -1,9 +1,10 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
 };
 
-export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
 export type ParsedThreadSessionSuffix = {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
@@ -23,7 +24,7 @@ export type RawSessionConversationRef = {
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeOptionalString(sessionKey)?.toLowerCase();
   if (!raw) {
     return null;
   }
@@ -34,39 +35,12 @@ export function parseAgentSessionKey(
   if (parts[0] !== "agent") {
     return null;
   }
-  const agentId = parts[1]?.trim();
+  const agentId = normalizeOptionalString(parts[1]);
   const rest = parts.slice(2).join(":");
   if (!agentId || !rest) {
     return null;
   }
   return { agentId, rest };
-}
-
-/**
- * Best-effort chat-type extraction from session keys across canonical and legacy formats.
- */
-export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
-  if (!raw) {
-    return "unknown";
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const tokens = new Set(scoped.split(":").filter(Boolean));
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  // Legacy Discord keys can be shaped like:
-  // discord:<accountId>:guild-<guildId>:channel-<channelId>
-  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scoped)) {
-    return "channel";
-  }
-  return "unknown";
 }
 
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
@@ -86,7 +60,7 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = (sessionKey ?? "").trim();
+  const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return false;
   }
@@ -98,7 +72,7 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
 }
 
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeOptionalString(sessionKey)?.toLowerCase();
   if (!raw) {
     return 0;
   }
@@ -106,7 +80,7 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = (sessionKey ?? "").trim();
+  const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return false;
   }
@@ -118,15 +92,10 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
-function normalizeSessionConversationChannel(value: string | undefined | null): string | undefined {
-  const trimmed = (value ?? "").trim().toLowerCase();
-  return trimmed || undefined;
-}
-
 export function parseThreadSessionSuffix(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {
-  const raw = (sessionKey ?? "").trim();
+  const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return { baseSessionKey: undefined, threadId: undefined };
   }
@@ -139,7 +108,7 @@ export function parseThreadSessionSuffix(
 
   const baseSessionKey = markerIndex === -1 ? raw : raw.slice(0, markerIndex);
   const threadIdRaw = markerIndex === -1 ? undefined : raw.slice(markerIndex + marker.length);
-  const threadId = threadIdRaw?.trim() || undefined;
+  const threadId = normalizeOptionalString(threadIdRaw);
 
   return { baseSessionKey, threadId };
 }
@@ -147,30 +116,27 @@ export function parseThreadSessionSuffix(
 export function parseRawSessionConversationRef(
   sessionKey: string | undefined | null,
 ): RawSessionConversationRef | null {
-  const raw = (sessionKey ?? "").trim();
+  const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return null;
   }
 
   const rawParts = raw.split(":").filter(Boolean);
   const bodyStartIndex =
-    rawParts.length >= 3 && rawParts[0]?.trim().toLowerCase() === "agent" ? 2 : 0;
+    rawParts.length >= 3 && normalizeOptionalString(rawParts[0])?.toLowerCase() === "agent" ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
   if (parts.length < 3) {
     return null;
   }
 
-  const channel = normalizeSessionConversationChannel(parts[0]);
-  const kind = parts[1]?.trim().toLowerCase();
+  const channel = normalizeOptionalString(parts[0])?.toLowerCase();
+  const kind = normalizeOptionalString(parts[1])?.toLowerCase();
   if (!channel || (kind !== "group" && kind !== "channel")) {
     return null;
   }
 
-  const rawId = parts.slice(2).join(":").trim();
-  const prefix = rawParts
-    .slice(0, bodyStartIndex + 2)
-    .join(":")
-    .trim();
+  const rawId = normalizeOptionalString(parts.slice(2).join(":"));
+  const prefix = normalizeOptionalString(rawParts.slice(0, bodyStartIndex + 2).join(":"));
   if (!rawId || !prefix) {
     return null;
   }
@@ -185,7 +151,7 @@ export function resolveThreadParentSessionKey(
   if (!threadId) {
     return null;
   }
-  const parent = baseSessionKey?.trim();
+  const parent = normalizeOptionalString(baseSessionKey);
   if (!parent) {
     return null;
   }

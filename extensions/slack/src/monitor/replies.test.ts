@@ -6,6 +6,7 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
+let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
@@ -22,7 +23,7 @@ function baseParams(overrides?: Record<string, unknown>) {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ deliverReplies } = await import("./replies.js"));
+    ({ deliverReplies, resolveSlackThreadTs } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -162,6 +163,51 @@ describe("deliverReplies identity passthrough", () => {
         }),
       ),
     ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
+});
+
+describe("resolveSlackThreadTs fallback classification", () => {
+  const threadTs = "1234567890.123456";
+  const messageTs = "9999999999.999999";
+
+  it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "off",
+        incomingThreadTs: threadTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBe(threadTs);
+  });
+
+  it("respects replyToMode for auto-created top-level thread_ts when callers omit isThreadReply", () => {
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "off",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "first",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBe(messageTs);
+
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "batched",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: true,
+      }),
+    ).toBeUndefined();
   });
 });
 

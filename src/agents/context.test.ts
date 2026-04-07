@@ -38,6 +38,16 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
     expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
+
+  it("prefers discovered contextTokens over contextWindow", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
+    });
+
+    expect(cache.get("gpt-5.4")).toBe(272_000);
+  });
 });
 
 describe("applyConfiguredContextWindows", () => {
@@ -106,6 +116,22 @@ describe("applyConfiguredContextWindows", () => {
 
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
+  });
+
+  it("prefers configured contextTokens over contextWindow", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          openrouter: {
+            models: [{ id: "custom/model", contextWindow: 1_050_000, contextTokens: 200_000 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("custom/model")).toBe(200_000);
   });
 });
 
@@ -191,5 +217,36 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(200_000);
+  });
+
+  it("prefers per-model contextTokens config over contextWindow", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "gpt-5.4",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_050_000,
+                  contextTokens: 160_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 272_000,
+    });
+
+    expect(result).toBe(160_000);
   });
 });

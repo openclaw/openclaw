@@ -1,5 +1,6 @@
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingChannel,
@@ -54,7 +55,7 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
     channel,
     accountId: normalizeAccountId(conversation.accountId),
     conversationId,
-    parentConversationId: conversation.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(conversation.parentConversationId),
   };
 }
 

@@ -1,4 +1,4 @@
-import { truncateText } from "./format.ts";
+import { formatUnknownText, truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -160,8 +160,7 @@ function formatToolOutput(value: unknown): string | null {
     try {
       text = JSON.stringify(value, null, 2);
     } catch {
-      // oxlint-disable typescript/no-base-to-string
-      text = String(value);
+      text = formatUnknownText(value);
     }
   }
   const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);

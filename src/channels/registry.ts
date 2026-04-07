@@ -1,13 +1,14 @@
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
 import {
+  CHANNEL_IDS,
   CHAT_CHANNEL_ALIASES,
-  getChatChannelMeta,
+  CHAT_CHANNEL_ORDER,
   listChatChannelAliases,
-  listChatChannels,
   normalizeChatChannelId,
-  type ChatChannelMeta,
-} from "./chat-meta.js";
-import { CHANNEL_IDS, CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
+  type ChatChannelId,
+} from "./ids.js";
 import type { ChannelId, ChannelMeta } from "./plugins/types.js";
 export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
@@ -20,6 +21,10 @@ type RegisteredChannelPluginEntry = {
 };
 
 function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
+  const channelRegistry = getActivePluginChannelRegistry();
+  if (channelRegistry && channelRegistry.channels && channelRegistry.channels.length > 0) {
+    return channelRegistry.channels;
+  }
   return getActivePluginRegistry()?.channels ?? [];
 }
 
@@ -27,14 +32,12 @@ function findRegisteredChannelPluginEntry(
   normalizedKey: string,
 ): RegisteredChannelPluginEntry | undefined {
   return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = String(entry.plugin.id ?? "")
-      .trim()
-      .toLowerCase();
+    const id = normalizeOptionalString(String(entry.plugin.id ?? ""))?.toLowerCase() ?? "";
     if (id && id === normalizedKey) {
       return true;
     }
     return (entry.plugin.meta?.aliases ?? []).some(
-      (alias) => alias.trim().toLowerCase() === normalizedKey,
+      (alias) => normalizeOptionalString(alias)?.toLowerCase() === normalizedKey,
     );
   });
 }
@@ -42,19 +45,14 @@ function findRegisteredChannelPluginEntry(
 function findRegisteredChannelPluginEntryById(
   id: string,
 ): RegisteredChannelPluginEntry | undefined {
-  const normalizedId = normalizeChannelKey(id);
+  const normalizedId = normalizeOptionalString(id)?.toLowerCase();
   if (!normalizedId) {
     return undefined;
   }
   return listRegisteredChannelPluginEntries().find(
-    (entry) => normalizeChannelKey(entry.plugin.id) === normalizedId,
+    (entry) => normalizeOptionalString(entry.plugin.id)?.toLowerCase() === normalizedId,
   );
 }
-
-const normalizeChannelKey = (raw?: string | null): string | undefined => {
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
-};
 export {
   CHAT_CHANNEL_ALIASES,
   getChatChannelMeta,
@@ -74,7 +72,7 @@ export function normalizeChannelId(raw?: string | null): ChatChannelId | null {
 // Keep this light: we do not import channel plugins here (those are "heavy" and can pull in
 // monitors, web login, etc). The plugin registry must be initialized first.
 export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
-  const key = normalizeChannelKey(raw);
+  const key = normalizeOptionalString(raw)?.toLowerCase();
   if (!key) {
     return null;
   }
@@ -83,7 +81,7 @@ export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
 
 export function listRegisteredChannelPluginIds(): ChannelId[] {
   return listRegisteredChannelPluginEntries().flatMap((entry) => {
-    const id = entry.plugin.id?.trim();
+    const id = normalizeOptionalString(entry.plugin.id);
     return id ? [id as ChannelId] : [];
   });
 }

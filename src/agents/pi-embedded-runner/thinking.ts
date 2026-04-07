@@ -1,5 +1,6 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { log } from "./logger.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
@@ -218,7 +219,7 @@ function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
 ): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error);
   if (!THINKING_BLOCK_ERROR_PATTERN.test(message)) {
     return false;
   }

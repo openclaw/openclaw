@@ -1,28 +1,28 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
-import { SILENT_REPLY_TOKEN, type PluginRuntime } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
+  uploadAndShareSharePoint: vi.fn(),
+  getDriveItemProperties: vi.fn(),
 }));
 
-vi.mock("./graph-upload.js", async () => {
-  const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
+vi.mock("./graph-upload.js", () => {
   return {
-    ...actual,
     uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
+    uploadAndShareSharePoint: graphUploadMockState.uploadAndShareSharePoint,
+    getDriveItemProperties: graphUploadMockState.getDriveItemProperties,
   };
 });
 
 import {
-  type MSTeamsAdapter,
-  type MSTeamsRenderedMessage,
   buildActivity,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
+  type MSTeamsAdapter,
 } from "./messenger.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
@@ -115,6 +115,8 @@ describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
     graphUploadMockState.uploadAndShareOneDrive.mockReset();
+    graphUploadMockState.uploadAndShareSharePoint.mockReset();
+    graphUploadMockState.getDriveItemProperties.mockReset();
     graphUploadMockState.uploadAndShareOneDrive.mockResolvedValue({
       itemId: "item123",
       webUrl: "https://onedrive.example.com/item123",

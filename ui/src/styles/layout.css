@@ -924,6 +924,97 @@
 .page-meta {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.dreaming-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dreaming-header-controls__modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+.dreaming-header-controls__mode {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  max-width: 90px;
+  overflow: hidden;
+  transition:
+    max-width var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.dreaming-header-controls__mode:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--text);
+  max-width: 290px;
+}
+
+.dreaming-header-controls__mode:focus:not(:disabled) {
+  max-width: 290px;
+}
+
+.dreaming-header-controls__mode:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.dreaming-header-controls__mode--active {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--bg-elevated));
+  color: var(--text-strong);
+}
+
+.dreaming-header-controls__mode-label {
+  flex-shrink: 0;
+}
+
+.dreaming-header-controls__mode-detail {
+  max-width: 0;
+  opacity: 0;
+  margin-left: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 10px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
+  transition:
+    max-width var(--duration-fast) ease,
+    margin-left var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.dreaming-header-controls__mode:hover:not(:disabled) .dreaming-header-controls__mode-detail,
+.dreaming-header-controls__mode:focus:not(:disabled) .dreaming-header-controls__mode-detail {
+  max-width: 220px;
+  margin-left: 6px;
+  opacity: 0.95;
 }
 
 /* Chat view header adjustments */

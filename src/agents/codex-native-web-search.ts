@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
@@ -37,10 +38,6 @@ export type CodexNativeSearchActivation = {
 export type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {

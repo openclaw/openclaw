@@ -250,11 +250,67 @@ const BUILD_REASON_LABELS = {
 
 const formatBuildReason = (reason) => BUILD_REASON_LABELS[reason] ?? reason;
 
+const SIGNAL_EXIT_CODES = {
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
+
+const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
+
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
     return;
   }
   deps.stderr.write(`[openclaw] ${message}\n`);
+};
+
+const waitForSpawnedProcess = async (childProcess, deps) => {
+  let forwardedSignal = null;
+  let onSigInt;
+  let onSigTerm;
+
+  const cleanupSignals = () => {
+    if (onSigInt) {
+      deps.process.off("SIGINT", onSigInt);
+    }
+    if (onSigTerm) {
+      deps.process.off("SIGTERM", onSigTerm);
+    }
+  };
+
+  const forwardSignal = (signal) => {
+    if (forwardedSignal) {
+      return;
+    }
+    forwardedSignal = signal;
+    try {
+      childProcess.kill?.(signal);
+    } catch {
+      // Best-effort only. Exit handling still happens via the child "exit" event.
+    }
+  };
+
+  onSigInt = () => {
+    forwardSignal("SIGINT");
+  };
+  onSigTerm = () => {
+    forwardSignal("SIGTERM");
+  };
+
+  deps.process.on("SIGINT", onSigInt);
+  deps.process.on("SIGTERM", onSigTerm);
+
+  try {
+    return await new Promise((resolve) => {
+      childProcess.on("exit", (exitCode, exitSignal) => {
+        resolve({ exitCode, exitSignal, forwardedSignal });
+      });
+    });
+  } finally {
+    cleanupSignals();
+  }
 };
 
 const runOpenClaw = async (deps) => {
@@ -263,20 +319,19 @@ const runOpenClaw = async (deps) => {
     env: deps.env,
     stdio: "inherit",
   });
-  const res = await new Promise((resolve) => {
-    nodeProcess.on("exit", (exitCode, exitSignal) => {
-      resolve({ exitCode, exitSignal });
-    });
-  });
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
   if (res.exitSignal) {
-    return 1;
+    return getSignalExitCode(res.exitSignal);
+  }
+  if (res.forwardedSignal) {
+    return getSignalExitCode(res.forwardedSignal);
   }
   return res.exitCode ?? 1;
 };
 
 const syncRuntimeArtifacts = (deps) => {
   try {
-    runRuntimePostBuild({ cwd: deps.cwd });
+    deps.runRuntimePostBuild({ cwd: deps.cwd });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -300,16 +355,20 @@ const writeBuildStamp = (deps) => {
   }
 };
 
+const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
+
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
     spawnSync: params.spawnSync ?? spawnSync,
     fs: params.fs ?? fs,
     stderr: params.stderr ?? process.stderr,
+    process: params.process ?? process,
     execPath: params.execPath ?? process.execPath,
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
   };
 
   deps.distRoot = path.join(deps.cwd, "dist");
@@ -323,7 +382,7 @@ export async function runNodeMain(params = {}) {
 
   const buildRequirement = resolveBuildRequirement(deps);
   if (!buildRequirement.shouldBuild) {
-    if (!syncRuntimeArtifacts(deps)) {
+    if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
       return 1;
     }
     return await runOpenClaw(deps);
@@ -341,11 +400,12 @@ export async function runNodeMain(params = {}) {
     stdio: "inherit",
   });
 
-  const buildRes = await new Promise((resolve) => {
-    build.on("exit", (exitCode, exitSignal) => resolve({ exitCode, exitSignal }));
-  });
+  const buildRes = await waitForSpawnedProcess(build, deps);
   if (buildRes.exitSignal) {
-    return 1;
+    return getSignalExitCode(buildRes.exitSignal);
+  }
+  if (buildRes.forwardedSignal) {
+    return getSignalExitCode(buildRes.forwardedSignal);
   }
   if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
     return buildRes.exitCode;

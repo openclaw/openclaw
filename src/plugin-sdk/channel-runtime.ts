@@ -1,5 +1,8 @@
-// Legacy compatibility shim for older channel helpers. Prefer the dedicated
-// plugin-sdk subpaths instead of adding new imports here.
+/**
+ * @deprecated Compatibility shim only. Keep old plugins working, but do not
+ * add new imports here and do not use this subpath from repo code.
+ * Prefer the dedicated generic plugin-sdk subpaths instead.
+ */
 
 export * from "../channels/chat-type.js";
 export * from "../channels/reply-prefix.js";

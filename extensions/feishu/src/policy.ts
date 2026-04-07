@@ -143,8 +143,6 @@ export function resolveFeishuReplyPolicy(params: {
         ? groupRequireMention
         : typeof resolvedCfg.requireMention === "boolean"
           ? resolvedCfg.requireMention
-          : params.groupPolicy === "open"
-            ? false
-            : true,
+          : params.groupPolicy !== "open",
   };
 }

@@ -231,9 +231,21 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 
 describe("createApproverRestrictedNativeApprovalCapability", () => {
   it("builds the canonical approval capability and preserves legacy split compatibility", () => {
+    const describeExecApprovalSetup = vi.fn(
+      ({
+        channel,
+        channelLabel,
+        accountId,
+      }: {
+        channel: string;
+        channelLabel: string;
+        accountId?: string;
+      }) => `${channelLabel}:${channel}:${accountId ?? "default"}:setup`,
+    );
     const capability = createApproverRestrictedNativeApprovalCapability({
       channel: "matrix",
       channelLabel: "Matrix",
+      describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -252,6 +264,13 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     ).toEqual({ authorized: true });
     expect(capability.delivery?.hasConfiguredDmRoute?.({ cfg: {} as never })).toBe(true);
+    expect(
+      capability.describeExecApprovalSetup?.({
+        channel: "matrix",
+        channelLabel: "Matrix",
+        accountId: "ops",
+      }),
+    ).toBe("Matrix:matrix:ops:setup");
     expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,
@@ -276,6 +295,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     const legacy = createApproverRestrictedNativeApprovalAdapter({
       channel: "matrix",
       channelLabel: "Matrix",
+      describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -328,5 +348,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
         approvalKind: "exec",
       }),
     );
+    expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
   });
 });
