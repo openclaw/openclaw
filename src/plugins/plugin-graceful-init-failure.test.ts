@@ -193,4 +193,20 @@ describe("plugin module default-unwrapping", () => {
     expect(loaded?.failurePhase).toBeUndefined();
     expect(loaded?.error).toBeUndefined();
   });
+
+  it("prefers default function exports over wrapper-level named register exports", async () => {
+    const plugin = writePlugin({
+      id: "nested-default-wrapper-with-default-function",
+      body: `module.exports = { register() { throw new Error("wrapper register should not run"); }, default() {} };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "nested-default-wrapper-with-default-function",
+    );
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+    expect(loaded?.error).toBeUndefined();
+  });
 });

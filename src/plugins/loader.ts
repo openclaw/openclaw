@@ -602,6 +602,9 @@ function resolvePluginModuleExport(moduleExport: unknown): {
     shouldStop: (candidate) =>
       typeof candidate.register === "function" || typeof candidate.activate === "function",
     shouldContinueOnDefault: (_candidate, next) => {
+      if (typeof next === "function") {
+        return true;
+      }
       if (!next || typeof next !== "object") {
         return false;
       }
