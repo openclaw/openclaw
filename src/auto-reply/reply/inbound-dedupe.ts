@@ -1,6 +1,7 @@
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
@@ -17,15 +18,18 @@ const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
 
-const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
+const normalizeProvider = (value?: string | null) =>
+  normalizeOptionalString(value)?.toLowerCase() || "";
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
-    (ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey : undefined)?.trim() ||
-    ctx.SessionKey?.trim() ||
+    (ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined) ||
+    normalizeOptionalString(ctx.SessionKey) ||
     "";
   if (!sessionKey) {
     return "";
@@ -41,7 +45,7 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = ctx.MessageSid?.trim();
+  const messageId = normalizeOptionalString(ctx.MessageSid);
   if (!provider || !messageId) {
     return null;
   }
@@ -50,7 +54,7 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     return null;
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
-  const accountId = ctx.AccountId?.trim() ?? "";
+  const accountId = normalizeOptionalString(ctx.AccountId) ?? "";
   const threadId =
     ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
       ? String(ctx.MessageThreadId)

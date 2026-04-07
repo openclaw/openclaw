@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { MatrixClient } from "./sdk.js";
 
 export const MATRIX_PROFILE_AVATAR_MAX_BYTES = 10 * 1024 * 1024;
@@ -23,19 +24,15 @@ export type MatrixProfileSyncResult = {
 };
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return normalizeOptionalString(value) ?? null;
 }
 
 export function isMatrixMxcUri(value: string): boolean {
-  return value.trim().toLowerCase().startsWith("mxc://");
+  return normalizeOptionalString(value)?.toLowerCase().startsWith("mxc://") ?? false;
 }
 
 export function isMatrixHttpAvatarUri(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase() ?? "";
   return normalized.startsWith("https://") || normalized.startsWith("http://");
 }
 

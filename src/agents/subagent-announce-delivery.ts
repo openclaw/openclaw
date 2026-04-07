@@ -1,5 +1,5 @@
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -26,7 +26,6 @@ import {
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
-  resolveMainSessionKey,
   resolveQueueSettings,
   resolveStorePath,
 } from "./subagent-announce-delivery.runtime.js";
@@ -37,6 +36,7 @@ import {
 import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce-origin.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
@@ -300,28 +300,6 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     },
     timeoutMs: announceTimeoutMs,
   });
-}
-
-export function resolveRequesterStoreKey(
-  cfg: ReturnType<typeof loadConfig>,
-  requesterSessionKey: string,
-): string {
-  const raw = (requesterSessionKey ?? "").trim();
-  if (!raw) {
-    return raw;
-  }
-  if (raw === "global" || raw === "unknown") {
-    return raw;
-  }
-  if (raw.startsWith("agent:")) {
-    return raw;
-  }
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  if (raw === "main" || raw === mainKey) {
-    return resolveMainSessionKey(cfg);
-  }
-  const agentId = resolveAgentIdFromSessionKey(raw);
-  return `agent:${agentId}:${raw}`;
 }
 
 export function loadRequesterSessionEntry(requesterSessionKey: string) {

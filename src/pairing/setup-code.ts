@@ -19,6 +19,7 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -214,11 +215,11 @@ function pickTailnetIPv4(
 }
 
 function resolveGatewayTokenFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  return normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
 }
 
 function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+  return normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
 }
 
 function resolvePairingSetupAuthLabel(

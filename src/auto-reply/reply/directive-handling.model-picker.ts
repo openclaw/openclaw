@@ -4,6 +4,7 @@ import {
   normalizeProviderId,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;
@@ -57,7 +58,7 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
 
   for (const entry of catalog) {
     const provider = normalizeProviderId(entry.provider);
-    const model = entry.id?.trim();
+    const model = normalizeOptionalString(entry.id);
     if (!provider || !model) {
       continue;
     }
@@ -93,8 +94,8 @@ export function resolveProviderEndpointLabel(
     { baseUrl?: string; api?: string } | undefined
   >;
   const entry = findNormalizedProviderValue(providers, normalized);
-  const endpoint = entry?.baseUrl?.trim();
-  const api = entry?.api?.trim();
+  const endpoint = normalizeOptionalString(entry?.baseUrl);
+  const api = normalizeOptionalString(entry?.api);
   return {
     endpoint: endpoint || undefined,
     api: api || undefined,

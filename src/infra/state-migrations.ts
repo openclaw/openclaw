@@ -635,7 +635,6 @@ export async function autoMigrateLegacyStateDir(params: {
     } catch (fallbackErr) {
       try {
         if (!legacyDir) {
-          // oxlint-disable-next-line preserve-caught-error
           throw new Error("Legacy state dir not found", { cause: fallbackErr });
         }
         fs.renameSync(targetDir, legacyDir);

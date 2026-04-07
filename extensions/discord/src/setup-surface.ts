@@ -1,7 +1,7 @@
 import {
+  type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
-  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
@@ -10,12 +10,7 @@ import {
   resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import {
-  createDiscordSetupWizardBase,
-  DISCORD_TOKEN_HELP_LINES,
-  parseDiscordAllowFromId,
-  setDiscordGuildChannelAllowlist,
-} from "./setup-core.js";
+import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
 import {
   promptLegacyChannelAllowFromForAccount,
   resolveEntriesWithOptionalToken,

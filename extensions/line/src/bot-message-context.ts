@@ -1,4 +1,4 @@
-import type { EventSource, MessageEvent, PostbackEvent, StickerEventMessage } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import {
   formatInboundEnvelope,
   formatLocationText,
@@ -22,9 +22,15 @@ import {
   resolveAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+
+type EventSource = webhook.Source | undefined;
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+type StickerEventMessage = webhook.StickerMessageContent;
 
 interface MediaRef {
   path: string;
@@ -49,6 +55,9 @@ export type LineSourceInfo = {
 };
 
 export function getLineSourceInfo(source: EventSource): LineSourceInfo {
+  if (!source) {
+    return { userId: undefined, groupId: undefined, roomId: undefined, isGroup: false };
+  }
   const userId =
     source.type === "user"
       ? source.userId
@@ -65,6 +74,9 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
 }
 
 function buildPeerId(source: EventSource): string {
+  if (!source) {
+    return "unknown";
+  }
   const groupKey = resolveLineGroupHistoryKey({
     groupId: source.type === "group" ? source.groupId : undefined,
     roomId: source.type === "room" ? source.roomId : undefined,
@@ -280,7 +292,7 @@ function resolveLineGroupSystemPrompt(
     groupId: source.groupId,
     roomId: source.roomId,
   });
-  return entry?.systemPrompt?.trim() || undefined;
+  return normalizeOptionalString(entry?.systemPrompt);
 }
 
 async function finalizeLineInboundContext(params: {

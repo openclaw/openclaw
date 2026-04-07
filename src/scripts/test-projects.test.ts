@@ -37,6 +37,13 @@ const { buildVitestArgs, buildVitestRunPlans, createVitestRunSpecs, parseTestPro
     };
   };
 
+const VITEST_NODE_PREFIX = [
+  "exec",
+  "node",
+  "--no-maglev",
+  expect.stringContaining("/node_modules/vitest/vitest.mjs"),
+];
+
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseTestProjectsArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
@@ -48,8 +55,7 @@ describe("test-projects args", () => {
 
   it("keeps watch mode explicit without leaking the sentinel to Vitest", () => {
     expect(buildVitestArgs(["--watch", "--", "src/foo.test.ts"])).toEqual([
-      "exec",
-      "vitest",
+      ...VITEST_NODE_PREFIX,
       "--config",
       "vitest.unit.config.ts",
       "src/foo.test.ts",
@@ -58,8 +64,7 @@ describe("test-projects args", () => {
 
   it("uses run mode by default", () => {
     expect(buildVitestArgs(["src/foo.test.ts"])).toEqual([
-      "exec",
-      "vitest",
+      ...VITEST_NODE_PREFIX,
       "run",
       "--config",
       "vitest.unit.config.ts",
@@ -704,8 +709,7 @@ describe("test-projects args", () => {
     ]);
 
     expect(spec?.pnpmArgs).toEqual([
-      "exec",
-      "vitest",
+      ...VITEST_NODE_PREFIX,
       "run",
       "--config",
       "vitest.extension-channels.config.ts",

@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { CronPayload } from "../types.js";
 
@@ -14,11 +15,7 @@ export function normalizeRequiredName(raw: unknown) {
 }
 
 export function normalizeOptionalText(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(raw);
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -29,10 +26,7 @@ function truncateText(input: string, maxLen: number) {
 }
 
 export function normalizeOptionalAgentId(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return undefined;
   }
@@ -40,11 +34,7 @@ export function normalizeOptionalAgentId(raw: unknown) {
 }
 
 export function normalizeOptionalSessionKey(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(raw);
 }
 
 export function inferLegacyName(job: {

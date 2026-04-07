@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
@@ -13,7 +14,6 @@ import { collectConfigAssignments } from "../secrets/runtime-config-collectors.j
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { resolveRuntimeWebTools } from "../secrets/runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "../secrets/secret-value.js";
-import { describeUnknownError } from "../secrets/shared.js";
 import {
   discoverConfigSecretTargetsByIds,
   type DiscoveredConfigSecretTarget,
@@ -57,6 +57,41 @@ type GatewaySecretsResolveResult = {
 
 const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
 const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
+
+type CommandSecretGatewayDeps = {
+  analyzeCommandSecretAssignmentsFromSnapshot: typeof analyzeCommandSecretAssignmentsFromSnapshot;
+  collectConfigAssignments: typeof collectConfigAssignments;
+  discoverConfigSecretTargetsByIds: typeof discoverConfigSecretTargetsByIds;
+  resolveManifestContractOwnerPluginId: typeof resolveManifestContractOwnerPluginId;
+  resolveRuntimeWebTools: typeof resolveRuntimeWebTools;
+};
+
+const commandSecretGatewayDeps: CommandSecretGatewayDeps = {
+  analyzeCommandSecretAssignmentsFromSnapshot,
+  collectConfigAssignments,
+  discoverConfigSecretTargetsByIds,
+  resolveManifestContractOwnerPluginId,
+  resolveRuntimeWebTools,
+};
+
+export const __testing = {
+  setDepsForTest(overrides: Partial<CommandSecretGatewayDeps>): () => void {
+    const previous = { ...commandSecretGatewayDeps };
+    Object.assign(commandSecretGatewayDeps, overrides);
+    return () => {
+      Object.assign(commandSecretGatewayDeps, previous);
+    };
+  },
+  resetDepsForTest(): void {
+    Object.assign(commandSecretGatewayDeps, {
+      analyzeCommandSecretAssignmentsFromSnapshot,
+      collectConfigAssignments,
+      discoverConfigSecretTargetsByIds,
+      resolveManifestContractOwnerPluginId,
+      resolveRuntimeWebTools,
+    });
+  },
+};
 
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
@@ -117,7 +152,7 @@ function classifyRuntimeWebTargetPathState(params: {
       if (!configuredProvider) {
         return "active";
       }
-      return resolveManifestContractOwnerPluginId({
+      return commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
         contract: "webFetchProviders",
         value: configuredProvider,
         origin: "bundled",
@@ -135,7 +170,7 @@ function classifyRuntimeWebTargetPathState(params: {
     if (!configuredProvider) {
       return "active";
     }
-    return resolveManifestContractOwnerPluginId({
+    return commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
       contract: "webSearchProviders",
       value: configuredProvider,
       origin: "bundled",
@@ -195,7 +230,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
     const configuredProvider =
       typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
     const configuredPluginId = configuredProvider
-      ? resolveManifestContractOwnerPluginId({
+      ? commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
           value: configuredProvider,
           origin: "bundled",
@@ -254,7 +289,10 @@ function collectConfiguredTargetRefPaths(params: {
 }): Set<string> {
   const defaults = params.config.secrets?.defaults;
   const configuredTargetRefPaths = new Set<string>();
-  for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
+  for (const target of commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
+    params.config,
+    params.targetIds,
+  )) {
     if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
       continue;
     }
@@ -289,7 +327,7 @@ function classifyConfiguredTargetRefs(params: {
     sourceConfig: params.config,
     env: process.env,
   });
-  collectConfigAssignments({
+  commandSecretGatewayDeps.collectConfigAssignments({
     config: structuredClone(params.config),
     context,
   });
@@ -360,7 +398,7 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
 }
 
 function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = describeUnknownError(err).toLowerCase();
+  const message = formatErrorMessage(err).toLowerCase();
   if (!message.includes("secrets.resolve")) {
     return false;
   }
@@ -394,13 +432,13 @@ async function resolveCommandSecretRefsLocally(params: {
     env: process.env,
   });
   const localResolutionDiagnostics: string[] = [];
-  const discoveredTargets = discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds).filter(
-    (target) => !params.allowedPaths || params.allowedPaths.has(target.path),
-  );
+  const discoveredTargets = commandSecretGatewayDeps
+    .discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds)
+    .filter((target) => !params.allowedPaths || params.allowedPaths.has(target.path));
   const runtimeWebTargets = discoveredTargets.filter((target) =>
     targetsRuntimeWebPath(target.path),
   );
-  collectConfigAssignments({
+  commandSecretGatewayDeps.collectConfigAssignments({
     config: structuredClone(params.config),
     context,
   });
@@ -412,7 +450,7 @@ async function resolveCommandSecretRefsLocally(params: {
     !runtimeWebTargets.every((target) => isDirectRuntimeWebTargetPath(target.path))
   ) {
     try {
-      await resolveRuntimeWebTools({
+      await commandSecretGatewayDeps.resolveRuntimeWebTools({
         sourceConfig,
         resolvedConfig,
         context,
@@ -422,7 +460,7 @@ async function resolveCommandSecretRefsLocally(params: {
         throw error;
       }
       localResolutionDiagnostics.push(
-        `${params.commandName}: failed to resolve web tool secrets locally (${describeUnknownError(error)}).`,
+        `${params.commandName}: failed to resolve web tool secrets locally (${formatErrorMessage(error)}).`,
       );
     }
   }
@@ -474,7 +512,7 @@ async function resolveCommandSecretRefsLocally(params: {
       localResolutionDiagnostics,
     });
   }
-  const analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
+  const analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
     sourceConfig,
     resolvedConfig,
     targetIds: params.targetIds,
@@ -612,7 +650,7 @@ async function resolveTargetSecretLocally(params: {
   } catch (error) {
     if (!enforcesResolvedSecrets(params.mode)) {
       params.localResolutionDiagnostics.push(
-        `${params.commandName}: failed to resolve ${params.target.path} locally (${describeUnknownError(error)}).`,
+        `${params.commandName}: failed to resolve ${params.target.path} locally (${formatErrorMessage(error)}).`,
       );
     }
   }
@@ -687,7 +725,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         resolvedConfig: fallback.resolvedConfig,
         diagnostics: dedupeDiagnostics([
           ...fallback.diagnostics,
-          `${params.commandName}: gateway secrets.resolve unavailable (${describeUnknownError(err)}); ${fallbackMessage}`,
+          `${params.commandName}: gateway secrets.resolve unavailable (${formatErrorMessage(err)}); ${fallbackMessage}`,
         ]),
         targetStatesByPath: fallback.targetStatesByPath,
         hadUnresolvedTargets: fallback.hadUnresolvedTargets,
@@ -697,12 +735,12 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     }
     if (isUnsupportedSecretsResolveError(err)) {
       throw new Error(
-        `${params.commandName}: active gateway does not support secrets.resolve (${describeUnknownError(err)}). Update the gateway or run without SecretRefs.`,
+        `${params.commandName}: active gateway does not support secrets.resolve (${formatErrorMessage(err)}). Update the gateway or run without SecretRefs.`,
         { cause: err },
       );
     }
     throw new Error(
-      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${describeUnknownError(err)}). Start the gateway and retry.`,
+      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). Start the gateway and retry.`,
       { cause: err },
     );
   }
@@ -719,7 +757,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     } catch (err) {
       const path = pathSegments.join(".");
       throw new Error(
-        `${params.commandName}: failed to apply resolved secret assignment at ${path} (${describeUnknownError(err)}).`,
+        `${params.commandName}: failed to apply resolved secret assignment at ${path} (${formatErrorMessage(err)}).`,
         { cause: err },
       );
     }
@@ -728,7 +766,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     parsed.inactiveRefPaths.length > 0
       ? new Set(parsed.inactiveRefPaths)
       : collectInactiveSurfacePathsFromDiagnostics(parsed.diagnostics);
-  const analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
+  const analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
     sourceConfig: params.config,
     resolvedConfig,
     targetIds: params.targetIds,
@@ -799,7 +837,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       scrubUnresolvedAssignments(resolvedConfig, analyzed.unresolved);
       diagnostics = dedupeDiagnostics([
         ...diagnostics,
-        `${params.commandName}: local fallback after incomplete gateway snapshot failed (${describeUnknownError(error)}).`,
+        `${params.commandName}: local fallback after incomplete gateway snapshot failed (${formatErrorMessage(error)}).`,
         ...buildUnresolvedDiagnostics(params.commandName, analyzed.unresolved, mode),
       ]);
     }

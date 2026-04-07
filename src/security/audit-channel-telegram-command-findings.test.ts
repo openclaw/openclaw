@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { collectTelegramSecurityAuditFindings } from "../../extensions/telegram/contract-api.js";
-import type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { collectTelegramSecurityAuditFindings } from "../plugin-sdk/telegram.js";
 import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
+
+type TelegramAuditParams = Parameters<typeof collectTelegramSecurityAuditFindings>[0];
+type ResolvedTelegramAccount = TelegramAuditParams["account"];
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
   readChannelAllowFromStoreMock: vi.fn(async () => [] as string[]),

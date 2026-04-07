@@ -5,6 +5,7 @@ import {
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -41,7 +42,7 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
 }): ExecApprovalInitiatingSurfaceState {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);
-  const accountId = params.accountId?.trim() || undefined;
+  const accountId = normalizeOptionalString(params.accountId);
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
     return { kind: "enabled", channel, channelLabel, accountId };
   }
@@ -78,7 +79,7 @@ export function listNativeExecApprovalClientLabels(params?: {
   return listChannelPlugins()
     .filter((plugin) => plugin.id !== excludeChannel)
     .filter((plugin) => hasNativeExecApprovalCapability(plugin.id))
-    .map((plugin) => plugin.meta.label?.trim())
+    .map((plugin) => normalizeOptionalString(plugin.meta.label))
     .filter((label): label is string => Boolean(label))
     .toSorted((a, b) => a.localeCompare(b));
 }
@@ -92,8 +93,8 @@ export function describeNativeExecApprovalClientSetup(params: {
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
     return null;
   }
-  const channelLabel = params.channelLabel?.trim() || labelForChannel(channel);
-  const accountId = params.accountId?.trim() || undefined;
+  const channelLabel = normalizeOptionalString(params.channelLabel) ?? labelForChannel(channel);
+  const accountId = normalizeOptionalString(params.accountId);
   return (
     resolveChannelApprovalCapability(getChannelPlugin(channel))?.describeExecApprovalSetup?.({
       channel,

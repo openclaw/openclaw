@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
@@ -19,7 +20,7 @@ function resolveGroupId(raw: string | undefined | null): string | undefined {
 }
 
 function resolveLooseChannelId(raw?: string | null): string | null {
-  const normalized = raw?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(raw)?.toLowerCase();
   if (!normalized) {
     return null;
   }
@@ -52,14 +53,15 @@ export async function resolveGroupRequireMention(params: {
   groupResolution?: GroupKeyResolution;
 }): Promise<boolean> {
   const { cfg, ctx, groupResolution } = params;
-  const rawChannel = groupResolution?.channel ?? ctx.Provider?.trim();
+  const rawChannel = groupResolution?.channel ?? normalizeOptionalString(ctx.Provider);
   const channel = await resolveRuntimeChannelId(rawChannel);
   if (!channel) {
     return true;
   }
   const groupId = groupResolution?.id ?? resolveGroupId(ctx.From);
-  const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
-  const groupSpace = ctx.GroupSpace?.trim();
+  const groupChannel =
+    normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject);
+  const groupSpace = normalizeOptionalString(ctx.GroupSpace);
   let requireMention: boolean | undefined;
   const runtime = await loadGroupsRuntime();
   try {
@@ -89,7 +91,7 @@ export function defaultGroupActivation(requireMention: boolean): "always" | "men
 }
 
 function resolveProviderLabel(rawProvider: string | undefined): string {
-  const providerKey = rawProvider?.trim().toLowerCase() ?? "";
+  const providerKey = normalizeOptionalString(rawProvider)?.toLowerCase() ?? "";
   if (!providerKey) {
     return "chat";
   }
@@ -100,8 +102,8 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 }
 
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
-  const subject = params.sessionCtx.GroupSubject?.trim();
-  const members = params.sessionCtx.GroupMembers?.trim();
+  const subject = normalizeOptionalString(params.sessionCtx.GroupSubject);
+  const members = normalizeOptionalString(params.sessionCtx.GroupMembers);
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
 
   const lines: string[] = [];

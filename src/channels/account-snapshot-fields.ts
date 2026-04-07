@@ -1,4 +1,6 @@
 import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
 // Read-only status commands project a safe subset of account fields into snapshots
@@ -15,20 +17,8 @@ const CREDENTIAL_STATUS_KEYS = [
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function readTrimmedString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(record[key]);
 }
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
@@ -60,7 +50,7 @@ function readCredentialStatus(record: Record<string, unknown>, key: CredentialSt
 }
 
 export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return undefined;
   }
@@ -82,7 +72,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
 ): boolean | undefined {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return undefined;
   }
@@ -101,7 +91,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
 }
 
 export function hasConfiguredUnavailableCredentialStatus(account: unknown): boolean {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return false;
   }
@@ -111,14 +101,13 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
 }
 
 export function hasResolvedCredentialValue(account: unknown): boolean {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return false;
   }
   return (
     ["token", "botToken", "appToken", "signingSecret", "userToken"].some((key) => {
-      const value = record[key];
-      return typeof value === "string" && value.trim().length > 0;
+      return normalizeOptionalString(record[key]) !== undefined;
     }) || CREDENTIAL_STATUS_KEYS.some((key) => readCredentialStatus(record, key) === "available")
   );
 }
@@ -137,7 +126,7 @@ export function projectCredentialSnapshotFields(
   | "signingSecretStatus"
   | "userTokenStatus"
 > {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return {};
   }
@@ -176,7 +165,7 @@ export function projectCredentialSnapshotFields(
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
 ): Partial<ChannelAccountSnapshot> {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return {};
   }

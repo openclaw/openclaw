@@ -22,11 +22,19 @@
     },
     "bridge.enabled": {
       "label": "Enable Bridge Mode",
-      "help": "Read public memory artifacts and events from the selected memory plugin."
+      "help": "Read public memory artifacts and events from the active memory plugin in bridge mode."
+    },
+    "bridge.readMemoryArtifacts": {
+      "label": "Read Memory Artifacts",
+      "help": "Enable bridge reads from the active memory plugin's public artifact export."
     },
     "unsafeLocal.allowPrivateMemoryCoreAccess": {
       "label": "Allow Private Memory Access",
       "help": "Experimental same-repo escape hatch for reading memory-core private paths."
+    },
+    "context.includeCompiledDigestPrompt": {
+      "label": "Include Compiled Digest In Prompt",
+      "help": "Append a compact compiled wiki digest snapshot to memory prompt sections for context engines and legacy prompt assembly."
     }
   },
   "configSchema": {
@@ -75,7 +83,7 @@
           "enabled": {
             "type": "boolean"
           },
-          "readMemoryCore": {
+          "readMemoryArtifacts": {
             "type": "boolean"
           },
           "indexDreamReports": {
@@ -134,6 +142,15 @@
           "corpus": {
             "type": "string",
             "enum": ["wiki", "memory", "all"]
+          }
+        }
+      },
+      "context": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "includeCompiledDigestPrompt": {
+            "type": "boolean"
           }
         }
       },

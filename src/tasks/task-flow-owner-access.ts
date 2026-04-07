@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findLatestTaskFlowForOwnerKey,
   getTaskFlowById,
@@ -5,13 +6,8 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function canOwnerAccessFlow(flow: TaskFlowRecord, callerOwnerKey: string): boolean {
-  return normalizeOwnerKey(flow.ownerKey) === normalizeOwnerKey(callerOwnerKey);
+  return normalizeOptionalString(flow.ownerKey) === normalizeOptionalString(callerOwnerKey);
 }
 
 export function getTaskFlowByIdForOwner(params: {
@@ -23,14 +19,14 @@ export function getTaskFlowByIdForOwner(params: {
 }
 
 export function listTaskFlowsForOwner(params: { callerOwnerKey: string }): TaskFlowRecord[] {
-  const ownerKey = normalizeOwnerKey(params.callerOwnerKey);
+  const ownerKey = normalizeOptionalString(params.callerOwnerKey);
   return ownerKey ? listTaskFlowsForOwnerKey(ownerKey) : [];
 }
 
 export function findLatestTaskFlowForOwner(params: {
   callerOwnerKey: string;
 }): TaskFlowRecord | undefined {
-  const ownerKey = normalizeOwnerKey(params.callerOwnerKey);
+  const ownerKey = normalizeOptionalString(params.callerOwnerKey);
   return ownerKey ? findLatestTaskFlowForOwnerKey(ownerKey) : undefined;
 }
 
@@ -45,8 +41,8 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   if (direct) {
     return direct;
   }
-  const normalizedToken = normalizeOwnerKey(params.token);
-  const normalizedCallerOwnerKey = normalizeOwnerKey(params.callerOwnerKey);
+  const normalizedToken = normalizeOptionalString(params.token);
+  const normalizedCallerOwnerKey = normalizeOptionalString(params.callerOwnerKey);
   if (!normalizedToken || normalizedToken !== normalizedCallerOwnerKey) {
     return undefined;
   }

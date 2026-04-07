@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type BooleanParseOptions = {
   truthy?: string[];
   falsy?: string[];
@@ -18,7 +20,7 @@ export function parseBooleanValue(
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   if (!normalized) {
     return undefined;
   }

@@ -3,11 +3,12 @@ import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
-import { ToolInputError } from "../agents/tools/common.js";
+import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -225,9 +226,9 @@ export async function handleToolsInvokeHttpRequest(
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
-  const agentTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
-  const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
+  const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
+  const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
+  const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
   const { agentId, tools } = resolveGatewayScopedTools({
     cfg,
     sessionKey,
@@ -237,6 +238,7 @@ export async function handleToolsInvokeHttpRequest(
     agentThreadId,
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
+    surface: "http",
     disablePluginTools: isKnownCoreToolId(toolName),
   });
   // Owner semantics intentionally follow the same shared-secret HTTP contract
@@ -254,10 +256,10 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   try {
+    const gatewayTool: AnyAgentTool = tool;
     const toolCallId = `http-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: gatewayTool.parameters,
       action,
       args,
     });
@@ -278,8 +280,7 @@ export async function handleToolsInvokeHttpRequest(
       });
       return true;
     }
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(toolCallId, hookResult.params);
+    const result = await gatewayTool.execute?.(toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

@@ -12,6 +12,7 @@ import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
+  normalizeOptionalString,
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -106,7 +107,7 @@ function hasValidTelegramWebhookSecret(
 }
 
 function parseIpLiteral(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

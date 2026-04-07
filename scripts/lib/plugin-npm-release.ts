@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { normalizeOptionalString } from "../../src/shared/string-coerce.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
@@ -55,14 +56,65 @@ export type ParsedPluginReleaseArgs = {
   headRef?: string;
 };
 
-type PublishablePluginPackageCandidate = {
+export type PublishablePluginPackageCandidate<
+  TPackageJson extends PluginPackageJson = PluginPackageJson,
+> = {
   extensionId: string;
   packageDir: string;
-  packageJson: PluginPackageJson;
+  packageJson: TPackageJson;
 };
 
-function readPluginPackageJson(path: string): PluginPackageJson {
-  return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
+function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
+  path: string,
+): TPackageJson {
+  return JSON.parse(readFileSync(path, "utf8")) as TPackageJson;
+}
+
+export function collectExtensionPackageJsonCandidates<
+  TPackageJson extends PluginPackageJson = PluginPackageJson,
+>(rootDir = resolve(".")): PublishablePluginPackageCandidate<TPackageJson>[] {
+  const extensionsDir = join(rootDir, "extensions");
+  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  );
+
+  const candidates: PublishablePluginPackageCandidate<TPackageJson>[] = [];
+  for (const dir of dirs) {
+    const packageDir = join("extensions", dir.name);
+    const absolutePackageDir = join(extensionsDir, dir.name);
+    const packageJsonPath = join(absolutePackageDir, "package.json");
+    try {
+      candidates.push({
+        extensionId: dir.name,
+        packageDir,
+        packageJson: readPluginPackageJson<TPackageJson>(packageJsonPath),
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return candidates;
+}
+
+export function resolvePublishablePluginVersion(params: {
+  extensionId: string;
+  packageJson: Pick<PluginPackageJson, "version">;
+  validationErrors: string[];
+}): { version: string; parsedVersion: NonNullable<ReturnType<typeof parseReleaseVersion>> } | null {
+  const version = params.packageJson.version?.trim() ?? "";
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    params.validationErrors.push(
+      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
+    );
+    return null;
+  }
+  return { version, parsedVersion };
+}
+
+export function normalizeGitDiffPath(path: string): string {
+  return path.trim().replaceAll("\\", "/");
 }
 
 export function parsePluginReleaseSelection(value: string | undefined): string[] {
@@ -187,57 +239,39 @@ export function collectPublishablePluginPackageErrors(
 export function collectPublishablePluginPackages(
   rootDir = resolve("."),
 ): PublishablePluginPackage[] {
-  const extensionsDir = join(rootDir, "extensions");
-  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
-  );
-
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
 
-  for (const dir of dirs) {
-    const packageDir = join("extensions", dir.name);
-    const absolutePackageDir = join(extensionsDir, dir.name);
-    const packageJsonPath = join(absolutePackageDir, "package.json");
-    let packageJson: PluginPackageJson;
-    try {
-      packageJson = readPluginPackageJson(packageJsonPath);
-    } catch {
-      continue;
-    }
-
+  for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
+    const { extensionId, packageDir, packageJson } = candidate;
     if (packageJson.openclaw?.release?.publishToNpm !== true) {
       continue;
     }
 
-    const candidate = {
-      extensionId: dir.name,
-      packageDir,
-      packageJson,
-    } satisfies PublishablePluginPackageCandidate;
     const errors = collectPublishablePluginPackageErrors(candidate);
     if (errors.length > 0) {
-      validationErrors.push(...errors.map((error) => `${dir.name}: ${error}`));
+      validationErrors.push(...errors.map((error) => `${extensionId}: ${error}`));
       continue;
     }
 
-    const version = packageJson.version!.trim();
-    const parsedVersion = parseReleaseVersion(version);
-    if (parsedVersion === null) {
-      validationErrors.push(
-        `${dir.name}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
-      );
+    const resolvedVersion = resolvePublishablePluginVersion({
+      extensionId,
+      packageJson,
+      validationErrors,
+    });
+    if (!resolvedVersion) {
       continue;
     }
+    const { version, parsedVersion } = resolvedVersion;
 
     publishable.push({
-      extensionId: dir.name,
+      extensionId,
       packageDir,
       packageName: packageJson.name!.trim(),
       version,
       channel: parsedVersion.channel,
       publishTag: resolveNpmPublishPlan(version).publishTag,
-      installNpmSpec: packageJson.openclaw?.install?.npmSpec?.trim() || undefined,
+      installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec),
     });
   }
 
@@ -292,13 +326,43 @@ export function collectChangedExtensionIdsFromPaths(paths: readonly string[]): s
   return [...extensionIds].toSorted();
 }
 
-function isNullGitRef(ref: string | undefined): boolean {
+export function isNullGitRef(ref: string | undefined): boolean {
   return !ref || /^0+$/.test(ref);
 }
 
-export function collectChangedExtensionIdsFromGitRange(params: {
+function assertSafeGitRef(ref: string, label: string): string {
+  const trimmed = ref.trim();
+  if (!trimmed || isNullGitRef(trimmed)) {
+    throw new Error(`${label} is required.`);
+  }
+  if (
+    trimmed.startsWith("-") ||
+    trimmed.includes("\u0000") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n")
+  ) {
+    throw new Error(`${label} must be a normal git ref or commit SHA.`);
+  }
+  return trimmed;
+}
+
+export function resolveGitCommitSha(rootDir: string, ref: string, label: string): string {
+  const safeRef = assertSafeGitRef(ref, label);
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", "--quiet", `${safeRef}^{commit}`], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    throw new Error(`${label} is not a valid git commit ref: ${safeRef}`);
+  }
+}
+
+export function collectChangedPathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
+  pathspecs: readonly string[];
 }): string[] {
   const rootDir = params.rootDir ?? resolve(".");
   const { baseRef, headRef } = params.gitRange;
@@ -307,9 +371,12 @@ export function collectChangedExtensionIdsFromGitRange(params: {
     return [];
   }
 
-  const changedPaths = execFileSync(
+  const baseSha = resolveGitCommitSha(rootDir, baseRef, "baseRef");
+  const headSha = resolveGitCommitSha(rootDir, headRef, "headRef");
+
+  return execFileSync(
     "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseRef, headRef, "--", "extensions"],
+    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", ...params.pathspecs],
     {
       cwd: rootDir,
       encoding: "utf8",
@@ -318,9 +385,21 @@ export function collectChangedExtensionIdsFromGitRange(params: {
   )
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((path) => normalizeGitDiffPath(path));
+}
 
-  return collectChangedExtensionIdsFromPaths(changedPaths);
+export function collectChangedExtensionIdsFromGitRange(params: {
+  rootDir?: string;
+  gitRange: GitRangeSelection;
+}): string[] {
+  return collectChangedExtensionIdsFromPaths(
+    collectChangedPathsFromGitRange({
+      rootDir: params.rootDir,
+      gitRange: params.gitRange,
+      pathspecs: ["extensions"],
+    }),
+  );
 }
 
 export function resolveChangedPublishablePluginPackages(params: {

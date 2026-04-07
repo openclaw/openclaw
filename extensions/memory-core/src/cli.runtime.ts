@@ -34,6 +34,7 @@ import type {
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import { previewRemDreaming } from "./dreaming-phases.js";
+import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
   applyShortTermPromotions,
@@ -69,13 +70,6 @@ type LoadedMemoryCommandConfig = {
   config: OpenClawConfig;
   diagnostics: string[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([
@@ -856,7 +850,20 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (qmdIndexSummary) {
             defaultRuntime.log(qmdIndexSummary);
           }
-          defaultRuntime.log(`Memory index updated (${agentId}).`);
+          const postIndexStatus = manager.status();
+          const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
+          const vectorAvailable = postIndexStatus.vector?.available;
+          const vectorLoadErr = postIndexStatus.vector?.loadError;
+          if (vectorEnabled && vectorAvailable === false) {
+            const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
+            // Indexing still persisted chunks/FTS state; keep the command successful but
+            // emit a stderr warning so operators and scripts can detect degraded recall.
+            defaultRuntime.error(
+              `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
+            );
+          } else {
+            defaultRuntime.log(`Memory index updated (${agentId}).`);
+          }
         } catch (err) {
           const message = formatErrorMessage(err);
           defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
@@ -1195,9 +1202,17 @@ export async function runMemoryPromoteExplain(
 
       const rich = isRich();
       const lines = [
-        `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
-        `${colorize(rich, theme.accent, candidate.key)}`,
-        `${colorize(rich, theme.muted, `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
+        `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
+          rich,
+          theme.muted,
+          "(" + String(agentId) + ")",
+        )}`,
+        colorize(rich, theme.accent, candidate.key),
+        colorize(
+          rich,
+          theme.muted,
+          `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+        ),
         candidate.snippet,
         colorize(
           rich,

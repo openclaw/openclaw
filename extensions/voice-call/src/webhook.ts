@@ -38,7 +38,7 @@ type WebhookHeaderGateResult =
 
 function sanitizeTranscriptForLog(value: string): string {
   const sanitized = value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {

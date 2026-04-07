@@ -4,6 +4,7 @@ export function createRuntimeConfigVitestConfig(env?: Record<string, string | un
   return createScopedVitestConfig(["src/config/**/*.test.ts"], {
     dir: "src",
     env,
+    includeOpenClawRuntimeSetup: false,
     name: "runtime-config",
     passWithNoTests: true,
   });

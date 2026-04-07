@@ -109,7 +109,7 @@ function resolveConversationPath(to: string): {
     const [teamId, channelId] = cleaned.split("/", 2);
     return {
       kind: "channel",
-      basePath: `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`,
+      basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
       channelId,
     };

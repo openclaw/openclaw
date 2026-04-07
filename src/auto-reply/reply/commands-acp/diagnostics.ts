@@ -6,6 +6,7 @@ import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta
 import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 import {
@@ -139,7 +140,7 @@ function formatAcpSessionLine(params: {
     return "";
   }
   const marker = params.currentSessionKey === params.key ? "*" : " ";
-  const label = params.entry.label?.trim() || acp.agent;
+  const label = normalizeOptionalString(params.entry.label) || acp.agent;
   const threadText = params.threadId ? `, thread:${params.threadId}` : "";
   return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText}) -> ${params.key}`;
 }

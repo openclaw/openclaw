@@ -1,7 +1,8 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { NodeRegistry } from "./node-registry.js";
 
 const isMobilePlatform = (platform: unknown): boolean => {
-  const p = typeof platform === "string" ? platform.trim().toLowerCase() : "";
+  const p = normalizeOptionalString(platform)?.toLowerCase() ?? "";
   if (!p) {
     return false;
   }
