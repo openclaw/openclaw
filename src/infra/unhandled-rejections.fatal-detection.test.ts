@@ -176,6 +176,21 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
+    it("does not exit on known Baileys WhatsApp decrypt races", () => {
+      const err = new Error("Unsupported state or unable to authenticate data");
+      err.stack = [
+        "Error: Unsupported state or unable to authenticate data",
+        "    at aesDecryptGCM (file:///x/@whiskeysockets/baileys/src/Utils/crypto.ts:71:55)",
+        "    at decrypt (file:///x/@whiskeysockets/baileys/src/Utils/noise-handler.ts:49:18)",
+      ].join("\n");
+
+      expectExitCodeFromUnhandled(err, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Suppressed WhatsApp crypto rejection (continuing):",
+        expect.stringContaining("Unsupported state or unable to authenticate data"),
+      );
+    });
+
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
