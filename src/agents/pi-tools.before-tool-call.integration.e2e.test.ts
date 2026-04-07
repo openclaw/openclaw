@@ -104,6 +104,7 @@ describe("before_tool_call hook integration", () => {
       { path: "/tmp/file" },
       undefined,
       extensionContext,
+      undefined,
     );
   });
 
@@ -122,6 +123,7 @@ describe("before_tool_call hook integration", () => {
       { cmd: "ls", mode: "safe" },
       undefined,
       extensionContext,
+      undefined,
     );
   });
 
@@ -289,6 +291,52 @@ describe("before_tool_call hook integration", () => {
         sessionKey: "main",
         toolCallId: "call-ctx",
       },
+    );
+  });
+
+  it("forwards extensionContext through wrapped tool execution", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "read", execute, description: "read", parameters: {} } as any;
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const [def] = toToolDefinitions([wrapped]);
+    const extensionContext = {
+      sessionManager: {
+        getLeafEntry: () => ({
+          id: "msg-extension-context",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Inspect file first." },
+              {
+                type: "toolCall",
+                id: "call-extension-context",
+                name: "read",
+                arguments: { path: "/tmp/file" },
+              },
+            ],
+          },
+        }),
+      },
+    } as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-extension-context",
+      { path: "/tmp/file" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-extension-context",
+      { path: "/tmp/file" },
+      undefined,
+      undefined,
+      extensionContext,
     );
   });
 });

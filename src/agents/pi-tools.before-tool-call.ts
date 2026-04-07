@@ -488,7 +488,13 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const result = await execute(
+          toolCallId,
+          outcome.params,
+          signal,
+          onUpdate,
+          extensionContext,
+        );
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
