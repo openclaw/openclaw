@@ -366,18 +366,13 @@ async function execSystemctlUser(
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const machineUser = resolveSystemctlMachineScopeUser(env);
   const sudoUser = env.SUDO_USER?.trim();
-  let machineScopeAlreadyTried = false;
 
   // Under sudo, prefer the invoking non-root user's scope directly via machine scope.
-  // If machine scope fails (e.g. user session bus unreachable), fall through to direct --user.
   if (sudoUser && sudoUser !== "root" && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
-      const machineResult = await execSystemctl([...machineScopeArgs, ...args]);
-      machineScopeAlreadyTried = true;
-      if (machineResult.code === 0) {
-        return machineResult;
-      }
+      // Do not fall through to bare --user: under sudo that can target root's user manager.
+      return await execSystemctl([...machineScopeArgs, ...args]);
     }
   }
 
@@ -387,7 +382,7 @@ async function execSystemctlUser(
   }
 
   const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
-  if (!machineUser || machineScopeAlreadyTried || !shouldFallbackToMachineUserScope(detail)) {
+  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
     return directResult;
   }
 
