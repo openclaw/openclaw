@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 
 type TestGatewayHookEvent = {
@@ -203,7 +204,7 @@ describe("createGatewayCloseHandler", () => {
   it("continues shutdown when a lifecycle hook stalls", async () => {
     vi.useFakeTimers();
     triggerInternalHook
-      .mockImplementationOnce(async () => await new Promise<void>(() => {}))
+      .mockImplementationOnce(async () => await new Promise<undefined>(() => {}))
       .mockResolvedValue(undefined);
 
     const harness = createCloseHarness();
@@ -233,7 +234,7 @@ describe("createGatewayCloseHandler", () => {
   it("falls back to subsystem logging when shutdown hook stalls without params.logger", async () => {
     vi.useFakeTimers();
     triggerInternalHook
-      .mockImplementationOnce(async () => await new Promise<void>(() => {}))
+      .mockImplementationOnce(async () => await new Promise<undefined>(() => {}))
       .mockResolvedValue(undefined);
 
     const harness = createCloseHarness({ omitLogger: true });
@@ -324,7 +325,9 @@ describe("createGatewayCloseHandler", () => {
         restartExpectedMs: 1500,
       });
 
-      const payload = writeRestartSentinel.mock.calls[0]?.[0];
+      const payload = writeRestartSentinel.mock.calls.at(-1)?.[0] as
+        | RestartSentinelPayload
+        | undefined;
       expect(payload?.outbox).toEqual([
         expect.objectContaining({
           kind: "message",
@@ -361,7 +364,9 @@ describe("createGatewayCloseHandler", () => {
         restartExpectedMs: 1500,
       });
 
-      const payload = writeRestartSentinel.mock.calls[0]?.[0];
+      const payload = writeRestartSentinel.mock.calls.at(-1)?.[0] as
+        | RestartSentinelPayload
+        | undefined;
       expect(payload?.outbox).toEqual([
         expect.objectContaining({
           kind: "message",

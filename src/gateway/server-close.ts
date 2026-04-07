@@ -179,9 +179,8 @@ async function persistGatewayRestartOutbox(params: {
   const suppressPrimaryNotice =
     typeof existingPayload?.suppressPrimaryNotice === "boolean"
       ? existingPayload.suppressPrimaryNotice &&
-        hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
-      : !existingPayload &&
-          hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
+        hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload.sessionKey)
+      : !existingPayload && hasDeliverableGatewayOutboxTask(mergedOutbox, undefined)
         ? true
         : undefined;
   const stats = {
