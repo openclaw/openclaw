@@ -525,10 +525,20 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
+const VOICE_NOTE_CHANNELS = new Set([
+  "telegram",
+  "feishu",
+  "whatsapp",
+  "matrix",
+  "openclaw-weixin",
+]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
+}
+
+function supportsVoiceNoteReplies(channelId: ChannelId | null): boolean {
+  return channelId !== null && VOICE_NOTE_CHANNELS.has(channelId);
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
@@ -740,7 +750,7 @@ export async function synthesizeSpeech(params: {
 
   const { config, providers } = setup;
   const channelId = resolveChannelId(params.channel);
-  const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  const target = supportsVoiceNoteReplies(channelId) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -1094,8 +1104,7 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice =
-      channelId !== null && OPUS_CHANNELS.has(channelId) && result.voiceCompatible === true;
+    const shouldVoice = supportsVoiceNoteReplies(channelId) && result.voiceCompatible === true;
     return {
       ...nextPayload,
       mediaUrl: result.audioPath,
@@ -1125,4 +1134,5 @@ export const _test = {
   getResolvedSpeechProviderConfig,
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
+  supportsVoiceNoteReplies,
 };
