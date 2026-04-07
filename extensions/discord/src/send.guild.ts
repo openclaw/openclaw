@@ -9,7 +9,6 @@ import type {
 import { Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordRest } from "./send.shared.js";
-import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import type {
   DiscordModerationTarget,
   DiscordReactOpts,

@@ -31,7 +31,6 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
-  resolveEventCoverImage,
 } from "../send.js";
 import { readDiscordParentIdParam } from "./runtime.shared.js";
 
