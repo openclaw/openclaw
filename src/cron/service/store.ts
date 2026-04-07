@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -34,6 +35,7 @@ export async function ensureLoaded(
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
   for (const job of jobs) {
+    normalizeCronJobIdentityFields(job as unknown as Record<string, unknown>);
     // Persisted legacy jobs may predate the required `enabled` field.
     // Keep runtime behavior backward-compatible without rewriting the store.
     if (typeof job.enabled !== "boolean") {
