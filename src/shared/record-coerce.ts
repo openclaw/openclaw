@@ -1,5 +1,3 @@
-import { isRecord } from "../utils.js";
-
 export function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -10,6 +8,16 @@ export function readStringField(
 ): string | undefined {
   const value = record?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Type guard for Record<string, unknown>.
+ * Inlined here to avoid pulling in `../utils.js` which contains Node.js-only
+ * side effects (`fs`, `os`, `process.env`) that break browser bundles
+ * (e.g. the Control UI served by the gateway).
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
