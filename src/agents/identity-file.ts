@@ -57,9 +57,6 @@ function extractAvatarValue(rawValue: string): string {
       }
     }
   }
-  if (isAvatarHttpUrl(value) || isAvatarDataUrl(value) || looksLikeAvatarPath(value)) {
-    return value;
-  }
   return value;
 }
 
