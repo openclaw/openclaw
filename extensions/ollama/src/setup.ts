@@ -63,7 +63,7 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
   return { text: trimmed, hidePercent: false };
 }
 
-async function checkOllamaCloudAuth(baseUrl: string): Promise<OllamaCloudAuthResult> {
+export async function checkOllamaCloudAuth(baseUrl: string): Promise<OllamaCloudAuthResult> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
     const { response, release } = await fetchWithSsrFGuard({
@@ -245,9 +245,14 @@ function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
 ) {
-  return modelNames.map((name) =>
-    buildOllamaModelDefinition(name, discoveredModelsByName?.get(name)?.contextWindow),
-  );
+  return modelNames.map((name) => {
+    const discovered = discoveredModelsByName?.get(name);
+    // Suggested cloud models may be injected before `/api/tags` exposes them,
+    // so keep Kimi vision-capable during setup even without discovered metadata.
+    const capabilities =
+      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
+    return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
+  });
 }
 
 function applyOllamaProviderConfig(
@@ -299,7 +304,9 @@ export async function buildOllamaProvider(
   return {
     baseUrl: apiBase,
     api: "ollama",
-    models: discovered.map((model) => buildOllamaModelDefinition(model.name, model.contextWindow)),
+    models: discovered.map((model) =>
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+    ),
   };
 }
 
@@ -344,7 +351,7 @@ export async function promptAndConfigureOllama(params: {
   const mode = (await params.prompter.select({
     message: "Ollama mode",
     options: [
-      { value: "remote", label: "Cloud + Local", hint: "Ollama cloud models + local models" },
+      { value: "remote", label: "Cloud + Local", hint: "Cloud models + local models" },
       { value: "local", label: "Local", hint: "Local models only" },
     ],
   })) as OllamaMode;
@@ -358,27 +365,27 @@ export async function promptAndConfigureOllama(params: {
           await params.openUrl(authResult.signinUrl);
         }
         await params.prompter.note(
-          ["Sign in to Ollama Cloud:", authResult.signinUrl].join("\n"),
-          "Ollama Cloud",
+          ["Run `ollama signin`:", authResult.signinUrl].join("\n"),
+          "Ollama Sign-In",
         );
         const confirmed = await params.prompter.confirm({ message: "Have you signed in?" });
         if (!confirmed) {
-          throw new WizardCancelledError("Ollama cloud sign-in cancelled");
+          throw new WizardCancelledError("Ollama sign-in cancelled");
         }
         if (!(await checkOllamaCloudAuth(baseUrl)).signedIn) {
-          throw new WizardCancelledError("Ollama cloud sign-in required");
+          throw new WizardCancelledError("Ollama sign-in required");
         }
         cloudAuthVerified = true;
       } else {
         await params.prompter.note(
           [
-            "Could not verify Ollama Cloud authentication.",
+            "Could not verify `ollama signin`.",
             "Cloud models may not work until you sign in at https://ollama.com.",
           ].join("\n"),
-          "Ollama Cloud",
+          "Ollama Sign-In",
         );
-        if (!(await params.prompter.confirm({ message: "Continue without cloud auth?" }))) {
-          throw new WizardCancelledError("Ollama cloud auth could not be verified");
+        if (!(await params.prompter.confirm({ message: "Continue without sign-in?" }))) {
+          throw new WizardCancelledError("Ollama sign-in could not be verified");
         }
       }
     } else {
@@ -482,7 +489,7 @@ export async function configureOllamaNonInteractive(params: {
 
     defaultModelId =
       allModelNames.find((name) => availableModelNames.has(name)) ??
-      Array.from(availableModelNames)[0]!;
+      Array.from(availableModelNames)[0];
     params.runtime.log(
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
     );

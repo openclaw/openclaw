@@ -194,30 +194,25 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("still posts fresh verification completions", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-14T13:10:00.000Z"));
-    try {
-      const { sendMessage, roomEventListener } = createHarness();
+    const { sendMessage, roomEventListener } = createHarness();
 
-      roomEventListener("!room:example.org", {
-        event_id: "$done-fresh",
-        sender: "@alice:example.org",
-        type: "m.key.verification.done",
-        origin_server_ts: Date.now(),
-        content: {
-          "m.relates_to": { event_id: "$req-fresh" },
-        },
-      });
+    roomEventListener("!room:example.org", {
+      event_id: "$done-fresh",
+      sender: "@alice:example.org",
+      type: "m.key.verification.done",
+      origin_server_ts: Date.now(),
+      content: {
+        "m.relates_to": { event_id: "$req-fresh" },
+      },
+    });
 
-      await vi.waitFor(() => {
-        expect(sendMessage).toHaveBeenCalledTimes(1);
-      });
-      expect(getSentNoticeBody(sendMessage)).toContain(
-        "Matrix verification completed with @alice:example.org.",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(getSentNoticeBody(sendMessage)).toContain(
+      "Matrix verification completed with @alice:example.org.",
+    );
   });
 
   it("forwards reaction room events into the shared room handler", async () => {
@@ -304,6 +299,27 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
     expect(rememberInvite).not.toHaveBeenCalled();
+  });
+
+  it("remembers invite provenance even when Matrix omits the direct invite hint", async () => {
+    const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
+    if (!roomInviteListener) {
+      throw new Error("room.invite listener was not registered");
+    }
+
+    roomInviteListener("!room:example.org", {
+      event_id: "$invite-group",
+      sender: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: {
+        membership: "invite",
+      },
+      state_key: "@bot:example.org",
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
   });
 
   it("does not synthesize invite provenance from room joins", async () => {
@@ -479,7 +495,11 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("posts SAS emoji/decimal details when verification summaries expose them", async () => {
-    const { sendMessage, roomEventListener, listVerifications } = createHarness({
+    const {
+      sendMessage,
+      roomEventListener,
+      listVerifications: _listVerifications,
+    } = createHarness({
       joinedMembersByRoom: {
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
       },
@@ -877,7 +897,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
       await vi.advanceTimersByTimeAsync(500);
       verifications[0] = {
-        ...verifications[0]!,
+        ...verifications[0],
         sas: {
           decimal: [1234, 5678, 9012],
           emoji: [

@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { formatUnknownText } from "../format.ts";
 import { icons as sharedIcons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
@@ -28,6 +29,27 @@ function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+function formatComparablePrimitive(value: unknown): string | null {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  return null;
+}
+
+function matchesComparablePrimitiveValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  const leftComparable = formatComparablePrimitive(left);
+  const rightComparable = formatComparablePrimitive(right);
+  return leftComparable !== null && leftComparable === rightComparable;
 }
 
 // SVG Icons as template literals
@@ -79,7 +101,9 @@ const icons = {
       stroke-linejoin="round"
     >
       <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <path
+        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+      ></path>
     </svg>
   `,
   edit: html`
@@ -166,20 +190,16 @@ function renderSensitiveToggleButton(params: {
       type="button"
       class="btn btn--icon ${state.isRevealed ? "active" : ""}"
       style="width:28px;height:28px;padding:0;"
-      title=${
-        state.canReveal
-          ? state.isRevealed
-            ? "Hide value"
-            : "Reveal value"
-          : "Disable stream mode to reveal value"
-      }
-      aria-label=${
-        state.canReveal
-          ? state.isRevealed
-            ? "Hide value"
-            : "Reveal value"
-          : "Disable stream mode to reveal value"
-      }
+      title=${state.canReveal
+        ? state.isRevealed
+          ? "Hide value"
+          : "Reveal value"
+        : "Disable stream mode to reveal value"}
+      aria-label=${state.canReveal
+        ? state.isRevealed
+          ? "Hide value"
+          : "Reveal value"
+        : "Disable stream mode to reveal value"}
       aria-pressed=${state.isRevealed}
       ?disabled=${params.disabled || !state.canReveal}
       @click=${() => params.onToggleSensitivePath?.(params.path)}
@@ -476,17 +496,13 @@ export function renderNode(params: {
               (lit) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${
-                    // oxlint-disable typescript/no-base-to-string
-                    lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
-                  }"
+                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(lit, resolvedValue)
+                    ? "active"
+                    : ""}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, lit)}
                 >
-                  ${
-                    // oxlint-disable typescript/no-base-to-string
-                    String(lit)
-                  }
+                  ${formatUnknownText(lit)}
                 </button>
               `,
             )}
@@ -555,13 +571,13 @@ export function renderNode(params: {
               (opt) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${
-                    opt === resolvedValue || String(opt) === String(resolvedValue) ? "active" : ""
-                  }"
+                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(opt, resolvedValue)
+                    ? "active"
+                    : ""}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, opt)}
                 >
-                  ${String(opt)}
+                  ${formatUnknownText(opt)}
                 </button>
               `,
             )}
@@ -667,8 +683,7 @@ function renderTextInput(params: {
         : "Structured value (SecretRef) - edit the config file directly"
       : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
-      // oxlint-disable typescript/no-base-to-string
-      (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
+      (schema.default !== undefined ? `Default: ${formatUnknownText(schema.default)}` : ""));
   const displayValue = effectiveRedacted
     ? ""
     : isStructuredValue
@@ -685,7 +700,7 @@ function renderTextInput(params: {
           type=${effectiveInputType}
           class="cfg-input${effectiveRedacted ? " cfg-input--redacted" : ""}"
           placeholder=${placeholder}
-          .value=${displayValue == null ? "" : String(displayValue)}
+          .value=${formatUnknownText(displayValue)}
           ?disabled=${disabled}
           ?readonly=${effectiveRedacted}
           @click=${() => {
@@ -721,19 +736,16 @@ function renderTextInput(params: {
             onPatch(path, raw.trim());
           }}
         />
-        ${
-          isStructuredSecretRef
-            ? nothing
-            : renderSensitiveToggleButton({
-                path,
-                state: sensitiveState,
-                disabled,
-                onToggleSensitivePath: params.onToggleSensitivePath,
-              })
-        }
-        ${
-          schema.default !== undefined
-            ? html`
+        ${isStructuredSecretRef
+          ? nothing
+          : renderSensitiveToggleButton({
+              path,
+              state: sensitiveState,
+              disabled,
+              onToggleSensitivePath: params.onToggleSensitivePath,
+            })}
+        ${schema.default !== undefined
+          ? html`
               <button
                 type="button"
                 class="cfg-input__reset"
@@ -744,8 +756,7 @@ function renderTextInput(params: {
                 ↺
               </button>
             `
-            : nothing
-        }
+          : nothing}
       </div>
     </div>
   `;
@@ -783,7 +794,7 @@ function renderNumberInput(params: {
         <input
           type="number"
           class="cfg-number__input"
-          .value=${displayValue == null ? "" : String(displayValue)}
+          .value=${formatUnknownText(displayValue)}
           ?disabled=${disabled}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
@@ -990,25 +1001,23 @@ function renderObject(params: {
         onPatch,
       }),
     )}
-    ${
-      allowExtra
-        ? renderMapField({
-            schema: additional,
-            value: obj,
-            path,
-            hints,
-            rawAvailable,
-            unsupported,
-            disabled,
-            reservedKeys: reserved,
-            searchCriteria: childSearchCriteria,
-            revealSensitive,
-            isSensitivePathRevealed,
-            onToggleSensitivePath,
-            onPatch,
-          })
-        : nothing
-    }
+    ${allowExtra
+      ? renderMapField({
+          schema: additional,
+          value: obj,
+          path,
+          hints,
+          rawAvailable,
+          unsupported,
+          disabled,
+          reservedKeys: reserved,
+          searchCriteria: childSearchCriteria,
+          revealSensitive,
+          isSensitivePathRevealed,
+          onToggleSensitivePath,
+          onPatch,
+        })
+      : nothing}
   `;
 
   // For top-level, don't wrap in collapsible
@@ -1107,12 +1116,9 @@ function renderArray(params: {
         </button>
       </div>
       ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
-      ${
-        arr.length === 0
-          ? html`
-              <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div>
-            `
-          : html`
+      ${arr.length === 0
+        ? html` <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div> `
+        : html`
             <div class="cfg-array__items">
               ${arr.map(
                 (item, idx) => html`
@@ -1154,8 +1160,7 @@ function renderArray(params: {
                 `,
               )}
             </div>
-          `
-      }
+          `}
     </div>
   `;
 }
@@ -1230,12 +1235,9 @@ function renderMapField(params: {
         </button>
       </div>
 
-      ${
-        visibleEntries.length === 0
-          ? html`
-              <div class="cfg-map__empty">No custom entries.</div>
-            `
-          : html`
+      ${visibleEntries.length === 0
+        ? html` <div class="cfg-map__empty">No custom entries.</div> `
+        : html`
             <div class="cfg-map__items">
               ${visibleEntries.map(([key, entryValue]) => {
                 const valuePath = [...path, key];
@@ -1287,17 +1289,16 @@ function renderMapField(params: {
                       </button>
                     </div>
                     <div class="cfg-map__item-value">
-                      ${
-                        anySchema
-                          ? html`
+                      ${anySchema
+                        ? html`
                             <div class="cfg-input-wrap">
                               <textarea
-                                class="cfg-textarea cfg-textarea--sm${
-                                  sensitiveState.isRedacted ? " cfg-textarea--redacted" : ""
-                                }"
-                                placeholder=${
-                                  sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : "JSON value"
-                                }
+                                class="cfg-textarea cfg-textarea--sm${sensitiveState.isRedacted
+                                  ? " cfg-textarea--redacted"
+                                  : ""}"
+                                placeholder=${sensitiveState.isRedacted
+                                  ? REDACTED_PLACEHOLDER
+                                  : "JSON value"}
                                 rows="2"
                                 .value=${sensitiveState.isRedacted ? "" : fallback}
                                 ?disabled=${disabled}
@@ -1332,29 +1333,27 @@ function renderMapField(params: {
                               })}
                             </div>
                           `
-                          : renderNode({
-                              schema,
-                              value: entryValue,
-                              path: valuePath,
-                              hints,
-                              rawAvailable,
-                              unsupported,
-                              disabled,
-                              searchCriteria,
-                              showLabel: false,
-                              revealSensitive,
-                              isSensitivePathRevealed,
-                              onToggleSensitivePath,
-                              onPatch,
-                            })
-                      }
+                        : renderNode({
+                            schema,
+                            value: entryValue,
+                            path: valuePath,
+                            hints,
+                            rawAvailable,
+                            unsupported,
+                            disabled,
+                            searchCriteria,
+                            showLabel: false,
+                            revealSensitive,
+                            isSensitivePathRevealed,
+                            onToggleSensitivePath,
+                            onPatch,
+                          })}
                     </div>
                   </div>
                 `;
               })}
             </div>
-          `
-      }
+          `}
     </div>
   `;
 }

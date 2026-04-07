@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
-import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 import type { SandboxConfig } from "./types.js";
+import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 let BROWSER_BRIDGES: Map<string, unknown>;
 let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
@@ -25,8 +25,8 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-vi.mock("./docker.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./docker.js")>();
+vi.mock("./docker.js", async () => {
+  const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
     dockerContainerState: dockerMocks.dockerContainerState,
@@ -42,7 +42,7 @@ vi.mock("./registry.js", () => ({
   updateBrowserRegistry: registryMocks.updateBrowserRegistry,
 }));
 
-vi.mock("../../browser/bridge-server.js", () => ({
+vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   startBrowserBridgeServer: bridgeMocks.startBrowserBridgeServer,
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
@@ -103,8 +103,11 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
 }
 
 describe("ensureSandboxBrowser create args", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadFreshBrowserModulesForTest();
+  });
+
+  beforeEach(() => {
     BROWSER_BRIDGES.clear();
     resetNoVncObserverTokensForTests();
     dockerMocks.dockerContainerState.mockClear();

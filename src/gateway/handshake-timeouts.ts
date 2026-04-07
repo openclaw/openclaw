@@ -9,10 +9,28 @@ export function clampConnectChallengeTimeoutMs(timeoutMs: number): number {
   );
 }
 
+export function getConnectChallengeTimeoutMsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 export function resolveConnectChallengeTimeoutMs(timeoutMs?: number | null): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? clampConnectChallengeTimeoutMs(timeoutMs)
-    : DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+    return clampConnectChallengeTimeoutMs(timeoutMs);
+  }
+  const envOverride = getConnectChallengeTimeoutMsFromEnv();
+  if (envOverride !== undefined) {
+    return clampConnectChallengeTimeoutMs(envOverride);
+  }
+  return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 }
 
 export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {

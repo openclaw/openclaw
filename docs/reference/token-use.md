@@ -59,7 +59,28 @@ Other surfaces:
 
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
-  provider quota windows (not per-response costs).
+  normalized provider quota windows (`X% left`, not per-response costs).
+  Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
+  OpenAI Codex, MiniMax, Xiaomi, and z.ai.
+
+Usage surfaces normalize common provider-native field aliases before display.
+For OpenAI-family Responses traffic, that includes both `input_tokens` /
+`output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
+field names do not change `/status`, `/usage`, or session summaries.
+Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
+`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
+used when the CLI omits an explicit `stats.input` field.
+For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
+normalized the same way, and totals fall back to normalized input + output when
+`total_tokens` is missing or `0`.
+When the current session snapshot is sparse, `/status` and `session_status` can
+also recover token/cache counters and the active runtime model label from the
+most recent transcript usage log. Existing nonzero live values still take
+precedence over transcript fallback values, and larger prompt-oriented
+transcript totals can win when stored totals are missing or smaller.
+Usage auth for provider quota windows comes from provider-specific hooks when
+available; otherwise OpenClaw falls back to matching OAuth/API-key credentials
+from auth profiles, env, or config.
 
 ## Cost estimation (when shown)
 
@@ -156,9 +177,8 @@ This maps to Anthropic's `context-1m-2025-08-07` beta header.
 
 This only applies when `context1m: true` is set on that model entry.
 
-Requirement: the credential must be eligible for long-context usage (API key
-billing, or subscription with Extra Usage enabled). If not, Anthropic responds
-with `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+Requirement: the credential must be eligible for long-context usage. If not,
+Anthropic responds with a provider-side rate limit error for that request.
 
 If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
 OpenClaw skips the `context-1m-*` beta header because Anthropic currently

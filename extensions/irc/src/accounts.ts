@@ -1,8 +1,10 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import {
+  parseOptionalDelimitedEntries,
+  tryReadSecretFileSync,
+} from "openclaw/plugin-sdk/channel-core";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 

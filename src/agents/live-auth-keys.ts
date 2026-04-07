@@ -1,3 +1,4 @@
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -98,7 +99,8 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
 }
 
 export function collectProviderApiKeys(provider: string): string[] {
-  const config = resolveProviderApiKeyConfig(provider);
+  const normalizedProvider = normalizeProviderId(provider);
+  const config = resolveProviderApiKeyConfig(normalizedProvider);
 
   const forcedSingle = config.liveSingle ? process.env[config.liveSingle]?.trim() : undefined;
   if (forcedSingle) {
@@ -110,6 +112,9 @@ export function collectProviderApiKeys(provider: string): string[] {
   const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar) : [];
 
   const fallback = config.fallbackVars
+    .map((envVar) => process.env[envVar]?.trim())
+    .filter(Boolean) as string[];
+  const manifestFallback = getProviderEnvVars(normalizedProvider)
     .map((envVar) => process.env[envVar]?.trim())
     .filter(Boolean) as string[];
 
@@ -133,6 +138,9 @@ export function collectProviderApiKeys(provider: string): string[] {
     add(value);
   }
   for (const value of fallback) {
+    add(value);
+  }
+  for (const value of manifestFallback) {
     add(value);
   }
 

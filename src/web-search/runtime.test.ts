@@ -8,20 +8,15 @@ type TestPluginWebSearchConfig = {
   };
 };
 
-const { resolveBundledPluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(
-      () => [],
-    ),
+const { resolvePluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } = vi.hoisted(
+  () => ({
+    resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
     resolveRuntimeWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-  }));
-
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
-}));
+  }),
+);
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
 }));
 
@@ -71,9 +66,9 @@ describe("web search runtime", () => {
   });
 
   beforeEach(() => {
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
-    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([]);
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([]);
   });
 
@@ -127,7 +122,7 @@ describe("web search runtime", () => {
       }),
     });
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
     const config: OpenClawConfig = {
       plugins: {
@@ -174,7 +169,7 @@ describe("web search runtime", () => {
       }),
     });
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
     const config: OpenClawConfig = {
       plugins: {
@@ -276,17 +271,9 @@ describe("web search runtime", () => {
           selectedProvider: "beta",
           diagnostics: [],
         },
-        xSearch: {
-          active: false,
-          apiKeySource: "missing",
-          diagnostics: [],
-        },
         fetch: {
-          firecrawl: {
-            active: false,
-            apiKeySource: "missing",
-            diagnostics: [],
-          },
+          providerSource: "none",
+          diagnostics: [],
         },
         diagnostics: [],
       },

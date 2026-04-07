@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import type { MatrixConfig } from "../../types.js";
 import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
@@ -134,8 +134,7 @@ function hasPendingSelfVerification(
   }>,
 ): boolean {
   return verifications.some(
-    (entry) =>
-      entry.isSelfVerification === true && entry.completed !== true && entry.pending !== false,
+    (entry) => entry.isSelfVerification && !entry.completed && entry.pending,
   );
 }
 

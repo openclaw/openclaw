@@ -30,6 +30,7 @@ afterEach(() => {
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
+    expect(buildCommandText("tasks")).toBe("/tasks");
     expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
     expect(buildCommandText("models")).toBe("/models");
   });
@@ -39,6 +40,7 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "tasks")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
@@ -105,25 +107,24 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
   });
 
-  it("applies provider-specific native names", () => {
+  it("keeps default native names when the channel plugin does not override them", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "discord" },
     );
-    expect(native.find((spec) => spec.name === "voice")).toBeTruthy();
-    expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
-    expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
+    expect(native.find((spec) => spec.name === "tts")).toBeTruthy();
+    expect(findCommandByNativeName("tts", "discord")?.key).toBe("tts");
+    expect(findCommandByNativeName("voice", "discord")).toBeUndefined();
   });
 
-  it("renames status to agentstatus for slack", () => {
+  it("keeps status unchanged for slack without a channel override", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "slack" },
     );
-    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
-    expect(native.find((spec) => spec.name === "status")).toBeFalsy();
-    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
-    expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+    expect(native.find((spec) => spec.name === "status")).toBeTruthy();
+    expect(findCommandByNativeName("status", "slack")?.key).toBe("status");
+    expect(findCommandByNativeName("agentstatus", "slack")).toBeUndefined();
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
@@ -352,12 +353,10 @@ describe("commands registry args", () => {
       args: [{ name: "model", description: "model", type: "string", captureRemaining: true }],
     };
 
-    expect(serializeCommandArgs(command, { raw: "gpt-5.2-codex" })).toBe("gpt-5.2-codex");
-    expect(serializeCommandArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "gpt-5.2-codex",
-    );
-    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "/model gpt-5.2-codex",
+    expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(serializeCommandArgs(command, { values: { model: "gpt-5.4" } })).toBe("gpt-5.4");
+    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.4" } })).toBe(
+      "/model gpt-5.4",
     );
   });
 

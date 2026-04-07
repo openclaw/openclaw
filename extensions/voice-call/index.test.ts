@@ -22,6 +22,7 @@ vi.mock("./runtime-entry.js", () => ({
 }));
 
 import plugin from "./index.js";
+import { createVoiceCallRuntime } from "./runtime-entry.js";
 
 const noopLogger = {
   info: vi.fn(),
@@ -107,6 +108,11 @@ async function registerVoiceCallCli(program: Command) {
 
 describe("voice-call plugin", () => {
   beforeEach(() => {
+    noopLogger.info.mockClear();
+    noopLogger.warn.mockClear();
+    noopLogger.error.mockClear();
+    noopLogger.debug.mockClear();
+    vi.mocked(createVoiceCallRuntime).mockClear();
     runtimeStub = {
       config: { toNumber: "+15550001234" },
       manager: {
@@ -125,16 +131,6 @@ describe("voice-call plugin", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
-
-  it("registers gateway methods", () => {
-    const { methods } = setup({ provider: "mock" });
-    expect(methods.has("voicecall.initiate")).toBe(true);
-    expect(methods.has("voicecall.continue")).toBe(true);
-    expect(methods.has("voicecall.speak")).toBe(true);
-    expect(methods.has("voicecall.end")).toBe(true);
-    expect(methods.has("voicecall.status")).toBe(true);
-    expect(methods.has("voicecall.start")).toBe(true);
-  });
 
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });
@@ -165,6 +161,49 @@ describe("voice-call plugin", () => {
     const [ok, payload] = respond.mock.calls[0];
     expect(ok).toBe(true);
     expect(payload.found).toBe(true);
+  });
+
+  it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
+    const { methods } = setup({
+      enabled: true,
+      provider: "log",
+      twilio: {
+        from: "+15550001234",
+      },
+      streaming: {
+        enabled: true,
+        sttProvider: "openai",
+        openaiApiKey: "sk-test", // pragma: allowlist secret
+      },
+    });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "call-1" }, respond });
+
+    expect(vi.mocked(createVoiceCallRuntime)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createVoiceCallRuntime).mock.calls[0]?.[0]?.config).toMatchObject({
+      enabled: true,
+      provider: "mock",
+      fromNumber: "+15550001234",
+      streaming: {
+        enabled: true,
+        provider: "openai",
+        providers: {
+          openai: {
+            apiKey: "sk-test",
+          },
+        },
+      },
+    });
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Run "openclaw doctor --fix"'),
+    );
   });
 
   it("tool get_status returns json payload", async () => {

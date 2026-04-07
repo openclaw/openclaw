@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
@@ -9,6 +10,39 @@ export type ResolvedCliBackend = {
   bundleMcp: boolean;
   pluginId?: string;
 };
+
+export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
+  return normalizeConfig ? normalizeConfig(config) : config;
+}
+
+type FallbackCliBackendPolicy = {
+  bundleMcp: boolean;
+  baseConfig?: CliBackendConfig;
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+};
+
+const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
+
+function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  const entry = resolvePluginSetupCliBackend({
+    backend: provider,
+  });
+  if (!entry) {
+    return undefined;
+  }
+  return {
+    // Setup-registered backends keep narrow CLI paths generic even when the
+    // runtime plugin registry has not booted yet.
+    bundleMcp: entry.backend.bundleMcp === true,
+    baseConfig: entry.backend.config,
+    normalizeConfig: entry.backend.normalizeConfig,
+  };
+}
+
+function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  return FALLBACK_CLI_BACKEND_POLICIES[provider] ?? resolveSetupCliBackendPolicy(provider);
+}
 
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
@@ -89,6 +123,7 @@ export function resolveCliBackendConfig(
   cfg?: OpenClawConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
@@ -108,11 +143,35 @@ export function resolveCliBackendConfig(
   }
 
   if (!override) {
-    return null;
+    if (!fallbackPolicy?.baseConfig) {
+      return null;
+    }
+    const baseConfig = fallbackPolicy.normalizeConfig
+      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig)
+      : fallbackPolicy.baseConfig;
+    const command = baseConfig.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return {
+      id: normalized,
+      config: { ...baseConfig, command },
+      bundleMcp: fallbackPolicy.bundleMcp,
+    };
   }
-  const command = override.command?.trim();
+  const mergedFallback = fallbackPolicy?.baseConfig
+    ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
+    : override;
+  const config = fallbackPolicy?.normalizeConfig
+    ? fallbackPolicy.normalizeConfig(mergedFallback)
+    : mergedFallback;
+  const command = config.command?.trim();
   if (!command) {
     return null;
   }
-  return { id: normalized, config: { ...override, command }, bundleMcp: false };
+  return {
+    id: normalized,
+    config: { ...config, command },
+    bundleMcp: fallbackPolicy?.bundleMcp === true,
+  };
 }

@@ -100,9 +100,10 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
+vi.mock("../../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../infra/outbound/session-binding-service.js")
+  >("../../infra/outbound/session-binding-service.js");
   const patched = { ...actual } as typeof actual & {
     getSessionBindingService: () => ReturnType<typeof createAcpCommandSessionBindingService>;
   };
@@ -113,9 +114,11 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
+const { __testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
+  await import("./acp-reset-target.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
+const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
 
 function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   const trimmed = raw?.trim().replace(/^telegram:/i, "");
@@ -159,6 +162,19 @@ function setMinimalAcpCommandRegistryForTests(): void {
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "current",
+            buildBoundReplyChannelData: ({
+              operation,
+              conversation,
+            }: {
+              operation: "acp-spawn";
+              conversation: { conversationId: string };
+            }) =>
+              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
+                ? { telegram: { pin: true } }
+                : null,
+          },
           bindings: {
             resolveCommandConversation: ({
               threadId,
@@ -196,6 +212,9 @@ function setMinimalAcpCommandRegistryForTests(): void {
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "child",
+          },
           bindings: {
             resolveCommandConversation: ({
               threadId,
@@ -264,6 +283,9 @@ function setMinimalAcpCommandRegistryForTests(): void {
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "child",
+          },
           bindings: {
             resolveCommandConversation: ({
               threadId,
@@ -1389,6 +1411,58 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
+  it("resolves ACP reset targets through the configured default account when AccountId is omitted", () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        ...baseCfg.channels,
+        discord: {
+          ...baseCfg.channels.discord,
+          defaultAccount: "work",
+        },
+      },
+    } satisfies OpenClawConfig;
+    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+      (ref: {
+        channel?: string;
+        accountId?: string;
+        conversationId?: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" &&
+        ref.accountId === "work" &&
+        ref.conversationId === defaultThreadId &&
+        ref.parentConversationId === "parent-1"
+          ? createSessionBinding({
+              targetSessionKey: defaultAcpSessionKey,
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: defaultThreadId,
+                parentConversationId: "parent-1",
+              },
+            })
+          : null,
+    );
+
+    const result = resolveEffectiveResetTargetSessionKey({
+      cfg,
+      channel: "discord",
+      conversationId: defaultThreadId,
+      parentConversationId: "parent-1",
+    });
+
+    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "work",
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      }),
+    );
+    expect(result).toBe(defaultAcpSessionKey);
+  });
+
   it("blocks /acp steer when ACP dispatch is disabled by policy", async () => {
     const cfg = {
       ...baseCfg,
@@ -1464,7 +1538,8 @@ describe("/acp command", () => {
     });
     createTaskRecord({
       runtime: "acp",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       childSessionKey: defaultAcpSessionKey,
       runId: "acp-run-1",
       task: "Inspect ACP backlog",
@@ -1481,6 +1556,92 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes leaked task and runtime details in ACP status output", async () => {
+    mockBoundThreadSession({
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-1",
+        agentSessionId: "codex-sid-1",
+        lastUpdatedAt: Date.now(),
+      },
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      ...createAcpSessionEntry({
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-1",
+          agentSessionId: "codex-sid-1",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+      acp: {
+        ...createAcpSessionEntry().acp,
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-1",
+          agentSessionId: "codex-sid-1",
+          lastUpdatedAt: Date.now(),
+        },
+        lastError: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    hoisted.getStatusMock.mockResolvedValue({
+      summary: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      details: {
+        payload: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+    });
+    failTaskRunByRunId({
+      runId: "acp-run-1",
+      endedAt: Date.now(),
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      terminalSummary: "Needs approval to continue.",
+    });
+
+    const result = await runThreadAcpCommand("/acp status", baseCfg);
+
+    expect(result?.reply?.text).toContain("ACP status:");
+    expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
+    expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(result?.reply?.text).not.toContain("Internal task completion event");
   });
 
   it("updates ACP runtime mode via /acp set-mode", async () => {

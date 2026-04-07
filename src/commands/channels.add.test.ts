@@ -24,24 +24,30 @@ const manifestRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
 }));
 
-vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/catalog.js")>();
+vi.mock("../channels/plugins/catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
+    "../channels/plugins/catalog.js",
+  );
   return {
     ...actual,
     listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+vi.mock("../plugins/manifest-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
+    "../plugins/manifest-registry.js",
+  );
   return {
     ...actual,
     loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
   };
 });
 
-vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./channel-setup/plugin-install.js")>();
+vi.mock("./channel-setup/plugin-install.js", async () => {
+  const actual = await vi.importActual<typeof import("./channel-setup/plugin-install.js")>(
+    "./channel-setup/plugin-install.js",
+  );
   const { createMockChannelSetupPluginInstallModule } =
     await import("./channels.plugin-install.test-helpers.js");
   return createMockChannelSetupPluginInstallModule(actual);
@@ -196,7 +202,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                signalNumber: input.signalNumber,
+                account: input.signalNumber,
               },
             },
           },
@@ -222,6 +228,11 @@ describe("channelsAddCommand", () => {
   beforeEach(async () => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -457,7 +468,7 @@ describe("channelsAddCommand", () => {
             enabled: true,
             accounts: {
               ops: {
-                signalNumber: "+15550001",
+                account: "+15550001",
               },
             },
           },

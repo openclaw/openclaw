@@ -6,15 +6,18 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   normalizeProviderResolvedModelWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
+import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
@@ -50,10 +53,6 @@ function createInMemoryAuthStorageBackend(
       return result;
     },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeRegistryModel<T>(value: T, agentDir: string): T {
@@ -102,26 +101,40 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
   return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 
-class OpenClawModelRegistry extends PiModelRegistryClass {
-  constructor(
-    authStorage: PiAuthStorage,
-    modelsJsonPath: string,
-    private readonly agentDir: string,
-  ) {
-    super(authStorage, modelsJsonPath);
-  }
+type PiModelRegistryClassLike = {
+  create?: (authStorage: PiAuthStorage, modelsJsonPath: string) => PiModelRegistry;
+  new (authStorage: PiAuthStorage, modelsJsonPath: string): PiModelRegistry;
+};
 
-  override getAll(): Array<Model<Api>> {
-    return super.getAll().map((entry) => normalizeRegistryModel(entry, this.agentDir));
+function instantiatePiModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+): PiModelRegistry {
+  const Registry = PiModelRegistryClass as unknown as PiModelRegistryClassLike;
+  if (typeof Registry.create === "function") {
+    return Registry.create(authStorage, modelsJsonPath);
   }
+  return new Registry(authStorage, modelsJsonPath);
+}
 
-  override getAvailable(): Array<Model<Api>> {
-    return super.getAvailable().map((entry) => normalizeRegistryModel(entry, this.agentDir));
-  }
+function createOpenClawModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+  agentDir: string,
+): PiModelRegistry {
+  const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
+  const getAll = registry.getAll.bind(registry);
+  const getAvailable = registry.getAvailable.bind(registry);
+  const find = registry.find.bind(registry);
 
-  override find(provider: string, modelId: string): Model<Api> | undefined {
-    return normalizeRegistryModel(super.find(provider, modelId), this.agentDir);
-  }
+  registry.getAll = () =>
+    getAll().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
+  registry.getAvailable = () =>
+    getAvailable().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
+  registry.find = (provider: string, modelId: string) =>
+    normalizeRegistryModel(find(provider, modelId), agentDir);
+
+  return registry;
 }
 
 function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
@@ -218,7 +231,7 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(PROVIDER_ENV_API_KEY_CANDIDATES)) {
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
     if (credentials[provider]) {
       continue;
     }
@@ -229,6 +242,36 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
     credentials[provider] = {
       type: "api_key",
       key: resolved.apiKey,
+    };
+  }
+  const syntheticProviders = new Set<string>();
+  for (const plugin of loadPluginManifestRegistry().plugins) {
+    for (const provider of plugin.providers) {
+      syntheticProviders.add(provider);
+    }
+    for (const backend of plugin.cliBackends) {
+      syntheticProviders.add(backend);
+    }
+  }
+  for (const provider of syntheticProviders) {
+    if (credentials[provider]) {
+      continue;
+    }
+    const resolved = resolveProviderSyntheticAuthWithPlugin({
+      provider,
+      context: {
+        config: undefined,
+        provider,
+        providerConfig: undefined,
+      },
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    if (!apiKey) {
+      continue;
+    }
+    credentials[provider] = {
+      type: "api_key",
+      key: apiKey,
     };
   }
   return credentials;
@@ -243,5 +286,5 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new OpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
+  return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
 }

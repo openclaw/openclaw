@@ -64,7 +64,6 @@ describe("account-scoped LINE groups", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveLineGroupsConfig(cfg, "work")).toEqual({
@@ -97,7 +96,6 @@ describe("line group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "r123" })).toBe(false);
@@ -127,7 +125,6 @@ describe("line group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "g123", accountId: "work" })).toBe(false);

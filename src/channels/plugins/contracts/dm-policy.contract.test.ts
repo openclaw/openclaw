@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  isSignalSenderAllowed,
+  type SignalSender,
+} from "../../../../test/helpers/channels/dm-policy-contract.js";
 import { isAllowedBlueBubblesSender } from "../../../plugin-sdk/bluebubbles-policy.js";
 import { isMattermostSenderAllowed } from "../../../plugin-sdk/mattermost-policy.js";
-import { isSignalSenderAllowed, type SignalSender } from "../../../plugin-sdk/signal-surface.js";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
