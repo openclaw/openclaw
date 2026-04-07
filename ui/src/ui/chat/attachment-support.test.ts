@@ -28,6 +28,9 @@ describe("attachment support", () => {
   it("rejects unsupported files when mime type and extension are both missing or non-image", () => {
     expect(resolveSupportedChatAttachmentMimeType({ name: "notes.txt", type: "" })).toBeNull();
     expect(resolveSupportedChatAttachmentMimeType({ name: "", type: "" })).toBeNull();
+    expect(
+      resolveSupportedChatAttachmentMimeType({ name: "report.png", type: "application/pdf" }),
+    ).toBeNull();
     expect(isSupportedChatAttachmentMimeType("application/pdf")).toBe(false);
   });
 });

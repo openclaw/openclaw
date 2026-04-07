@@ -16,8 +16,11 @@ export function resolveSupportedChatAttachmentMimeType(file: {
   name?: string | null;
   type?: string | null;
 }): string | null {
-  if (isSupportedChatAttachmentMimeType(file.type)) {
-    return file.type;
+  if (typeof file.type === "string") {
+    const mimeType = file.type.trim();
+    if (mimeType.length > 0) {
+      return isSupportedChatAttachmentMimeType(mimeType) ? mimeType : null;
+    }
   }
   const fileName = typeof file.name === "string" ? file.name.trim().toLowerCase() : "";
   if (!fileName) {
