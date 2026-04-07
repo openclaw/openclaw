@@ -87,6 +87,8 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): str
     targets.add(`${globRoot}/SKILL.md`);
     // Standard layout: <skillsRoot>/<skillName>/SKILL.md
     targets.add(`${globRoot}/*/SKILL.md`);
+    // Grouped layout: <skillsRoot>/<group>/<skillName>/SKILL.md
+    targets.add(`${globRoot}/*/*/SKILL.md`);
   }
   return Array.from(targets).toSorted();
 }
