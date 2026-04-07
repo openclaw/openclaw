@@ -1009,6 +1009,7 @@
                   "install/ansible",
                   "install/bun",
                   "install/clawdock",
+                  "install/devcontainer",
                   "install/docker",
                   "install/nix",
                   "install/podman"

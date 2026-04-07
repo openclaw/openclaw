@@ -12,7 +12,7 @@ describe(".devcontainer", () => {
       const raw = await readFile(join(devcontainerDir, "devcontainer.json"), "utf8");
       const config = JSON.parse(raw);
       expect(config).toBeDefined();
-      expect(config.name).toBe("OpenClaw");
+      expect(config.name).toBe("OpenClawDev");
     });
 
     it("uses a local Dockerfile build", async () => {
@@ -30,11 +30,11 @@ describe(".devcontainer", () => {
       expect(config.postCreateCommand).toContain("pnpm install");
     });
 
-    it("forwards the gateway port", async () => {
+    it("does not forward ports by default", async () => {
       const config = JSON.parse(
         await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
       );
-      expect(config.forwardPorts).toContain(18789);
+      expect(config.forwardPorts).toBeUndefined();
     });
 
     it("mounts host SSH directory for git auth", async () => {
