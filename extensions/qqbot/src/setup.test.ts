@@ -91,8 +91,8 @@ describe("qqbot setup", () => {
     const account = qqbotSetupPlugin.config.resolveAccount?.(cfg, DEFAULT_ACCOUNT_ID);
 
     expect(account?.clientSecret).toBe("");
-    expect(qqbotSetupPlugin.config.isConfigured?.(account!, cfg)).toBe(true);
-    expect(qqbotSetupPlugin.config.describeAccount?.(account!, cfg)?.configured).toBe(true);
+    expect(qqbotSetupPlugin.config.isConfigured?.(account, cfg)).toBe(true);
+    expect(qqbotSetupPlugin.config.describeAccount?.(account, cfg)?.configured).toBe(true);
   });
 
   it("keeps the sibling credential when switching only AppSecret to env mode", async () => {
@@ -105,7 +105,7 @@ describe("qqbot setup", () => {
       },
     } as OpenClawConfig;
 
-    const next = await qqbotSetupWizard.credentials[1]!.applyUseEnv!({
+    const next = await qqbotSetupWizard.credentials[1].applyUseEnv!({
       cfg,
       accountId: DEFAULT_ACCOUNT_ID,
     });

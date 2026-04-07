@@ -1,6 +1,7 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
   connectOk,
@@ -122,11 +123,16 @@ async function sendSharedTokenRotationPatch(ws: WebSocket): Promise<{ ok: boolea
 async function applyCurrentConfig(ws: WebSocket) {
   const current = await loadCurrentConfig(ws);
   return await rpcReq(ws, "config.apply", {
+    baseHash: current.hash,
     raw: JSON.stringify(current.config, null, 2),
   });
 }
 
 describe("gateway shared auth rotation", () => {
+  beforeEach(() => {
+    testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
+  });
+
   it("disconnects existing shared-token websocket sessions after config.patch rotates auth", async () => {
     const ws = await openAuthenticatedWs(OLD_TOKEN);
     try {
@@ -163,13 +169,34 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
   let secretRefPort = 0;
 
   beforeAll(async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+    }
     secretRefPort = await getFreePort();
     process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
-    testState.gatewayAuth = {
-      mode: "token",
-      token: { source: "env", provider: "default", id: SECRET_REF_TOKEN_ID },
-    };
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: SECRET_REF_TOKEN_ID },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
     secretRefServer = await startGatewayServer(secretRefPort, { controlUiEnabled: true });
+  });
+
+  beforeEach(() => {
+    process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
   });
 
   afterAll(async () => {

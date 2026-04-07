@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { findNormalizedProviderValue } from "../model-selection.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
@@ -16,7 +17,7 @@ export function decodeDataUrl(dataUrl: string): {
   if (!match) {
     throw new Error("Invalid data URL (expected base64 data: URL).");
   }
-  const mimeType = (match[1] ?? "").trim().toLowerCase();
+  const mimeType = normalizeLowercaseStringOrEmpty(match[1]);
   if (!mimeType.startsWith("image/")) {
     throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
   }

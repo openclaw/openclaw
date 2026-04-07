@@ -36,4 +36,4 @@ export {
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-export { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+export { jidToE164, normalizeE164 } from "../../text-runtime.js";

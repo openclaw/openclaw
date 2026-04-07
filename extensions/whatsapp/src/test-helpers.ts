@@ -392,6 +392,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
+  implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
     const digits = String(value).replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
@@ -409,17 +410,54 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
     const next = [...current, params.entry].slice(-params.limit);
     params.historyMap.set(params.historyKey, next);
   },
-  resolveMentionGating: (params: {
-    requireMention: boolean;
-    wasMentioned: boolean;
-    implicitMention?: boolean;
-    shouldBypassMention?: boolean;
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      implicitMentionKinds?: string[];
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    implicitMentionKinds?: string[];
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
   }) => {
-    const effectiveWasMentioned =
-      params.wasMentioned || Boolean(params.implicitMention) || Boolean(params.shouldBypassMention);
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            implicitMentionKinds: params.implicitMentionKinds,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    const effectiveWasMentioned = facts.wasMentioned || Boolean(facts.implicitMentionKinds?.length);
     return {
       effectiveWasMentioned,
-      shouldSkip: params.requireMention && !effectiveWasMentioned,
+      shouldSkip:
+        policy.isGroup && policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
+      shouldBypassMention: false,
+      implicitMention: Boolean(facts.implicitMentionKinds?.length),
+      matchedImplicitMentionKinds: facts.implicitMentionKinds ?? [],
     };
   },
 }));
@@ -467,6 +505,22 @@ vi.mock("qrcode-terminal", () => ({
 
 export const baileys = await import("./session.runtime.js");
 
+function resetMockExport<T extends (...args: never[]) => unknown>(params: {
+  current: T;
+  implementation: T;
+}) {
+  if (!("mockReset" in params.current) || typeof params.current.mockReset !== "function") {
+    return;
+  }
+  params.current.mockReset();
+  if (
+    "mockImplementation" in params.current &&
+    typeof params.current.mockImplementation === "function"
+  ) {
+    params.current.mockImplementation(params.implementation);
+  }
+}
+
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
@@ -475,24 +529,30 @@ export function resetBaileysMocks() {
   const makeWASocket = vi.mocked(baileys.makeWASocket);
   const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
     (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
-  makeWASocket.mockReset();
-  makeWASocket.mockImplementation(makeWASocketImpl);
+  resetMockExport({
+    current: makeWASocket,
+    implementation: makeWASocketImpl,
+  });
 
   const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
   const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
     (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
       ...args,
     );
-  useMultiFileAuthState.mockReset();
-  useMultiFileAuthState.mockImplementation(useMultiFileAuthStateImpl);
+  resetMockExport({
+    current: useMultiFileAuthState,
+    implementation: useMultiFileAuthStateImpl,
+  });
 
   const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
   const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
     (
       recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
     )(...args);
-  fetchLatestBaileysVersion.mockReset();
-  fetchLatestBaileysVersion.mockImplementation(fetchLatestBaileysVersionImpl);
+  resetMockExport({
+    current: fetchLatestBaileysVersion,
+    implementation: fetchLatestBaileysVersionImpl,
+  });
 
   const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
   const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
@@ -500,8 +560,10 @@ export function resetBaileysMocks() {
       recreated.mod
         .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
     )(...args);
-  makeCacheableSignalKeyStore.mockReset();
-  makeCacheableSignalKeyStore.mockImplementation(makeCacheableSignalKeyStoreImpl);
+  resetMockExport({
+    current: makeCacheableSignalKeyStore,
+    implementation: makeCacheableSignalKeyStoreImpl,
+  });
 }
 
 export function getLastSocket(): MockBaileysSocket {

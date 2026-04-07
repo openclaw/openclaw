@@ -1,5 +1,6 @@
 import { defineProject } from "vitest/config";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
@@ -9,18 +10,24 @@ export function loadBoundaryIncludePatternsFromEnv(
   return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
 }
 
-export function createBoundaryVitestConfig(env: Record<string, string | undefined> = process.env) {
+export function createBoundaryVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+  argv: string[] = process.argv,
+) {
+  const cliIncludePatterns = narrowIncludePatternsForCli(boundaryTestFiles, argv);
+  const isolate = resolveVitestIsolation(env);
   return defineProject({
     ...sharedVitestConfig,
     test: {
       ...sharedVitestConfig.test,
       name: "boundary",
-      isolate: false,
-      runner: "./test/non-isolated-runner.ts",
-      include: loadBoundaryIncludePatternsFromEnv(env) ?? boundaryTestFiles,
-      // Keep this lane free of OpenClaw runtime bootstrap so pure infra/boundary
-      // suites can avoid plugin/channel setup import cost.
-      setupFiles: [],
+      isolate,
+      ...(isolate ? { runner: undefined } : { runner: "./test/non-isolated-runner.ts" }),
+      include: loadBoundaryIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? boundaryTestFiles,
+      ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      // Boundary workers still need the shared isolated HOME/bootstrap. Only
+      // per-file module isolation is disabled here.
+      setupFiles: sharedVitestConfig.test.setupFiles,
     },
   });
 }

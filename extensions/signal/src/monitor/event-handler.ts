@@ -6,15 +6,12 @@ import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   matchesMentionPatterns,
+  resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  logInboundDrop,
-  resolveMentionGatingWithBypass,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-targets";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import {
@@ -57,6 +54,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
@@ -672,19 +670,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
       });
     const canDetectMention = mentionRegexes.length > 0;
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup,
-      requireMention: Boolean(requireMention),
-      canDetectMention,
-      wasMentioned,
-      implicitMention: false,
-      hasAnyMention: false,
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention,
+        wasMentioned,
+        hasAnyMention: false,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup,
+        requireMention: Boolean(requireMention),
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommandInMessage,
+        commandAuthorized,
+      },
     });
-    const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+    const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",

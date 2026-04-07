@@ -1,7 +1,11 @@
-import { normalizeConversationText } from "../acp/conversation-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
 import type { ChannelPlugin } from "./plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "./registry.js";
@@ -41,13 +45,8 @@ const CANONICAL_TARGET_PREFIXES = [
   "spaces/",
 ] as const;
 
-function normalizeText(value: unknown): string | undefined {
-  const normalized = normalizeConversationText(value);
-  return normalized || undefined;
-}
-
 function getLoadedChannelPlugin(rawChannel: string): ChannelPlugin | undefined {
-  const normalized = normalizeAnyChannelId(rawChannel) ?? normalizeText(rawChannel);
+  const normalized = normalizeAnyChannelId(rawChannel) ?? normalizeOptionalString(rawChannel);
   if (!normalized) {
     return undefined;
   }
@@ -59,16 +58,28 @@ function shouldDefaultParentConversationToSelf(plugin?: ChannelPlugin): boolean 
   return plugin?.bindings?.selfParentConversationByDefault === true;
 }
 
+function resolveBindingAccountId(params: {
+  rawAccountId?: string | null;
+  plugin?: ChannelPlugin;
+  cfg: OpenClawConfig;
+}): string {
+  return (
+    normalizeOptionalString(params.rawAccountId) ||
+    normalizeOptionalString(params.plugin?.config.defaultAccountId?.(params.cfg)) ||
+    "default"
+  );
+}
+
 function resolveChannelTargetId(params: {
   channel: string;
   target?: string | null;
 }): string | undefined {
-  const target = normalizeText(params.target);
+  const target = normalizeOptionalString(params.target);
   if (!target) {
     return undefined;
   }
 
-  const lower = target.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(target);
   const channelPrefix = `${params.channel}:`;
   if (lower.startsWith(channelPrefix)) {
     return resolveChannelTargetId({
@@ -81,7 +92,7 @@ function resolveChannelTargetId(params: {
   }
 
   const parsed = parseExplicitTargetForChannel(params.channel, target);
-  const parsedTarget = normalizeText(parsed?.to);
+  const parsedTarget = normalizeOptionalString(parsed?.to);
   if (parsedTarget) {
     return (
       resolveConversationIdFromTargets({
@@ -104,7 +115,8 @@ function buildThreadingContext(params: {
   chatType?: string;
   nativeChannelId?: string;
 }) {
-  const to = normalizeText(params.originatingTo) ?? normalizeText(params.fallbackTo);
+  const to =
+    normalizeOptionalString(params.originatingTo) ?? normalizeOptionalString(params.fallbackTo);
   return {
     ...(to ? { To: to } : {}),
     ...(params.from ? { From: params.from } : {}),
@@ -120,21 +132,27 @@ export function resolveConversationBindingContext(
   const channel =
     normalizeAnyChannelId(params.channel) ??
     normalizeChannelId(params.channel) ??
-    normalizeText(params.channel)?.toLowerCase();
+    normalizeOptionalLowercaseString(params.channel);
   if (!channel) {
     return null;
   }
-  const accountId = normalizeText(params.accountId) || "default";
-  const threadId = normalizeText(params.threadId != null ? String(params.threadId) : undefined);
   const loadedPlugin = getLoadedChannelPlugin(channel);
+  const accountId = resolveBindingAccountId({
+    rawAccountId: params.accountId,
+    plugin: loadedPlugin,
+    cfg: params.cfg,
+  });
+  const threadId = normalizeOptionalString(
+    params.threadId != null ? String(params.threadId) : undefined,
+  );
 
   const resolvedByProvider = loadedPlugin?.bindings?.resolveCommandConversation?.({
     accountId,
     threadId,
-    threadParentId: normalizeText(params.threadParentId),
-    senderId: normalizeText(params.senderId),
-    sessionKey: normalizeText(params.sessionKey),
-    parentSessionKey: normalizeText(params.parentSessionKey),
+    threadParentId: normalizeOptionalString(params.threadParentId),
+    senderId: normalizeOptionalString(params.senderId),
+    sessionKey: normalizeOptionalString(params.sessionKey),
+    parentSessionKey: normalizeOptionalString(params.parentSessionKey),
     originatingTo: params.originatingTo ?? undefined,
     commandTo: params.commandTo ?? undefined,
     fallbackTo: params.fallbackTo ?? undefined,
@@ -164,9 +182,9 @@ export function resolveConversationBindingContext(
       fallbackTo: params.fallbackTo ?? undefined,
       originatingTo: params.originatingTo ?? undefined,
       threadId,
-      from: normalizeText(params.from),
-      chatType: normalizeText(params.chatType),
-      nativeChannelId: normalizeText(params.nativeChannelId),
+      from: normalizeOptionalString(params.from),
+      chatType: normalizeOptionalString(params.chatType),
+      nativeChannelId: normalizeOptionalString(params.nativeChannelId),
     }),
   });
   if (focusedBinding?.conversationId) {

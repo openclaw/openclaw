@@ -9,13 +9,22 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   createDiscordActionGate,
   listEnabledDiscordAccounts,
   resolveDiscordAccount,
 } from "./accounts.js";
-import { handleDiscordMessageAction } from "./actions/handle-action.js";
 import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
+
+let discordChannelActionsRuntimePromise:
+  | Promise<typeof import("./channel-actions.runtime.js")>
+  | undefined;
+
+async function loadDiscordChannelActionsRuntime() {
+  discordChannelActionsRuntimePromise ??= import("./channel-actions.runtime.js");
+  return await discordChannelActionsRuntimePromise;
+}
 
 function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
   const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
@@ -161,8 +170,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "sendMessage") {
-      const to = typeof args.to === "string" ? args.to : undefined;
-      return to ? { to } : null;
+      return extractToolSend(args, "sendMessage");
     }
     if (action === "threadReply") {
       const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
@@ -179,7 +187,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     toolContext,
     mediaLocalRoots,
   }) => {
-    return await handleDiscordMessageAction({
+    return await (
+      await loadDiscordChannelActionsRuntime()
+    ).handleDiscordMessageAction({
       action,
       params,
       cfg,

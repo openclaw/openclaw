@@ -7,6 +7,7 @@ import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -53,21 +54,20 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionKey = resolveMainSessionKeyFromConfig();
-    const deviceId = typeof params.deviceId === "string" ? params.deviceId : undefined;
-    const instanceId = typeof params.instanceId === "string" ? params.instanceId : undefined;
-    const host = typeof params.host === "string" ? params.host : undefined;
-    const ip = typeof params.ip === "string" ? params.ip : undefined;
-    const mode = typeof params.mode === "string" ? params.mode : undefined;
-    const version = typeof params.version === "string" ? params.version : undefined;
-    const platform = typeof params.platform === "string" ? params.platform : undefined;
-    const deviceFamily = typeof params.deviceFamily === "string" ? params.deviceFamily : undefined;
-    const modelIdentifier =
-      typeof params.modelIdentifier === "string" ? params.modelIdentifier : undefined;
+    const deviceId = readStringValue(params.deviceId);
+    const instanceId = readStringValue(params.instanceId);
+    const host = readStringValue(params.host);
+    const ip = readStringValue(params.ip);
+    const mode = readStringValue(params.mode);
+    const version = readStringValue(params.version);
+    const platform = readStringValue(params.platform);
+    const deviceFamily = readStringValue(params.deviceFamily);
+    const modelIdentifier = readStringValue(params.modelIdentifier);
     const lastInputSeconds =
       typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
         ? params.lastInputSeconds
         : undefined;
-    const reason = typeof params.reason === "string" ? params.reason : undefined;
+    const reason = readStringValue(params.reason);
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
         ? params.roles

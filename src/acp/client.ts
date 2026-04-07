@@ -21,6 +21,7 @@ import {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
 
@@ -209,11 +210,11 @@ export function shouldStripProviderAuthEnvVarsForAcpServer(
     defaultServerArgs?: string[];
   } = {},
 ): boolean {
-  const serverCommand = params.serverCommand?.trim();
+  const serverCommand = normalizeOptionalString(params.serverCommand);
   if (!serverCommand) {
     return true;
   }
-  const defaultServerCommand = params.defaultServerCommand?.trim();
+  const defaultServerCommand = normalizeOptionalString(params.defaultServerCommand);
   if (!defaultServerCommand || serverCommand !== defaultServerCommand) {
     return false;
   }
@@ -282,7 +283,7 @@ function resolveSelfEntryPath(): string | null {
     // ignore
   }
 
-  const argv1 = process.argv[1]?.trim();
+  const argv1 = normalizeOptionalString(process.argv[1]);
   if (argv1) {
     return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
   }

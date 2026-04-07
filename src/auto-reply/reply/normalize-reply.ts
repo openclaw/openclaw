@@ -1,5 +1,6 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -9,7 +10,6 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
@@ -25,6 +25,7 @@ export type NormalizeReplyOptions = {
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
   silentToken?: string;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -43,7 +44,7 @@ export function normalizeReplyPayload(
         trimText: true,
       },
     );
-  const trimmed = payload.text?.trim() ?? "";
+  const trimmed = normalizeOptionalString(payload.text) ?? "";
   if (!hasContent(trimmed)) {
     opts.onSkip?.("empty");
     return null;
@@ -94,10 +95,9 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
   let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (applyChannelTransforms && text && hasLineDirectives(text)) {
-    enrichedPayload = parseLineDirectives(enrichedPayload);
+  if (applyChannelTransforms && opts.transformReplyPayload) {
+    enrichedPayload = opts.transformReplyPayload(enrichedPayload) ?? enrichedPayload;
     text = enrichedPayload.text;
   }
 

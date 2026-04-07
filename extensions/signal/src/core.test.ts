@@ -178,6 +178,33 @@ describe("probeSignal", () => {
 
     expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
   });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            defaultAccount: "work",
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              alerts: {
+                cliPath: "/tmp/alerts-signal-cli",
+              },
+              work: {
+                cliPath: "",
+                account: "",
+                httpHost: "",
+                httpUrl: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+  });
 });
 
 describe("signal outbound", () => {
@@ -321,10 +348,12 @@ describe("signal setup parsing", () => {
 
     const next = signalDmPolicy.setPolicy(cfg, "open");
     expect(next.channels?.signal?.dmPolicy).toBe("disabled");
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
     expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
     const cfg: OpenClawConfig = {
       channels: {
         signal: {

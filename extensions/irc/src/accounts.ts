@@ -1,9 +1,12 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import {
+  parseOptionalDelimitedEntries,
+  tryReadSecretFileSync,
+} from "openclaw/plugin-sdk/channel-core";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -109,7 +112,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
 
   const merged: IrcNickServConfig = {
     ...base,
-    service: base.service?.trim() || undefined,
+    service: normalizeOptionalString(base.service),
     passwordFile: passwordFile || undefined,
     password: resolvedPassword || undefined,
     registerEmail: base.registerEmail?.trim() || envRegisterEmail || undefined,
@@ -184,7 +187,7 @@ export function resolveIrcAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       configured: Boolean(host && nick),
       host,
       port,

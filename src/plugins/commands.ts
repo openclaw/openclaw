@@ -191,6 +191,7 @@ export async function executePluginCommand(params: {
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
   });
+  const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
 
   const ctx: PluginCommandContext = {
     senderId,
@@ -205,7 +206,7 @@ export async function executePluginCommand(params: {
     config,
     from: params.from,
     to: params.to,
-    accountId: params.accountId,
+    accountId: effectiveAccountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     requestConversationBinding: async (bindingParams) => {

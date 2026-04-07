@@ -1,5 +1,3 @@
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -8,7 +6,8 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { listNextcloudTalkAccountIds, resolveNextcloudTalkAccount } from "./accounts.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
   clearNextcloudTalkAccountFields,
   nextcloudTalkDmPolicy,
@@ -17,7 +16,7 @@ import {
   setNextcloudTalkAccountConfig,
   validateNextcloudTalkBaseUrl,
 } from "./setup-core.js";
-import type { CoreConfig, DmPolicy } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "nextcloud-talk" as const;
 const CONFIGURE_API_FLAG = "__nextcloudTalkConfigureApiCredentials";
@@ -34,17 +33,8 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 5,
     resolveConfigured: ({ cfg, accountId }) => {
-      if (accountId) {
-        const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-        return Boolean(account.secret && account.baseUrl);
-      }
-      return listNextcloudTalkAccountIds(cfg as CoreConfig).some((resolvedAccountId) => {
-            const account = resolveNextcloudTalkAccount({
-              cfg: cfg as CoreConfig,
-              accountId: resolvedAccountId,
-            });
-            return Boolean(account.secret && account.baseUrl);
-          });
+      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
+      return Boolean(account.secret && account.baseUrl);
     },
   }),
   introNote: {
@@ -104,7 +94,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
           resolvedValue: resolvedAccount.secret || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim() || undefined
+              ? normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET)
               : undefined,
         };
       },

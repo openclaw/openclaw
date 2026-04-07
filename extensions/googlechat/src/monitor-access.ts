@@ -1,3 +1,5 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -6,7 +8,6 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
-  resolveMentionGatingWithBypass,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
   type OpenClawConfig,
@@ -63,7 +64,6 @@ export function isSenderAllowed(
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
-  allow?: boolean;
   enabled?: boolean;
   users?: Array<string | number>;
   systemPrompt?: string;
@@ -130,7 +130,7 @@ function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, 
   }
   const key = deprecated
     .map((v) => v.toLowerCase())
-    .sort()
+    .toSorted()
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -153,7 +153,7 @@ function warnMutableGroupKeysConfigured(
   }
   const warningKey = mutableKeys
     .map((key) => key.toLowerCase())
-    .sort()
+    .toSorted()
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;
@@ -242,7 +242,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       groupPolicy,
       routeAllowlistConfigured: groupAllowlistConfigured,
       routeMatched: Boolean(groupEntry),
-      routeEnabled: groupEntry?.enabled !== false && groupEntry?.allow !== false,
+      routeEnabled: groupEntry?.enabled !== false,
     });
     if (!routeAccess.allowed) {
       if (routeAccess.reason === "disabled") {
@@ -322,19 +322,23 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       cfg: config,
       surface: "googlechat",
     });
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup: true,
-      requireMention,
-      canDetectMention: true,
-      wasMentioned: mentionInfo.wasMentioned,
-      implicitMention: false,
-      hasAnyMention: mentionInfo.hasAnyMention,
-      allowTextCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
-      commandAuthorized: commandAuthorized === true,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: mentionInfo.wasMentioned,
+        hasAnyMention: mentionInfo.hasAnyMention,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup: true,
+        requireMention,
+        allowTextCommands,
+        hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
+        commandAuthorized: commandAuthorized === true,
+      },
     });
-    effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (mentionGate.shouldSkip) {
+    effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    if (mentionDecision.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
       return { ok: false };
     }
@@ -394,6 +398,6 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     ok: true,
     commandAuthorized,
     effectiveWasMentioned,
-    groupSystemPrompt: groupEntry?.systemPrompt?.trim() || undefined,
+    groupSystemPrompt: normalizeOptionalString(groupEntry?.systemPrompt),
   };
 }

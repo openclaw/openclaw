@@ -1,3 +1,4 @@
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { AllowFromMode } from "./shared/allow-from-mode.js";
 
@@ -17,26 +18,12 @@ const DEFAULT_DOCTOR_CHANNEL_CAPABILITIES: DoctorChannelCapabilities = {
   warnOnEmptyGroupSenderAllowlist: true,
 };
 
-const DOCTOR_CHANNEL_CAPABILITIES: Record<string, DoctorChannelCapabilities> = {
-  imessage: {
-    dmAllowFromMode: "topOnly",
-    groupModel: "sender",
-    groupAllowFromFallbackToAllowFrom: false,
-    warnOnEmptyGroupSenderAllowlist: true,
-  },
-  irc: {
-    dmAllowFromMode: "topOnly",
-    groupModel: "sender",
-    groupAllowFromFallbackToAllowFrom: false,
-    warnOnEmptyGroupSenderAllowlist: true,
-  },
-};
-
 export function getDoctorChannelCapabilities(channelName?: string): DoctorChannelCapabilities {
   if (!channelName) {
     return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
   }
-  const pluginDoctor = getChannelPlugin(channelName)?.doctor;
+  const pluginDoctor =
+    getChannelPlugin(channelName)?.doctor ?? getBundledChannelPlugin(channelName)?.doctor;
   if (pluginDoctor) {
     return {
       dmAllowFromMode:
@@ -50,5 +37,5 @@ export function getDoctorChannelCapabilities(channelName?: string): DoctorChanne
         DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.warnOnEmptyGroupSenderAllowlist,
     };
   }
-  return DOCTOR_CHANNEL_CAPABILITIES[channelName] ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
+  return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
 }

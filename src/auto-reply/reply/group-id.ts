@@ -1,7 +1,12 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
-  const trimmed = (raw ?? "").trim();
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -14,10 +19,22 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
     const joined = parts.slice(1).join(":");
     return joined.replace(/:topic:.*$/, "") || undefined;
   }
-  const channelId = normalizeChannelId(parts[0] ?? "") ?? parts[0]?.trim().toLowerCase();
-  const parsed = channelId
-    ? getChannelPlugin(channelId)?.messaging?.parseExplicitTarget?.({ raw: trimmed })
-    : null;
+  if (parts.length >= 2 && parts[0] === "whatsapp") {
+    const joined = parts
+      .slice(1)
+      .join(":")
+      .replace(/:topic:.*$/, "");
+    if (/@g\.us$/i.test(joined)) {
+      return joined || undefined;
+    }
+  }
+  const channelId =
+    normalizeChannelId(parts[0] ?? "") ?? normalizeOptionalLowercaseString(parts[0]);
+  const messaging = channelId
+    ? (getLoadedChannelPlugin(channelId)?.messaging ??
+      getBundledChannelPlugin(channelId)?.messaging)
+    : undefined;
+  const parsed = messaging?.parseExplicitTarget?.({ raw: trimmed }) ?? null;
   if (parsed && parsed.chatType && parsed.chatType !== "direct") {
     return parsed.to.replace(/:topic:.*$/, "") || undefined;
   }

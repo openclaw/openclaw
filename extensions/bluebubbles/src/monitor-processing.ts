@@ -3,6 +3,8 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
@@ -89,11 +91,6 @@ type PendingOutboundMessageId = {
 
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
-
-function trimOrUndefined(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function normalizeSnippet(value: string): string {
   return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
@@ -267,8 +264,8 @@ function rememberPendingOutboundMessageId(entry: {
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     outboundTarget: entry.outboundTarget,
-    chatGuid: trimOrUndefined(entry.chatGuid),
-    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatGuid: normalizeOptionalString(entry.chatGuid),
+    chatIdentifier: normalizeOptionalString(entry.chatIdentifier),
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
@@ -289,14 +286,14 @@ function chatsMatch(
   left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
   right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
 ): boolean {
-  const leftGuid = trimOrUndefined(left.chatGuid);
-  const rightGuid = trimOrUndefined(right.chatGuid);
+  const leftGuid = normalizeOptionalString(left.chatGuid);
+  const rightGuid = normalizeOptionalString(right.chatGuid);
   if (leftGuid && rightGuid) {
     return leftGuid === rightGuid;
   }
 
-  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
-  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  const leftIdentifier = normalizeOptionalString(left.chatIdentifier);
+  const rightIdentifier = normalizeOptionalString(right.chatIdentifier);
   if (leftIdentifier && rightIdentifier) {
     return leftIdentifier === rightIdentifier;
   }
@@ -731,7 +728,7 @@ export async function processMessage(
     chatId: message.chatId ?? undefined,
     chatIdentifier: message.chatIdentifier ?? undefined,
   });
-  const groupName = message.chatName?.trim() || undefined;
+  const groupName = normalizeOptionalString(message.chatName);
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
@@ -934,7 +931,7 @@ export async function processMessage(
         chatGuid: message.chatGuid,
         chatId: message.chatId,
         chatIdentifier: message.chatIdentifier,
-        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
       });
       if (fetchedParticipants?.length) {
         message.participants = fetchedParticipants;
@@ -1104,11 +1101,11 @@ export async function processMessage(
   // The sender identity is included in the envelope body via formatInboundEnvelope.
   const senderLabel = message.senderName || `user:${message.senderId}`;
   const fromLabel = isGroup
-    ? `${message.chatName?.trim() || "Group"} id:${peerId}`
+    ? `${normalizeOptionalString(message.chatName) || "Group"} id:${peerId}`
     : senderLabel !== message.senderId
       ? `${senderLabel} id:${message.senderId}`
       : senderLabel;
-  const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
+  const groupSubject = isGroup ? normalizeOptionalString(message.chatName) : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
         participants: message.participants,
@@ -1147,7 +1144,7 @@ export async function processMessage(
           baseUrl,
           password,
           target: resolveTarget,
-          allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+          allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
     }
   }

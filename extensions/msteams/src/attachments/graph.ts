@@ -1,12 +1,13 @@
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
   inferPlaceholder,
-  isRecord,
+  readNestedString,
   isUrlAllowed,
   type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
@@ -36,17 +37,6 @@ type GraphAttachment = {
   thumbnailUrl?: string | null;
   content?: unknown;
 };
-
-function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return typeof current === "string" && current.trim() ? current.trim() : undefined;
-}
 
 export function buildMSTeamsGraphMessageUrls(params: {
   conversationType?: string | null;
@@ -130,7 +120,7 @@ async function fetchGraphCollection<T>(params: {
     url: params.url,
     fetchImpl: fetchFn,
     init: {
-      headers: { Authorization: `Bearer ${params.accessToken}` },
+      headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
     },
     policy: params.ssrfPolicy,
     auditContext: "msteams.graph.collection",
@@ -209,7 +199,7 @@ async function downloadGraphHostedContent(params: {
           url: valueUrl,
           fetchImpl: params.fetchFn ?? fetch,
           init: {
-            headers: { Authorization: `Bearer ${params.accessToken}` },
+            headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
           },
           policy: params.ssrfPolicy,
           auditContext: "msteams.graph.hostedContent.value",
@@ -297,7 +287,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       url: messageUrl,
       fetchImpl: fetchFn,
       init: {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: ensureUserAgentHeader({ Authorization: `Bearer ${accessToken}` }),
       },
       policy: ssrfPolicy,
       auditContext: "msteams.graph.message",
@@ -340,7 +330,7 @@ export async function downloadMSTeamsGraphMedia(params: {
               ssrfPolicy,
               fetchImpl: async (input, init) => {
                 const requestUrl = resolveRequestUrl(input);
-                const headers = new Headers(init?.headers);
+                const headers = ensureUserAgentHeader(init?.headers);
                 applyAuthorizationHeaderForUrl({
                   headers,
                   url: requestUrl,

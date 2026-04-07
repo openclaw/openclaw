@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type DiscoveredModel = { id: string; contextWindow: number };
+type DiscoveredModel = { id: string; contextWindow?: number; contextTokens?: number };
 type ContextModule = typeof import("./context.js");
 
 function mockContextDeps(params: {
@@ -118,6 +118,21 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
       321_000,
     );
+  });
+
+  it("prefers config contextTokens over contextWindow on first lookup", async () => {
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
   });
 
   it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
@@ -28,7 +28,6 @@ vi.mock("@line/bot-sdk", () => ({
 }));
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
-let probeLineBot: typeof import("./probe.js").probeLineBot;
 const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
 
 function normalizeModuleSpecifier(specifier: string): string | null {
@@ -235,8 +234,13 @@ describe("line setup wizard", () => {
     });
 
     const next = lineSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    const workAccount = next?.channels?.line?.accounts?.work as
+      | {
+          dmPolicy?: string;
+        }
+      | undefined;
     expect(next?.channels?.line?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
@@ -260,18 +264,48 @@ describe("line setup wizard", () => {
       "work",
     );
 
+    const workAccount = next?.channels?.line?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
     expect(next?.channels?.line?.dmPolicy).toBeUndefined();
     expect(next?.channels?.line?.allowFrom).toEqual(["Uroot"]);
-    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.line?.accounts?.work?.allowFrom).toEqual(["Uroot", "*"]);
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["Uroot", "*"]);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const configured = await lineSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            channelAccessToken: "root-token",
+            channelSecret: "root-secret",
+            accounts: {
+              alerts: {
+                channelAccessToken: "alerts-token",
+                channelSecret: "alerts-secret",
+              },
+              work: {
+                channelAccessToken: "",
+                channelSecret: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 });
 
 describe("probeLineBot", () => {
-  beforeAll(async () => {
-    ({ probeLineBot } = await import("./probe.js"));
-  });
-
   beforeEach(() => {
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
@@ -287,6 +321,7 @@ describe("probeLineBot", () => {
   });
 
   it("returns timeout when bot info stalls", async () => {
+    const { probeLineBot } = await import("./probe.js");
     vi.useFakeTimers();
     getBotInfoMock.mockImplementation(() => new Promise(() => {}));
 
@@ -299,6 +334,7 @@ describe("probeLineBot", () => {
   });
 
   it("returns bot info when available", async () => {
+    const { probeLineBot } = await import("./probe.js");
     getBotInfoMock.mockResolvedValue({
       displayName: "OpenClaw",
       userId: "U123",
@@ -315,6 +351,7 @@ describe("probeLineBot", () => {
 
 describe("linePlugin status.probeAccount", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    const { probeLineBot } = await import("./probe.js");
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };

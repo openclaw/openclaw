@@ -19,7 +19,6 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { runBrowserProxyCommand } from "../plugin-sdk/browser-runtime.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
@@ -28,6 +27,7 @@ import type {
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
+import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
@@ -480,13 +480,14 @@ export async function handleInvoke(
     return;
   }
 
-  if (command === "browser.proxy") {
-    try {
-      const payload = await runBrowserProxyCommand(frame.paramsJSON);
-      await sendRawPayloadResult(client, frame, payload);
-    } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+  try {
+    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
+    if (pluginNodeHostResult !== null) {
+      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
+      return;
     }
+  } catch (err) {
+    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 

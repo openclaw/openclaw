@@ -32,6 +32,7 @@ export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallSh
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
+export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
@@ -120,6 +121,10 @@ vi.mock("../plugins/installs.js", () => ({
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: () => clearPluginManifestRegistryCache(),
+  loadPluginManifestRegistry: ((...args: unknown[]) =>
+    invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
+    ...args: unknown[]
+  ) => unknown,
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -333,6 +338,7 @@ export function resetPluginsCliTestState() {
   enablePluginInConfig.mockReset();
   recordPluginInstall.mockReset();
   clearPluginManifestRegistryCache.mockReset();
+  loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
   buildPluginDiagnosticsReport.mockReset();
   buildPluginCompatibilityNotices.mockReset();
@@ -385,6 +391,10 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins: [],
+    diagnostics: [],
+  });
   const defaultPluginReport = {
     plugins: [],
     diagnostics: [],

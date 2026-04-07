@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import type {
   DiscordInteractiveHandlerContext,
   DiscordInteractiveHandlerRegistration,
-} from "../../extensions/discord/api.js";
+} from "../../test/helpers/channels/interactive-contract.js";
 import type {
   SlackInteractiveHandlerContext,
   SlackInteractiveHandlerRegistration,
-} from "../../extensions/slack/api.js";
+} from "../../test/helpers/channels/interactive-contract.js";
 import type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
-} from "../../extensions/telegram/api.js";
+} from "../../test/helpers/channels/interactive-contract.js";
 import * as conversationBinding from "./conversation-binding.js";
 import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import {
@@ -606,6 +606,16 @@ describe("plugin interactive handlers", () => {
       ok: false,
       error: 'Interactive handler namespace "codex" already registered by plugin "plugin-a"',
     });
+  });
+
+  it("preserves arbitrary plugin-owned channel ids", () => {
+    const result = registerPluginInteractiveHandler("plugin-a", {
+      channel: "msteams",
+      namespace: "codex",
+      handler: async () => ({ handled: true }),
+    });
+
+    expect(result).toEqual({ ok: true });
   });
 
   it("acknowledges matched Discord interactions before awaiting plugin handlers", async () => {

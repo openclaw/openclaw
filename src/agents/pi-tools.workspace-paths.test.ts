@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -78,8 +80,7 @@ describe("workspace path resolution", () => {
           await fs.writeFile(path.join(workspaceDir, editFile), "hello world", "utf8");
           await editTool.execute("ws-edit", {
             path: editFile,
-            oldText: "world",
-            newText: "openclaw",
+            edits: [{ oldText: "world", newText: "openclaw" }],
           });
           expect(await fs.readFile(path.join(workspaceDir, editFile), "utf8")).toBe(
             "hello openclaw",
@@ -104,8 +105,7 @@ describe("workspace path resolution", () => {
 
           await editTool.execute("ws-edit-delete", {
             path: testFile,
-            oldText: " world",
-            newText: "",
+            edits: [{ oldText: " world", newText: "" }],
           });
 
           expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("hello");
@@ -251,8 +251,7 @@ describe("sandboxed workspace paths", () => {
 
         await editTool?.execute("sbx-edit", {
           path: "new.txt",
-          oldText: "write",
-          newText: "edit",
+          edits: [{ oldText: "write", newText: "edit" }],
         });
         const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");

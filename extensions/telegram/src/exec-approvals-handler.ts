@@ -1,4 +1,4 @@
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,
@@ -76,9 +76,7 @@ export class TelegramExecApprovalHandler {
     this.runtime = createChannelNativeApprovalRuntime<
       PendingMessage,
       { chatId: string; messageThreadId?: number },
-      TelegramPendingDelivery,
-      ApprovalRequest,
-      ApprovalResolved
+      TelegramPendingDelivery
     >({
       label: "telegram/exec-approvals",
       clientDisplayName: `Telegram Exec Approvals (${this.opts.accountId})`,
