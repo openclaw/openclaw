@@ -10,6 +10,7 @@ export type HttpMcpServerLaunchConfig = {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
+  auth?: "oauth";
 };
 
 export type HttpMcpServerLaunchResult =
@@ -58,12 +59,15 @@ export function resolveHttpMcpServerLaunchConfig(
     }
   }
 
+  const auth = raw.auth === "oauth" ? ("oauth" as const) : undefined;
+
   return {
     ok: true,
     config: {
       transportType: options?.transportType ?? "sse",
       url,
       headers,
+      auth,
     },
   };
 }

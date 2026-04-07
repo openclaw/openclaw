@@ -30,6 +30,7 @@ export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
+  auth?: "oauth";
 };
 
 export type ResolvedMcpTransportConfig =
@@ -87,6 +88,7 @@ function resolveHttpTransportConfig(
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
+    auth: launch.config.auth,
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
   };

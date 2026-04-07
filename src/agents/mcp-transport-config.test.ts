@@ -52,4 +52,19 @@ describe("resolveMcpTransportConfig", () => {
       url: "https://mcp.example.com/http",
     });
   });
+
+  it("preserves OAuth auth mode for remote MCP servers", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/http",
+      transport: "streamable-http",
+      auth: "oauth",
+    });
+
+    expect(resolved).toMatchObject({
+      kind: "http",
+      transportType: "streamable-http",
+      url: "https://mcp.example.com/http",
+      auth: "oauth",
+    });
+  });
 });
