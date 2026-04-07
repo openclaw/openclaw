@@ -4,13 +4,22 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { buildProviderRegistry, runCapability } from "./runner.js";
+import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
+
+function createProviderRegistry(
+  providers: Record<string, MediaUnderstandingProvider>,
+): Map<string, MediaUnderstandingProvider> {
+  // Keep these tests focused on auto-entry selection instead of paying the full
+  // plugin capability registry build for every stub provider setup.
+  return new Map(Object.entries(providers));
+}
 
 function createOpenAiAudioProvider(
   transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>,
 ) {
-  return buildProviderRegistry({
+  return createProviderRegistry({
     openai: {
       id: "openai",
       capabilities: ["audio"],
@@ -129,7 +138,7 @@ describe("runCapability auto audio entries", () => {
         },
         async () => {
           await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {
-            const providerRegistry = buildProviderRegistry({
+            const providerRegistry = createProviderRegistry({
               openai: {
                 id: "openai",
                 capabilities: ["audio"],

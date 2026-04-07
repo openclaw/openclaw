@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { killSubagentRunAdmin } from "../agents/subagent-control.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -59,7 +58,19 @@ const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
+type TaskRegistryDeliveryRuntime = Pick<
+  typeof import("./task-registry-delivery-runtime.js"),
+  "sendMessage"
+>;
+const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
+  "openclaw.taskRegistry.deliveryRuntimeOverride",
+);
+type TaskRegistryGlobalWithDeliveryOverride = typeof globalThis & {
+  [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
+};
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
+  null;
+let controlRuntimePromise: Promise<typeof import("./task-registry-control.runtime.js")> | null =
   null;
 
 type TaskDeliveryOwner = {
@@ -361,8 +372,21 @@ function appendTaskEvent(event: {
 }
 
 function loadTaskRegistryDeliveryRuntime() {
+  const deliveryRuntimeOverride = (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
+  ];
+  if (deliveryRuntimeOverride) {
+    return Promise.resolve(deliveryRuntimeOverride);
+  }
   deliveryRuntimePromise ??= import("./task-registry-delivery-runtime.js");
   return deliveryRuntimePromise;
+}
+
+function loadTaskRegistryControlRuntime() {
+  // Registry reads happen far more often than task cancellation, so keep the ACP/subagent
+  // control graph off the default import path until a cancellation flow actually needs it.
+  controlRuntimePromise ??= import("./task-registry-control.runtime.js");
+  return controlRuntimePromise;
 }
 
 function addRunIdIndex(taskId: string, runId?: string) {
@@ -628,6 +652,7 @@ function findExistingTaskForCreate(params: {
 function mergeExistingTaskForCreate(
   existing: TaskRecord,
   params: {
+    taskKind?: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
     parentFlowId?: string;
@@ -652,6 +677,9 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
+  }
+  if (params.taskKind?.trim() && !existing.taskKind?.trim()) {
+    patch.taskKind = params.taskKind.trim();
   }
   if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
     assertParentFlowLinkAllowed({
@@ -1334,6 +1362,7 @@ function ensureListener() {
 
 export function createTaskRecord(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
@@ -1408,6 +1437,7 @@ export function createTaskRecord(params: {
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
+    taskKind: params.taskKind?.trim() || undefined,
     sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey,
     ownerKey,
@@ -1708,12 +1738,14 @@ export async function cancelTaskById(params: {
   }
   try {
     if (task.runtime === "acp") {
+      const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
       await getAcpSessionManager().cancelSession({
         cfg: params.cfg,
         sessionKey: childSessionKey,
         reason: "task-cancel",
       });
     } else if (task.runtime === "subagent") {
+      const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
       const result = await killSubagentRunAdmin({
         cfg: params.cfg,
         sessionKey: childSessionKey,
@@ -1752,7 +1784,7 @@ export async function cancelTaskById(params: {
     return {
       found: true,
       cancelled: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: formatErrorMessage(error),
       task: cloneTaskRecord(task),
     };
   }
@@ -1925,6 +1957,8 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
     listenerStop = null;
   }
   listenerStarted = false;
+  deliveryRuntimePromise = null;
+  controlRuntimePromise = null;
   if (opts?.persist !== false) {
     persistTaskRegistry();
   }
@@ -1934,5 +1968,15 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 export function resetTaskRegistryDeliveryRuntimeForTests() {
+  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
+  ] = null;
+  deliveryRuntimePromise = null;
+}
+
+export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
+  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
+  ] = runtime;
   deliveryRuntimePromise = null;
 }

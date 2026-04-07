@@ -36,6 +36,17 @@ openclaw cron runs --id <job-id>
 - Jobs persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
+- Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
+- Isolated cron runs also guard against stale acknowledgement replies. If the
+  first result is just an interim status update (`on it`, `pulling everything
+together`, and similar hints) and no descendant subagent run is still
+  responsible for the final answer, OpenClaw re-prompts once for the actual
+  result before delivery.
+
+Task reconciliation for cron is runtime-owned: an active cron task stays live while the
+cron runtime still tracks that job as running, even if an old child session row still exists.
+Once the runtime stops owning the job and the 5-minute grace window expires, maintenance can
+mark the task `lost`.
 
 ## Schedule types
 
@@ -60,12 +71,41 @@ Recurring top-of-hour expressions are automatically staggered by up to 5 minutes
 
 **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
+For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
+
+When isolated cron runs orchestrate subagents, delivery also prefers the final
+descendant output over stale parent interim text. If descendants are still
+running, OpenClaw suppresses that partial parent update instead of announcing it.
+
 ### Payload options for isolated jobs
 
 - `--message`: prompt text (required for isolated)
 - `--model` / `--thinking`: model and thinking level overrides
 - `--light-context`: skip workspace bootstrap file injection
 - `--tools exec,read`: restrict which tools the job can use
+
+`--model` uses the selected allowed model for that job. If the requested model
+is not allowed, cron logs a warning and falls back to the job's agent/default
+model selection instead. Configured fallback chains still apply, but a plain
+model override with no explicit per-job fallback list no longer appends the
+agent primary as a hidden extra retry target.
+
+Model-selection precedence for isolated jobs is:
+
+1. Gmail hook model override (when the run came from Gmail and that override is allowed)
+2. Per-job payload `model`
+3. Stored cron session model override
+4. Agent/default model selection
+
+Fast mode follows the resolved live selection too. If the selected model config
+has `params.fastMode`, isolated cron uses that by default. A stored session
+`fastMode` override still wins over config in either direction.
+
+If an isolated run hits a live model-switch handoff, cron retries with the
+switched provider/model and persists that live selection before retrying. When
+the switch also carries a new auth profile, cron persists that auth profile
+override too. Retries are bounded: after the initial attempt plus 2 switch
+retries, cron aborts instead of looping forever.
 
 ## Delivery and output
 
@@ -76,6 +116,22 @@ Recurring top-of-hour expressions are automatically staggered by up to 5 minutes
 | `none`     | Internal only, no delivery                               |
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
+
+For cron-owned isolated jobs, the runner owns the final delivery path. The
+agent is prompted to return a plain-text summary, and that summary is then sent
+through `announce`, `webhook`, or kept internal for `none`. `--no-deliver`
+does not hand delivery back to the agent; it keeps the run internal.
+
+If the original task explicitly says to message some external recipient, the
+agent should note who/where that message should go in its output instead of
+trying to send it directly.
+
+Failure notifications follow a separate destination path:
+
+- `cron.failureDestination` sets a global default for failure notifications.
+- `job.delivery.failureDestination` overrides that per job.
+- If neither is set and the job already delivers via `announce`, failure notifications now fall back to that primary announce target.
+- `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
 
 ## CLI examples
 
@@ -163,7 +219,7 @@ Run an isolated agent turn:
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
@@ -176,8 +232,10 @@ Custom hook names are resolved via `hooks.mappings` in config. Mappings can tran
 
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 - Use a dedicated hook token; do not reuse gateway auth tokens.
+- Keep `hooks.path` on a dedicated subpath; `/` is rejected.
 - Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
+- If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to constrain allowed session key shapes.
 - Hook payloads are wrapped with safety boundaries by default.
 
 ## Gmail PubSub integration
@@ -265,6 +323,17 @@ openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --mes
 openclaw cron edit <jobId> --clear-agent
 ```
 
+Model override note:
+
+- `openclaw cron add|edit --model ...` changes the job's selected model.
+- If the model is allowed, that exact provider/model reaches the isolated agent
+  run.
+- If it is not allowed, cron warns and falls back to the job's agent/default
+  model selection.
+- Configured fallback chains still apply, but a plain `--model` override with
+  no explicit per-job fallback list no longer falls through to the agent
+  primary as a silent extra retry target.
+
 ## Configuration
 
 ```json5
@@ -313,13 +382,19 @@ openclaw doctor
 - Check `cron.enabled` and `OPENCLAW_SKIP_CRON` env var.
 - Confirm the Gateway is running continuously.
 - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
-- `reason: not-due` in run output means manual run called without `--force`.
+- `reason: not-due` in run output means manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
 
 ### Cron fired but no delivery
 
 - Delivery mode is `none` means no external message is expected.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
+- If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
+  OpenClaw suppresses direct outbound delivery and also suppresses the fallback
+  queued summary path, so nothing is posted back to chat.
+- For cron-owned isolated jobs, do not expect the agent to use the message tool
+  as a fallback. The runner owns final delivery; `--no-deliver` keeps it
+  internal instead of allowing a direct send.
 
 ### Timezone gotchas
 

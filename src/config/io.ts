@@ -5,7 +5,9 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -13,7 +15,12 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -30,7 +37,6 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
-import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -38,9 +44,19 @@ import {
   materializeRuntimeConfig,
 } from "./materialize.js";
 import { applyMergePatch } from "./merge-patch.js";
-import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import {
+  clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshotRefreshHandler,
+  getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
+  resetConfigRuntimeState as resetConfigRuntimeStateState,
+  setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
+  setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
+} from "./runtime-snapshot.js";
+import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -48,31 +64,19 @@ import {
 } from "./validation.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
+export {
+  clearRuntimeConfigSnapshotState as clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
+  resetConfigRuntimeStateState as resetConfigRuntimeState,
+  setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
+};
+
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
-
-const SHELL_ENV_EXPECTED_KEYS = [
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "GEMINI_API_KEY",
-  "ZAI_API_KEY",
-  "OPENROUTER_API_KEY",
-  "AI_GATEWAY_API_KEY",
-  "MINIMAX_API_KEY",
-  "MODELSTUDIO_API_KEY",
-  "SYNTHETIC_API_KEY",
-  "KILOCODE_API_KEY",
-  "ELEVENLABS_API_KEY",
-  "TELEGRAM_BOT_TOKEN",
-  "DISCORD_BOT_TOKEN",
-  "SLACK_BOT_TOKEN",
-  "SLACK_APP_TOKEN",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
-];
+export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
@@ -226,15 +230,6 @@ export type ConfigWriteOptions = {
 export type ReadConfigFileSnapshotForWriteResult = {
   snapshot: ConfigFileSnapshot;
   writeOptions: ConfigWriteOptions;
-};
-
-export type RuntimeConfigSnapshotRefreshParams = {
-  sourceConfig: OpenClawConfig;
-};
-
-export type RuntimeConfigSnapshotRefreshHandler = {
-  refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
-  clearOnRefreshFailure?: () => void;
 };
 
 export type ConfigWriteNotification = {
@@ -437,24 +432,20 @@ function coerceConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function hasConfigMeta(value: unknown): boolean {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const meta = value.meta;
-  return isPlainObject(meta);
+  return isRecord(meta);
 }
 
 function resolveGatewayMode(value: unknown): string | null {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return null;
   }
   const gateway = value.gateway;
-  if (!isPlainObject(gateway) || typeof gateway.mode !== "string") {
+  if (!isRecord(gateway) || typeof gateway.mode !== "string") {
     return null;
   }
   const trimmed = gateway.mode.trim();
@@ -466,7 +457,7 @@ function cloneUnknown<T>(value: T): T {
 }
 
 function createMergePatch(base: unknown, target: unknown): unknown {
-  if (!isPlainObject(base) || !isPlainObject(target)) {
+  if (!isRecord(base) || !isRecord(target)) {
     return cloneUnknown(target);
   }
 
@@ -485,9 +476,9 @@ function createMergePatch(base: unknown, target: unknown): unknown {
       continue;
     }
     const baseValue = base[key];
-    if (isPlainObject(baseValue) && isPlainObject(targetValue)) {
+    if (isRecord(baseValue) && isRecord(targetValue)) {
       const childPatch = createMergePatch(baseValue, targetValue);
-      if (isPlainObject(childPatch) && Object.keys(childPatch).length === 0) {
+      if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
         continue;
       }
       patch[key] = childPatch;
@@ -498,6 +489,21 @@ function createMergePatch(base: unknown, target: unknown): unknown {
     }
   }
   return patch;
+}
+
+function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
+  if (!isRecord(source) || !isRecord(runtime)) {
+    return cloneUnknown(source);
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [key, sourceValue] of Object.entries(source)) {
+    if (!(key in runtime)) {
+      continue;
+    }
+    next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
+  }
+  return next;
 }
 
 function collectEnvRefPaths(value: unknown, path: string, output: Map<string, string>): void {
@@ -513,7 +519,7 @@ function collectEnvRefPaths(value: unknown, path: string, output: Map<string, st
     });
     return;
   }
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     for (const [key, child] of Object.entries(value)) {
       const childPath = path ? `${path}.${key}` : key;
       collectEnvRefPaths(child, childPath, output);
@@ -539,7 +545,7 @@ function collectChangedPaths(
     }
     return;
   }
-  if (isPlainObject(base) && isPlainObject(target)) {
+  if (isRecord(base) && isRecord(target)) {
     const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
     for (const key of keys) {
       const childPath = path ? `${path}.${key}` : key;
@@ -610,7 +616,7 @@ function restoreEnvRefsFromMap(
     });
     return changed ? next : value;
   }
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
@@ -727,7 +733,7 @@ async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<Conf
     const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
-    return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
   } catch {
     return {};
   }
@@ -738,7 +744,7 @@ function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthSt
     const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     const raw = deps.fs.readFileSync(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
-    return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
   } catch {
     return {};
   }
@@ -775,11 +781,11 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {
   const entries = state.entries;
-  if (!entries || !isPlainObject(entries)) {
+  if (!entries || !isRecord(entries)) {
     return {};
   }
   const entry = entries[configPath];
-  return entry && isPlainObject(entry) ? entry : {};
+  return entry && isRecord(entry) ? entry : {};
 }
 
 function setConfigHealthEntry(
@@ -797,7 +803,7 @@ function setConfigHealthEntry(
 }
 
 function isUpdateChannelOnlyRoot(value: unknown): boolean {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const keys = Object.keys(value);
@@ -805,7 +811,7 @@ function isUpdateChannelOnlyRoot(value: unknown): boolean {
     return false;
   }
   const update = value.update;
-  if (!isPlainObject(update)) {
+  if (!isRecord(update)) {
     return false;
   }
   const updateKeys = Object.keys(update);
@@ -1615,13 +1621,18 @@ function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
 ): LegacyMigrationResolution {
-  const sourceLegacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
-  if (sourceLegacyIssues.length === 0) {
+  const pluginIds = collectRelevantDoctorPluginIds(resolvedConfigRaw);
+  const sourceLegacyIssues = findLegacyConfigIssues(
+    resolvedConfigRaw,
+    sourceRaw,
+    listPluginDoctorLegacyConfigRules({ pluginIds }),
+  );
+  if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
     return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
   }
-  const migrated = migrateLegacyConfig(resolvedConfigRaw);
+  const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
   return {
-    effectiveConfigRaw: migrated.config ?? resolvedConfigRaw,
+    effectiveConfigRaw: compat.next ?? resolvedConfigRaw,
     sourceLegacyIssues,
   };
 }
@@ -1673,12 +1684,7 @@ async function finalizeReadConfigSnapshotInternalResult(
 
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
-  const requestedConfigPath = resolveConfigPathForDeps(deps);
-  const candidatePaths = deps.configPath
-    ? [requestedConfigPath]
-    : resolveDefaultConfigCandidates(deps.env, deps.homedir);
-  const configPath =
-    candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
+  const configPath = resolveConfigPathForDeps(deps);
 
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
     observeConfigSnapshotSync(deps, snapshot);
@@ -1693,7 +1699,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           loadShellEnvFallback({
             enabled: true,
             env: deps.env,
-            expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+            expectedKeys: resolveShellEnvExpectedKeys(deps.env),
             logger: deps.logger,
             timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
           });
@@ -1823,7 +1829,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         loadShellEnvFallback({
           enabled: true,
           env: deps.env,
-          expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+          expectedKeys: resolveShellEnvExpectedKeys(deps.env),
           logger: deps.logger,
           timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
         });
@@ -1885,7 +1891,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const hash = hashConfigRaw(null);
-      const config = materializeRuntimeConfig({}, "missing");
+      const config = {};
       const legacyIssues: LegacyConfigIssue[] = [];
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
@@ -1976,7 +1982,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
-
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -2081,7 +2086,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
-      persistCandidate = applyMergePatch(snapshot.resolved, patch);
+      const projectedSource = projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config);
+      persistCandidate = applyMergePatch(projectedSource, patch);
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
@@ -2376,9 +2382,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
-let runtimeConfigSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 const configWriteListeners = new Set<(event: ConfigWriteNotification) => void>();
 
 function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
@@ -2402,31 +2405,6 @@ export function registerConfigWriteListener(
   return () => {
     configWriteListeners.delete(listener);
   };
-}
-
-export function setRuntimeConfigSnapshot(
-  config: OpenClawConfig,
-  sourceConfig?: OpenClawConfig,
-): void {
-  runtimeConfigSnapshot = config;
-  runtimeConfigSourceSnapshot = sourceConfig ?? null;
-}
-
-export function resetConfigRuntimeState(): void {
-  runtimeConfigSnapshot = null;
-  runtimeConfigSourceSnapshot = null;
-}
-
-export function clearRuntimeConfigSnapshot(): void {
-  resetConfigRuntimeState();
-}
-
-export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
-  return runtimeConfigSnapshot;
-}
-
-export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
-  return runtimeConfigSourceSnapshot;
 }
 
 function isCompatibleTopLevelRuntimeProjectionShape(params: {
@@ -2459,6 +2437,8 @@ function isCompatibleTopLevelRuntimeProjectionShape(params: {
 }
 
 export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
   if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
     return config;
   }
@@ -2477,17 +2457,15 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   ) {
     return config;
   }
+  const projectedSource = coerceConfig(
+    projectSourceOntoRuntimeShape(runtimeConfigSourceSnapshot, runtimeConfigSnapshot),
+  );
   const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
-  return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
-}
-
-export function setRuntimeConfigSnapshotRefreshHandler(
-  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
-): void {
-  runtimeConfigSnapshotRefreshHandler = refreshHandler;
+  return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
 export function loadConfig(): OpenClawConfig {
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
@@ -2495,8 +2473,8 @@ export function loadConfig(): OpenClawConfig {
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  setRuntimeConfigSnapshot(config);
-  return runtimeConfigSnapshot ?? config;
+  setRuntimeConfigSnapshotState(config);
+  return getRuntimeConfigSnapshotState() ?? config;
 }
 
 export function getRuntimeConfig(): OpenClawConfig {
@@ -2530,6 +2508,8 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
@@ -2543,20 +2523,21 @@ export async function writeConfigFile(
     unsetPaths: options.unsetPaths,
   });
   const notifyCommittedWrite = () => {
-    if (!runtimeConfigSnapshot) {
+    const currentRuntimeConfig = getRuntimeConfigSnapshotState();
+    if (!currentRuntimeConfig) {
       return;
     }
     notifyConfigWriteListeners({
       configPath: io.configPath,
       sourceConfig: nextCfg,
-      runtimeConfig: runtimeConfigSnapshot,
+      runtimeConfig: currentRuntimeConfig,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
     });
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
-  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+  const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
     try {
       const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
@@ -2570,7 +2551,7 @@ export async function writeConfigFile(
       } catch {
         // Keep the original refresh failure as the surfaced error.
       }
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = formatErrorMessage(error);
       throw new ConfigRuntimeRefreshError(
         `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
         { cause: error },
@@ -2581,16 +2562,16 @@ export async function writeConfigFile(
     // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
     // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
     const fresh = io.loadConfig();
-    setRuntimeConfigSnapshot(fresh, nextCfg);
+    setRuntimeConfigSnapshotState(fresh, nextCfg);
     notifyCommittedWrite();
     return;
   }
   if (hadRuntimeSnapshot) {
     const fresh = io.loadConfig();
-    setRuntimeConfigSnapshot(fresh);
+    setRuntimeConfigSnapshotState(fresh);
     notifyCommittedWrite();
     return;
   }
-  setRuntimeConfigSnapshot(io.loadConfig());
+  setRuntimeConfigSnapshotState(io.loadConfig());
   notifyCommittedWrite();
 }

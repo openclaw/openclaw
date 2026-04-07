@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { isRecord } from "../utils.js";
 
 export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;

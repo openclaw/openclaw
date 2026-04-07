@@ -1,20 +1,24 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.4.1-beta.1",
+  "version": "2026.4.6",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
-    "@buape/carbon": "0.0.0-beta-20260327000044",
+    "@buape/carbon": "0.0.0-beta-20260406003433",
     "@discordjs/voice": "^0.19.2",
-    "discord-api-types": "^0.38.43",
-    "https-proxy-agent": "^8.0.0",
-    "opusscript": "^0.0.8"
+    "@snazzah/davey": "^0.1.11",
+    "discord-api-types": "^0.38.44",
+    "https-proxy-agent": "^9.0.0",
+    "opusscript": "^0.1.1"
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.10.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.1-beta.1"
+    "openclaw": ">=2026.4.6"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -35,17 +39,28 @@
       "docsLabel": "discord",
       "blurb": "very well supported right now.",
       "systemImage": "bubble.left.and.bubble.right",
-      "markdownCapable": true
+      "markdownCapable": true,
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasDiscordConfiguredState"
+      }
     },
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.4.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.6"
+    },
+    "build": {
+      "openclawVersion": "2026.4.6"
     },
     "bundle": {
       "stageRuntimeDependencies": true
     },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

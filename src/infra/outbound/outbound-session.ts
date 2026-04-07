@@ -3,8 +3,12 @@ import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+} from "../../config/sessions/inbound.runtime.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {
@@ -23,6 +27,7 @@ export type ResolveOutboundSessionRouteParams = {
   agentId: string;
   accountId?: string | null;
   target: string;
+  currentSessionKey?: string;
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -144,13 +149,12 @@ export async function resolveOutboundSessionRoute(
 
 export async function ensureOutboundSessionEntry(params: {
   cfg: OpenClawConfig;
-  agentId: string;
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
 }): Promise<void> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
+    agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
   });
   const ctx: MsgContext = {
     From: params.route.from,

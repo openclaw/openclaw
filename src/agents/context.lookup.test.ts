@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type DiscoveredModel = { id: string; contextWindow: number };
+type DiscoveredModel = { id: string; contextWindow?: number; contextTokens?: number };
 type ContextModule = typeof import("./context.js");
 
 function mockContextDeps(params: {
@@ -54,6 +54,10 @@ function createContextOverrideConfig(provider: string, model: string, contextWin
 }
 
 async function flushAsyncWarmup() {
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(0);
+    return;
+  }
   await new Promise((r) => setTimeout(r, 0));
 }
 
@@ -114,6 +118,53 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
       321_000,
     );
+  });
+
+  it("prefers config contextTokens over contextWindow on first lookup", async () => {
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
+  });
+
+  it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {
+    const firstLoadConfigMock = vi.fn(() => ({
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
+          },
+        },
+      },
+    }));
+    mockContextModuleDeps(firstLoadConfigMock);
+
+    let { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
+      321_000,
+    );
+    expect(firstLoadConfigMock).toHaveBeenCalledTimes(1);
+
+    vi.resetModules();
+
+    const secondLoadConfigMock = vi.fn(() => {
+      throw new Error("config should come from shared runtime state");
+    });
+    mockContextModuleDeps(secondLoadConfigMock);
+
+    ({ lookupContextTokens } = await importContextModule());
+    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
+      321_000,
+    );
+    expect(secondLoadConfigMock).not.toHaveBeenCalled();
   });
 
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {

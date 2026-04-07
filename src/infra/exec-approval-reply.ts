@@ -1,6 +1,11 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
 import {
+  describeNativeExecApprovalClientSetup,
+  listNativeExecApprovalClientLabels,
+  supportsNativeExecApprovalClient,
+} from "./exec-approval-surface.js";
+import {
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   type ExecHost,
@@ -47,10 +52,42 @@ export type ExecApprovalPendingReplyParams = {
 
 export type ExecApprovalUnavailableReplyParams = {
   warningText?: string;
+  channel?: string;
   channelLabel?: string;
+  accountId?: string;
   reason: ExecApprovalUnavailableReason;
   sentApproverDms?: boolean;
 };
+
+function formatHumanList(values: readonly string[]): string {
+  if (values.length === 0) {
+    return "";
+  }
+  if (values.length === 1) {
+    return values[0];
+  }
+  if (values.length === 2) {
+    return `${values[0]} or ${values[1]}`;
+  }
+  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
+}
+
+function resolveNativeExecApprovalClientList(params?: { excludeChannel?: string }): string {
+  return formatHumanList(
+    listNativeExecApprovalClientLabels({
+      excludeChannel: params?.excludeChannel,
+    }),
+  );
+}
+
+function buildGenericNativeExecApprovalFallbackText(params?: { excludeChannel?: string }): string {
+  const clients = resolveNativeExecApprovalClientList({
+    excludeChannel: params?.excludeChannel,
+  });
+  return clients
+    ? `Approve it from the Web UI or terminal UI, or enable a native chat approval client such as ${clients}. If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.`
+    : "Approve it from the Web UI or terminal UI.";
+}
 
 function resolveAllowedDecisions(params: {
   ask?: string | null;
@@ -337,24 +374,37 @@ export function buildExecApprovalUnavailableReplyPayload(
 
   if (params.reason === "initiating-platform-disabled") {
     lines.push(
-      `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
+      `Exec approval is required, but native chat exec approvals are not configured on ${params.channelLabel ?? "this platform"}.`,
     );
-    lines.push(
-      "Approve it from the Web UI or terminal UI, or enable a native chat approval client such as Discord, Slack, or Telegram. If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.",
-    );
+    const channel = params.channel?.trim().toLowerCase();
+    const setupText =
+      channel && params.channelLabel && supportsNativeExecApprovalClient(channel)
+        ? describeNativeExecApprovalClientSetup({
+            channel,
+            channelLabel: params.channelLabel,
+            accountId: params.accountId,
+          })
+        : null;
+    if (setupText) {
+      lines.push(setupText);
+    } else {
+      lines.push(buildGenericNativeExecApprovalFallbackText());
+    }
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or enable a native chat approval client such as Discord, Slack, or Telegram. If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.",
+      buildGenericNativeExecApprovalFallbackText({
+        excludeChannel: params.channel,
+      }),
     );
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      "Open the Web UI or terminal UI, or enable a native chat approval client such as Discord, Slack, or Telegram, then retry the command. If those accounts already know your owner ID via allowFrom or owner config, you can usually leave execApprovals.approvers unset.",
+      `${buildGenericNativeExecApprovalFallbackText()} Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.`,
     );
   }
 

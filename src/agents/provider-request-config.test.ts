@@ -5,6 +5,7 @@ import {
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
+  sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
   sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
@@ -309,6 +310,28 @@ describe("provider request config", () => {
     ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);
   });
 
+  it("keeps model-provider transport overrides once the llm path can carry them", () => {
+    expect(
+      sanitizeConfiguredModelProviderRequest({
+        headers: {
+          "X-Tenant": "acme",
+        },
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      }),
+    ).toEqual({
+      headers: {
+        "X-Tenant": "acme",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.internal:8443",
+      },
+    });
+  });
+
   it("merges configured request overrides with later entries winning", () => {
     expect(
       mergeProviderRequestOverrides(
@@ -452,7 +475,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
-    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.allowPrivateNetwork).toBe(false);
     expect(resolved.policy.endpointClass).toBe("openai-public");
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
     expect(resolved.headers).toMatchObject({

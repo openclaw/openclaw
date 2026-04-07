@@ -3,6 +3,7 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
 } from "openclaw/plugin-sdk/setup";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -16,11 +17,7 @@ import {
   validateMatrixHomeserverUrl,
 } from "./matrix/client.js";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
-import {
-  resolveMatrixConfigFieldPath,
-  resolveMatrixConfigPath,
-  updateMatrixAccountConfig,
-} from "./matrix/config-update.js";
+import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
 import type { DmPolicy } from "./runtime-api.js";
@@ -30,13 +27,13 @@ import {
   hasConfiguredSecretInput,
   isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
-  moveSingleAccountChannelSectionToDefaultAccount,
   normalizeAccountId,
-  promptChannelAccessConfig,
   promptAccountId,
+  promptChannelAccessConfig,
   type RuntimeEnv,
   type WizardPrompter,
 } from "./runtime-api.js";
+import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -183,7 +180,7 @@ function setMatrixGroupPolicy(
 }
 
 function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[], accountId?: string) {
-  const groups = Object.fromEntries(roomKeys.map((key) => [key, { allow: true }]));
+  const groups = Object.fromEntries(roomKeys.map((key) => [key, { enabled: true }]));
   return updateMatrixAccountConfig(cfg, resolveMatrixOnboardingAccountId(cfg, accountId), {
     groups,
     rooms: null,
@@ -249,10 +246,7 @@ async function runMatrixConfigure(params: {
       await params.prompter.note(`Account id will be "${accountId}".`, "Matrix account");
     }
     if (accountId !== DEFAULT_ACCOUNT_ID) {
-      next = moveSingleAccountChannelSectionToDefaultAccount({
-        cfg: next,
-        channelKey: channel,
-      }) as CoreConfig;
+      next = moveSingleMatrixAccountConfigToNamedAccount(next);
     }
     next = updateMatrixAccountConfig(next, accountId, { name: enteredName, enabled: true });
   } else {
@@ -324,20 +318,18 @@ async function runMatrixConfigure(params: {
   ).trim();
   const requiresAllowPrivateNetwork = requiresMatrixPrivateNetworkOptIn(homeserver);
   const shouldPromptAllowPrivateNetwork =
-    requiresAllowPrivateNetwork || existing.allowPrivateNetwork === true;
+    requiresAllowPrivateNetwork || isPrivateNetworkOptInEnabled(existing);
   const allowPrivateNetwork = shouldPromptAllowPrivateNetwork
     ? await params.prompter.confirm({
         message: "Allow private/internal Matrix homeserver traffic for this account?",
-        initialValue: existing.allowPrivateNetwork === true || requiresAllowPrivateNetwork,
+        initialValue: isPrivateNetworkOptInEnabled(existing) || requiresAllowPrivateNetwork,
       })
     : false;
   if (requiresAllowPrivateNetwork && !allowPrivateNetwork) {
-    throw new Error(
-      "Matrix homeserver requires allowPrivateNetwork for trusted private/internal access",
-    );
+    throw new Error("Matrix homeserver requires explicit private-network opt-in");
   }
   await resolveValidatedMatrixHomeserverUrl(homeserver, {
-    allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: allowPrivateNetwork,
   });
 
   let accessToken = existing.accessToken;

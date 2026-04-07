@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 
@@ -84,7 +85,7 @@ async function callSlack(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

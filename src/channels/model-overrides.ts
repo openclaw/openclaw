@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -8,6 +7,7 @@ import {
   type ChannelMatchSource,
 } from "./channel-config.js";
 import { normalizeChatType } from "./chat-type.js";
+import { getChannelPlugin } from "./plugins/registry.js";
 import {
   resolveSessionConversation,
   resolveSessionConversationRef,
@@ -58,10 +58,18 @@ function buildChannelCandidates(
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
-  const feishuParentFallbacks = resolveFeishuParentSessionFallbackCandidates({
-    channel: normalizedChannel,
-    parentSessionKey: params.parentSessionKey,
-  });
+  const feishuParentOverrideFallbacks =
+    normalizedChannel === "feishu"
+      ? buildFeishuParentOverrideCandidates(sessionConversation?.rawId)
+      : [];
+  const parentOverrideFallbacks =
+    (normalizedChannel
+      ? getChannelPlugin(
+          normalizedChannel,
+        )?.conversationBindings?.buildModelOverrideParentCandidates?.({
+          parentConversationId: sessionConversation?.rawId,
+        })
+      : null) ?? [];
   const groupConversationKind =
     normalizeChatType(params.groupChatType ?? undefined) === "channel"
       ? "channel"
@@ -86,7 +94,8 @@ function buildChannelCandidates(
       sessionConversation?.rawId,
       ...(groupConversation?.parentConversationCandidates ?? []),
       ...(sessionConversation?.parentConversationCandidates ?? []),
-      ...feishuParentFallbacks,
+      ...feishuParentOverrideFallbacks,
+      ...parentOverrideFallbacks,
     ),
     parentKeys: buildChannelKeyCandidates(
       groupChannel,
@@ -99,36 +108,28 @@ function buildChannelCandidates(
   };
 }
 
-function resolveFeishuParentSessionFallbackCandidates(params: {
-  channel?: string;
-  parentSessionKey?: string | null;
-}): string[] {
-  if (params.channel !== "feishu") {
+function buildFeishuParentOverrideCandidates(rawId: string | undefined): string[] {
+  const value = rawId?.trim();
+  if (!value) {
     return [];
   }
-  const rawId = parseRawSessionConversationRef(params.parentSessionKey)?.rawId?.trim();
-  if (!rawId) {
-    return [];
-  }
-  const topicSenderMatch = rawId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  const topicSenderMatch = value.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
   if (topicSenderMatch) {
     const chatId = topicSenderMatch[1]?.trim().toLowerCase();
     const topicId = topicSenderMatch[2]?.trim().toLowerCase();
-    if (chatId && topicId) {
-      return [`${chatId}:topic:${topicId}`, chatId];
-    }
-    return [];
+    return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
+      Boolean(entry),
+    );
   }
-  const topicMatch = rawId.match(/^(.+):topic:([^:]+)$/i);
+  const topicMatch = value.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
     const chatId = topicMatch[1]?.trim().toLowerCase();
     const topicId = topicMatch[2]?.trim().toLowerCase();
-    if (chatId && topicId) {
-      return [chatId];
-    }
-    return [];
+    return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
+      Boolean(entry),
+    );
   }
-  const senderMatch = rawId.match(/^(.+):sender:([^:]+)$/i);
+  const senderMatch = value.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
     const chatId = senderMatch[1]?.trim().toLowerCase();
     return chatId ? [chatId] : [];
