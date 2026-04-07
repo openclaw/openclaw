@@ -206,6 +206,37 @@ describe("systemd availability", () => {
       });
     await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(true);
   });
+
+  it("does not retry machine scope when sudo machine-scope already failed and --user also fails", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        // First call: machine scope under sudo — fails with bus-unavailable (non-permission-denied)
+        assertMachineUserSystemctlArgs(args, "ai", "status");
+        cb(
+          createExecFileError("Failed to connect to bus: No such file or directory", {
+            stderr: "Failed to connect to bus: No such file or directory",
+            code: 1,
+          }),
+          "",
+          "",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        // Second call: direct --user — also fails with bus-unavailable
+        assertUserSystemctlArgs(args, "status");
+        cb(
+          createExecFileError("Failed to connect to bus: No such file or directory", {
+            stderr: "Failed to connect to bus: No such file or directory",
+            code: 1,
+          }),
+          "",
+          "",
+        );
+      });
+    // Machine scope must NOT be called a third time; exactly 2 calls total.
+    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
