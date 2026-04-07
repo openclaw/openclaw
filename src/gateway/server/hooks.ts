@@ -327,6 +327,7 @@ export function createGatewayHooksRequestHandler(params: {
     void (async () => {
       try {
         const cfg = loadConfig();
+        const deliveryContract = value.deliver ? "shared" : "cron-owned";
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
@@ -334,10 +335,10 @@ export function createGatewayHooksRequestHandler(params: {
           message: value.message,
           sessionKey,
           lane: "cron",
-          deliveryContract: "shared",
+          deliveryContract,
         });
         logHooks.info(
-          `hook.agent.completed runId=${runId} jobId=${jobId} status=${result.status} delivered=${result.delivered === true} deliveryAttempted=${result.deliveryAttempted === true}`,
+          `hook.agent.completed runId=${runId} jobId=${jobId} status=${result.status} delivered=${result.delivered === true} deliveryAttempted=${result.deliveryAttempted === true} deliveryContract=${deliveryContract}`,
         );
       } catch (err) {
         logHooks.warn(`hook.agent.failed runId=${runId} jobId=${jobId} error=${String(err)}`);

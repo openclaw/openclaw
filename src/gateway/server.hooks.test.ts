@@ -300,6 +300,37 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("uses cron-owned delivery contract for /hooks/agent when deliver is false", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Run without outbound delivery",
+        name: "No outbound",
+        deliver: false,
+      });
+      expect(response.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
+
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | {
+            deliveryContract?: string;
+            job?: {
+              delivery?: {
+                mode?: string;
+              };
+            };
+          }
+        | undefined;
+      expect(call?.deliveryContract).toBe("cron-owned");
+      expect(call?.job?.delivery?.mode).toBe("none");
+    });
+  });
+
   test("queues direct and mapped wake payloads as untrusted system events", async () => {
     testState.hooksConfig = {
       enabled: true,
