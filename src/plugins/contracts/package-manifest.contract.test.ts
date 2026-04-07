@@ -6,7 +6,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    runtimeDeps: ["@buape/carbon", "https-proxy-agent"],
+    runtimeDeps: ["@buape/carbon"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -29,7 +29,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "nostr", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "slack", runtimeDeps: ["@slack/bolt"] },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "telegram", runtimeDeps: ["grammy"] },
+  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
