@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - Memory/wiki: add an opt-in `context.includeCompiledDigestPrompt` flag so memory prompt supplements can append a compact compiled wiki snapshot for legacy prompt assembly and context engines that explicitly consume memory prompt sections. Thanks @vincentkoc.
 - Plugin SDK/context engines: pass `availableTools` and `citationsMode` into `assemble()`, and expose `buildMemorySystemPromptAddition(...)` so non-legacy context engines can adopt the active memory prompt path without reimplementing it. Thanks @vincentkoc.
 - Providers/inferrs: add string-content compatibility for stricter OpenAI-compatible chat backends, document `inferrs` setup with a full config example, and add troubleshooting guidance for local backends that pass direct probes but fail on full agent-runtime prompts.
+- Agents/context engine: expose prompt-cache runtime context to context engines and keep current-turn prompt-cache usage aligned with the active attempt instead of stale prior-turn assistant state. (#62179) Thanks @jalehman.
 
 ### Fixes
 
