@@ -3,6 +3,7 @@ import path from "node:path";
 import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import { trimBundledPluginString } from "./bundled-plugin-scan.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
@@ -34,15 +35,11 @@ type ChannelConfigSurface = {
 
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => trimString(entry) ?? "").filter(Boolean);
+  return value.map((entry) => trimBundledPluginString(entry) ?? "").filter(Boolean);
 }
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
@@ -177,12 +174,19 @@ export function collectBundledChannelConfigs(params: {
       ...((surface?.runtime ?? existing?.runtime)
         ? { runtime: surface?.runtime ?? existing?.runtime }
         : {}),
-      ...((trimString(existing?.label) ?? trimString(channelMeta?.label))
-        ? { label: trimString(existing?.label) ?? trimString(channelMeta?.label)! }
-        : {}),
-      ...((trimString(existing?.description) ?? trimString(channelMeta?.blurb))
+      ...((trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label))
         ? {
-            description: trimString(existing?.description) ?? trimString(channelMeta?.blurb)!,
+            label:
+              trimBundledPluginString(existing?.label) ??
+              trimBundledPluginString(channelMeta?.label)!,
+          }
+        : {}),
+      ...((trimBundledPluginString(existing?.description) ??
+      trimBundledPluginString(channelMeta?.blurb))
+        ? {
+            description:
+              trimBundledPluginString(existing?.description) ??
+              trimBundledPluginString(channelMeta?.blurb)!,
           }
         : {}),
       ...(existing?.preferOver?.length

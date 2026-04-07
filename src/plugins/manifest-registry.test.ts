@@ -417,6 +417,28 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves channel env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "slack",
+      channels: ["slack"],
+      channelEnvVars: {
+        slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "slack",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.channelEnvVars).toEqual({
+      slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+    });
+  });
+
   it("preserves channel config metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

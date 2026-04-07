@@ -609,8 +609,9 @@ conversation, and it runs after core approval handling finishes.
 
 Provider plugins now have two layers:
 
-- manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
-  runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
+- manifest metadata: `providerAuthEnvVars` for cheap provider env-auth lookup
+  before runtime load, `channelEnvVars` for cheap channel env/setup lookup
+  before runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
   labels and CLI flag metadata before runtime load
 - config-time hooks: `catalog` / legacy `discovery` plus `applyConfigDefaults`
 - runtime hooks: `normalizeModelId`, `normalizeTransport`,
@@ -644,6 +645,10 @@ surfaces should know the provider's choice id, group labels, and simple
 one-flag auth wiring without loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
+
+Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
+generic shell-env fallback, config/status checks, or setup prompts should see
+without loading channel runtime.
 
 ### Hook order and usage
 

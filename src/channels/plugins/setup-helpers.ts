@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { getBundledChannelPlugin } from "./bundled.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
@@ -408,6 +409,11 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "defaultTo",
 ]);
 
+const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
+  // Some setup/migration paths run before the channel setup surface has been loaded.
+  telegram: ["streaming"],
+};
+
 type ChannelSetupPromotionSurface = {
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
@@ -417,7 +423,7 @@ type ChannelSetupPromotionSurface = {
 };
 
 function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const setup = getChannelPlugin(channelKey)?.setup;
+  const setup = getChannelPlugin(channelKey)?.setup ?? getBundledChannelPlugin(channelKey)?.setup;
   if (!setup || typeof setup !== "object") {
     return null;
   }
@@ -433,6 +439,10 @@ export function shouldMoveSingleAccountChannelKey(params: {
   }
   const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
   if (contractKeys?.includes(params.key)) {
+    return true;
+  }
+  const fallbackKeys = BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
+  if (fallbackKeys?.includes(params.key)) {
     return true;
   }
   return false;

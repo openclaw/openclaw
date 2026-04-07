@@ -110,11 +110,7 @@ export function createMattermostClient(params: {
 
   const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : (input as Request).url;
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const { response, release } = await fetchWithSsrFGuard({
       url,
       init,

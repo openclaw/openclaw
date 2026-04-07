@@ -11,7 +11,7 @@ import type { QaBusState } from "./bus-state.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
-import type { QaLabScenarioOutcome } from "./lab-server.js";
+import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
@@ -1760,6 +1760,7 @@ export async function runQaSuite(params?: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  lab?: Awaited<ReturnType<typeof startQaLabServer>>;
 }) {
   const startedAt = new Date();
   const providerMode = params?.providerMode ?? "mock-openai";
@@ -1775,11 +1776,14 @@ export async function runQaSuite(params?: {
     path.join(process.cwd(), ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
-  const lab = await startQaLabServer({
-    host: "127.0.0.1",
-    port: 0,
-    embeddedGateway: "disabled",
-  });
+  const ownsLab = !params?.lab;
+  const lab =
+    params?.lab ??
+    (await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    }));
   const mock =
     providerMode === "mock-openai"
       ? await startQaMockOpenAiServer({
@@ -1946,6 +1950,12 @@ export async function runQaSuite(params?: {
       )}\n`,
       "utf8",
     );
+    const latestReport = {
+      outputPath: reportPath,
+      markdown: report,
+      generatedAt: finishedAt.toISOString(),
+    } satisfies QaLabLatestReport;
+    lab.setLatestReport(latestReport);
 
     return {
       outputDir,
@@ -1961,6 +1971,14 @@ export async function runQaSuite(params?: {
       keepTemp,
     });
     await mock?.stop();
-    await lab.stop();
+    if (ownsLab) {
+      await lab.stop();
+    } else {
+      lab.setControlUi({
+        controlUiUrl: null,
+        controlUiToken: null,
+        controlUiProxyTarget: null,
+      });
+    }
   }
 }

@@ -7,10 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
@@ -31,6 +28,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { MatrixConfigSchema } from "./config-schema.js";
@@ -42,9 +40,9 @@ import {
 } from "./group-mentions.js";
 import {
   listMatrixAccountIds,
-  resolveMatrixAccountConfig,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
+  resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
@@ -58,7 +56,6 @@ import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./matrix/thread-bindings-shared.js";
-import { getMatrixRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import {
@@ -73,22 +70,6 @@ import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
-
-function chunkTextForOutbound(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const window = remaining.slice(0, limit);
-    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
-    const breakAt = splitAt > 0 ? splitAt : limit;
-    chunks.push(remaining.slice(0, breakAt).trimEnd());
-    remaining = remaining.slice(breakAt).trimStart();
-  }
-  if (remaining.length > 0 || text.length === 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}
 
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -146,6 +127,29 @@ const listMatrixDirectoryGroupsFromConfig =
     },
   });
 
+function projectMatrixConversationBinding(binding: {
+  boundAt: number;
+  metadata?: {
+    lastActivityAt?: number;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+  };
+}) {
+  return {
+    boundAt: binding.boundAt,
+    lastActivityAt:
+      typeof binding.metadata?.lastActivityAt === "number"
+        ? binding.metadata.lastActivityAt
+        : binding.boundAt,
+    idleTimeoutMs:
+      typeof binding.metadata?.idleTimeoutMs === "number"
+        ? binding.metadata.idleTimeoutMs
+        : undefined,
+    maxAgeMs:
+      typeof binding.metadata?.maxAgeMs === "number" ? binding.metadata.maxAgeMs : undefined,
+  };
+}
+
 const matrixConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedMatrixAccount,
   ReturnType<typeof resolveMatrixAccountConfig>,
@@ -155,7 +159,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
   listAccountIds: listMatrixAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
   resolveAccessorAccount: ({ cfg, accountId }) =>
-    resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
+    resolveMatrixAccountConfig({ cfg: cfg, accountId }),
   defaultAccountId: resolveDefaultMatrixAccountId,
   clearBaseFields: [
     "name",
@@ -371,41 +375,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             targetSessionKey,
             accountId: accountId ?? "",
             idleTimeoutMs,
-          }).map((binding) => ({
-            boundAt: binding.boundAt,
-            lastActivityAt:
-              typeof binding.metadata?.lastActivityAt === "number"
-                ? binding.metadata.lastActivityAt
-                : binding.boundAt,
-            idleTimeoutMs:
-              typeof binding.metadata?.idleTimeoutMs === "number"
-                ? binding.metadata.idleTimeoutMs
-                : undefined,
-            maxAgeMs:
-              typeof binding.metadata?.maxAgeMs === "number"
-                ? binding.metadata.maxAgeMs
-                : undefined,
-          })),
+          }).map(projectMatrixConversationBinding),
         setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
           setMatrixThreadBindingMaxAgeBySessionKey({
             targetSessionKey,
             accountId: accountId ?? "",
             maxAgeMs,
-          }).map((binding) => ({
-            boundAt: binding.boundAt,
-            lastActivityAt:
-              typeof binding.metadata?.lastActivityAt === "number"
-                ? binding.metadata.lastActivityAt
-                : binding.boundAt,
-            idleTimeoutMs:
-              typeof binding.metadata?.idleTimeoutMs === "number"
-                ? binding.metadata.idleTimeoutMs
-                : undefined,
-            maxAgeMs:
-              typeof binding.metadata?.maxAgeMs === "number"
-                ? binding.metadata.maxAgeMs
-                : undefined,
-          })),
+          }).map(projectMatrixConversationBinding),
       },
       messaging: {
         normalizeTarget: normalizeMatrixMessagingTarget,
@@ -590,9 +566,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         normalizeAllowEntry: createPairingPrefixStripper(/^matrix:/i),
         notify: async ({ id, message, accountId }) => {
           const { sendMessageMatrix } = await loadMatrixChannelRuntime();
-          await sendMessageMatrix(`user:${id}`, message, {
-            ...(accountId ? { accountId } : {}),
-          });
+          await sendMessageMatrix(`user:${id}`, message, accountId ? { accountId } : {});
         },
       },
     },

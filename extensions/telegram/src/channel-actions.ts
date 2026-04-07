@@ -1,10 +1,9 @@
-import { Type } from "@sinclair/typebox";
 import {
+  createMessageToolButtonsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

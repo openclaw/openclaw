@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-migrate.js";
 import type { OpenClawConfig } from "./config.js";
 import { validateConfigObject } from "./validation.js";
 
@@ -7,6 +7,12 @@ function getChannelConfig(config: unknown, provider: string) {
   const channels = (config as { channels?: Record<string, Record<string, unknown>> } | undefined)
     ?.channels;
   return channels?.[provider];
+}
+
+function expectMigratedConfig(input: unknown, name: string) {
+  const migrated = applyLegacyDoctorMigrations(input);
+  expect(migrated.next, name).not.toBeNull();
+  return migrated.next as NonNullable<OpenClawConfig>;
 }
 
 describe("legacy config detection", () => {
@@ -216,11 +222,7 @@ describe("legacy config detection", () => {
   ] as const)(
     "normalizes telegram legacy streamMode alias during migration: $name",
     ({ input, assert, name }) => {
-      const res = migrateLegacyConfig(input);
-      expect(res.config, name).not.toBeNull();
-      if (res.config) {
-        assert(res.config);
-      }
+      assert(expectMigratedConfig(input, name));
     },
   );
 
@@ -244,13 +246,15 @@ describe("legacy config detection", () => {
   ] as const)(
     "normalizes discord streaming fields during legacy migration: $name",
     ({ input, expectedChanges, expectedStreaming, name }) => {
-      const res = migrateLegacyConfig(input);
+      const migrated = applyLegacyDoctorMigrations(input);
       for (const expectedChange of expectedChanges) {
-        expect(res.changes, name).toContain(expectedChange);
+        expect(migrated.changes, name).toContain(expectedChange);
       }
-      expect(res.config?.channels?.discord?.streaming?.mode, name).toBe(expectedStreaming);
+      const config = migrated.next as NonNullable<OpenClawConfig> | null;
+      expect(config, name).not.toBeNull();
+      expect(config?.channels?.discord?.streaming?.mode, name).toBe(expectedStreaming);
       expect(
-        (res.config?.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+        (config?.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
         name,
       ).toBeUndefined();
     },
@@ -322,7 +326,7 @@ describe("legacy config detection", () => {
         expect(
           (config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
         ).toBeUndefined();
-        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(true);
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBeUndefined();
       },
     },
     {
@@ -342,11 +346,7 @@ describe("legacy config detection", () => {
   ] as const)(
     "normalizes account-level discord/slack streaming alias during migration: $name",
     ({ input, assert, name }) => {
-      const res = migrateLegacyConfig(input);
-      expect(res.config, name).not.toBeNull();
-      if (res.config) {
-        assert(res.config);
-      }
+      assert(expectMigratedConfig(input, name));
     },
   );
 

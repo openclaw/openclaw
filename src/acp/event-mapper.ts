@@ -5,6 +5,7 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { asRecord } from "./record-shared.js";
 
 export type GatewayAttachment = {
   type: string;
@@ -93,12 +94,6 @@ function escapeInlineControlChars(value: string): string {
 function escapeResourceTitle(value: string): string {
   // Keep title content, but escape characters that can break the resource-link annotation shape.
   return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function normalizeToolLocationPath(value: string): string | undefined {

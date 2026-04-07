@@ -1,5 +1,6 @@
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
@@ -106,7 +107,7 @@ export class MockedFailoverError extends Error {
 export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
 export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
-    message: err instanceof Error ? err.message : String(err),
+    message: formatErrorMessage(err),
     reason: undefined,
     status: undefined,
     code: undefined,
@@ -230,7 +231,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedDescribeFailoverError.mockReset();
   mockedDescribeFailoverError.mockImplementation(
     (err: unknown): MockFailoverErrorDescription => ({
-      message: err instanceof Error ? err.message : String(err),
+      message: formatErrorMessage(err),
       reason: undefined,
       status: undefined,
       code: undefined,

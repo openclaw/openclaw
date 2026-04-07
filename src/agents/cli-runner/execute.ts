@@ -124,7 +124,9 @@ export async function executePreparedCliRun(
     const imagePayload = await writeCliImages(resolvedImages);
     imagePaths = imagePayload.paths;
     cleanupImages = imagePayload.cleanup;
-    if (!backend.imageArg) {
+    // Some stdin-driven CLIs still need the hydrated file paths mentioned in the
+    // prompt even when we also pass explicit image args.
+    if (!backend.imageArg || backend.input === "stdin") {
       prompt = appendImagePathsToPrompt(prompt, imagePaths);
     }
   }

@@ -856,7 +856,10 @@ export async function resetTelegramThreadBindingsForTests() {
   for (const manager of getThreadBindingsState().managersByAccountId.values()) {
     manager.stop();
   }
-  await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
+  const pendingPersists = [...getThreadBindingsState().persistQueueByAccountId.values()];
+  if (pendingPersists.length > 0) {
+    await Promise.allSettled(pendingPersists);
+  }
   getThreadBindingsState().persistQueueByAccountId.clear();
   getThreadBindingsState().managersByAccountId.clear();
   getThreadBindingsState().bindingsByAccountConversation.clear();

@@ -1,5 +1,4 @@
 import type { CliBackendConfig } from "../config/types.js";
-import { isClaudeCliProvider } from "../plugin-sdk/anthropic-cli.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -22,6 +21,10 @@ export type CliStreamingDelta = {
   sessionId?: string;
   usage?: CliUsage;
 };
+
+function isClaudeCliProvider(providerId: string): boolean {
+  return providerId.trim().toLowerCase() === "claude-cli";
+}
 
 function extractJsonObjectCandidates(raw: string): string[] {
   const candidates: string[] = [];

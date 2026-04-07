@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ResolvedSlackAccount } from "../../extensions/slack/src/accounts.js";
-import { collectSlackSecurityAuditFindings } from "../../extensions/slack/src/security-audit.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { collectSlackSecurityAuditFindings } from "../plugin-sdk/slack.js";
 import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
@@ -14,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 
 function createSlackAccount(
   config: NonNullable<OpenClawConfig["channels"]>["slack"],
-): ResolvedSlackAccount {
+): Parameters<typeof collectSlackSecurityAuditFindings>[0]["account"] {
   return {
     accountId: "default",
     enabled: true,
@@ -22,7 +21,7 @@ function createSlackAccount(
     botTokenSource: "config",
     appTokenSource: "config",
     config,
-  } as ResolvedSlackAccount;
+  } as Parameters<typeof collectSlackSecurityAuditFindings>[0]["account"];
 }
 
 describe("security audit slack command findings", () => {

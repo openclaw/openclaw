@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+async function loadModules() {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.resetModules();
+  return Promise.all([
+    import("./model-auth-markers.js"),
+    import("./models-config.providers.secrets.js"),
+  ]);
+}
+
+beforeEach(() => {
+  vi.doUnmock("../plugins/manifest-registry.js");
+});
 
 describe("vercel-ai-gateway provider resolution", () => {
-  it("resolves AI_GATEWAY_API_KEY through provider auth lookup", () => {
+  it("resolves AI_GATEWAY_API_KEY through provider auth lookup", async () => {
+    const [, { createProviderAuthResolver }] = await loadModules();
     const resolveAuth = createProviderAuthResolver(
       {
         AI_GATEWAY_API_KEY: "vercel-gateway-test-key", // pragma: allowlist secret
@@ -18,7 +30,8 @@ describe("vercel-ai-gateway provider resolution", () => {
     });
   });
 
-  it("prefers env keyRef markers over runtime plaintext in auth profiles", () => {
+  it("prefers env keyRef markers over runtime plaintext in auth profiles", async () => {
+    const [, { createProviderAuthResolver }] = await loadModules();
     const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
       version: 1,
       profiles: {
@@ -39,7 +52,8 @@ describe("vercel-ai-gateway provider resolution", () => {
     });
   });
 
-  it("uses non-env markers for non-env keyRef vercel profiles", () => {
+  it("uses non-env markers for non-env keyRef vercel profiles", async () => {
+    const [{ NON_ENV_SECRETREF_MARKER }, { createProviderAuthResolver }] = await loadModules();
     const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
       version: 1,
       profiles: {

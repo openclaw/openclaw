@@ -39,7 +39,9 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
 
 let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
 let maxExecApprovalFollowupFailureLogKeys: typeof import("./bash-tools.exec-host-shared.js").MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS;
+let enforceStrictInlineEvalApprovalBoundary: typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext;
+let buildExecApprovalPendingToolResult: typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalPendingToolResult;
 let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
 let logWarn: typeof import("../logger.js").logWarn;
 
@@ -47,7 +49,9 @@ beforeAll(async () => {
   ({
     sendExecApprovalFollowupResult,
     MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
+    enforceStrictInlineEvalApprovalBoundary,
     resolveExecHostApprovalContext,
+    buildExecApprovalPendingToolResult,
   } = await import("./bash-tools.exec-host-shared.js"));
   ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
   ({ logWarn } = await import("../logger.js"));
@@ -146,5 +150,63 @@ describe("resolveExecHostApprovalContext", () => {
     });
 
     expect(result.hostSecurity).toBe("full");
+  });
+});
+
+describe("enforceStrictInlineEvalApprovalBoundary", () => {
+  it("denies timeout-based fallback when strict inline-eval approval is required", () => {
+    expect(
+      enforceStrictInlineEvalApprovalBoundary({
+        baseDecision: { timedOut: true },
+        approvedByAsk: true,
+        deniedReason: null,
+        requiresInlineEvalApproval: true,
+      }),
+    ).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+  });
+
+  it("keeps explicit approvals intact for strict inline-eval commands", () => {
+    expect(
+      enforceStrictInlineEvalApprovalBoundary({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+        requiresInlineEvalApproval: true,
+      }),
+    ).toEqual({
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+  });
+});
+
+describe("buildExecApprovalPendingToolResult", () => {
+  it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
+    const result = buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "npm view diver name version description",
+      cwd: process.cwd(),
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: Date.now() + 60_000,
+      initiatingSurface: {
+        kind: "disabled",
+        channel: "discord",
+        channelLabel: "Discord",
+        accountId: "default",
+      },
+      sentApproverDms: false,
+      unavailableReason: null,
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("/approve approval-slug allow-once");
+    expect(text).not.toContain("native chat exec approvals are not configured on Discord");
   });
 });

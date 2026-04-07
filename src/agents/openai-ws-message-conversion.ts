@@ -339,7 +339,6 @@ export function convertMessagesToInputItems(
             Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
           );
         });
-
         const pushAssistantText = (phase?: OpenAIResponsesAssistantPhase) => {
           if (textParts.length === 0) {
             return;
@@ -365,7 +364,12 @@ export function convertMessagesToInputItems(
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
             const blockPhase =
-              parsedSignature?.phase ?? (hasExplicitBlockPhase ? undefined : assistantMessagePhase);
+              parsedSignature?.phase ??
+              (parsedSignature?.id
+                ? assistantMessagePhase
+                : hasExplicitBlockPhase
+                  ? undefined
+                  : assistantMessagePhase);
             if (textParts.length > 0 && blockPhase !== currentTextPhase) {
               pushAssistantText(currentTextPhase);
             }
@@ -559,6 +563,13 @@ export function buildAssistantMessageFromResponse(
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
   const normalizedUsage = normalizeUsage(response.usage);
   const rawTotalTokens = normalizedUsage?.total;
+  const resolvedTotalTokens =
+    rawTotalTokens && rawTotalTokens > 0
+      ? rawTotalTokens
+      : (normalizedUsage?.input ?? 0) +
+        (normalizedUsage?.output ?? 0) +
+        (normalizedUsage?.cacheRead ?? 0) +
+        (normalizedUsage?.cacheWrite ?? 0);
 
   const message = buildAssistantMessage({
     model: modelInfo,
@@ -567,7 +578,9 @@ export function buildAssistantMessageFromResponse(
     usage: buildUsageWithNoCost({
       input: normalizedUsage?.input ?? 0,
       output: normalizedUsage?.output ?? 0,
-      totalTokens: rawTotalTokens && rawTotalTokens > 0 ? rawTotalTokens : undefined,
+      cacheRead: normalizedUsage?.cacheRead ?? 0,
+      cacheWrite: normalizedUsage?.cacheWrite ?? 0,
+      totalTokens: resolvedTotalTokens > 0 ? resolvedTotalTokens : undefined,
     }),
   });
 

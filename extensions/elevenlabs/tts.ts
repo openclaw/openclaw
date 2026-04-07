@@ -8,20 +8,7 @@ import {
   trimToUndefined,
   truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
-
-const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
-
-function isValidVoiceId(voiceId: string): boolean {
-  return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
-}
-
-function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return DEFAULT_ELEVENLABS_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
+import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 function formatElevenLabsErrorPayload(payload: unknown): string | undefined {
   const root = asObject(payload);
@@ -109,7 +96,7 @@ export async function elevenLabsTTS(params: {
     voiceSettings,
     timeoutMs,
   } = params;
-  if (!isValidVoiceId(voiceId)) {
+  if (!isValidElevenLabsVoiceId(voiceId)) {
     throw new Error("Invalid voiceId format");
   }
   assertElevenLabsVoiceSettings(voiceSettings);

@@ -169,8 +169,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/send.js";',
     'export * from "./src/session.js";',
     'export { setWhatsAppRuntime } from "./src/runtime.js";',
-    "export async function startWebLoginWithQr( ...args: Parameters<StartWebLoginWithQr> ): ReturnType<StartWebLoginWithQr> { const { startWebLoginWithQr } = await loadLoginQrModule(); return await startWebLoginWithQr(...args); }",
-    "export async function waitForWebLogin( ...args: Parameters<WaitForWebLogin> ): ReturnType<WaitForWebLogin> { const { waitForWebLogin } = await loadLoginQrModule(); return await waitForWebLogin(...args); }",
+    'export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";',
   ],
 } as const;
 

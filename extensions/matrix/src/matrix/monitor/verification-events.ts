@@ -261,7 +261,7 @@ async function resolveVerificationSummaryForSignal(
   // Fallback for DM flows where transaction IDs do not match room event IDs consistently.
   const activeByUser = list
     .filter((entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry))
-    .sort((a, b) => resolveSummaryRecency(b) - resolveSummaryRecency(a));
+    .toSorted((a, b) => resolveSummaryRecency(b) - resolveSummaryRecency(a));
   const activeInRoom = activeByUser.filter((entry) => {
     const roomId = trimMaybeString(entry.roomId);
     return roomId === params.roomId;

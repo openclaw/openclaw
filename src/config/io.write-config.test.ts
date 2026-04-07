@@ -519,11 +519,9 @@ describe("config io write", () => {
       const next = structuredClone(snapshot.config);
       // Simulate doctor removing legacy keys while keeping dm enabled.
       if (next.channels?.discord?.dm && typeof next.channels.discord.dm === "object") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
         delete (next.channels.discord.dm as any).policy;
       }
       if (next.channels?.slack?.dm && typeof next.channels.slack.dm === "object") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
         delete (next.channels.slack.dm as any).policy;
       }
 

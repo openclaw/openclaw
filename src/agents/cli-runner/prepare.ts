@@ -1,8 +1,7 @@
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
-} from "../../gateway/mcp-http.js";
+} from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -17,7 +16,6 @@ import {
 import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { resolveOpenClawDocsPath } from "../docs-path.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -35,6 +33,12 @@ const prepareDeps = {
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
+  resolveHeartbeatPrompt: async (
+    prompt: Parameters<typeof import("../../auto-reply/heartbeat.js").resolveHeartbeatPrompt>[0],
+  ) => (await import("../../auto-reply/heartbeat.js")).resolveHeartbeatPrompt(prompt),
+  resolveOpenClawDocsPath: async (
+    params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
+  ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -146,9 +150,9 @@ export async function prepareCliRunContext(
   }
   const heartbeatPrompt =
     sessionAgentId === defaultAgentId
-      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      ? await prepareDeps.resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
-  const docsPath = await resolveOpenClawDocsPath({
+  const docsPath = await prepareDeps.resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),

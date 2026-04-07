@@ -92,6 +92,8 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
+export type ResolvedMemorySearchSyncConfig = ResolvedMemorySearchConfig["sync"];
+
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
@@ -367,6 +369,36 @@ function mergeConfig(
   };
 }
 
+function resolveSyncConfig(
+  defaults: MemorySearchConfig | undefined,
+  overrides: MemorySearchConfig | undefined,
+): ResolvedMemorySearchSyncConfig {
+  return {
+    onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
+    onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
+    watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
+    watchDebounceMs:
+      overrides?.sync?.watchDebounceMs ??
+      defaults?.sync?.watchDebounceMs ??
+      DEFAULT_WATCH_DEBOUNCE_MS,
+    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    sessions: {
+      deltaBytes:
+        overrides?.sync?.sessions?.deltaBytes ??
+        defaults?.sync?.sessions?.deltaBytes ??
+        DEFAULT_SESSION_DELTA_BYTES,
+      deltaMessages:
+        overrides?.sync?.sessions?.deltaMessages ??
+        defaults?.sync?.sessions?.deltaMessages ??
+        DEFAULT_SESSION_DELTA_MESSAGES,
+      postCompactionForce:
+        overrides?.sync?.sessions?.postCompactionForce ??
+        defaults?.sync?.sessions?.postCompactionForce ??
+        true,
+    },
+  };
+}
+
 export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -409,4 +441,17 @@ export function resolveMemorySearchConfig(
     );
   }
   return resolved;
+}
+
+export function resolveMemorySearchSyncConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): ResolvedMemorySearchSyncConfig | null {
+  const defaults = cfg.agents?.defaults?.memorySearch;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  if (!enabled) {
+    return null;
+  }
+  return resolveSyncConfig(defaults, overrides);
 }

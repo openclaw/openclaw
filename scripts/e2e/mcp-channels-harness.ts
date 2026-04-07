@@ -38,6 +38,9 @@ export type McpClientHandle = {
   rawMessages: unknown[];
 };
 
+const GATEWAY_WS_TIMEOUT_MS = 30_000;
+const GATEWAY_CONNECT_RETRY_WINDOW_MS = 45_000;
+
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -86,9 +89,36 @@ export async function connectGateway(params: {
   url: string;
   token: string;
 }): Promise<GatewayRpcClient> {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < GATEWAY_CONNECT_RETRY_WINDOW_MS) {
+    attempt += 1;
+    try {
+      return await connectGatewayOnce(params);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError)) {
+        throw lastError;
+      }
+      await delay(Math.min(500 * attempt, 2_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway ws open timeout");
+}
+
+async function connectGatewayOnce(params: {
+  url: string;
+  token: string;
+}): Promise<GatewayRpcClient> {
   const ws = new WebSocket(params.url);
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("gateway ws open timeout")), 10_000);
+    const timeout = setTimeout(
+      () => reject(new Error("gateway ws open timeout")),
+      GATEWAY_WS_TIMEOUT_MS,
+    );
     timeout.unref?.();
     ws.once("open", () => {
       clearTimeout(timeout);
@@ -196,7 +226,7 @@ export async function connectGateway(params: {
     const timeout = setTimeout(() => {
       pending.delete(connectId);
       reject(new Error("gateway connect timeout"));
-    }, 10_000);
+    }, GATEWAY_WS_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(connectId, {
       resolve: () => {
@@ -215,7 +245,7 @@ export async function connectGateway(params: {
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error("gateway sessions.subscribe timeout"));
-    }, 10_000);
+    }, GATEWAY_WS_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(id, {
       resolve: () => {
@@ -282,6 +312,17 @@ export async function connectGateway(params: {
       });
     },
   };
+}
+
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway ws open timeout") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway closed") ||
+    message.includes("econnrefused") ||
+    message.includes("socket hang up")
+  );
 }
 
 export async function connectMcpClient(params: {

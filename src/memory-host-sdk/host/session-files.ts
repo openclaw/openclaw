@@ -17,6 +17,8 @@ export type SessionFileEntry = {
   content: string;
   /** Maps each content line (0-indexed) to its 1-indexed JSONL source line. */
   lineMap: number[];
+  /** Maps each content line (0-indexed) to epoch ms; 0 means unknown timestamp. */
+  messageTimestampsMs: number[];
 };
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -72,6 +74,28 @@ export function extractSessionText(content: unknown): string | null {
   return parts.join(" ");
 }
 
+function parseSessionTimestampMs(
+  record: { timestamp?: unknown },
+  message: { timestamp?: unknown },
+): number {
+  const candidates = [message.timestamp, record.timestamp];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const ms = value > 0 && value < 1e11 ? value * 1000 : value;
+      if (Number.isFinite(ms) && ms > 0) {
+        return ms;
+      }
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return 0;
+}
+
 export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
@@ -79,6 +103,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
     const lines = raw.split("\n");
     const collected: string[] = [];
     const lineMap: number[] = [];
+    const messageTimestampsMs: number[] = [];
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -114,6 +139,12 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       const label = message.role === "user" ? "User" : "Assistant";
       collected.push(`${label}: ${safe}`);
       lineMap.push(jsonlIdx + 1);
+      messageTimestampsMs.push(
+        parseSessionTimestampMs(
+          record as { timestamp?: unknown },
+          message as { timestamp?: unknown },
+        ),
+      );
     }
     const content = collected.join("\n");
     return {
@@ -121,9 +152,10 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       absPath,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
-      hash: hashText(content + "\n" + lineMap.join(",")),
+      hash: hashText(content + "\n" + lineMap.join(",") + "\n" + messageTimestampsMs.join(",")),
       content,
       lineMap,
+      messageTimestampsMs,
     };
   } catch (err) {
     log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
