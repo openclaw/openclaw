@@ -39,6 +39,7 @@ export type GuardedFetchOptions = {
   maxRedirects?: number;
   /**
    * Allow replaying unsafe request methods and bodies across cross-origin redirects.
+   * Sensitive cross-origin headers (for example Authorization/Cookie) are still stripped.
    * Defaults to false.
    */
   allowCrossOriginUnsafeRedirectReplay?: boolean;
