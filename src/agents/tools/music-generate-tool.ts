@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -16,6 +17,7 @@ import type {
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
@@ -143,7 +145,7 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
   if (!raw) {
     return "generate";
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "generate" || normalized === "list" || normalized === "status") {
     return normalized;
   }
@@ -156,7 +158,7 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
     return raw;
   }
   if (typeof raw === "string") {
-    const normalized = raw.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(raw);
     if (normalized === "true") {
       return true;
     }
@@ -168,7 +170,9 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
 }
 
 function normalizeOutputFormat(raw: string | undefined): MusicGenerationOutputFormat | undefined {
-  const normalized = raw?.trim().toLowerCase() as MusicGenerationOutputFormat | undefined;
+  const normalized = normalizeOptionalLowercaseString(raw) as
+    | MusicGenerationOutputFormat
+    | undefined;
   if (!normalized) {
     return undefined;
   }
@@ -235,17 +239,6 @@ function validateMusicGenerationCapabilities(params: {
   }
   if (!caps) {
     return;
-  }
-  if (
-    typeof params.durationSeconds === "number" &&
-    caps.supportsDuration &&
-    typeof caps.maxDurationSeconds === "number"
-  ) {
-    if (params.durationSeconds > caps.maxDurationSeconds) {
-      throw new ToolInputError(
-        `${provider.id} supports at most ${caps.maxDurationSeconds} seconds per track.`,
-      );
-    }
   }
 }
 
@@ -418,6 +411,23 @@ async function executeMusicGenerationJob(params: {
   );
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
+  const requestedDurationSeconds =
+    result.normalization?.durationSeconds?.requested ??
+    (typeof result.metadata?.requestedDurationSeconds === "number" &&
+    Number.isFinite(result.metadata.requestedDurationSeconds)
+      ? result.metadata.requestedDurationSeconds
+      : params.durationSeconds);
+  const runtimeNormalizedDurationSeconds =
+    result.normalization?.durationSeconds?.applied ??
+    (typeof result.metadata?.normalizedDurationSeconds === "number" &&
+    Number.isFinite(result.metadata.normalizedDurationSeconds)
+      ? result.metadata.normalizedDurationSeconds
+      : undefined);
+  const appliedDurationSeconds =
+    runtimeNormalizedDurationSeconds ??
+    (!ignoredOverrideKeys.has("durationSeconds") && typeof params.durationSeconds === "number"
+      ? params.durationSeconds
+      : undefined);
   const warning =
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map((entry) => `${entry.key}=${String(entry.value)}`).join(", ")}.`
@@ -425,9 +435,14 @@ async function executeMusicGenerationJob(params: {
   const lines = [
     `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
+    typeof requestedDurationSeconds === "number" &&
+    typeof appliedDurationSeconds === "number" &&
+    requestedDurationSeconds !== appliedDurationSeconds
+      ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`
+      : null,
     ...(result.lyrics?.length ? ["Lyrics returned.", ...result.lyrics] : []),
     ...savedTracks.map((track) => `MEDIA:${track.path}`),
-  ];
+  ].filter((entry): entry is string => Boolean(entry));
   return {
     provider: result.provider,
     model: result.model,
@@ -456,8 +471,13 @@ async function executeMusicGenerationJob(params: {
       ...(!ignoredOverrideKeys.has("instrumental") && typeof params.instrumental === "boolean"
         ? { instrumental: params.instrumental }
         : {}),
-      ...(!ignoredOverrideKeys.has("durationSeconds") && typeof params.durationSeconds === "number"
-        ? { durationSeconds: params.durationSeconds }
+      ...(typeof appliedDurationSeconds === "number"
+        ? { durationSeconds: appliedDurationSeconds }
+        : {}),
+      ...(typeof requestedDurationSeconds === "number" &&
+      typeof appliedDurationSeconds === "number" &&
+      requestedDurationSeconds !== appliedDurationSeconds
+        ? { requestedDurationSeconds }
         : {}),
       ...(!ignoredOverrideKeys.has("format") && params.format ? { format: params.format } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
@@ -478,6 +498,7 @@ async function executeMusicGenerationJob(params: {
           : {}),
       ...(result.lyrics?.length ? { lyrics: result.lyrics } : {}),
       attempts: result.attempts,
+      ...(result.normalization ? { normalization: result.normalization } : {}),
       metadata: result.metadata,
       ...(warning ? { warning } : {}),
       ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
@@ -630,7 +651,7 @@ export function createMusicGenerateTool(options?: {
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",
-              result: error instanceof Error ? error.message : String(error),
+              result: formatErrorMessage(error),
             });
             return;
           }

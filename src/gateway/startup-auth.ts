@@ -15,7 +15,7 @@ import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
 import {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
-  readGatewayTokenEnv,
+  trimToUndefined,
 } from "./credentials.js";
 
 export function mergeGatewayAuthConfig(
@@ -104,7 +104,7 @@ function hasGatewayTokenCandidate(params: {
   env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  const envToken = readGatewayTokenEnv(params.env);
+  const envToken = trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN);
   if (envToken) {
     return true;
   }

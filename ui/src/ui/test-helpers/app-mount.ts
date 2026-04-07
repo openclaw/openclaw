@@ -22,19 +22,25 @@ class MockWebSocket {
   send() {}
 }
 
-function createMatchMediaMock(matches = true): typeof window.matchMedia {
-  return ((query: string) => ({
-    matches,
-    media: query,
-    onchange: null,
-    addListener: () => {},
-    removeListener: () => {},
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => false,
-  })) as typeof window.matchMedia;
+function createMatchMediaMock(width: number) {
+  return vi.fn((query: string) => {
+    const maxWidthMatch = query.match(/\(max-width:\s*(\d+)px\)/);
+    const minWidthMatch = query.match(/\(min-width:\s*(\d+)px\)/);
+    const matches =
+      (maxWidthMatch ? width <= Number.parseInt(maxWidthMatch[1] ?? "0", 10) : true) &&
+      (minWidthMatch ? width >= Number.parseInt(minWidthMatch[1] ?? "0", 10) : true);
+    return {
+      matches,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+  });
 }
-
 export function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
   const app = document.createElement("openclaw-app") as OpenClawApp;
@@ -46,15 +52,37 @@ export function mountApp(pathname: string) {
 
 export function registerAppMountHooks() {
   beforeEach(async () => {
+    const localStorage = createStorageMock();
+    const sessionStorage = createStorageMock();
+    const matchMedia = createMatchMediaMock(390);
     window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    const matchMedia = createMatchMediaMock(true);
+    vi.stubGlobal("localStorage", localStorage);
+    vi.stubGlobal("sessionStorage", sessionStorage);
     vi.stubGlobal("matchMedia", matchMedia);
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
+    Object.defineProperty(window, "localStorage", {
+      value: localStorage,
       writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "sessionStorage", {
+      value: sessionStorage,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "matchMedia", {
       value: matchMedia,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "innerWidth", {
+      value: 390,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      value: 844,
+      writable: true,
+      configurable: true,
     });
     getSafeLocalStorage()?.clear();
     getSafeSessionStorage()?.clear();

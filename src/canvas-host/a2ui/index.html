@@ -6,9 +6,13 @@
     <title>OpenClaw Canvas</title>
     <script>
       (() => {
+        const normalizeLower = (value) => {
+          const trimmed = String(value || "").trim();
+          return trimmed.toLowerCase();
+        };
         try {
           const params = new URLSearchParams(window.location.search);
-          const platform = (params.get("platform") || "").trim().toLowerCase();
+          const platform = normalizeLower(params.get("platform"));
           if (platform) {
             document.documentElement.dataset.platform = platform;
             return;
@@ -246,7 +250,7 @@
             const params = new URLSearchParams(window.location.search);
             const raw = params.get("debugStatus") ?? params.get("debug");
             if (!raw) return false;
-            const normalized = String(raw).trim().toLowerCase();
+            const normalized = normalizeLower(raw);
             return normalized === "1" || normalized === "true" || normalized === "yes";
           } catch (_) {
             return false;

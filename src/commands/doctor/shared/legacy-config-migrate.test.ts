@@ -397,7 +397,6 @@ describe("legacy migrate channel streaming aliases", () => {
         expect.objectContaining({ path: "channels.googlechat.accounts" }),
       ]),
     );
-
     const res = migrateLegacyConfig(raw);
     expect(res.changes).toContain(
       "Removed channels.googlechat.streamMode (legacy key no longer used).",

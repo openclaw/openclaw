@@ -12,6 +12,7 @@
     "music-metadata": "^11.12.3"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

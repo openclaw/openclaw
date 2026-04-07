@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { compileSlackInteractiveReplies } from "../../../extensions/slack/src/interactive-replies.ts";
 import type {
   ChannelMessagingAdapter,
   ChannelPlugin,
@@ -29,11 +28,30 @@ vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
 
 const { routeReply } = await import("./route-reply.js");
 
+function compileSlackInteractiveRepliesForTest(
+  payload: Parameters<NonNullable<ChannelMessagingAdapter["transformReplyPayload"]>>[0]["payload"],
+) {
+  const text = payload.text ?? "";
+  if (!text.includes("[[slack_select:") && !text.includes("[[slack_buttons:")) {
+    return payload;
+  }
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      slack: {
+        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
+        blocks: [{ type: "section", text }],
+      },
+    },
+  };
+}
+
 const slackMessaging: ChannelMessagingAdapter = {
   transformReplyPayload: ({ payload, cfg }) =>
     (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
       ?.capabilities?.interactiveReplies === true
-      ? compileSlackInteractiveReplies(payload)
+      ? compileSlackInteractiveRepliesForTest(payload)
       : payload,
   enableInteractiveReplies: ({ cfg }) =>
     (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
@@ -422,7 +440,7 @@ describe("routeReply", () => {
     expectLastDelivery({
       channel: "mattermost",
       to: "channel:CHAN1",
-      replyToId: null,
+      replyToId: "post-root",
       threadId: "post-root",
     });
   });

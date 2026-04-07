@@ -86,9 +86,6 @@ describe("production lint suppressions", () => {
       "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
       "src/config/types.channels.ts|@typescript-eslint/no-explicit-any|1",
       "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
-      "ui/src/ui/app-tool-stream.ts|typescript/no-base-to-string|1",
-      "ui/src/ui/presenter.ts|typescript/no-base-to-string|1",
-      "ui/src/ui/views/config-form.node.ts|typescript/no-base-to-string|3",
       "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
     ]);
   });

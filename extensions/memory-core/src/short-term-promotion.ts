@@ -4,6 +4,7 @@ import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -13,6 +14,8 @@ import {
 import { asRecord } from "./dreaming-shared.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_SESSION_CORPUS_RE =
+  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
@@ -239,7 +242,10 @@ function buildEntryKey(result: {
 }
 
 function hashQuery(query: string): string {
-  return createHash("sha1").update(query.trim().toLowerCase()).digest("hex").slice(0, 12);
+  return createHash("sha1")
+    .update(normalizeLowercaseStringOrEmpty(query))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 function mergeQueryHashes(existing: string[], queryHash: string): string[] {
@@ -761,6 +767,9 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (SHORT_TERM_PATH_RE.test(normalized)) {
+    return true;
+  }
+  if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
     return true;
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);

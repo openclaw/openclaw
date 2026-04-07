@@ -1,5 +1,9 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 
@@ -34,14 +38,7 @@ const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
-  if (!key) {
-    return undefined;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key);
 }
 
 function resolvePrimaryIPv4(): string | undefined {
@@ -107,7 +104,7 @@ function initSelfPresence() {
     text,
     ts: Date.now(),
   };
-  const key = host.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(host);
   entries.set(key, selfEntry);
 }
 
@@ -122,7 +119,7 @@ function ensureSelfPresence() {
 
 function touchSelfPresence() {
   const host = os.hostname();
-  const key = host.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(host);
   const existing = entries.get(key);
   if (existing) {
     entries.set(key, { ...existing, ts: Date.now() });
@@ -200,7 +197,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     normalizePresenceKey(parsed.host) ||
     parsed.ip ||
     parsed.text.slice(0, 64) ||
-    os.hostname().toLowerCase();
+    normalizeLowercaseStringOrEmpty(os.hostname());
   const hadExisting = entries.has(key);
   const existing = entries.get(key) ?? ({} as SystemPresence);
   const merged: SystemPresence = {
@@ -247,7 +244,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   ensureSelfPresence();
-  const normalizedKey = normalizePresenceKey(key) ?? os.hostname().toLowerCase();
+  const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);

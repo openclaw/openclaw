@@ -6,12 +6,14 @@ import {
 } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { writeCodexCliCredentials } from "../cli-credentials.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
@@ -119,11 +121,11 @@ async function buildOAuthProfileResult(params: {
 }
 
 function extractErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }
 
 function isRefreshTokenReusedError(error: unknown): boolean {
-  const message = extractErrorMessage(error).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
   return (
     message.includes("refresh_token_reused") ||
     message.includes("refresh token has already been used") ||
@@ -207,7 +209,7 @@ function adoptNewerMainOAuthCredential(params: {
     // Best-effort: don't crash if main agent store is missing or unreadable.
     log.debug("adoptNewerMainOAuthCredential failed", {
       profileId: params.profileId,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
   }
   return null;
@@ -403,7 +405,7 @@ async function resolveProfileSecretString(params: {
         log.debug(params.inlineFailureMessage, {
           profileId: params.profileId,
           provider: params.provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatErrorMessage(err),
         });
       }
     }
@@ -421,7 +423,7 @@ async function resolveProfileSecretString(params: {
       log.debug(params.refFailureMessage, {
         profileId: params.profileId,
         provider: params.provider,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
     }
   }

@@ -25,6 +25,7 @@ export type OllamaTagsResponse = {
 
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
+  capabilities?: string[];
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
@@ -56,10 +57,15 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
-export async function queryOllamaContextWindow(
+export type OllamaModelShowInfo = {
+  contextWindow?: number;
+  capabilities?: string[];
+};
+
+export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
-): Promise<number | undefined> {
+): Promise<OllamaModelShowInfo> {
   try {
     const { response, release } = await fetchWithSsrFGuard({
       url: `${apiBase}/api/show`,
@@ -74,31 +80,49 @@ export async function queryOllamaContextWindow(
     });
     try {
       if (!response.ok) {
-        return undefined;
+        return {};
       }
-      const data = (await response.json()) as { model_info?: Record<string, unknown> };
-      if (!data.model_info) {
-        return undefined;
-      }
-      for (const [key, value] of Object.entries(data.model_info)) {
-        if (
-          key.endsWith(".context_length") &&
-          typeof value === "number" &&
-          Number.isFinite(value)
-        ) {
-          const contextWindow = Math.floor(value);
-          if (contextWindow > 0) {
-            return contextWindow;
+      const data = (await response.json()) as {
+        model_info?: Record<string, unknown>;
+        capabilities?: unknown;
+      };
+
+      let contextWindow: number | undefined;
+      if (data.model_info) {
+        for (const [key, value] of Object.entries(data.model_info)) {
+          if (
+            key.endsWith(".context_length") &&
+            typeof value === "number" &&
+            Number.isFinite(value)
+          ) {
+            const ctx = Math.floor(value);
+            if (ctx > 0) {
+              contextWindow = ctx;
+              break;
+            }
           }
         }
       }
-      return undefined;
+
+      const capabilities = Array.isArray(data.capabilities)
+        ? (data.capabilities as unknown[]).filter((c): c is string => typeof c === "string")
+        : undefined;
+
+      return { contextWindow, capabilities };
     } finally {
       await release();
     }
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** @deprecated Use queryOllamaModelShowInfo instead. */
+export async function queryOllamaContextWindow(
+  apiBase: string,
+  modelName: string,
+): Promise<number | undefined> {
+  return (await queryOllamaModelShowInfo(apiBase, modelName)).contextWindow;
 }
 
 export async function enrichOllamaModelsWithContext(
@@ -111,10 +135,14 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
-      batch.map(async (model) => ({
-        ...model,
-        contextWindow: await queryOllamaContextWindow(apiBase, model.name),
-      })),
+      batch.map(async (model) => {
+        const showInfo = await queryOllamaModelShowInfo(apiBase, model.name);
+        return {
+          ...model,
+          contextWindow: showInfo.contextWindow,
+          capabilities: showInfo.capabilities,
+        };
+      }),
     );
     enriched.push(...batchResults);
   }
@@ -128,12 +156,15 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
+  capabilities?: string[],
 ): ModelDefinitionConfig {
+  const hasVision = capabilities?.includes("vision") ?? false;
+  const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   return {
     id: modelId,
     name: modelId,
     reasoning: isReasoningModelHeuristic(modelId),
-    input: ["text"],
+    input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,

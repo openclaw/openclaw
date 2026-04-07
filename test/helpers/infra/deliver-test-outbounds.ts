@@ -250,10 +250,9 @@ function resolveIMessageMaxBytes(
 export const imessageOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sanitizeText: ({ text }) => text,
-  sendText: async ({ cfg, to, text, accountId, deps }) =>
+  sendText: async ({ to, text, accountId, deps }) =>
     withIMessageChannel(
       await resolveIMessageSender(deps)(to, text, {
-        maxBytes: resolveIMessageMaxBytes(cfg, accountId),
         accountId: accountId ?? undefined,
       }),
     ),

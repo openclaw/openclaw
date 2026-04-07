@@ -210,10 +210,13 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
   });
 
-  it("preserves approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+  it("preserves live approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const host = createHost();
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
     const chatHost = host as typeof host & {
       chatRunId: string | null;
       chatQueue: Array<{
@@ -246,10 +249,6 @@ describe("connectGateway", () => {
         expiresAtMs: now + 60_000,
       },
     ];
-
-    connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
 
     client.emitGap(20, 24);
 

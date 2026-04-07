@@ -8,8 +8,9 @@ import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
+  isBundledPluginExtensionPath,
+  resolvePluginLoaderJitiConfig,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -26,6 +27,7 @@ const publicSurfaceLocations = new Map<
   } | null
 >();
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const sharedBundledPublicSurfaceJitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -69,13 +71,16 @@ function resolvePublicSurfaceLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    preferBuiltDist: true,
   });
+  const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
+  if (sharedLoader) {
+    return sharedLoader;
+  }
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {
     return cached;
@@ -85,6 +90,34 @@ function getJiti(modulePath: string) {
     tryNative,
   });
   jitiLoaders.set(cacheKey, loader);
+  return loader;
+}
+
+function getSharedBundledPublicSurfaceJiti(
+  modulePath: string,
+  tryNative: boolean,
+): ReturnType<typeof createJiti> | null {
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  if (
+    !isBundledPluginExtensionPath({
+      modulePath,
+      openClawPackageRoot: OPENCLAW_PACKAGE_ROOT,
+      ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+    })
+  ) {
+    return null;
+  }
+  const cacheKey = tryNative ? "bundled:native" : "bundled:source";
+  const cached = sharedBundledPublicSurfaceJitiLoaders.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
+  const loader = createJiti(import.meta.url, {
+    ...buildPluginLoaderJitiOptions(aliasMap),
+    tryNative,
+  });
+  sharedBundledPublicSurfaceJitiLoaders.set(cacheKey, loader);
   return loader;
 }
 
@@ -136,4 +169,5 @@ export function resetBundledPluginPublicArtifactLoaderForTest(): void {
   loadedPublicSurfaceModules.clear();
   publicSurfaceLocations.clear();
   jitiLoaders.clear();
+  sharedBundledPublicSurfaceJitiLoaders.clear();
 }

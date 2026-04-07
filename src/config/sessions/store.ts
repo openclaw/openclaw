@@ -7,6 +7,7 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -76,7 +77,7 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
 }
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
-  return sessionKey.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(sessionKey);
 }
 
 export function resolveSessionStoreEntry(params: {
@@ -103,7 +104,7 @@ export function resolveSessionStoreEntry(params: {
     if (candidateKey === normalizedKey) {
       continue;
     }
-    if (candidateKey.toLowerCase() !== normalizedKey) {
+    if (normalizeStoreSessionKey(candidateKey) !== normalizedKey) {
       continue;
     }
     legacyKeySet.add(candidateKey);

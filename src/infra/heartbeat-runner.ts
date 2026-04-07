@@ -49,6 +49,10 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -197,11 +201,27 @@ function resolveHeartbeatSession(
   const mainEntry = store[mainSessionKey];
 
   if (scope === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
 
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
+  if (forced && isSubagentSessionKey(forced)) {
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: true,
+    };
+  }
+
   if (forced && !isSubagentSessionKey(forced)) {
     const forcedCandidate = toAgentStoreSessionKey({
       agentId: resolvedAgentId,
@@ -222,6 +242,7 @@ function resolveHeartbeatSession(
             storePath,
             store,
             entry: store[forcedCanonical],
+            suppressOriginatingContext: false,
           };
         }
       }
@@ -230,12 +251,24 @@ function resolveHeartbeatSession(
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
 
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
 
   const candidate = toAgentStoreSessionKey({
@@ -244,7 +277,13 @@ function resolveHeartbeatSession(
     mainKey: cfg.session?.mainKey,
   });
   if (isSubagentSessionKey(candidate)) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
   const canonical = canonicalizeMainSessionAlias({
     cfg,
@@ -259,11 +298,18 @@ function resolveHeartbeatSession(
         storePath,
         store,
         entry: store[canonical],
+        suppressOriginatingContext: false,
       };
     }
   }
 
-  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  return {
+    sessionKey: mainSessionKey,
+    storePath,
+    store,
+    entry: mainEntry,
+    suppressOriginatingContext: false,
+  };
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -589,7 +635,7 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const { entry, sessionKey, storePath } = preflight.session;
+  const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -718,8 +764,9 @@ export async function runHeartbeatOnce(opts: {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
-    OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
-    OriginatingTo: delivery.to,
+    OriginatingChannel:
+      !suppressOriginatingContext && delivery.channel !== "none" ? delivery.channel : undefined,
+    OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
     AccountId: delivery.accountId,
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
@@ -775,7 +822,7 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
@@ -1148,7 +1195,7 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;

@@ -7,6 +7,9 @@
     "@clawdbot/lobster": "2026.1.24",
     "@sinclair/typebox": "0.34.49"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

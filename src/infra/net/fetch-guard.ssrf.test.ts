@@ -693,7 +693,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("preserves body while stripping auth headers for cross-origin 307 redirects", async () => {
+  it("drops unsafe bodies while stripping auth headers for cross-origin 307 redirects", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
       .fn()
@@ -709,6 +709,113 @@ describe("fetchWithSsrFGuard hardening", () => {
       url: "https://api.example.com/upload",
       fetchImpl,
       lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBeNull();
+    await result.release();
+  });
+
+  it("preserves unsafe cross-origin 307 bodies only when explicitly enabled", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 307,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      allowCrossOriginUnsafeRedirectReplay: true,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBe('{"secret":"123"}');
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBe("application/json");
+    await result.release();
+  });
+
+  it("drops unsafe bodies while stripping auth headers for cross-origin 308 redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 308,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBeNull();
+    await result.release();
+  });
+
+  it("preserves unsafe cross-origin 308 bodies only when explicitly enabled", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 308,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      allowCrossOriginUnsafeRedirectReplay: true,
       init: {
         method: "POST",
         headers: {

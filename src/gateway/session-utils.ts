@@ -54,6 +54,10 @@ import {
   isWorkspaceRelativeAvatarPath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
@@ -211,6 +215,18 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
 
 function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveLatestCompactionCheckpoint(
+  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
+): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+  return checkpoints.reduce((latest, checkpoint) =>
+    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  );
 }
 
 function resolveEstimatedSessionCostUsd(params: {
@@ -642,19 +658,19 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     }
     const identity = entry.identity
       ? {
-          name: entry.identity.name?.trim() || undefined,
-          theme: entry.identity.theme?.trim() || undefined,
-          emoji: entry.identity.emoji?.trim() || undefined,
-          avatar: entry.identity.avatar?.trim() || undefined,
+          name: normalizeOptionalString(entry.identity.name),
+          theme: normalizeOptionalString(entry.identity.theme),
+          emoji: normalizeOptionalString(entry.identity.emoji),
+          avatar: normalizeOptionalString(entry.identity.avatar),
           avatarUrl: resolveIdentityAvatarUrl(
             cfg,
             normalizeAgentId(entry.id),
-            entry.identity.avatar?.trim(),
+            normalizeOptionalString(entry.identity.avatar),
           ),
         }
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
-      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
+      name: normalizeOptionalString(entry.name),
       identity,
     });
   }
@@ -1061,10 +1077,10 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
-    const normalizedProvider = params.provider?.trim().toLowerCase();
+    const normalizedProvider = normalizeOptionalString(params.provider)?.toLowerCase();
     const normalizedCandidates = [
-      params.model.trim().toLowerCase(),
-      typeof modelEntry?.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty(params.model),
+      normalizeLowercaseStringOrEmpty(modelEntry?.name),
     ].filter(Boolean);
     if (modelEntry) {
       if (modelEntry.input?.includes("image")) {
@@ -1268,6 +1284,7 @@ export function buildGatewaySessionRow(params: {
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store);
+  const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1354,6 +1371,8 @@ export function buildGatewaySessionRow(params: {
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
+    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    latestCompactionCheckpoint,
   };
 }
 
@@ -1393,7 +1412,7 @@ export function listSessionsFromStore(params: {
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = typeof opts.label === "string" ? opts.label.trim() : "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
-  const search = typeof opts.search === "string" ? opts.search.trim().toLowerCase() : "";
+  const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))

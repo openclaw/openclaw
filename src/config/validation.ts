@@ -969,6 +969,9 @@ function validateConfigObjectWithPluginsBase(
     const entry = normalizedPlugins.entries[pluginId];
     const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
+    const shouldReplacePluginConfig = opts.applyDefaults
+      ? entryExists || entryHasConfig
+      : entryHasConfig;
 
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
@@ -1014,7 +1017,7 @@ function validateConfigObjectWithPluginsBase(
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (entryExists || entryHasConfig) {
+        } else if (shouldReplacePluginConfig) {
           replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
         }
       } else if (record.format === "bundle") {

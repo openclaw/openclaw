@@ -567,14 +567,14 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
-  it("does not pass iMessage media maxBytes on plain text sends", async () => {
+  it("passes config through for iMessage media sends so the channel runtime can resolve limits", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
+          plugin: createIMessageTestPlugin(),
         },
       ]),
     );
@@ -586,11 +586,18 @@ describe("deliverOutboundPayloads", () => {
       cfg,
       channel: "imessage",
       to: "chat_id:42",
-      payloads: [{ text: "hello" }],
+      payloads: [{ text: "hello", mediaUrls: ["https://example.com/a.png"] }],
       deps: { imessage: sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith("chat_id:42", "hello", { accountId: undefined });
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "chat_id:42",
+      "hello",
+      expect.objectContaining({
+        config: cfg,
+        mediaUrl: "https://example.com/a.png",
+      }),
+    );
   });
 
   it("normalizes payloads and drops empty entries", () => {

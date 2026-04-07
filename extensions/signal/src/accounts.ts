@@ -4,6 +4,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SignalAccountConfig } from "./runtime-api.js";
 
 export type ResolvedSignalAccount = {
@@ -54,7 +55,7 @@ export function resolveSignalAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     baseUrl,
     configured,
     config: merged,

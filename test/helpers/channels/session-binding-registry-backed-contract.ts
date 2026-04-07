@@ -7,10 +7,8 @@ import {
 import { feishuPlugin, feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
 import { imessagePlugin } from "../../../extensions/imessage/api.js";
 import { matrixPlugin, setMatrixRuntime } from "../../../extensions/matrix/test-api.js";
-import {
-  telegramPlugin,
-  resetTelegramThreadBindingsForTests,
-} from "../../../extensions/telegram/test-api.js";
+import { telegramPlugin } from "../../../extensions/telegram/api.js";
+import { resetTelegramThreadBindingsForTests } from "../../../extensions/telegram/test-api.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   clearRuntimeConfigSnapshot,

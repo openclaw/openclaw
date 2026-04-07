@@ -17,7 +17,9 @@ const SECRET_TARGET_CALLSITES = [
 function hasSupportedTargetIdsWiring(source: string): boolean {
   return (
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
-    /targetIds:\s*scopedTargets\.targetIds/m.test(source)
+    /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
+    source.includes("collectStatusScanOverview({")
   );
 }
 

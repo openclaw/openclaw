@@ -21,6 +21,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -170,7 +171,7 @@ async function resolveModelOverride(params: {
   if (!raw) {
     return { kind: "reset" };
   }
-  if (raw.toLowerCase() === "default") {
+  if (normalizeOptionalLowercaseString(raw) === "default") {
     return { kind: "reset" };
   }
 

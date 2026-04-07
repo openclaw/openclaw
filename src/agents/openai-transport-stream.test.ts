@@ -1079,6 +1079,41 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
+  it("flattens pure text content arrays for string-only completions backends when opted in", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gg-hf-gg/gemma-4-E2B-it",
+        name: "Gemma 4 E2B",
+        api: "openai-completions",
+        provider: "inferrs",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 4096,
+        compat: {
+          requiresStringContent: true,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "What is 2 + 2?" }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ role?: string; content?: unknown }> };
+
+    expect(params.messages?.[0]).toMatchObject({ role: "system", content: "system" });
+    expect(params.messages?.[1]).toMatchObject({ role: "user", content: "What is 2 + 2?" });
+  });
+
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAICompletionsParams(
       {

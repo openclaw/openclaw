@@ -119,8 +119,10 @@ describe("chat context notice", () => {
       return;
     }
 
+    expect(icon.tagName.toLowerCase()).toBe("svg");
+    expect(icon.classList.contains("context-notice__icon")).toBe(true);
     expect(icon.getAttribute("width")).toBe("16");
     expect(icon.getAttribute("height")).toBe("16");
-    expect(icon.getBoundingClientRect().width).toBeLessThan(24);
+    expect(icon.querySelector("path")).not.toBeNull();
   });
 });

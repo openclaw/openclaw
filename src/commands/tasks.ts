@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   cancelTaskById,
   getTaskById,
@@ -55,7 +56,7 @@ function truncate(value: string, maxChars: number) {
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "n/a";
   }

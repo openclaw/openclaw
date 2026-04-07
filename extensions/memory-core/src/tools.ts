@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   jsonResult,
   readNumberParam,
@@ -114,7 +115,7 @@ async function resolveMemoryReadFailureResult(params: {
       return jsonResult(supplement);
     }
   }
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
 }
 
@@ -239,7 +240,7 @@ export function createMemorySearchTool(options: {
             mode: searchMode,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           return jsonResult(buildMemorySearchUnavailableResult(message));
         }
       },

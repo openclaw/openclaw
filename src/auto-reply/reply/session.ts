@@ -33,6 +33,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -70,23 +75,21 @@ function resolveSessionDefaultAccountId(params: {
   accountIdRaw?: string;
   persistedLastAccountId?: string;
 }): string | undefined {
-  const explicit = params.accountIdRaw?.trim();
+  const explicit = normalizeOptionalString(params.accountIdRaw);
   if (explicit) {
     return explicit;
   }
-  const persisted = params.persistedLastAccountId?.trim();
+  const persisted = normalizeOptionalString(params.persistedLastAccountId);
   if (persisted) {
     return persisted;
   }
-  const channel = params.channelRaw?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channelRaw);
   if (!channel) {
     return undefined;
   }
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefault = channels?.[channel]?.defaultAccount;
-  return typeof configuredDefault === "string" && configuredDefault.trim()
-    ? configuredDefault.trim()
-    : undefined;
+  return normalizeOptionalString(configuredDefault);
 }
 
 function resolveStaleSessionEndReason(params: {
@@ -218,7 +221,9 @@ export async function initSessionState(params: {
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const commandTargetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined;
   const targetSessionKey =
     resolveBoundConversationSessionKey({
       cfg,
@@ -314,8 +319,8 @@ export async function initSessionState(params: {
     : triggerBodyNormalized;
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
-  const trimmedBodyLower = trimmedBody.toLowerCase();
-  const strippedForResetLower = strippedForReset.toLowerCase();
+  const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
+  const strippedForResetLower = normalizeLowercaseStringOrEmpty(strippedForReset);
   let matchedResetTriggerLower: string | undefined;
 
   for (const trigger of resetTriggers) {
@@ -325,7 +330,7 @@ export async function initSessionState(params: {
     if (!resetAuthorized) {
       break;
     }
-    const triggerLower = trigger.toLowerCase();
+    const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
       isNewSession = true;
       bodyStripped = "";
@@ -563,11 +568,11 @@ export async function initSessionState(params: {
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
   }
-  const threadLabel = ctx.ThreadLabel?.trim();
+  const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
   }
-  const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
     parentSessionKey &&

@@ -89,6 +89,7 @@ import type {
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
+  SessionCompactionCheckpoint,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
@@ -312,6 +313,11 @@ export class OpenClawApp extends LitElement {
   @state() sessionsPage = 0;
   @state() sessionsPageSize = 25;
   @state() sessionsSelectedKeys: Set<string> = new Set();
+  @state() sessionsExpandedCheckpointKey: string | null = null;
+  @state() sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
+  @state() sessionsCheckpointLoadingKey: string | null = null;
+  @state() sessionsCheckpointBusyKey: string | null = null;
+  @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

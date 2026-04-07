@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -182,7 +183,7 @@ const TalkSchema = z
   })
   .strict()
   .superRefine((talk, ctx) => {
-    const provider = talk.provider?.trim().toLowerCase();
+    const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
     if (provider && providers.length > 0 && !(provider in talk.providers!)) {

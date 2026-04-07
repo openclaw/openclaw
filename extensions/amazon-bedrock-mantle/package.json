@@ -7,6 +7,9 @@
   "dependencies": {
     "@aws/bedrock-token-generator": "^1.1.0"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "bundle": {
       "stageRuntimeDependencies": true

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -115,14 +116,8 @@ function coerceNormalizeCompatibilityConfig(
   return typeof value === "function" ? (value as PluginDoctorCompatibilityNormalizer) : undefined;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
-  const talk = asRecord(asRecord(raw)?.talk);
+  const talk = asNullableRecord(asNullableRecord(raw)?.talk);
   if (!talk) {
     return false;
   }
@@ -133,12 +128,12 @@ function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
 
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   const ids = new Set<string>();
-  const root = asRecord(raw);
+  const root = asNullableRecord(raw);
   if (!root) {
     return [];
   }
 
-  const channels = asRecord(root.channels);
+  const channels = asNullableRecord(root.channels);
   if (channels) {
     for (const channelId of Object.keys(channels)) {
       if (channelId !== "defaults") {
@@ -147,7 +142,7 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
     }
   }
 
-  const pluginsEntries = asRecord(asRecord(root.plugins)?.entries);
+  const pluginsEntries = asNullableRecord(asNullableRecord(root.plugins)?.entries);
   if (pluginsEntries) {
     for (const pluginId of Object.keys(pluginsEntries)) {
       ids.add(pluginId);

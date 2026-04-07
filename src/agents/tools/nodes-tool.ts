@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -72,7 +74,7 @@ async function resolveNodePairApproveScopes(
 }
 
 function isPairingRequiredMessage(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return lower.includes("pairing required") || lower.includes("not_paired");
 }
 
@@ -303,7 +305,7 @@ export function createNodesTool(options?: {
             ? gatewayOpts.gatewayUrl.trim()
             : "default";
         const agentLabel = agentId ?? "unknown";
-        let message = err instanceof Error ? err.message : String(err);
+        let message = formatErrorMessage(err);
         if (action === "invoke" && isPairingRequiredMessage(message)) {
           const requestId = extractPairingRequestId(message);
           const approveHint = requestId

@@ -167,7 +167,9 @@ describe("control UI routing", () => {
     }
 
     expect(sidebar.classList.contains("sidebar--collapsed")).toBe(true);
+    expect(item.querySelector(".nav-item__icon")).not.toBeNull();
     expect(item.querySelector(".nav-item__text")).toBeNull();
+    expect(app.querySelector(".sidebar-brand__copy")).toBeNull();
     expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
   });
 
@@ -228,6 +230,8 @@ describe("control UI routing", () => {
       return;
     }
 
+    expect(shell.classList.contains("topnav-shell")).toBe(true);
+    expect(content.classList.contains("topnav-shell__content")).toBe(true);
     expect(shell.querySelector(".topbar-nav-toggle")).not.toBeNull();
     expect(shell.children[1]).toBe(content);
     expect(shell.querySelector(".topnav-shell__actions")).not.toBeNull();
@@ -249,7 +253,10 @@ describe("control UI routing", () => {
       return;
     }
 
+    expect(toggle.classList.contains("topbar-nav-toggle")).toBe(true);
+    expect(actions.classList.contains("topnav-shell__actions")).toBe(true);
     expect(shell.firstElementChild).toBe(toggle);
+    expect(shell.querySelector(".topbar-nav-toggle")).toBe(toggle);
     expect(actions.querySelector(".topbar-search")).not.toBeNull();
     expect(toggle.getAttribute("aria-label")).toBeTruthy();
   });
@@ -350,15 +357,46 @@ describe("control UI routing", () => {
     if (!container) {
       return;
     }
-    const maxScroll = container.scrollHeight - container.clientHeight;
-    expect(maxScroll).toBeGreaterThan(0);
+    let finalScrollTop = 0;
+    Object.defineProperty(container, "clientHeight", {
+      value: 180,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollHeight", {
+      value: 960,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollTop", {
+      configurable: true,
+      get: () => finalScrollTop,
+      set: (value: number) => {
+        finalScrollTop = value;
+      },
+    });
+    Object.defineProperty(container, "scrollTo", {
+      configurable: true,
+      value: ({ top }: { top: number }) => {
+        finalScrollTop = top;
+      },
+    });
+    const targetScrollTop = container.scrollHeight;
+    expect(targetScrollTop).toBeGreaterThan(container.clientHeight);
+    app.chatMessages = [
+      ...app.chatMessages,
+      {
+        role: "assistant",
+        content: `Line 60 - ${"x".repeat(200)}`,
+        timestamp: Date.now() + 60,
+      },
+    ];
+    await app.updateComplete;
     for (let i = 0; i < 10; i++) {
-      if (container.scrollTop === maxScroll) {
+      if (container.scrollTop === targetScrollTop) {
         break;
       }
       await nextFrame();
     }
-    expect(container.scrollTop).toBe(maxScroll);
+    expect(container.scrollTop).toBe(targetScrollTop);
   });
 
   it("hydrates token from query params and strips them", async () => {

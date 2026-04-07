@@ -1,10 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { MINIMAX_OAUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import {
-  createProviderAuthResolver,
-  resolveApiKeyFromCredential,
-} from "./models-config.providers.secrets.js";
+
+async function loadProviderAuthModules() {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  vi.resetModules();
+  return Promise.all([
+    import("./model-auth-markers.js"),
+    import("./models-config.providers.secrets.js"),
+  ]);
+}
+
+beforeEach(() => {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+});
 
 function buildPairedApiKeyProviders(apiKey: string) {
   return {
@@ -14,7 +26,8 @@ function buildPairedApiKeyProviders(apiKey: string) {
 }
 
 describe("models-config provider auth provenance", () => {
-  it("persists env keyRef and tokenRef auth profiles as env var markers", () => {
+  it("persists env keyRef and tokenRef auth profiles as env var markers", async () => {
+    const [, { resolveApiKeyFromCredential }] = await loadProviderAuthModules();
     const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY", "TOGETHER_API_KEY"]);
     delete process.env.VOLCANO_ENGINE_API_KEY;
     delete process.env.TOGETHER_API_KEY;
@@ -39,7 +52,9 @@ describe("models-config provider auth provenance", () => {
     }
   });
 
-  it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", () => {
+  it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", async () => {
+    const [{ NON_ENV_SECRETREF_MARKER }, { resolveApiKeyFromCredential }] =
+      await loadProviderAuthModules();
     const byteplusApiKey = resolveApiKeyFromCredential({
       type: "api_key",
       provider: "byteplus",
@@ -59,7 +74,8 @@ describe("models-config provider auth provenance", () => {
     expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
-  it("keeps oauth compatibility markers for minimax-portal", () => {
+  it("keeps oauth compatibility markers for minimax-portal", async () => {
+    const [{ MINIMAX_OAUTH_MARKER }] = await loadProviderAuthModules();
     const providers = {
       "minimax-portal": {
         apiKey: MINIMAX_OAUTH_MARKER,
@@ -69,6 +85,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("prefers profile auth over env auth in provider summaries to match runtime resolution", async () => {
+    const [, { createProviderAuthResolver }] = await loadProviderAuthModules();
     const auth = createProviderAuthResolver(
       {
         OPENAI_API_KEY: "env-openai-key",
@@ -94,7 +111,9 @@ describe("models-config provider auth provenance", () => {
     });
   });
 
-  it("resolves plugin-owned synthetic auth through the provider hook", () => {
+  it("resolves plugin-owned synthetic auth through the provider hook", async () => {
+    const [{ NON_ENV_SECRETREF_MARKER }, { createProviderAuthResolver }] =
+      await loadProviderAuthModules();
     const auth = createProviderAuthResolver(
       {} as NodeJS.ProcessEnv,
       {

@@ -1,4 +1,5 @@
 import { callGateway } from "../../../gateway/call.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
@@ -57,7 +58,7 @@ export async function resolveAcpTargetSessionKey(params: {
   commandParams: HandleCommandsParams;
   token?: string;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; error: string }> {
-  const token = params.token?.trim() || "";
+  const token = normalizeOptionalString(params.token) ?? "";
   if (token) {
     const resolved = await resolveSessionKeyByToken(token);
     if (!resolved) {

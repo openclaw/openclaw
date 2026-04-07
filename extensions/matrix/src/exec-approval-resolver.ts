@@ -1,28 +1,25 @@
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { withOperatorApprovalsGatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 
 export { isApprovalNotFoundError };
 
-export async function resolveMatrixExecApproval(params: {
+export async function resolveMatrixApproval(params: {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ExecApprovalReplyDecision;
   senderId?: string | null;
   gatewayUrl?: string;
 }): Promise<void> {
-  await withOperatorApprovalsGatewayClient(
-    {
-      config: params.cfg,
-      gatewayUrl: params.gatewayUrl,
-      clientDisplayName: `Matrix approval (${params.senderId?.trim() || "unknown"})`,
-    },
-    async (gatewayClient) => {
-      await gatewayClient.request("exec.approval.resolve", {
-        id: params.approvalId,
-        decision: params.decision,
-      });
-    },
-  );
+  await resolveApprovalOverGateway({
+    cfg: params.cfg,
+    approvalId: params.approvalId,
+    decision: params.decision,
+    senderId: params.senderId,
+    gatewayUrl: params.gatewayUrl,
+    clientDisplayName: `Matrix approval (${params.senderId?.trim() || "unknown"})`,
+  });
 }
+
+export const resolveMatrixExecApproval = resolveMatrixApproval;

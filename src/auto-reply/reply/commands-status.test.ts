@@ -15,6 +15,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildStatusReply, buildStatusText } from "./commands-status.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -84,15 +85,35 @@ function writeTranscriptUsageLog(params: {
   );
 }
 
+function configureInMemoryTaskRegistryStoreForTests(): void {
+  configureTaskRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      }),
+      saveSnapshot: () => {},
+      upsertTaskWithDeliveryState: () => {},
+      upsertTask: () => {},
+      deleteTaskWithDeliveryState: () => {},
+      deleteTask: () => {},
+      upsertDeliveryState: () => {},
+      deleteDeliveryState: () => {},
+      close: () => {},
+    },
+  });
+}
+
 describe("buildStatusReply subagent summary", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {

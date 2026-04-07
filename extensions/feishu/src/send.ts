@@ -1,5 +1,9 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import {
+  convertMarkdownTables,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -31,7 +35,7 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
   }
-  const msg = response.msg?.toLowerCase() ?? "";
+  const msg = normalizeLowercaseStringOrEmpty(response.msg);
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
@@ -614,7 +618,7 @@ export type CardHeaderConfig = {
 };
 
 export function resolveFeishuCardTemplate(template?: string): string | undefined {
-  const normalized = template?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(template);
   if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
     return undefined;
   }

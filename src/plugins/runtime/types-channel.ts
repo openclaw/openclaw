@@ -29,6 +29,38 @@ export type RuntimeThreadBindingLifecycleRecord =
       maxAgeMs?: number;
     };
 
+export type PluginRuntimeChannelContextKey = {
+  channelId: string;
+  accountId?: string | null;
+  capability: string;
+};
+
+export type PluginRuntimeChannelContextEvent = {
+  type: "registered" | "unregistered";
+  key: {
+    channelId: string;
+    accountId?: string;
+    capability: string;
+  };
+  context?: unknown;
+};
+
+export type PluginRuntimeChannelContextRegistry = {
+  register: (
+    params: PluginRuntimeChannelContextKey & {
+      context: unknown;
+      abortSignal?: AbortSignal;
+    },
+  ) => { dispose: () => void };
+  get: <T = unknown>(params: PluginRuntimeChannelContextKey) => T | undefined;
+  watch: (params: {
+    channelId?: string;
+    accountId?: string | null;
+    capability?: string;
+    onEvent: (event: PluginRuntimeChannelContextEvent) => void;
+  }) => () => void;
+};
+
 export type PluginRuntimeChannel = {
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
@@ -83,6 +115,8 @@ export type PluginRuntimeChannel = {
     buildMentionRegexes: typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
     matchesMentionPatterns: typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
     matchesMentionWithExplicit: typeof import("../../auto-reply/reply/mentions.js").matchesMentionWithExplicit;
+    implicitMentionKindWhen: typeof import("../../channels/mention-gating.js").implicitMentionKindWhen;
+    resolveInboundMentionDecision: typeof import("../../channels/mention-gating.js").resolveInboundMentionDecision;
   };
   reactions: {
     shouldAckReaction: typeof import("../../channels/ack-reactions.js").shouldAckReaction;
@@ -119,4 +153,5 @@ export type PluginRuntimeChannel = {
       maxAgeMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
   };
+  runtimeContexts: PluginRuntimeChannelContextRegistry;
 };

@@ -23,6 +23,7 @@ export const AgentDefaultsSchema = z
     imageGenerationModel: AgentModelSchema.optional(),
     videoGenerationModel: AgentModelSchema.optional(),
     musicGenerationModel: AgentModelSchema.optional(),
+    mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -43,6 +44,7 @@ export const AgentDefaultsSchema = z
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     repoRoot: z.string().optional(),
+    systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
@@ -107,6 +109,7 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        provider: z.string().optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),

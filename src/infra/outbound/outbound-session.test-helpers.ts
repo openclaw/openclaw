@@ -14,6 +14,10 @@ import {
 } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
@@ -180,7 +184,7 @@ function resolveSlackOutboundSessionRouteForTest(params: ChannelOutboundSessionR
   const isGroupChannel =
     /^g/i.test(rawId) &&
     params.cfg.channels?.slack?.dm?.groupChannels?.some(
-      (candidate) => String(candidate).trim().toLowerCase() === normalizedId,
+      (candidate) => normalizeLowercaseStringOrEmpty(String(candidate)) === normalizedId,
     ) === true;
   const peerKind: RoutePeer["kind"] = isDm ? "direct" : isGroupChannel ? "group" : "channel";
   return buildThreadedChannelRoute({
@@ -266,7 +270,9 @@ function resolveMattermostOutboundSessionRouteForTest(params: ChannelOutboundSes
 }
 
 function resolveWhatsAppOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const normalized = stripChannelTargetPrefix(params.target, "whatsapp").trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(
+    stripChannelTargetPrefix(params.target, "whatsapp"),
+  );
   if (!normalized) {
     return null;
   }

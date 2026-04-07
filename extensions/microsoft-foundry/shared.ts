@@ -5,6 +5,7 @@ import {
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -111,7 +112,7 @@ type FoundryConfigShape = {
 };
 
 export function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
 }
 

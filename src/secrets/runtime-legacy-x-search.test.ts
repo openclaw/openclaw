@@ -1,9 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as telegramSecrets from "../../extensions/telegram/src/secret-contract.ts";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+
+const telegramSecrets = loadBundledChannelSecretContractApi("telegram");
+if (!telegramSecrets?.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Telegram secret contract api");
+}
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 

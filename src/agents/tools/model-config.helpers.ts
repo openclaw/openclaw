@@ -4,7 +4,11 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
+  listProfilesForProvider,
+} from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
@@ -35,6 +39,9 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
   }
   const agentDir = params.agentDir?.trim();
   if (!agentDir) {
+    return false;
+  }
+  if (!hasAnyAuthProfileStoreSource(agentDir)) {
     return false;
   }
   const store = ensureAuthProfileStore(agentDir, {

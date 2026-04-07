@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -776,7 +777,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await this.embedBatchWithRetry(["ping"]);
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       return { ok: false, error: message };
     }
   }

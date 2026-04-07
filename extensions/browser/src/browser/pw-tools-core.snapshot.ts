@@ -23,6 +23,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   limit?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
   const page = await getPageForTargetId({
@@ -30,6 +31,15 @@ export async function snapshotAriaViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
+  if (opts.ssrfPolicy) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
   const res = (await withPageScopedCdpClient({
     cdpUrl: opts.cdpUrl,
     page,
@@ -52,12 +62,22 @@ export async function snapshotAiViaPlaywright(opts: {
   targetId?: string;
   timeoutMs?: number;
   maxChars?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
   });
   ensurePageState(page);
+  if (opts.ssrfPolicy) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
 
   const maybe = page as unknown as WithSnapshotForAI;
   if (!maybe._snapshotForAI) {
@@ -98,6 +118,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   frameSelector?: string;
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   snapshot: string;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
@@ -108,6 +129,15 @@ export async function snapshotRoleViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
+  if (opts.ssrfPolicy) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
 
   if (opts.refsMode === "aria") {
     if (opts.selector?.trim() || opts.frameSelector?.trim()) {
