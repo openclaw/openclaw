@@ -70,6 +70,7 @@ beforeAll(async () => {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
   port = await getFreePort();
+  testState.gatewayAuth = undefined;
   process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
   await fs.writeFile(
     configPath,
