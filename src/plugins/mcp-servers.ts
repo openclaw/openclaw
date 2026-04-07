@@ -42,10 +42,7 @@ function isPluginEnabledByConfig(
     origin: plugin.origin,
     config: normalizedPlugins,
     rootConfig: cfg,
-    // Active runtime registries do not retain manifest-level enabledByDefault,
-    // but activationSource preserves whether this plugin was admitted by the
-    // bundled default policy versus an explicit selection.
-    enabledByDefault: plugin.activationSource === "default",
+    enabledByDefault: plugin.enabledByDefault,
   }).activated;
 }
 

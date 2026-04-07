@@ -256,6 +256,7 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   enabled: boolean;
+  enabledByDefault?: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
   imported?: boolean;

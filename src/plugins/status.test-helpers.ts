@@ -39,6 +39,7 @@ export function createPluginRecord(
     source: overrides.source ?? `/tmp/${id}/index.ts`,
     origin: overrides.origin ?? "workspace",
     enabled: overrides.enabled ?? true,
+    enabledByDefault: overrides.enabledByDefault,
     explicitlyEnabled: overrides.explicitlyEnabled ?? overrides.enabled ?? true,
     activated: overrides.activated ?? overrides.enabled ?? true,
     activationSource:

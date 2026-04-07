@@ -646,6 +646,7 @@ function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   enabled: boolean;
+  enabledByDefault?: boolean;
   activationState?: PluginActivationState;
   configSchema: boolean;
   contracts?: PluginManifestContracts;
@@ -666,6 +667,7 @@ function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
+    enabledByDefault: params.enabledByDefault,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
     activated: params.activationState?.activated,
     activationSource: params.activationState?.source,
@@ -1296,6 +1298,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           origin: candidate.origin,
           workspaceDir: candidate.workspaceDir,
           enabled: false,
+          enabledByDefault: manifestRecord.enabledByDefault,
           activationState,
           configSchema: Boolean(manifestRecord.configSchema),
           contracts: manifestRecord.contracts,
@@ -1329,6 +1332,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: enableState.enabled,
+        enabledByDefault: manifestRecord.enabledByDefault,
         activationState,
         configSchema: Boolean(manifestRecord.configSchema),
         contracts: manifestRecord.contracts,
@@ -1884,6 +1888,7 @@ export async function loadOpenClawPluginCliRegistry(
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
+        enabledByDefault: manifestRecord.enabledByDefault,
         activationState,
         configSchema: Boolean(manifestRecord.configSchema),
         contracts: manifestRecord.contracts,
@@ -1917,6 +1922,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
+      enabledByDefault: manifestRecord.enabledByDefault,
       activationState,
       configSchema: Boolean(manifestRecord.configSchema),
       contracts: manifestRecord.contracts,
