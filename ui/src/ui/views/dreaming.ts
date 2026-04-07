@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -414,14 +416,7 @@ function renderDiarySection(props: DreamingProps) {
         <div class="dreams-diary__accent"></div>
         ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
         <div class="dreams-diary__prose">
-          ${entry.body
-            .split("\n")
-            .map(
-              (para, i) =>
-                html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
-                  ${para}
-                </p>`,
-            )}
+          ${unsafeHTML(toSanitizedMarkdownHtml(entry.body))}
         </div>
       </article>
     </section>

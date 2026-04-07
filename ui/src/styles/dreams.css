@@ -610,7 +610,35 @@
 }
 
 .dreams-diary__prose {
-  /* no styling container needed, just prose spacing */
+  animation: diary-text-stream 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dreams-diary__prose p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: color-mix(in oklab, var(--text) 85%, var(--muted));
+  font-style: italic;
+}
+
+.dreams-diary__prose p:last-child {
+  margin-bottom: 0;
+}
+
+.dreams-diary__prose strong {
+  font-style: normal;
+  font-weight: 600;
+}
+
+.dreams-diary__prose em {
+  font-style: italic;
+}
+
+.dreams-diary__prose code {
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
 }
 
 .dreams-diary__para {
