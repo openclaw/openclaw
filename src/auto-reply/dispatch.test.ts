@@ -63,7 +63,7 @@ describe("withReplyDispatcher", () => {
     const order: string[] = [];
     const dispatcher = {
       sendToolResult: () => true,
-      sendBlockReply: () => true,
+      sendBlockReply: () => Promise.resolve(),
       sendFinalReply: () => {
         order.push("sendFinalReply");
         return true;
