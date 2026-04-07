@@ -327,3 +327,46 @@ describe("stripAnalysisScratchpad", () => {
     expect(stripAnalysisScratchpad(input3)).toBe("Outer");
   });
 });
+
+describe("microCompactMessages", () => {
+  function toolResult(toolName: string, text: string) {
+    return {
+      role: "toolResult",
+      toolCallId: "id",
+      toolName,
+      content: [{ type: "text", text }],
+      timestamp: 0,
+    } as AgentMessage;
+  }
+
+  it("returns messages unchanged when there are fewer results than limit", () => {
+    const messages = [toolResult("read", "content")];
+    expect(microCompactMessages(messages, 5)).toEqual(messages);
+  });
+
+  it("clears old bulky results but keeps the most recent", () => {
+    const messages = [
+      toolResult("read", "old 1"),
+      toolResult("read", "old 2"),
+      toolResult("read", "recent 1"),
+      toolResult("read", "recent 2"),
+    ];
+    const result = microCompactMessages(messages, 2);
+    expect((result[0] as any).content[0].text).toBe(CLEARED_TOOL_RESULT_PLACEHOLDER);
+    expect((result[1] as any).content[0].text).toBe(CLEARED_TOOL_RESULT_PLACEHOLDER);
+    expect((result[2] as any).content[0].text).toBe("recent 1");
+    expect((result[3] as any).content[0].text).toBe("recent 2");
+  });
+
+  it("only targets specific clearable tools", () => {
+    const messages = [
+      toolResult("custom", "old but custom"),
+      toolResult("read", "old read"),
+      toolResult("read", "recent 1"),
+    ];
+    const result = microCompactMessages(messages, 1);
+    expect((result[0] as any).content[0].text).toBe("old but custom");
+    expect((result[1] as any).content[0].text).toBe(CLEARED_TOOL_RESULT_PLACEHOLDER);
+    expect((result[2] as any).content[0].text).toBe("recent 1");
+  });
+});
