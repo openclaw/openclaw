@@ -13,6 +13,7 @@ import {
   normalizeUsage,
   type UsageLike,
 } from "../../agents/usage.js";
+import { resolveAgentLane } from "../../config/agent-limits.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -705,6 +706,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...runBaseParams,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
+          lane: resolveAgentLane(params.cfg, params.followupRun.run.agentId),
           trigger: "memory",
           memoryFlushWritePath,
           prompt: activeMemoryFlushPlan.prompt,
