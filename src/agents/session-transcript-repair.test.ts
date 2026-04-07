@@ -411,22 +411,23 @@ describe("sanitizeToolCallInputs", () => {
     expect(ids).toEqual(expectedIds);
   });
 
-  it("drops tool calls with partialJson (streaming artifact from interrupted stream)", () => {
+  it("strips partialJson from completed blocks and drops incomplete streaming artifacts", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
         content: [
-          // complete tool call — should be kept
+          // complete tool call — kept as-is
           { type: "toolCall", id: "call_ok", name: "read", arguments: { path: "/a" } },
-          // has partialJson — streaming artifact, should be dropped even if arguments is set
+          // has partialJson but complete id/name/arguments — partialJson is stripped, block kept
+          // (OpenAI Responses transport retains partialJson on finalized blocks)
           {
             type: "toolCall",
             id: "call_partial",
             name: "Bash",
             arguments: { command: "ls" },
-            partialJson: '{"command": "ls"',
+            partialJson: '{"command": "ls"}',
           },
-          // has partialJson and no arguments — also dropped
+          // has partialJson and missing input — genuine interrupted stream artifact, dropped
           {
             type: "toolUse",
             id: "call_partial2",
@@ -442,7 +443,10 @@ describe("sanitizeToolCallInputs", () => {
     const out = sanitizeToolCallInputs(input);
     const toolCalls = getAssistantToolCallBlocks(out);
     const ids = toolCalls.map((t) => (t as { id?: unknown }).id);
-    expect(ids).toEqual(["call_ok"]);
+    expect(ids).toEqual(["call_ok", "call_partial"]);
+    // Verify partialJson was stripped from the completed block
+    const keptPartial = toolCalls.find((t) => (t as { id?: unknown }).id === "call_partial");
+    expect(keptPartial).not.toHaveProperty("partialJson");
   });
 
   it("keeps valid tool calls and preserves text blocks", () => {

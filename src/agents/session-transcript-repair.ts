@@ -317,21 +317,30 @@ export function repairToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
-      if (
-        isRawToolCallBlock(block) &&
-        // partialJson is a streaming-only assembly field that should be deleted when the
-        // stream completes.  Its presence means the stream was interrupted before the block
-        // was finalized — treat it as an incomplete artifact and drop it.
-        ("partialJson" in block ||
+      if (isRawToolCallBlock(block)) {
+        // Drop blocks that are missing required fields — they are genuine artifacts.
+        if (
           !hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
-      ) {
-        droppedToolCalls += 1;
-        droppedInMessage += 1;
-        changed = true;
-        messageChanged = true;
-        continue;
+          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
+        ) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
+          changed = true;
+          messageChanged = true;
+          continue;
+        }
+        // partialJson is a streaming-only assembly field. The OpenAI Responses
+        // transport can retain it on finalized blocks; strip it instead of
+        // dropping the otherwise-complete call.
+        if ("partialJson" in block) {
+          const stripped = { ...(block as object) } as Record<string, unknown>;
+          delete stripped.partialJson;
+          changed = true;
+          messageChanged = true;
+          nextContent.push(stripped as typeof block);
+          continue;
+        }
       }
       if (isRawToolCallBlock(block)) {
         if (
