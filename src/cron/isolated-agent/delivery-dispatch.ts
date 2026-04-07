@@ -20,7 +20,7 @@ import {
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.js";
+import type { IsolatedDeliveryContract, RunCronAgentTurnResult } from "./run.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -69,6 +69,7 @@ type DispatchCronDeliveryParams = {
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
+  deliveryContract: IsolatedDeliveryContract;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery?: boolean;
   deliveryBestEffort: boolean;
@@ -240,10 +241,18 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
-function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
+function shouldQueueCronAwareness(params: {
+  job: CronJob;
+  deliveryBestEffort: boolean;
+  deliveryContract: IsolatedDeliveryContract;
+}): boolean {
   // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
   // their existing behavior, and best-effort sends may only partially deliver.
-  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+  return (
+    params.deliveryContract === "cron-owned" &&
+    params.job.sessionTarget === "isolated" &&
+    !params.deliveryBestEffort
+  );
 }
 
 function resolveCronAwarenessMainSessionKey(params: {
@@ -533,7 +542,14 @@ export async function dispatchCronDelivery(
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
-      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+      if (
+        delivered &&
+        shouldQueueCronAwareness({
+          job: params.job,
+          deliveryBestEffort: params.deliveryBestEffort,
+          deliveryContract: params.deliveryContract,
+        })
+      ) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,

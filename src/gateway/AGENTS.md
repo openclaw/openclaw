@@ -23,6 +23,9 @@ This guide applies to `src/gateway/**` unless a deeper `AGENTS.md` overrides it.
 - For inbound message hooks, preserve `requestId` and session resolution deterministically.
 - Keep lifecycle logs deterministic with stable field order and stable event names.
 - Do not leak raw internal exceptions to hook clients; return generic 5xx errors and log details server-side.
+- Keep route responsibility explicit:
+  - `/hooks/agent` is automation execution only.
+  - `/hooks/message` is inbound chat visibility transport.
 
 ## Test Expectations
 

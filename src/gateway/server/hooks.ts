@@ -7,7 +7,6 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   type HookAgentDispatchPayload,
   type HookMessageDispatchPayload,
@@ -253,7 +252,6 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
     const delivery = value.deliver
@@ -299,28 +297,11 @@ export function createGatewayHooksRequestHandler(params: {
           lane: "cron",
           deliveryContract: "shared",
         });
-        const summary =
-          normalizeOptionalString(result.summary) ||
-          normalizeOptionalString(result.error) ||
-          result.status;
-        const prefix =
-          result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        if (!result.delivered) {
-          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
-          });
-          if (value.wakeMode === "now") {
-            requestHeartbeatNow({ reason: `hook:${jobId}` });
-          }
-        }
+        logHooks.info(
+          `hook.agent.completed runId=${runId} jobId=${jobId} status=${result.status} delivered=${result.delivered === true} deliveryAttempted=${result.deliveryAttempted === true}`,
+        );
       } catch (err) {
-        logHooks.warn(`hook agent failed: ${String(err)}`);
-        enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
-        });
-        if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error` });
-        }
+        logHooks.warn(`hook.agent.failed runId=${runId} jobId=${jobId} error=${String(err)}`);
       }
     })();
 

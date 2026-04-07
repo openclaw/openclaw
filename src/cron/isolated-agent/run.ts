@@ -620,6 +620,7 @@ async function finalizeCronRun(params: {
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,
+    deliveryContract: prepared.input.deliveryContract ?? "cron-owned",
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
