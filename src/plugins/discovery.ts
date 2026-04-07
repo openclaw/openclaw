@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
@@ -300,7 +303,7 @@ function isExtensionFile(filePath: string): boolean {
   if (filePath.endsWith(".d.ts")) {
     return false;
   }
-  const baseName = path.basename(filePath).toLowerCase();
+  const baseName = normalizeLowercaseStringOrEmpty(path.basename(filePath));
   return (
     !baseName.includes(".test.") &&
     !baseName.includes(".live.test.") &&
@@ -309,7 +312,7 @@ function isExtensionFile(filePath: string): boolean {
 }
 
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
-  const normalized = dirName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(dirName);
   if (!normalized) {
     return true;
   }

@@ -16,6 +16,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -197,7 +198,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         message: "OpenClaw: your access has been approved.",
         normalizeAllowEntry: createPairingPrefixStripper(
           /^(nextcloud-talk|nc-talk|nc):/i,
-          (entry) => entry.toLowerCase(),
+          (entry) => normalizeLowercaseStringOrEmpty(entry),
         ),
         notify: createLoggedPairingApprovalNotifier(
           ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,

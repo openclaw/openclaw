@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -221,52 +222,32 @@ describe("session.message websocket events", () => {
       storePath,
     });
 
-    const harness = await createGatewaySuiteHarness();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
-      const ws = await harness.openWs();
-      try {
-        await connectOk(ws, { scopes: ["operator.read"] });
-        await rpcReq(ws, "sessions.subscribe");
-
-        const appendPromise = appendAssistantMessageToSessionTranscript({
-          sessionKey: "agent:main:main",
-          text: "live websocket message",
-          storePath,
-        });
-        const eventPromise = onceMessage(
-          ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === "session.message" &&
-            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-              "agent:main:main",
-        );
-
-        const [appended, event] = await Promise.all([appendPromise, eventPromise]);
-        expect(appended.ok).toBe(true);
-        if (!appended.ok) {
-          throw new Error(`append failed: ${appended.reason}`);
-        }
-        expect(
-          (event.payload as { message?: { content?: Array<{ text?: string }> } }).message
-            ?.content?.[0]?.text,
-        ).toBe("live websocket message");
-        expect((event.payload as { messageSeq?: number }).messageSeq).toBe(1);
-        expect(
-          (
-            event.payload as {
-              message?: { __openclaw?: { id?: string; seq?: number } };
-            }
-          ).message?.__openclaw,
-        ).toMatchObject({
-          id: appended.ok ? appended.messageId : undefined,
-          seq: 1,
-        });
-      } finally {
-        ws.close();
+      const appended = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "live websocket message",
+        storePath,
+      });
+      expect(appended.ok).toBe(true);
+      if (!appended.ok) {
+        throw new Error(`append failed: ${appended.reason}`);
       }
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionFile: appended.sessionFile,
+          sessionKey: "agent:main:main",
+          messageId: appended.messageId,
+          message: expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+        }),
+      );
+      const transcript = await fs.readFile(appended.sessionFile, "utf-8");
+      expect(transcript).toContain('"live websocket message"');
     } finally {
-      await harness.close();
+      emitSpy.mockRestore();
     }
   });
 

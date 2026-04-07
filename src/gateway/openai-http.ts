@@ -18,6 +18,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -248,7 +249,9 @@ function parseImageUrlToSource(url: string): InputImageSource {
       .split(";")
       .map((part) => part.trim())
       .filter(Boolean);
-    const isBase64 = metadataParts.some((part) => part.toLowerCase() === "base64");
+    const isBase64 = metadataParts.some(
+      (part) => normalizeLowercaseStringOrEmpty(part) === "base64",
+    );
     if (!isBase64) {
       throw new Error("image_url data URI must be base64 encoded");
     }

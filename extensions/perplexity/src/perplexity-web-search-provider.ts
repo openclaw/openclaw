@@ -32,6 +32,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
@@ -85,7 +86,7 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
   if (!apiKey) {
     return undefined;
   }
-  const normalized = apiKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(apiKey);
   if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return "direct";
   }
@@ -147,7 +148,9 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
 
 function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
   try {
-    return new URL(baseUrl.trim()).hostname.toLowerCase() === "api.perplexity.ai";
+    return (
+      normalizeLowercaseStringOrEmpty(new URL(baseUrl.trim()).hostname) === "api.perplexity.ai"
+    );
   } catch {
     return false;
   }

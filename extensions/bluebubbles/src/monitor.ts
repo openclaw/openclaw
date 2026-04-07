@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
   asRecord,
@@ -110,7 +111,7 @@ function normalizeAuthToken(raw: string): string {
   if (!value) {
     return "";
   }
-  if (value.toLowerCase().startsWith("bearer ")) {
+  if (normalizeLowercaseStringOrEmpty(value).startsWith("bearer ")) {
     return value.slice("bearer ".length).trim();
   }
   return value;

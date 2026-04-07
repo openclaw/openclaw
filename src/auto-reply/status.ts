@@ -460,7 +460,8 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
-    const embeddedProvider = runtimeModelRaw.slice(0, slashIndex).trim().toLowerCase();
+    const embeddedProvider =
+      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       runtimeModelRaw.toLowerCase() ===

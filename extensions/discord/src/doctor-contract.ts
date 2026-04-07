@@ -3,16 +3,244 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  normalizeLegacyDmAliases,
-  normalizeLegacyStreamingAliases,
-} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
+  const existing = asObjectRecord(owner[key]);
+  if (existing) {
+    return { ...existing };
+  }
+  return {};
+}
+
+function allowFromListsMatch(left: unknown, right: unknown): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right)) {
+    return false;
+  }
+  const normalizedLeft = left.map((value) => String(value).trim()).filter(Boolean);
+  const normalizedRight = right.map((value) => String(value).trim()).filter(Boolean);
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function normalizeLegacyDmAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  promoteAllowFrom?: boolean;
+}): { entry: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  let updated: Record<string, unknown> = params.entry;
+  const rawDm = updated.dm;
+  const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
+  let dmChanged = false;
+
+  const topDmPolicy = updated.dmPolicy;
+  const legacyDmPolicy = dm?.policy;
+  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
+    updated = { ...updated, dmPolicy: legacyDmPolicy };
+    changed = true;
+    if (dm) {
+      delete dm.policy;
+      dmChanged = true;
+    }
+    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
+  } else if (
+    topDmPolicy !== undefined &&
+    legacyDmPolicy !== undefined &&
+    topDmPolicy === legacyDmPolicy
+  ) {
+    if (dm) {
+      delete dm.policy;
+      dmChanged = true;
+      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
+    }
+  }
+
+  if (params.promoteAllowFrom !== false) {
+    const topAllowFrom = updated.allowFrom;
+    const legacyAllowFrom = dm?.allowFrom;
+    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
+      updated = { ...updated, allowFrom: legacyAllowFrom };
+      changed = true;
+      if (dm) {
+        delete dm.allowFrom;
+        dmChanged = true;
+      }
+      params.changes.push(
+        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
+      );
+    } else if (
+      topAllowFrom !== undefined &&
+      legacyAllowFrom !== undefined &&
+      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
+    ) {
+      if (dm) {
+        delete dm.allowFrom;
+        dmChanged = true;
+        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
+      }
+    }
+  }
+
+  if (dm && asObjectRecord(rawDm) && dmChanged) {
+    const keys = Object.keys(dm);
+    if (keys.length === 0) {
+      if (updated.dm !== undefined) {
+        const { dm: _ignored, ...rest } = updated;
+        updated = rest;
+        changed = true;
+        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
+      }
+    } else {
+      updated = { ...updated, dm };
+      changed = true;
+    }
+  }
+
+  return { entry: updated, changed };
+}
+
+function normalizeLegacyStreamingAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  resolvedMode: string;
+  includePreviewChunk?: boolean;
+  resolvedNativeTransport?: unknown;
+  offModeLegacyNotice?: (pathPrefix: string) => string;
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const beforeStreaming = params.entry.streaming;
+  const hadLegacyStreamMode = params.entry.streamMode !== undefined;
+  const hasLegacyFlatFields =
+    params.entry.chunkMode !== undefined ||
+    params.entry.blockStreaming !== undefined ||
+    params.entry.blockStreamingCoalesce !== undefined ||
+    (params.includePreviewChunk === true && params.entry.draftChunk !== undefined) ||
+    params.entry.nativeStreaming !== undefined;
+  const shouldNormalize =
+    hadLegacyStreamMode ||
+    typeof beforeStreaming === "boolean" ||
+    typeof beforeStreaming === "string" ||
+    hasLegacyFlatFields;
+  if (!shouldNormalize) {
+    return { entry: params.entry, changed: false };
+  }
+
+  let updated = { ...params.entry };
+  let changed = false;
+  const streaming = ensureNestedRecord(updated, "streaming");
+  const block = ensureNestedRecord(streaming, "block");
+  const preview = ensureNestedRecord(streaming, "preview");
+
+  if (
+    (hadLegacyStreamMode ||
+      typeof beforeStreaming === "boolean" ||
+      typeof beforeStreaming === "string") &&
+    streaming.mode === undefined
+  ) {
+    streaming.mode = params.resolvedMode;
+    if (hadLegacyStreamMode) {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
+      );
+    } else if (typeof beforeStreaming === "boolean") {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
+      );
+    } else if (typeof beforeStreaming === "string") {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
+      );
+    }
+    changed = true;
+  }
+  if (hadLegacyStreamMode) {
+    delete updated.streamMode;
+    changed = true;
+  }
+  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
+    streaming.chunkMode = updated.chunkMode;
+    delete updated.chunkMode;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
+    );
+    changed = true;
+  }
+  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
+    block.enabled = updated.blockStreaming;
+    delete updated.blockStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
+    );
+    changed = true;
+  }
+  if (
+    params.includePreviewChunk === true &&
+    updated.draftChunk !== undefined &&
+    preview.chunk === undefined
+  ) {
+    preview.chunk = updated.draftChunk;
+    delete updated.draftChunk;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.draftChunk → ${params.pathPrefix}.streaming.preview.chunk.`,
+    );
+    changed = true;
+  }
+  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
+    block.coalesce = updated.blockStreamingCoalesce;
+    delete updated.blockStreamingCoalesce;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
+    );
+    changed = true;
+  }
+  if (
+    updated.nativeStreaming !== undefined &&
+    streaming.nativeTransport === undefined &&
+    params.resolvedNativeTransport !== undefined
+  ) {
+    streaming.nativeTransport = params.resolvedNativeTransport;
+    delete updated.nativeStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  } else if (
+    typeof beforeStreaming === "boolean" &&
+    streaming.nativeTransport === undefined &&
+    params.resolvedNativeTransport !== undefined
+  ) {
+    streaming.nativeTransport = params.resolvedNativeTransport;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  }
+
+  if (Object.keys(preview).length > 0) {
+    streaming.preview = preview;
+  }
+  if (Object.keys(block).length > 0) {
+    streaming.block = block;
+  }
+  updated.streaming = streaming;
+  if (
+    hadLegacyStreamMode &&
+    params.resolvedMode === "off" &&
+    params.offModeLegacyNotice !== undefined
+  ) {
+    params.changes.push(params.offModeLegacyNotice(params.pathPrefix));
+  }
+  return { entry: updated, changed };
 }
 
 function hasLegacyDiscordStreamingAliases(value: unknown): boolean {

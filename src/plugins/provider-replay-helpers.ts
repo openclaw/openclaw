@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderReasoningOutputMode,
   ProviderReplayPolicy,
@@ -71,7 +72,7 @@ export function buildStrictAnthropicReplayPolicy(
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
  */
 export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
-  const id = (modelId ?? "").toLowerCase();
+  const id = normalizeLowercaseStringOrEmpty(modelId);
   if (!id.includes("claude")) {
     return false;
   }
@@ -96,14 +97,14 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
 }
 
 export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
-  const isClaude = (modelId?.toLowerCase() ?? "").includes("claude");
+  const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
     dropThinkingBlocks: isClaude && !shouldPreserveThinkingBlocks(modelId),
   });
 }
 
 export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
-  const isClaude = (modelId?.toLowerCase() ?? "").includes("claude");
+  const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
     dropThinkingBlocks: isClaude && !shouldPreserveThinkingBlocks(modelId),
     sanitizeToolCallIds: true,
@@ -116,7 +117,7 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
   options: { anthropicModelDropThinkingBlocks?: boolean } = {},
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
-    const isClaude = (ctx.modelId?.toLowerCase() ?? "").includes("claude");
+    const isClaude = normalizeLowercaseStringOrEmpty(ctx.modelId).includes("claude");
     return buildStrictAnthropicReplayPolicy({
       dropThinkingBlocks:
         options.anthropicModelDropThinkingBlocks &&
@@ -187,11 +188,12 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
 export function buildPassthroughGeminiSanitizingReplayPolicy(
   modelId?: string,
 ): ProviderReplayPolicy {
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return {
     applyAssistantFirstOrderingFix: false,
     validateGeminiTurns: false,
     validateAnthropicTurns: false,
-    ...((modelId?.toLowerCase() ?? "").includes("gemini")
+    ...(normalizedModelId.includes("gemini")
       ? {
           sanitizeThoughtSignatures: {
             allowBase64Only: true,
