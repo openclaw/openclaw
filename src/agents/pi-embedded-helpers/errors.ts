@@ -598,6 +598,19 @@ function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("timeout");
   }
+  if (status === 404) {
+    // Bare "404 status code (no body)" style errors must still classify as failover so
+    // embedded runs throw FailoverError and outer model fallback can continue (#62119).
+    if (
+      messageReason === "session_expired" ||
+      messageReason === "billing" ||
+      messageReason === "auth_permanent" ||
+      messageReason === "auth"
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification("model_not_found");
+  }
   if (status === 503) {
     if (messageReason === "overloaded") {
       return messageClassification;
