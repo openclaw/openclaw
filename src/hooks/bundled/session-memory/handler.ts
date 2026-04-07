@@ -193,8 +193,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
-    // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1].split(".")[0];
+    // Format time in the same user timezone as dateStr for consistency.
+    const timeStr = new Intl.DateTimeFormat("en-GB", {
+      timeZone: userTimezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(now);
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -202,7 +208,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry (include slug in heading for descriptive context)
     const entryParts = [
-      `## Session: ${dateStr} ${timeStr} UTC — ${slug}`,
+      `## Session: ${dateStr} ${timeStr} — ${slug}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,

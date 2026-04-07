@@ -32,7 +32,7 @@ When you run `/new` or `/reset` to start a fresh session:
 Memory files are created with the following format:
 
 ```markdown
-## Session: 2026-01-16 14:30:00 UTC — vendor-pitch
+## Session: 2026-01-16 14:30:00 — vendor-pitch
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
