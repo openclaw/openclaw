@@ -47,7 +47,7 @@ describe("handleControlUiHttpRequest", () => {
     basePath?: string;
     rootKind?: "resolved" | "bundled";
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
       { url: params.url, method: params.method } as IncomingMessage,
       res,
@@ -56,7 +56,7 @@ describe("handleControlUiHttpRequest", () => {
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   function runAvatarRequest(params: {
@@ -127,6 +127,28 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+      },
+    });
+  });
+
+  it("omits CSP from static asset responses so SVG paint references work", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(
+          path.join(tmp, "favicon.svg"),
+          '<svg viewBox="0 0 10 10"><circle r="5" fill="url(#g)"/></svg>',
+        );
+        const { res, setHeader, handled } = runControlUiRequest({
+          url: "/favicon.svg",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const cspCalls = setHeader.mock.calls.filter(
+          (call) => call[0] === "Content-Security-Policy",
+        );
+        expect(cspCalls).toHaveLength(0);
       },
     });
   });
