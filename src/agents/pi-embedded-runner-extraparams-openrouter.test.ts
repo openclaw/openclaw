@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runExtraParamsPayloadCase } from "./pi-embedded-runner-extraparams.test-support.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
-  createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "./pi-embedded-runner/proxy-stream-wrappers.js";
@@ -38,7 +37,7 @@ beforeEach(() => {
       const skipReasoningInjection =
         params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
-      return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
+      return createOpenRouterWrapper(streamFn, thinkingLevel);
     },
   });
 });
