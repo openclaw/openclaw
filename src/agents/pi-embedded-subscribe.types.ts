@@ -24,6 +24,12 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
+  /**
+   * When true, downstream delivery buffers text-only block replies instead of
+   * sending them live. Collapse any per-message buffered chunks back to the
+   * final visible assistant text so they do not fan out as end-of-turn replies.
+   */
+  bufferTextOnlyBlockReplies?: boolean;
   /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";

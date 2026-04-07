@@ -1021,6 +1021,8 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalMessageStart();
                   await params.opts?.onAssistantMessageStart?.();
                 },
+                bufferTextOnlyBlockReplies:
+                  !params.blockStreamingEnabled && Boolean(params.opts?.onBlockReply),
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {

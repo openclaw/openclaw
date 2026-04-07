@@ -28,6 +28,31 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
+  it("keeps assistantTexts to the final answer when text-only block replies are buffered", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      bufferTextOnlyBlockReplies: true,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Draft " });
+    emitAssistantTextDelta({ emit, delta: "reply" });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    });
+    emitAssistantTextEnd({ emit, content: "Draft reply" });
+
+    expect(subscription.assistantTexts).toEqual(["Final answer"]);
+  });
   it("suppresses partial replies when reasoning is enabled and block replies are disabled", () => {
     const { session, emit } = createStubSessionHarness();
 

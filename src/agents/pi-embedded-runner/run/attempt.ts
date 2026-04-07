@@ -1512,6 +1512,7 @@ export async function runEmbeddedAttempt(
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply: params.onBlockReply,
+          bufferTextOnlyBlockReplies: params.bufferTextOnlyBlockReplies,
           onBlockReplyFlush: params.onBlockReplyFlush,
           blockReplyBreak: params.blockReplyBreak,
           blockReplyChunking: params.blockReplyChunking,

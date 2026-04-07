@@ -108,6 +108,11 @@ export type RunEmbeddedPiAgentParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
+  /**
+   * True when downstream delivery keeps text-only block replies buffered until
+   * final reply assembly instead of sending them live.
+   */
+  bufferTextOnlyBlockReplies?: boolean;
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
