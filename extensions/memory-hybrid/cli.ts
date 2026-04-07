@@ -46,7 +46,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps) {
           const limit = parseInt(opts.limit);
           const vector = await embeddings.embed(query);
           const rawResults = await db.search(vector, limit, 0.3);
-          const scored = await hybridScore(rawResults, graphDB);
+          const scored = await hybridScore(rawResults, graphDB, cfg.hybridWeights);
           const limited = scored.slice(0, limit);
 
           const output = limited.map((r) => ({

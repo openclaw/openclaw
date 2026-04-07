@@ -59,7 +59,7 @@ export function registerTools(api: OpenClawPluginApi, deps: ToolDeps) {
           ? await db.searchWithAMHR(vector, limit, graphDB)
           : await db.search(vector, limit);
 
-        const scored = await hybridScore(searchResults, graphDB);
+        const scored = await hybridScore(searchResults, graphDB, cfg.hybridWeights);
         const finalResults = scored.slice(0, limit);
 
         db.incrementRecallCount(finalResults.map((r) => r.entry.id));

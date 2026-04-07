@@ -43,23 +43,26 @@ The current `memory-lancedb` plugin uses pure vector similarity (static recall).
 | **Google Gemini**            | Free embeddings (`gemini-embedding-001`) + chat (`gemma-3-27b-it`).                                               |
 | **Lifecycle Protection**     | **(New)** Atomic `DreamService` start/stop guards to prevent orphaned background intervals and token waste.       |
 
-### 🛡️ Architectural Hardening & Detox (V3)
+### 🛡️ Architectural Hardening & Global Optimization (V4)
 
-This PR includes a massive "Code Detox" addressing 35 architectural flaws (P1-P3 severity) to meet OpenClaw's elite maintainability bar:
+This PR now includes "The Gamechanger" update, elevating the plugin from a prototype to a mathematically robust production engine:
 
+- **[P0] Mathematical Retrieval Integrity:** Implemented **L2 Unit-Length Normalization** in `embeddings.ts`. This solves the "Curse of Dimensionality" for high-dimensional models (e.g., Gemini 3072-dim), ensuring that LanceDB's L2 distance maps perfectly to standard Cosine Similarity.
+- **[P1] Decoupled Heuristics:** Replaced all "Magic Numbers" in `recall.ts` with a configurable `hybridWeights` system. Users can now tune their agent's cognitive priorities (e.g., prioritizing recency over importance) directly via `openclaw.plugin.json`.
+- **[P1] Linguistic Graph Resolution:** Upgraded the Knowledge Graph extraction (`graph.ts`) with **LLM Lemmatization**. The engine now forces entity resolution to base dictionary forms (e.g., "dogs" -> "dog"), enabling semantic graph hits without the overhead of secondary graph embeddings.
 - **[P1] Strict Type Safety:** Eradicated `Array<any>` and `any` types across `handlers.ts`, `queue.ts`, and `limiter.ts`. Full ESLint / `no-explicit-any` compliance.
-- **[P1] SDK Contract Compliance:** Implemented `safeParse()` in config schema to enable structured validation errors for users. Fixed `registerService` signature mismatch.
-- **[P1/P2] LanceDB Determinism:** Fixed `.query().limit()` silent bugs where temporal search and dream consolidation fetched _random_ subsets instead of sorted subsets.
-- **[P2] Concurrency & Deduplication:** Lowered L2 vector threshold for strict dedup. Fixed N+1 DB deletes in empathy profiling. Addressed an unhandled rejection that stalled the `MemoryQueue`.
-- **[P3] Code Cleanliness:** Removed `vitest` from `devDependencies`. Cleaned up nested `.git` folders. Removed deprecated `gemini-embedding-002` configuration. Structured 157 TDAID-driven tests.
+- **[P1] SDK Contract Compliance:** Implemented `safeParse()` in config schema for structured validation errors. Fixed `registerService` signature mismatch.
+- **[P1/P2] LanceDB Determinism:** Fixed `.query().limit()` silent bugs where search and dream consolidation fetched _random_ subsets instead of sorted subsets.
 
 ### Key Additions:
 
-- `stack.ts`: **Batch Summarization** buffer. Reduces LLM calls significantly by condensing history only when the buffer is full.
-- `tracer.ts`: **Deep Trace Engine**. Provides typed helpers for `memory_recall`, `memory_store`, and `graph_update`.
-- `scripts/monitor.ts`: **Memory Dashboard**. A real-time CLI tool to visualize what the bot is thinking/recalling.
-- `index.ts`: **Batch Recall Flush**. Persists reinforcement counts in bulk to minimize database overhead and concurrency lockouts.
-- `chat.ts`: **Semantic Contradiction Resolution** (PHOENIX) with strict Grounding and **Gemma 3 API Latency Fix**.
+- `embeddings.ts`: **L2 Normalization Wrapper**. Mathematically scales all vectors before storage/search.
+- `graph.ts`: **Lemmatized Extraction Prompts**. Unified concept matching across different word forms.
+- `config.ts`: **Custom Weight Factory**. Validates and injects user-defined search heuristics.
+- `stack.ts`: **Batch Summarization** buffer. Reduces LLM calls significantly by condensing history.
+- `tracer.ts`: **Deep Trace Engine**. Provides typed helpers for all lifecycle events.
+- `scripts/monitor.ts`: **Memory Dashboard**. Real-time CLI tool to visualize agent thinking.
+- `chat.ts`: **Semantic Contradiction Resolution** (PHOENIX) with strict Grounding.
 
 ### Tools
 
@@ -128,7 +131,16 @@ pnpm test --filter memory-hybrid
           },
           "autoRecall": true,
           "autoCapture": true,
-          "smartCapture": true
+          "smartCapture": true,
+          "hybridWeights": {
+            "vector": 0.42,
+            "recency": 0.1,
+            "importance": 0.16,
+            "graph": 0.08,
+            "reinforcement": 0.08,
+            "temporal": 0.1,
+            "emotional": 0.06
+          }
         }
       }
     }

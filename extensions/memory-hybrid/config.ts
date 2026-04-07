@@ -29,6 +29,15 @@ export type MemoryConfig = {
   autoRecall: boolean;
   smartCapture: boolean;
   captureMaxChars: number;
+  hybridWeights: {
+    vector: number;
+    recency: number;
+    importance: number;
+    graph: number;
+    reinforcement: number;
+    temporal: number;
+    emotional: number;
+  };
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -40,6 +49,16 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "gemini-embedding-001";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
+
+export const DEFAULT_HYBRID_WEIGHTS = {
+  vector: 0.42,
+  recency: 0.1,
+  importance: 0.16,
+  graph: 0.08,
+  reinforcement: 0.08,
+  temporal: 0.1,
+  emotional: 0.06,
+};
 
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
 
@@ -169,6 +188,33 @@ export const memoryConfigSchema = {
       : undefined;
     const chatProvider = chatProviderHint ?? detectChatProvider(chatModel);
 
+    // --- Hybrid Weights ---
+    let hybridWeights = DEFAULT_HYBRID_WEIGHTS;
+    if (cfg.hybridWeights && typeof cfg.hybridWeights === "object") {
+      const hw = cfg.hybridWeights as Record<string, number>;
+      hybridWeights = {
+        vector: typeof hw.vector === "number" ? hw.vector : DEFAULT_HYBRID_WEIGHTS.vector,
+        recency: typeof hw.recency === "number" ? hw.recency : DEFAULT_HYBRID_WEIGHTS.recency,
+        importance:
+          typeof hw.importance === "number" ? hw.importance : DEFAULT_HYBRID_WEIGHTS.importance,
+        graph: typeof hw.graph === "number" ? hw.graph : DEFAULT_HYBRID_WEIGHTS.graph,
+        reinforcement:
+          typeof hw.reinforcement === "number"
+            ? hw.reinforcement
+            : DEFAULT_HYBRID_WEIGHTS.reinforcement,
+        temporal: typeof hw.temporal === "number" ? hw.temporal : DEFAULT_HYBRID_WEIGHTS.temporal,
+        emotional:
+          typeof hw.emotional === "number" ? hw.emotional : DEFAULT_HYBRID_WEIGHTS.emotional,
+      };
+
+      const total = Object.values(hybridWeights).reduce((sum, w) => sum + w, 0);
+      if (total < 0.5 || total > 1.5) {
+        throw new Error(
+          "hybridWeights values should sum up to approximately 1.0 (between 0.5 and 1.5)",
+        );
+      }
+    }
+
     return {
       embedding: {
         provider,
@@ -187,6 +233,7 @@ export const memoryConfigSchema = {
       autoRecall: cfg.autoRecall !== false,
       smartCapture: cfg.smartCapture === true,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      hybridWeights,
     };
   },
 

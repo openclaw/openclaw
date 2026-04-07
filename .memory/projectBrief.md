@@ -1,5 +1,5 @@
-# Project Brief
+# Project Brief (OpenClaw Memory Hybrid Plugin)
 
-- North Star: Robust, self-healing memory architecture.
-- Stack: TypeScript, LanceDB, OpenClaw AI Agent plugin architecture.
-- Current Sprint: Optimize the context retrieval to prevent token exhaustion (LLM limit 15k, currently loading 62 memories at once).
+- **Purpose:** A modular Memory Plugin for OpenClaw that handles hybrid storage (Vector/Semantic + Temporal via LanceDB) and Knowledge Graph representations (JSONL appending).
+- **Key Mechanics:** Synthetic sleep states ("Dream Mode") compress/consolidate data, prevent memory growth bloat, and generate user empathy profiles through LLM calls.
+- **Goal:** Harden the `memory-hybrid` plugin, addressing data loss mechanisms (Store-Before-Delete issues, race conditions, partial saves) before production merge.

@@ -97,9 +97,16 @@ export class Embeddings {
       const firstKey = this.cache.keys().next().value;
       if (firstKey) this.cache.delete(firstKey);
     }
-    this.cache.set(cacheKey, vector);
 
-    return vector;
+    // L2 Unit-Length Normalization (solves the Curse of Dimensionality for LanceDB L2 search)
+    let sumSquared = 0;
+    for (let j = 0; j < vector.length; j++) sumSquared += vector[j] * vector[j];
+    const norm = Math.sqrt(sumSquared);
+    const normalizedVector = norm > 0 ? vector.map((x) => x / norm) : vector;
+
+    this.cache.set(cacheKey, normalizedVector);
+
+    return normalizedVector;
   }
 
   async embedBatch(texts: string[], priority = TaskPriority.NORMAL): Promise<number[][]> {
@@ -154,8 +161,16 @@ export class Embeddings {
           const firstKey = this.cache.keys().next().value;
           if (firstKey) this.cache.delete(firstKey);
         }
-        this.cache.set(cacheKey, newVectors[i]);
-        results[neededIndices[i]] = newVectors[i];
+
+        // L2 Unit-Length Normalization (solves the Curse of Dimensionality for LanceDB L2 search)
+        const v = newVectors[i];
+        let sumSquared = 0;
+        for (let j = 0; j < v.length; j++) sumSquared += v[j] * v[j];
+        const norm = Math.sqrt(sumSquared);
+        const normalizedVector = norm > 0 ? v.map((x) => x / norm) : v;
+
+        this.cache.set(cacheKey, normalizedVector);
+        results[neededIndices[i]] = normalizedVector;
       }
     }
 

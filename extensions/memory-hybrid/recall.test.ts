@@ -14,6 +14,16 @@ function createMockEntry(overrides: Partial<MemoryEntry>): MemoryEntry {
   };
 }
 
+const mockWeights = {
+  vector: 0.42,
+  recency: 0.1,
+  importance: 0.16,
+  graph: 0.08,
+  reinforcement: 0.08,
+  temporal: 0.1,
+  emotional: 0.06,
+};
+
 describe("hybridScore (7-Channel Formula)", () => {
   test("prioritizes highly important memories over standard ones", async () => {
     const mockGraph = { findEdgesForTexts: vi.fn().mockResolvedValue([]) } as unknown as GraphDB;
@@ -23,7 +33,7 @@ describe("hybridScore (7-Channel Formula)", () => {
       { entry: createMockEntry({ importance: 0.9, id: "important-1" }), score: 0.8 },
     ];
 
-    const scored = await hybridScore(results, mockGraph);
+    const scored = await hybridScore(results, mockGraph, mockWeights);
     expect(scored[0].entry.id).toBe("important-1");
     expect(scored[0].importanceScore).toBe(0.9);
   });
@@ -45,7 +55,7 @@ describe("hybridScore (7-Channel Formula)", () => {
       }, // 10 days ago
     ];
 
-    const scored = await hybridScore(results, mockGraph);
+    const scored = await hybridScore(results, mockGraph, mockWeights);
     expect(scored[0].entry.id).not.toBe("old-event");
     expect(scored[0].temporalScore).toBeGreaterThan(scored[1].temporalScore);
   });
@@ -63,7 +73,7 @@ describe("hybridScore (7-Channel Formula)", () => {
       { entry: createMockEntry({ text: "Isolated text" }), score: 0.8 },
     ];
 
-    const scored = await hybridScore(results, mockGraphWithEdges);
+    const scored = await hybridScore(results, mockGraphWithEdges, mockWeights);
     expect(scored[0].entry.id).toBe("graph-boosted");
     expect(scored[0].graphScore).toBeGreaterThan(0);
   });
@@ -75,7 +85,7 @@ describe("hybridScore (7-Channel Formula)", () => {
       { entry: createMockEntry({ recallCount: 0 }), score: 0.6 },
     ];
 
-    const scored = await hybridScore(results, mockGraph);
+    const scored = await hybridScore(results, mockGraph, mockWeights);
     expect(scored[0].entry.id).toBe("well-known");
     expect(scored[0].reinforcementScore).toBeGreaterThan(0);
   });
@@ -87,7 +97,7 @@ describe("hybridScore (7-Channel Formula)", () => {
       { entry: createMockEntry({ emotionScore: 0 }), score: 0.6 },
     ];
 
-    const scored = await hybridScore(results, mockGraph);
+    const scored = await hybridScore(results, mockGraph, mockWeights);
     expect(scored[0].entry.id).toBe("emotional");
     expect(scored[0].emotionalScore).toBeGreaterThan(0.3);
   });

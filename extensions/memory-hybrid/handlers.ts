@@ -54,7 +54,7 @@ export async function handleRecall(
 
     const vector = await embeddings.embed(event.prompt);
     const rawResults = await db.searchWithAMHR(vector, limit, graphDB, 0.3);
-    const scored = await hybridScore(rawResults, graphDB);
+    const scored = await hybridScore(rawResults, graphDB, cfg.hybridWeights);
     const finalScored = scored.slice(0, limit);
 
     const radarContext = formatRadarContext(

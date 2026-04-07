@@ -460,7 +460,8 @@ Format:
 
 Rules:
 - Entity IDs MUST BE short, clean names (max 2-3 words)
-- Entity IDs MUST BE normalized (use lowercase, e.g. "python", not "Python")
+- Entity IDs MUST BE lemmatized to their base dictionary form (e.g. use "dog" instead of "dogs", "run" instead of "running"). Translate synonyms to a single base concept if obvious.
+- Entity IDs MUST BE normalized to lowercase (e.g. "python", not "Python")
 - Relations MUST BE exactly one of these allowed uppercase strings:
   [ "HAS", "LIKES", "DISLIKES", "USES", "CREATED", "KNOWS", "WORKS_AT", "IS_A", "RELATED_TO", "EXPERIENCED" ]
 - If a relation doesn't fit the allowed list perfectly, map it to the closest one (e.g. "loves" -> "LIKES", "built" -> "CREATED")
@@ -585,7 +586,8 @@ Format:
 Rules:
 - Create nodes for all distinct entities mentioned across ALL facts.
 - Combine overlapping entities (e.g. "vova" and "vladimir" if they refer to the same person in context).
-- IDs must be clean, normalized lowercase strings.
+- IDs must be lemmatized to their base dictionary form (e.g. use "dog" instead of "dogs").
+- IDs must be normalized lowercase strings.
 - Relations: [ "HAS", "LIKES", "DISLIKES", "USES", "CREATED", "KNOWS", "WORKS_AT", "IS_A", "RELATED_TO", "EXPERIENCED" ]
 
 Facts:

@@ -90,6 +90,19 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "hybridWeights": {
+        "type": "object",
+        "description": "Custom weights for the 7-channel hybrid scoring formula. All weights combined should ideally sum up to ~1.0.",
+        "properties": {
+          "vector": { "type": "number", "minimum": 0, "maximum": 1 },
+          "recency": { "type": "number", "minimum": 0, "maximum": 1 },
+          "importance": { "type": "number", "minimum": 0, "maximum": 1 },
+          "graph": { "type": "number", "minimum": 0, "maximum": 1 },
+          "reinforcement": { "type": "number", "minimum": 0, "maximum": 1 },
+          "temporal": { "type": "number", "minimum": 0, "maximum": 1 },
+          "emotional": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
       }
     },
     "required": ["embedding"]

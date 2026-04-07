@@ -59,16 +59,9 @@ export interface ScoredMemory {
 // Scoring Weights
 // ============================================================================
 
-// Tunable weights for the hybrid scoring formula (7 channels)
-const WEIGHTS = {
-  vector: 0.42, // Semantic similarity is still king
-  recency: 0.1, // Newer memories get a slight boost
-  importance: 0.16, // User-defined or LLM-assigned importance
-  graph: 0.08, // Graph connectivity bonus
-  reinforcement: 0.08, // Frequently recalled memories are boosted
-  temporal: 0.1, // Events close to "now" in time are boosted
-  emotional: 0.06, // Emotional alignment bonus
-};
+// Tunable weights are now provided via the MemoryConfig.
+// Default values:
+// vector: 0.42, recency: 0.1, importance: 0.16, graph: 0.08, reinforcement: 0.08, temporal: 0.1, emotional: 0.06
 
 // Recency decay: memories lose ~50% score after 30 days
 const RECENCY_DECAY_RATE = 0.023; // -ln(0.5) / 30
@@ -174,6 +167,15 @@ export function emotionalAlignmentScore(entry: MemoryEntry): number {
 export async function hybridScore(
   results: Array<{ entry: MemoryEntry; score: number }>,
   graphDB: GraphDB,
+  weights: {
+    vector: number;
+    recency: number;
+    importance: number;
+    graph: number;
+    reinforcement: number;
+    temporal: number;
+    emotional: number;
+  },
 ): Promise<ScoredMemory[]> {
   const scored = await Promise.all(
     results.map(async (r) => {
@@ -186,13 +188,13 @@ export async function hybridScore(
       const es = emotionalAlignmentScore(r.entry);
 
       const finalScore =
-        WEIGHTS.vector * vs +
-        WEIGHTS.recency * rs +
-        WEIGHTS.importance * imp +
-        WEIGHTS.graph * gs +
-        WEIGHTS.reinforcement * rf +
-        WEIGHTS.temporal * ts +
-        WEIGHTS.emotional * es;
+        weights.vector * vs +
+        weights.recency * rs +
+        weights.importance * imp +
+        weights.graph * gs +
+        weights.reinforcement * rf +
+        weights.temporal * ts +
+        weights.emotional * es;
 
       return {
         entry: r.entry,
