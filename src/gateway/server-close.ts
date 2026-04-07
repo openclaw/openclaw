@@ -14,6 +14,7 @@ import {
 import type { RestartOutboxTask, RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
+const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1500;
 const GATEWAY_WSS_CLOSE_TIMEOUT_MS = 2000;
 
 type GatewayCloseOptions = {
@@ -266,6 +267,53 @@ export function createGatewayCloseHandler(params: {
       const correlationId = correlationIdRaw || restartId;
       const outbox: unknown[] = [];
 
+      const runHookWithTimeout = async (
+        event: ReturnType<typeof createInternalHookEvent>,
+        hookLabel: "shutdown" | "pre-restart",
+      ) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const hookPromise = triggerInternalHook(event)
+          .then(() => {
+            if (!settled) {
+              settled = true;
+              if (timer) {
+                clearTimeout(timer);
+                timer = null;
+              }
+              return "completed" as const;
+            }
+            return "late" as const;
+          })
+          .catch((error) => {
+            if (!settled) {
+              settled = true;
+              if (timer) {
+                clearTimeout(timer);
+                timer = null;
+              }
+              throw error;
+            }
+            return "late" as const;
+          });
+        const timeoutPromise = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            resolve("timeout");
+          }, GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+        });
+        const outcome = await Promise.race([hookPromise, timeoutPromise]);
+        if (outcome === "timeout") {
+          (params.logger ?? logger).warn?.("gateway lifecycle hook timed out", {
+            hookLabel,
+            timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
+          });
+        }
+      };
+
       try {
         const shutdownEvent = createInternalHookEvent("gateway", "shutdown", "gateway", {
           reason,
@@ -275,7 +323,7 @@ export function createGatewayCloseHandler(params: {
           ...(correlationId ? { correlationId } : {}),
           outbox,
         });
-        await triggerInternalHook(shutdownEvent);
+        await runHookWithTimeout(shutdownEvent, "shutdown");
 
         if (restartExpectedMs !== null) {
           const preRestartEvent = createInternalHookEvent("gateway", "pre-restart", "gateway", {
@@ -286,7 +334,7 @@ export function createGatewayCloseHandler(params: {
             ...(correlationId ? { correlationId } : {}),
             outbox,
           });
-          await triggerInternalHook(preRestartEvent);
+          await runHookWithTimeout(preRestartEvent, "pre-restart");
 
           await persistGatewayRestartOutbox({
             reason,
