@@ -12,7 +12,9 @@ import {
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
 export const CLAWHUB_INSTALL_ERROR_CODE = {
@@ -80,7 +82,7 @@ function mapClawHubRequestError(
       CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
     );
   }
-  return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
+  return buildClawHubInstallFailure(formatErrorMessage(error));
 }
 
 function resolveRequestedVersion(params: {
@@ -223,15 +225,17 @@ function logClawHubPackageSummary(params: {
   }
 }
 
-export async function installPluginFromClawHub(params: {
-  spec: string;
-  baseUrl?: string;
-  token?: string;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-}): Promise<
+export async function installPluginFromClawHub(
+  params: InstallSafetyOverrides & {
+    spec: string;
+    baseUrl?: string;
+    token?: string;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+  },
+): Promise<
   | ({
       ok: true;
     } & Extract<InstallPluginResult, { ok: true }> & {
@@ -297,7 +301,7 @@ export async function installPluginFromClawHub(params: {
       token: params.token,
     });
   } catch (error) {
-    return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
+    return buildClawHubInstallFailure(formatErrorMessage(error));
   }
   try {
     params.logger?.info?.(
@@ -305,6 +309,7 @@ export async function installPluginFromClawHub(params: {
     );
     const installResult = await installPluginFromArchive({
       archivePath: archive.archivePath,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       mode: params.mode,
       dryRun: params.dryRun,

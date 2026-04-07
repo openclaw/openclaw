@@ -7,6 +7,7 @@ import {
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { loginChutes } from "openclaw/plugin-sdk/provider-auth-login";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   CHUTES_DEFAULT_MODEL_REF,
   applyChutesApiKeyConfig,
@@ -82,7 +83,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,
-      email: typeof creds.email === "string" ? creds.email : undefined,
+      email: readStringValue(creds.email),
       credentialExtra: {
         clientId,
         ...("accountId" in creds && typeof creds.accountId === "string"

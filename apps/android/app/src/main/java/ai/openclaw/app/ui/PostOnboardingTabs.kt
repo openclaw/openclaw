@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 
 private enum class HomeTab(
@@ -72,6 +73,20 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
   var chatTabStarted by rememberSaveable { mutableStateOf(false) }
   var screenTabStarted by rememberSaveable { mutableStateOf(false) }
+  val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
+
+  LaunchedEffect(requestedHomeDestination) {
+    val destination = requestedHomeDestination ?: return@LaunchedEffect
+    activeTab =
+      when (destination) {
+        HomeDestination.Connect -> HomeTab.Connect
+        HomeDestination.Chat -> HomeTab.Chat
+        HomeDestination.Voice -> HomeTab.Voice
+        HomeDestination.Screen -> HomeTab.Screen
+        HomeDestination.Settings -> HomeTab.Settings
+      }
+    viewModel.clearRequestedHomeDestination()
+  }
 
   // Stop TTS when user navigates away from voice tab, and lazily keep the Chat/Screen tabs
   // alive after the first visit so repeated tab switches do not rebuild their UI trees.

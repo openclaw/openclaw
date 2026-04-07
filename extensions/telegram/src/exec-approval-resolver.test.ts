@@ -2,31 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayRuntimeHoisted = vi.hoisted(() => ({
   requestSpy: vi.fn(),
-  startSpy: vi.fn(),
-  stopSpy: vi.fn(),
-  stopAndWaitSpy: vi.fn(async () => undefined),
-  createClientSpy: vi.fn(),
+  withClientSpy: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
-  createOperatorApprovalsGatewayClient: gatewayRuntimeHoisted.createClientSpy,
+  withOperatorApprovalsGatewayClient: gatewayRuntimeHoisted.withClientSpy,
 }));
 
 describe("resolveTelegramExecApproval", () => {
   beforeEach(() => {
     gatewayRuntimeHoisted.requestSpy.mockReset();
-    gatewayRuntimeHoisted.startSpy.mockReset();
-    gatewayRuntimeHoisted.stopSpy.mockReset();
-    gatewayRuntimeHoisted.stopAndWaitSpy.mockReset().mockResolvedValue(undefined);
-    gatewayRuntimeHoisted.createClientSpy.mockReset().mockImplementation((opts) => ({
-      start: () => {
-        gatewayRuntimeHoisted.startSpy();
-        opts.onHelloOk?.();
-      },
-      request: gatewayRuntimeHoisted.requestSpy,
-      stop: gatewayRuntimeHoisted.stopSpy,
-      stopAndWait: gatewayRuntimeHoisted.stopAndWaitSpy,
-    }));
+    gatewayRuntimeHoisted.withClientSpy.mockReset().mockImplementation(async (_params, run) => {
+      await run({
+        request: gatewayRuntimeHoisted.requestSpy,
+      } as never);
+    });
   });
 
   it("routes plugin approval ids through plugin.approval.resolve", async () => {
@@ -63,14 +53,10 @@ describe("resolveTelegramExecApproval", () => {
       id: "legacy-plugin-123",
       decision: "allow-always",
     });
-    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(
-      2,
-      "plugin.approval.resolve",
-      {
-        id: "legacy-plugin-123",
-        decision: "allow-always",
-      },
-    );
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "legacy-plugin-123",
+      decision: "allow-always",
+    });
   });
 
   it("falls back to plugin.approval.resolve for structured approval-not-found errors", async () => {
@@ -95,14 +81,10 @@ describe("resolveTelegramExecApproval", () => {
       id: "legacy-plugin-123",
       decision: "allow-always",
     });
-    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(
-      2,
-      "plugin.approval.resolve",
-      {
-        id: "legacy-plugin-123",
-        decision: "allow-always",
-      },
-    );
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "legacy-plugin-123",
+      decision: "allow-always",
+    });
   });
 
   it("does not fall back to plugin.approval.resolve without explicit permission", async () => {

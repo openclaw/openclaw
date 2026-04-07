@@ -1,23 +1,33 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
+import {
+  getActivePluginChannelRegistryVersion,
+  requireActivePluginChannelRegistry,
+} from "../plugins/runtime.js";
 import type { ShouldHandleTextCommandsParams } from "./commands-registry.types.js";
 
 let cachedNativeCommandSurfaces: Set<string> | null = null;
 let cachedNativeCommandSurfacesVersion = -1;
+let cachedNativeCommandSurfacesRegistry: object | null = null;
 
 export function isNativeCommandSurface(surface?: string): boolean {
   const normalized = surface?.trim().toLowerCase();
   if (!normalized) {
     return false;
   }
+  const activeRegistry = requireActivePluginChannelRegistry();
   const registryVersion = getActivePluginChannelRegistryVersion();
-  if (!cachedNativeCommandSurfaces || cachedNativeCommandSurfacesVersion !== registryVersion) {
+  if (
+    !cachedNativeCommandSurfaces ||
+    cachedNativeCommandSurfacesVersion !== registryVersion ||
+    cachedNativeCommandSurfacesRegistry !== activeRegistry
+  ) {
     cachedNativeCommandSurfaces = new Set(
       listChannelPlugins()
         .filter((plugin) => plugin.capabilities?.nativeCommands === true)
         .map((plugin) => plugin.id),
     );
     cachedNativeCommandSurfacesVersion = registryVersion;
+    cachedNativeCommandSurfacesRegistry = activeRegistry;
   }
   return cachedNativeCommandSurfaces.has(normalized);
 }

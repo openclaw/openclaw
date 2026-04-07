@@ -18,6 +18,11 @@ into a summary so the chat can continue.
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+When OpenClaw splits history into compaction chunks, it keeps assistant tool
+calls paired with their matching `toolResult` entries. If a split point lands
+inside a tool block, OpenClaw moves the boundary so the pair stays together and
+the current unsummarized tail is preserved.
+
 The full conversation history stays on disk. Compaction only changes what the
 model sees on the next turn.
 
@@ -25,7 +30,11 @@ model sees on the next turn.
 
 Auto-compaction is on by default. It runs when the session nears the context
 limit, or when the model returns a context-overflow error (in which case
-OpenClaw compacts and retries).
+OpenClaw compacts and retries). Typical overflow signatures include
+`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `input is too long for the model`, and `ollama error: context length
+exceeded`.
 
 <Info>
 Before compacting, OpenClaw automatically reminds the agent to save important
@@ -58,6 +67,26 @@ capable model for better summaries:
 }
 ```
 
+## Compaction start notice
+
+By default, compaction runs silently. To show a brief notice when compaction
+starts, enable `notifyUser`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        notifyUser: true,
+      },
+    },
+  },
+}
+```
+
+When enabled, the user sees a short message (for example, "Compacting
+context...") at the start of each compaction run.
+
 ## Compaction vs pruning
 
 |                  | Compaction                    | Pruning                          |
@@ -84,3 +113,10 @@ survive.
 For advanced configuration (reserve tokens, identifier preservation, custom
 context engines, OpenAI server-side compaction), see the
 [Session Management Deep Dive](/reference/session-management-compaction).
+
+## Related
+
+- [Session](/concepts/session) — session management and lifecycle
+- [Session Pruning](/concepts/session-pruning) — trimming tool results
+- [Context](/concepts/context) — how context is built for agent turns
+- [Hooks](/automation/hooks) — compaction lifecycle hooks (before_compaction, after_compaction)

@@ -1,15 +1,9 @@
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveSessionAgentId,
-} from "../../agents/agent-scope.js";
-import { renderExecTargetLabel, resolveExecTarget } from "../../agents/bash-tools.exec-runtime.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { requestLiveSessionModelSwitch } from "../../agents/live-model-switch.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -32,49 +26,7 @@ import {
   withOptions,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
-
-function resolveExecDefaults(params: {
-  cfg: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  agentId?: string;
-  sandboxAvailable: boolean;
-}): {
-  host: ExecTarget;
-  effectiveHost: ExecHost;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  node?: string;
-} {
-  const globalExec = params.cfg.tools?.exec;
-  const agentExec = params.agentId
-    ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
-    : undefined;
-  const host =
-    (params.sessionEntry?.execHost as ExecTarget | undefined) ??
-    (agentExec?.host as ExecTarget | undefined) ??
-    (globalExec?.host as ExecTarget | undefined) ??
-    "auto";
-  const resolved = resolveExecTarget({
-    configuredTarget: host,
-    elevatedRequested: false,
-    sandboxAvailable: params.sandboxAvailable,
-  });
-  return {
-    host,
-    effectiveHost: resolved.effectiveHost,
-    security:
-      (params.sessionEntry?.execSecurity as ExecSecurity | undefined) ??
-      (agentExec?.security as ExecSecurity | undefined) ??
-      (globalExec?.security as ExecSecurity | undefined) ??
-      "deny",
-    ask:
-      (params.sessionEntry?.execAsk as ExecAsk | undefined) ??
-      (agentExec?.ask as ExecAsk | undefined) ??
-      (globalExec?.ask as ExecAsk | undefined) ??
-      "on-miss",
-    node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
-  };
-}
+import { refreshQueuedFollowupSession } from "./queue.js";
 
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
@@ -413,6 +365,7 @@ export async function handleDirectiveOnly(
         entry: sessionEntry,
         selection: modelSelection,
         profileOverride,
+        markLiveSwitchPending: true,
       });
       modelSelectionUpdated = applied.updated;
     }
@@ -442,15 +395,16 @@ export async function handleDirectiveOnly(
         store[sessionKey] = sessionEntry;
       });
     }
-    if (modelSelection && modelSelectionUpdated) {
-      requestLiveSessionModelSwitch({
-        sessionEntry,
-        selection: {
-          provider: modelSelection.provider,
-          model: modelSelection.model,
-          authProfileId: profileOverride,
-          authProfileIdSource: profileOverride ? "user" : undefined,
-        },
+    if (modelSelection && modelSelectionUpdated && sessionKey) {
+      // `/model` should retarget queued/future work without interrupting the
+      // active run. Refresh queued followups so they pick up the persisted
+      // selection once the current turn finishes.
+      refreshQueuedFollowupSession({
+        key: sessionKey,
+        nextProvider: modelSelection.provider,
+        nextModel: modelSelection.model,
+        nextAuthProfileId: profileOverride,
+        nextAuthProfileIdSource: profileOverride ? "user" : undefined,
       });
     }
   }

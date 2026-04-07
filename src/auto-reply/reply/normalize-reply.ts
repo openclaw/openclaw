@@ -9,24 +9,22 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
-import { compileSlackInteractiveReplies } from "./slack-directives.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
   applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
   silentToken?: string;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -96,10 +94,9 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
   let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (applyChannelTransforms && text && hasLineDirectives(text)) {
-    enrichedPayload = parseLineDirectives(enrichedPayload);
+  if (applyChannelTransforms && opts.transformReplyPayload) {
+    enrichedPayload = opts.transformReplyPayload(enrichedPayload) ?? enrichedPayload;
     text = enrichedPayload.text;
   }
 
@@ -118,9 +115,5 @@ export function normalizeReplyPayload(
   }
 
   enrichedPayload = { ...enrichedPayload, text };
-  if (applyChannelTransforms && opts.enableSlackInteractiveReplies && text) {
-    enrichedPayload = compileSlackInteractiveReplies(enrichedPayload);
-  }
-
   return enrichedPayload;
 }

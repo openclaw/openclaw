@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 
 const log = createSubsystemLogger("memory");
@@ -9,6 +10,8 @@ export type QmdQueryResult = {
   file?: string;
   snippet?: string;
   body?: string;
+  startLine?: number;
+  endLine?: number;
 };
 
 export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
@@ -40,7 +43,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     }
     throw new Error("qmd query JSON response was not an array");
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     log.warn(`qmd query returned invalid JSON: ${message}`);
     throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
   }
@@ -73,10 +76,38 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
     if (!Array.isArray(parsed)) {
       return null;
     }
-    return parsed as QmdQueryResult[];
+    return parsed.map((item) => {
+      if (typeof item !== "object" || item === null) {
+        return item as QmdQueryResult;
+      }
+      const record = item as Record<string, unknown>;
+      const docid = typeof record.docid === "string" ? record.docid : undefined;
+      const score =
+        typeof record.score === "number" && Number.isFinite(record.score)
+          ? record.score
+          : undefined;
+      const collection = typeof record.collection === "string" ? record.collection : undefined;
+      const file = typeof record.file === "string" ? record.file : undefined;
+      const snippet = typeof record.snippet === "string" ? record.snippet : undefined;
+      const body = typeof record.body === "string" ? record.body : undefined;
+      return {
+        docid,
+        score,
+        collection,
+        file,
+        snippet,
+        body,
+        startLine: parseQmdLineNumber(record.start_line ?? record.startLine),
+        endLine: parseQmdLineNumber(record.end_line ?? record.endLine),
+      } as QmdQueryResult;
+    });
   } catch {
     return null;
   }
+}
+
+function parseQmdLineNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function extractFirstJsonArray(raw: string): string | null {

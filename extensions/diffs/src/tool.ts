@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { Static, Type } from "@sinclair/typebox";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
@@ -125,7 +126,7 @@ const DiffsToolSchema = Type.Object(
     baseUrl: Type.Optional(
       Type.String({
         description:
-          "Optional gateway base URL override used when building the viewer URL, for example https://gateway.example.com.",
+          "Optional gateway base URL override used when building the viewer URL. Overrides configured viewerBaseUrl, for example https://gateway.example.com.",
       }),
     ),
   },
@@ -142,6 +143,7 @@ export function createDiffsTool(params: {
   api: OpenClawPluginApi;
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
+  viewerBaseUrl?: string;
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
@@ -237,7 +239,7 @@ export function createDiffsTool(params: {
       const viewerUrl = buildViewerUrl({
         config: params.api.config,
         viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+        baseUrl: normalizeBaseUrl(toolParams.baseUrl) ?? params.viewerBaseUrl,
       });
 
       const baseDetails = {
@@ -294,19 +296,18 @@ export function createDiffsTool(params: {
         };
       } catch (error) {
         if (mode === "both") {
+          const errorMessage = formatErrorMessage(error);
           return {
             content: [
               {
                 type: "text",
-                text:
-                  `Diff viewer ready.\n${viewerUrl}\n` +
-                  `File rendering failed: ${error instanceof Error ? error.message : String(error)}`,
+                text: `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
               },
             ],
             details: {
               ...baseDetails,
-              fileError: error instanceof Error ? error.message : String(error),
-              imageError: error instanceof Error ? error.message : String(error),
+              fileError: errorMessage,
+              imageError: errorMessage,
             },
           };
         }

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveBundledWebSearchPluginId } from "../../plugins/bundled-web-search-provider-ids.js";
+import { resolveManifestContractOwnerPluginId } from "../../plugins/manifest-registry.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import {
   resolveWebSearchDefinition,
@@ -19,7 +19,13 @@ export function createWebSearchTool(options?: {
   const resolved = resolveWebSearchDefinition({
     ...options,
     preferRuntimeProviders:
-      Boolean(runtimeProviderId) && !resolveBundledWebSearchPluginId(runtimeProviderId),
+      Boolean(runtimeProviderId) &&
+      !resolveManifestContractOwnerPluginId({
+        contract: "webSearchProviders",
+        value: runtimeProviderId,
+        origin: "bundled",
+        config: options?.config,
+      }),
   });
   if (!resolved) {
     return null;

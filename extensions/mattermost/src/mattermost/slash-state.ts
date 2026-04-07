@@ -54,7 +54,7 @@ export function resolveSlashHandlerForToken(token: string): {
     return { kind: "none" };
   }
   if (matches.length === 1) {
-    return { kind: "single", handler: matches[0]!.handler, accountIds: [matches[0]!.accountId] };
+    return { kind: "single", handler: matches[0].handler, accountIds: [matches[0].accountId] };
   }
 
   return {
@@ -206,7 +206,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     // If there's only one active account (common case), route directly.
     if (accountStates.size === 1) {
-      const [, state] = [...accountStates.entries()][0]!;
+      const [, state] = [...accountStates.entries()][0];
       if (!state.handler) {
         res.statusCode = 503;
         res.setHeader("Content-Type", "application/json; charset=utf-8");

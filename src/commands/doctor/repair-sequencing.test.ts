@@ -55,20 +55,48 @@ describe("doctor repair sequencing", () => {
     });
 
     expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.candidate.channels?.discord?.allowFrom).toEqual(["123"]);
+    expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([123]);
     expect(result.changeNotes).toEqual([
-      expect.stringContaining("channels.discord.allowFrom: converted 1 numeric entry to strings"),
       expect.stringContaining(
-        "tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries",
+        "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries",
       ),
     ]);
-    expect(result.changeNotes[1]).toContain("bad-keynext -> id:bad-keynext");
-    expect(result.changeNotes[1]).not.toContain("\u001B");
-    expect(result.changeNotes[1]).not.toContain("\r");
+    expect(result.changeNotes[0]).toContain("bad-keynext -> id:bad-keynext");
+    expect(result.changeNotes[0]).not.toContain("\u001B");
+    expect(result.changeNotes[0]).not.toContain("\r");
     expect(result.warningNotes).toEqual([
       expect.stringContaining("channels.signal.accounts.ops-teamnext.dmPolicy"),
     ]);
     expect(result.warningNotes[0]).not.toContain("\u001B");
     expect(result.warningNotes[0]).not.toContain("\r");
+  });
+
+  it("emits Discord warnings when unsafe numeric ids block repair", async () => {
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              allowFrom: [106232522769186816],
+            },
+          },
+        } as unknown as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              allowFrom: [106232522769186816],
+            },
+          },
+        } as unknown as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toEqual([]);
+    expect(result.warningNotes).toEqual([]);
+    expect(result.state.pendingChanges).toBe(false);
+    expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
   });
 });

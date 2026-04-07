@@ -4,6 +4,7 @@ import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
@@ -149,8 +150,21 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
  */
 let cachedTailscaleBinary: string | null = null;
 
+export function getTestTailscaleBinaryOverride(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  if (!forcedBinary) {
+    return null;
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return forcedBinary;
+  }
+  return null;
+}
+
 export async function getTailscaleBinary(): Promise<string> {
-  const forcedBinary = process.env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  const forcedBinary = getTestTailscaleBinaryOverride();
   if (forcedBinary) {
     cachedTailscaleBinary = forcedBinary;
     return forcedBinary;
@@ -422,7 +436,7 @@ export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
 }
 
 function getString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

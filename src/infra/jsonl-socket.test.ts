@@ -4,6 +4,22 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
+async function listenOnSocket(server: net.Server, socketPath: string): Promise<boolean> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   it("ignores malformed and non-accepted lines until one is accepted", async () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
@@ -15,13 +31,16 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           socket.write('{"type":"done","value":42}\n');
         });
       });
-      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
 
       try {
         await expect(
           requestJsonlSocket({
             socketPath,
-            payload: '{"hello":"world"}',
+            requestLine: '{"hello":"world"}',
             timeoutMs: 500,
             accept: (msg) => {
               const value = msg as { type?: string; value?: number };
@@ -35,19 +54,60 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     });
   });
 
+  it("half-closes the write side after sending the request line", async () => {
+    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+      const socketPath = path.join(dir, "socket.sock");
+      let receivedBuffer: string | null = null;
+      const server = net.createServer((socket) => {
+        let buffer = "";
+        socket.on("data", (chunk) => {
+          buffer += chunk.toString("utf8");
+        });
+        socket.on("end", () => {
+          receivedBuffer = buffer;
+          socket.end('{"type":"done","value":7}\n');
+        });
+      });
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
+
+      try {
+        await expect(
+          requestJsonlSocket({
+            socketPath,
+            requestLine: '{"hello":"world"}',
+            timeoutMs: 500,
+            accept: (msg) => {
+              const value = msg as { type?: string; value?: number };
+              return value.type === "done" ? (value.value ?? null) : undefined;
+            },
+          }),
+        ).resolves.toBe(7);
+        expect(receivedBuffer).toBe('{"hello":"world"}\n');
+      } finally {
+        server.close();
+      }
+    });
+  });
+
   it("returns null on timeout and on socket errors", async () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       const server = net.createServer(() => {
         // Intentionally never reply.
       });
-      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
 
       try {
         await expect(
           requestJsonlSocket({
             socketPath,
-            payload: "{}",
+            requestLine: "{}",
             timeoutMs: 50,
             accept: () => undefined,
           }),
@@ -59,7 +119,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       await expect(
         requestJsonlSocket({
           socketPath,
-          payload: "{}",
+          requestLine: "{}",
           timeoutMs: 50,
           accept: () => undefined,
         }),
