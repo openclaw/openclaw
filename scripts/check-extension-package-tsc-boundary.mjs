@@ -14,6 +14,7 @@ const prepareBoundaryArtifactsBin = resolve(
   "scripts/prepare-extension-package-boundary-artifacts.mjs",
 );
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
+const FAILURE_OUTPUT_TAIL_LINES = 40;
 
 function parseMode(argv) {
   const modeArg = argv.find((arg) => arg.startsWith("--mode="));
@@ -35,6 +36,54 @@ function resolveCompileConcurrency() {
 
 function readJsonFile(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+function summarizeOutputSection(name, output) {
+  const trimmed = output.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const lines = trimmed.split("\n");
+  if (lines.length <= FAILURE_OUTPUT_TAIL_LINES) {
+    return `${name}:\n${trimmed}`;
+  }
+
+  const omittedLineCount = lines.length - FAILURE_OUTPUT_TAIL_LINES;
+  const tail = lines.slice(-FAILURE_OUTPUT_TAIL_LINES).join("\n");
+  return `${name}:\n[... ${omittedLineCount} earlier lines omitted ...]\n${tail}`;
+}
+
+function formatFailureFooter(params = {}) {
+  const footerLines = [];
+  if (params.kind) {
+    footerLines.push(`kind: ${params.kind}`);
+  }
+  if (Number.isFinite(params.elapsedMs)) {
+    footerLines.push(`elapsed: ${params.elapsedMs}ms`);
+  }
+  if (params.note) {
+    footerLines.push(params.note);
+  }
+  return footerLines.join("\n");
+}
+
+export function formatStepFailure(label, params = {}) {
+  const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
+  const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
+  const footer = formatFailureFooter(params);
+  return [label, stdoutSection, stderrSection, footer].filter(Boolean).join("\n\n");
+}
+
+function attachStepFailureMetadata(error, label, params = {}) {
+  error.stepLabel = label;
+  error.kind = params.kind ?? "unknown";
+  error.elapsedMs = params.elapsedMs ?? null;
+  error.fullOutput = [label, params.stdout ?? "", params.stderr ?? "", formatFailureFooter(params)]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return error;
 }
 
 function collectBundledExtensionIds() {
@@ -74,6 +123,7 @@ function collectCanaryExtensionIds(extensionIds) {
 }
 
 function runNodeStep(label, args, timeoutMs) {
+  const startedAt = Date.now();
   const result = spawnSync(process.execPath, args, {
     cwd: repoRoot,
     encoding: "utf8",
@@ -87,11 +137,30 @@ function runNodeStep(label, args, timeoutMs) {
 
   const timeoutSuffix =
     result.error?.name === "Error" && result.error.message.includes("ETIMEDOUT")
-      ? `\n${label} timed out after ${timeoutMs}ms`
+      ? `${label} timed out after ${timeoutMs}ms`
       : "";
-  const errorSuffix = result.error ? `\n${result.error.message}` : "";
-  const failure = new Error(
-    `${label}\n${result.stdout}${result.stderr}${timeoutSuffix}${errorSuffix}`.trim(),
+  const errorSuffix = result.error ? result.error.message : "";
+  const note = [timeoutSuffix, errorSuffix].filter(Boolean).join("\n");
+  const elapsedMs = Date.now() - startedAt;
+  const kind = timeoutSuffix ? "timeout" : result.error ? "spawn-error" : "nonzero-exit";
+  const failure = attachStepFailureMetadata(
+    new Error(
+      formatStepFailure(label, {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        kind,
+        elapsedMs,
+        note,
+      }),
+    ),
+    label,
+    {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      kind,
+      elapsedMs,
+      note,
+    },
   );
   failure.status = result.status ?? 1;
   throw failure;
@@ -106,6 +175,7 @@ function abortSiblingSteps(abortController) {
 export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   const onFailure = params.onFailure;
+  const startedAt = Date.now();
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
@@ -123,8 +193,24 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       }
       child.kill("SIGTERM");
       settled = true;
-      const error = new Error(
-        `${label}\n${stdout}${stderr}\n${label} timed out after ${timeoutMs}ms`.trim(),
+      const error = attachStepFailureMetadata(
+        new Error(
+          formatStepFailure(label, {
+            stdout,
+            stderr,
+            kind: "timeout",
+            elapsedMs: Date.now() - startedAt,
+            note: `${label} timed out after ${timeoutMs}ms`,
+          }),
+        ),
+        label,
+        {
+          stdout,
+          stderr,
+          kind: "timeout",
+          elapsedMs: Date.now() - startedAt,
+          note: `${label} timed out after ${timeoutMs}ms`,
+        },
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
@@ -146,10 +232,34 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       clearTimeout(timer);
       settled = true;
       if (error.name === "AbortError" && abortController?.signal.aborted) {
-        rejectPromise(new Error(`${label} canceled after sibling failure`));
+        rejectPromise(
+          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
+            kind: "canceled",
+            elapsedMs: Date.now() - startedAt,
+            note: "canceled after sibling failure",
+          }),
+        );
         return;
       }
-      const failure = new Error(`${label}\n${stdout}${stderr}\n${error.message}`.trim());
+      const failure = attachStepFailureMetadata(
+        new Error(
+          formatStepFailure(label, {
+            stdout,
+            stderr,
+            kind: "spawn-error",
+            elapsedMs: Date.now() - startedAt,
+            note: error.message,
+          }),
+        ),
+        label,
+        {
+          stdout,
+          stderr,
+          kind: "spawn-error",
+          elapsedMs: Date.now() - startedAt,
+          note: error.message,
+        },
+      );
       onFailure?.(failure);
       abortSiblingSteps(abortController);
       rejectPromise(failure);
@@ -164,7 +274,23 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         resolvePromise({ stdout, stderr });
         return;
       }
-      const error = new Error(`${label}\n${stdout}${stderr}`.trim());
+      const error = attachStepFailureMetadata(
+        new Error(
+          formatStepFailure(label, {
+            stdout,
+            stderr,
+            kind: "nonzero-exit",
+            elapsedMs: Date.now() - startedAt,
+          }),
+        ),
+        label,
+        {
+          stdout,
+          stderr,
+          kind: "nonzero-exit",
+          elapsedMs: Date.now() - startedAt,
+        },
+      );
       onFailure?.(error);
       abortSiblingSteps(abortController);
       rejectPromise(error);
@@ -239,6 +365,49 @@ function resolveBoundaryTsBuildInfoPath(extensionId) {
   return resolve(repoRoot, "extensions", extensionId, "dist", ".boundary-tsc.tsbuildinfo");
 }
 
+export function resolveBoundaryCheckLockPath(rootDir = repoRoot) {
+  return resolve(rootDir, "dist", ".extension-package-boundary.lock");
+}
+
+export function acquireBoundaryCheckLock(params = {}) {
+  const rootDir = params.rootDir ?? repoRoot;
+  const processObject = params.processObject ?? process;
+  const lockPath = resolveBoundaryCheckLockPath(rootDir);
+  mkdirSync(dirname(lockPath), { recursive: true });
+  try {
+    mkdirSync(lockPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      throw attachStepFailureMetadata(
+        new Error(
+          [
+            "extension package boundary check",
+            "kind: lock-contention",
+            `lock: ${lockPath}`,
+            "another extension package boundary check is already running in this checkout",
+          ].join("\n\n"),
+          { cause: error },
+        ),
+        "extension package boundary check",
+        {
+          kind: "lock-contention",
+          note: `lock: ${lockPath}\nanother extension package boundary check is already running in this checkout`,
+        },
+      );
+    }
+    throw error;
+  }
+
+  const release = () => {
+    rmSync(lockPath, { force: true, recursive: true });
+  };
+  processObject.on("exit", release);
+  return () => {
+    processObject.off("exit", release);
+    release();
+  };
+}
+
 async function runCompileCheck(extensionIds) {
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
@@ -303,7 +472,10 @@ function runCanaryCheck(extensionIds) {
         `${extensionId} canary unexpectedly passed\n${result.stdout}${result.stderr}`,
       );
     } catch (error) {
-      const output = error instanceof Error ? error.message : String(error);
+      const output =
+        error instanceof Error && typeof error.fullOutput === "string"
+          ? error.fullOutput
+          : String(error);
       if (!output.includes("TS6059") || !output.includes("src/cli/acp-cli.ts")) {
         throw error;
       }
@@ -319,6 +491,7 @@ export async function main(argv = process.argv.slice(2)) {
   const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
   const cleanupExtensionIds = optInExtensionIds;
   const shouldRunCanary = mode === "all" || mode === "canary";
+  const releaseBoundaryLock = acquireBoundaryCheckLock();
   const teardownCanaryCleanup = installCanaryArtifactCleanup(cleanupExtensionIds);
 
   try {
@@ -330,6 +503,7 @@ export async function main(argv = process.argv.slice(2)) {
       runCanaryCheck(canaryExtensionIds);
     }
   } finally {
+    releaseBoundaryLock?.();
     teardownCanaryCleanup?.();
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
   }
