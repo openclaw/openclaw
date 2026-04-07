@@ -112,10 +112,12 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const mcpLoopbackRuntime =
-    backendResolved.id === "claude-cli" ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  const mcpLoopbackRuntime = backendResolved.bundleMcp
+    ? prepareDeps.getActiveMcpLoopbackRuntime()
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
+    mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,

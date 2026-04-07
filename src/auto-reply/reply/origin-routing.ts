@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 
 export function resolveOriginMessageProvider(params: {
@@ -6,8 +6,8 @@ export function resolveOriginMessageProvider(params: {
   provider?: string;
 }): string | undefined {
   return (
-    normalizeOptionalString(params.originatingChannel)?.toLowerCase() ??
-    normalizeOptionalString(params.provider)?.toLowerCase()
+    normalizeOptionalLowercaseString(params.originatingChannel) ??
+    normalizeOptionalLowercaseString(params.provider)
   );
 }
 

@@ -1,7 +1,10 @@
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
@@ -53,12 +56,12 @@ function resolveMethodById(
   provider: ProviderPlugin,
   methodId?: string,
 ): ProviderAuthMethod | undefined {
-  const normalizedMethodId = normalizeOptionalString(methodId)?.toLowerCase();
+  const normalizedMethodId = normalizeOptionalLowercaseString(methodId);
   if (!normalizedMethodId) {
     return provider.auth[0];
   }
   return provider.auth.find(
-    (method) => normalizeOptionalString(method.id)?.toLowerCase() === normalizedMethodId,
+    (method) => normalizeOptionalLowercaseString(method.id) === normalizedMethodId,
   );
 }
 

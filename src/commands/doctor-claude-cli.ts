@@ -14,7 +14,7 @@ import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -28,20 +28,8 @@ type ClaudeCliReadableCredential =
 
 type ClaudeCliDirHealth = "present" | "missing" | "not_directory" | "unreadable" | "readonly";
 
-function resolveConfiguredPrimaryModelRef(
-  value: string | { primary?: string; fallbacks?: string[] } | undefined,
-): string | undefined {
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return normalizeOptionalString(value.primary);
-}
-
 function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
-  const primary = resolveConfiguredPrimaryModelRef(
+  const primary = resolvePrimaryStringValue(
     cfg.agents?.defaults?.model as string | { primary?: string; fallbacks?: string[] } | undefined,
   );
   if (primary?.trim().toLowerCase().startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {

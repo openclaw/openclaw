@@ -198,13 +198,20 @@ function resolveCliImagePath(image: ImageContent): string {
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", `${digest}${ext}`);
 }
 
-export function appendImagePathsToPrompt(prompt: string, paths: string[]): string {
+function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: string }): string {
+  if (params.backend.imagePathScope === "workspace") {
+    return path.join(params.workspaceDir, ".openclaw-cli-images");
+  }
+  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
+}
+
+export function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
   if (!paths.length) {
     return prompt;
   }
   const trimmed = prompt.trimEnd();
   const separator = trimmed ? "\n\n" : "";
-  return `${trimmed}${separator}${paths.join("\n")}`;
+  return `${trimmed}${separator}${paths.map((entry) => `${prefix}${entry}`).join("\n")}`;
 }
 
 export async function loadPromptRefImages(params: {
@@ -244,15 +251,21 @@ export async function loadPromptRefImages(params: {
   return sanitizedImages;
 }
 
-export async function writeCliImages(
-  images: ImageContent[],
-): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const imageRoot = path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
+export async function writeCliImages(params: {
+  backend: CliBackendConfig;
+  workspaceDir: string;
+  images: ImageContent[];
+}): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+  const imageRoot = resolveCliImageRoot({
+    backend: params.backend,
+    workspaceDir: params.workspaceDir,
+  });
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   const paths: string[] = [];
-  for (let i = 0; i < images.length; i += 1) {
-    const image = images[i];
-    const filePath = resolveCliImagePath(image);
+  for (let i = 0; i < params.images.length; i += 1) {
+    const image = params.images[i];
+    const fileName = path.basename(resolveCliImagePath(image));
+    const filePath = path.join(imageRoot, fileName);
     const buffer = Buffer.from(image.data, "base64");
     await fs.writeFile(filePath, buffer, { mode: 0o600 });
     paths.push(filePath);
@@ -281,10 +294,22 @@ export async function prepareCliPromptImagePayload(params: {
   if (resolvedImages.length === 0) {
     return { prompt };
   }
-  const imagePayload = await writeCliImages(resolvedImages);
+  const imagePayload = await writeCliImages({
+    backend: params.backend,
+    workspaceDir: params.workspaceDir,
+    images: resolvedImages,
+  });
   const imagePaths = imagePayload.paths;
-  if (!params.backend.imageArg || params.backend.input === "stdin") {
-    prompt = appendImagePathsToPrompt(prompt, imagePaths);
+  if (
+    !params.backend.imageArg ||
+    params.backend.input === "stdin" ||
+    params.backend.imageArg === "@"
+  ) {
+    prompt = appendImagePathsToPrompt(
+      prompt,
+      imagePaths,
+      params.backend.imageArg === "@" ? "@" : "",
+    );
   }
   return {
     prompt,
@@ -322,7 +347,7 @@ export function buildCliArgs(params: {
   if (params.imagePaths && params.imagePaths.length > 0) {
     const mode = params.backend.imageMode ?? "repeat";
     const imageArg = params.backend.imageArg;
-    if (imageArg) {
+    if (imageArg && imageArg !== "@") {
       if (mode === "list") {
         args.push(imageArg, params.imagePaths.join(","));
       } else {

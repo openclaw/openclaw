@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import os from "node:os";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -21,6 +22,15 @@ function parseMode(argv) {
     throw new Error(`Unknown mode: ${mode}`);
   }
   return mode;
+}
+
+function resolveCompileConcurrency() {
+  const raw = process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return Math.max(1, Math.min(6, Math.floor(os.availableParallelism() / 2)));
 }
 
 function readJsonFile(filePath) {
@@ -87,25 +97,104 @@ function runNodeStep(label, args, timeoutMs) {
   throw failure;
 }
 
+function runNodeStepAsync(label, args, timeoutMs) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      child.kill("SIGTERM");
+      settled = true;
+      rejectPromise(
+        new Error(`${label}\n${stdout}${stderr}\n${label} timed out after ${timeoutMs}ms`.trim()),
+      );
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      clearTimeout(timer);
+      settled = true;
+      rejectPromise(new Error(`${label}\n${stdout}${stderr}\n${error.message}`.trim()));
+    });
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      clearTimeout(timer);
+      settled = true;
+      if (code === 0) {
+        resolvePromise({ stdout, stderr });
+        return;
+      }
+      rejectPromise(new Error(`${label}\n${stdout}${stderr}`.trim()));
+    });
+  });
+}
+
 function cleanupCanaryArtifacts(extensionId) {
   const extensionRoot = resolve(repoRoot, "extensions", extensionId);
   rmSync(resolve(extensionRoot, "__rootdir_boundary_canary__.ts"), { force: true });
   rmSync(resolve(extensionRoot, "tsconfig.rootdir-canary.json"), { force: true });
 }
 
-function runCompileCheck(extensionIds) {
+function resolveBoundaryTsBuildInfoPath(extensionId) {
+  return resolve(repoRoot, "extensions", extensionId, "dist", ".boundary-tsc.tsbuildinfo");
+}
+
+async function runCompileCheck(extensionIds) {
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
   runNodeStep("plugin-sdk boundary prep", [prepareBoundaryArtifactsBin], 420_000);
-  for (const [index, extensionId] of extensionIds.entries()) {
-    process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
-    runNodeStep(
-      extensionId,
-      [tscBin, "-p", resolve(repoRoot, "extensions", extensionId, "tsconfig.json"), "--noEmit"],
-      120_000,
-    );
-  }
+  const concurrency = resolveCompileConcurrency();
+  process.stdout.write(`compile concurrency ${concurrency}\n`);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, extensionIds.length) }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= extensionIds.length) {
+        return;
+      }
+      const extensionId = extensionIds[index];
+      const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
+      mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
+      process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
+      await runNodeStepAsync(
+        extensionId,
+        [
+          tscBin,
+          "-p",
+          resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
+          "--noEmit",
+          "--incremental",
+          "--tsBuildInfoFile",
+          tsBuildInfoPath,
+        ],
+        120_000,
+      );
+    }
+  });
+  await Promise.all(workers);
 }
 
 function runCanaryCheck(extensionIds) {
@@ -154,17 +243,17 @@ function runCanaryCheck(extensionIds) {
   }
 }
 
-function main() {
+async function main() {
   const mode = parseMode(process.argv.slice(2));
   const optInExtensionIds = collectOptInExtensionIds();
   const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
 
   if (mode === "all" || mode === "compile") {
-    runCompileCheck(optInExtensionIds);
+    await runCompileCheck(optInExtensionIds);
   }
   if (mode === "all" || mode === "canary") {
     runCanaryCheck(canaryExtensionIds);
   }
 }
 
-main();
+await main();

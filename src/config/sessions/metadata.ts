@@ -2,7 +2,10 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
@@ -55,7 +58,7 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
     ctx.Surface ||
     ctx.Provider;
   const provider = normalizeMessageChannel(providerRaw);
-  const surface = normalizeOptionalString(ctx.Surface)?.toLowerCase();
+  const surface = normalizeOptionalLowercaseString(ctx.Surface);
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
   const from = normalizeOptionalString(ctx.From);
   const to = normalizeOptionalString(

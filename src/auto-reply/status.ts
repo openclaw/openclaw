@@ -31,7 +31,7 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -98,7 +98,7 @@ type StatusArgs = {
 type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
 
 function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
   }

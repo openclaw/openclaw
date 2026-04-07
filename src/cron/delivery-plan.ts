@@ -1,5 +1,5 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString, normalizeOptionalThreadValue } from "../shared/string-coerce.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
@@ -24,16 +24,6 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
-function normalizeThreadId(value: unknown): string | number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return normalizeOptionalString(value);
-}
-
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
@@ -54,7 +44,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
   const deliveryTo = normalizeOptionalString((delivery as { to?: unknown } | undefined)?.to);
-  const deliveryThreadId = normalizeThreadId(
+  const deliveryThreadId = normalizeOptionalThreadValue(
     (delivery as { threadId?: unknown } | undefined)?.threadId,
   );
   const channel = deliveryChannel ?? "last";

@@ -8,7 +8,10 @@ import {
   createChannelNativeOriginTargetResolver,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import {
   getMatrixExecApprovalApprovers,
@@ -51,11 +54,6 @@ function resolveMatrixNativeTarget(raw: string): string | null {
   return target.kind === "user" ? `user:${target.id}` : `room:${target.id}`;
 }
 
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  const trimmed = value == null ? "" : String(value).trim();
-  return trimmed || undefined;
-}
-
 function resolveTurnSourceMatrixOriginTarget(request: ApprovalRequest): MatrixOriginTarget | null {
   const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
   const turnSourceTo = request.request.turnSourceTo?.trim() || "";
@@ -65,7 +63,7 @@ function resolveTurnSourceMatrixOriginTarget(request: ApprovalRequest): MatrixOr
   }
   return {
     to: target,
-    threadId: normalizeThreadId(request.request.turnSourceThreadId),
+    threadId: normalizeOptionalStringifiedId(request.request.turnSourceThreadId),
   };
 }
 
@@ -79,7 +77,7 @@ function resolveSessionMatrixOriginTarget(sessionTarget: {
   }
   return {
     to: target,
-    threadId: normalizeThreadId(sessionTarget.threadId),
+    threadId: normalizeOptionalStringifiedId(sessionTarget.threadId),
   };
 }
 

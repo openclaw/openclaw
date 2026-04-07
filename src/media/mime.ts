@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 let fileTypeModulePromise: Promise<typeof import("file-type")> | undefined;
@@ -71,7 +71,7 @@ const AUDIO_FILE_EXTENSIONS = new Set([
 ]);
 
 export function normalizeMimeType(mime?: string | null): string | undefined {
-  return normalizeOptionalString(mime?.split(";")[0])?.toLowerCase();
+  return normalizeOptionalLowercaseString(mime?.split(";")[0]);
 }
 
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {

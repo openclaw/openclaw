@@ -19,12 +19,14 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     liveTest: {
       defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,
+      defaultMcpProbe: true,
       docker: {
         npmPackage: "@anthropic-ai/claude-code",
         binaryName: "claude",
       },
     },
     bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
     config: {
       command: "claude",
       args: [

@@ -1,5 +1,5 @@
 import { logVerbose } from "../globals.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -126,7 +126,7 @@ export function validatePluginCommandDefinition(
 export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
-    const normalized = normalizeOptionalString(value)?.toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(value);
     if (!normalized) {
       return;
     }

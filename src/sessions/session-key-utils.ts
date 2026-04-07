@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -24,7 +27,7 @@ export type RawSessionConversationRef = {
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeOptionalString(sessionKey)?.toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return null;
   }
@@ -72,7 +75,7 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
 }
 
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
-  const raw = normalizeOptionalString(sessionKey)?.toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return 0;
   }
@@ -123,14 +126,14 @@ export function parseRawSessionConversationRef(
 
   const rawParts = raw.split(":").filter(Boolean);
   const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalString(rawParts[0])?.toLowerCase() === "agent" ? 2 : 0;
+    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
   if (parts.length < 3) {
     return null;
   }
 
-  const channel = normalizeOptionalString(parts[0])?.toLowerCase();
-  const kind = normalizeOptionalString(parts[1])?.toLowerCase();
+  const channel = normalizeOptionalLowercaseString(parts[0]);
+  const kind = normalizeOptionalLowercaseString(parts[1]);
   if (!channel || (kind !== "group" && kind !== "channel")) {
     return null;
   }

@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "./string-coerce.js";
+import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
@@ -52,7 +52,7 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
 }
 
 export function normalizeHyphenSlug(raw?: string | null) {
-  const trimmed = normalizeOptionalString(raw)?.toLowerCase() ?? "";
+  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
@@ -62,7 +62,7 @@ export function normalizeHyphenSlug(raw?: string | null) {
 }
 
 export function normalizeAtHashSlug(raw?: string | null) {
-  const trimmed = normalizeOptionalString(raw)?.toLowerCase() ?? "";
+  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
