@@ -1,7 +1,9 @@
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import type { MatrixProbe } from "./matrix/probe.js";
+import type { SsrFPolicy } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 type ResolveMatrixAuth = (params: { cfg: CoreConfig; accountId?: string }) => Promise<{
@@ -10,8 +12,8 @@ type ResolveMatrixAuth = (params: { cfg: CoreConfig; accountId?: string }) => Pr
   userId: string;
   deviceId?: string;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: unknown;
-  dispatcherPolicy?: unknown;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }>;
 
 type ProbeMatrix = (params: {
@@ -19,11 +21,11 @@ type ProbeMatrix = (params: {
   accessToken: string;
   userId: string;
   deviceId?: string;
-  timeoutMs?: number;
-  accountId?: string;
+  timeoutMs: number;
+  accountId?: string | null;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: unknown;
-  dispatcherPolicy?: unknown;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }) => Promise<MatrixProbe>;
 
 type SendMessageMatrix = (
@@ -42,7 +44,7 @@ export function createMatrixProbeAccount(params: {
     cfg,
   }: {
     account: { accountId?: string };
-    timeoutMs?: number;
+    timeoutMs: number;
     cfg: unknown;
   }): Promise<MatrixProbe> => {
     try {
