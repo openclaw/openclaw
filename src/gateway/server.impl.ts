@@ -1059,6 +1059,8 @@ export async function startGatewayServer(
                 startedAt: sessionRow.startedAt,
                 endedAt: sessionRow.endedAt,
                 runtimeMs: sessionRow.runtimeMs,
+                compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+                latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
               }
             : {};
           const message = attachOpenClawTranscriptMeta(update.message, {
@@ -1160,6 +1162,8 @@ export async function startGatewayServer(
                     startedAt: sessionRow.startedAt,
                     endedAt: sessionRow.endedAt,
                     runtimeMs: sessionRow.runtimeMs,
+                    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+                    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
                   }
                 : {}),
             },

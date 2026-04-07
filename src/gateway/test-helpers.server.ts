@@ -332,6 +332,17 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.compactEmbeddedPiSession.mockReset();
+  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
@@ -411,6 +422,17 @@ async function resetGatewayTestRuntimeOnly() {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.compactEmbeddedPiSession.mockReset();
+  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {

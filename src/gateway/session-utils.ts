@@ -213,6 +213,18 @@ function resolveNonNegativeNumber(value: number | null | undefined): number | un
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function resolveLatestCompactionCheckpoint(
+  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
+): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+  return checkpoints.reduce((latest, checkpoint) =>
+    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  );
+}
+
 function resolveEstimatedSessionCostUsd(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -1268,6 +1280,7 @@ export function buildGatewaySessionRow(params: {
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store);
+  const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1354,6 +1367,8 @@ export function buildGatewaySessionRow(params: {
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
+    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    latestCompactionCheckpoint,
   };
 }
 

@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - ACP/ACPX plugin: bump the bundled `acpx` pin to `0.5.1` so plugin-local installs and strict version checks pick up the latest published runtime release. (#62148) Thanks @onutc.
 - Tools/media generation: auto-fallback across auth-backed image, music, and video providers by default, and remap fallback size, aspect ratio, resolution, and duration hints to the closest supported option instead of dropping intent on provider switches.
 - Tools/media generation: report applied fallback geometry and duration settings consistently in tool results, add a shared normalization contract for image/music/video runtimes, and simplify the bundled image-generation-core runtime test to only verify the plugin-sdk re-export seam.
+- Gateway/sessions: add persisted compaction checkpoints plus Sessions UI branch/restore actions so operators can inspect and recover pre-compaction session state. (#62146) Thanks @scoootscooob.
 
 ### Fixes
 
