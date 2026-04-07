@@ -22,6 +22,7 @@ import {
   applyToolResultReplayMetadata,
   consumePendingToolResultReplayMetadata,
   resolveToolResultReplaySessionKey,
+  stampPersistedToolResultReplayMetadata,
 } from "./tool-result-replay-metadata.js";
 
 /**
@@ -177,7 +178,7 @@ export function installSessionToolResultGuard(
         ),
       );
       if (flushed) {
-        originalAppend(flushed as never);
+        originalAppend(stampPersistedToolResultReplayMetadata(flushed, replayMeta) as never);
       }
     }
     pendingState.clear();
@@ -237,7 +238,10 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      const replayTaggedPersisted = applyToolResultReplayMetadata(persisted, replayMeta);
+      const replayTaggedPersisted = stampPersistedToolResultReplayMetadata(
+        applyToolResultReplayMetadata(persisted, replayMeta),
+        replayMeta,
+      );
       return originalAppend(replayTaggedPersisted as never);
     }
 

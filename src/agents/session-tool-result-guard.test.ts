@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import {
@@ -352,7 +352,7 @@ describe("installSessionToolResultGuard", () => {
         role: "toolResult",
         toolCallId: "call_1",
         toolName: "read",
-        content: [{ type: "text", text: "{\"ok\":true}" }],
+        content: [{ type: "text", text: '{"ok":true}' }],
         isError: false,
         timestamp: Date.now(),
       }),
@@ -363,6 +363,47 @@ describe("installSessionToolResultGuard", () => {
     >;
     expect(messages[1]?.__openclaw?.transient).toBe(true);
     expect(messages[1]?.__openclaw?.diagnosticType).toBe("openclaw.config_snapshot");
+  });
+
+  it("stamps replay metadata with the persisted write time when toolResult timestamps are missing", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T03:30:00.000Z"));
+
+    try {
+      const sm = SessionManager.inMemory();
+      installSessionToolResultGuard(sm, { sessionKey: "agent:main:main" });
+
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        }),
+      );
+      recordPendingToolResultReplayMetadata({
+        sessionKey: "agent:main:main",
+        toolCallId: "call_1",
+        toolName: "exec",
+        args: { command: "openclaw status" },
+        taggedAt: Date.now() - 90_000,
+      });
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "exec",
+          content: [{ type: "text", text: "status output" }],
+          isError: false,
+        }),
+      );
+
+      const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<
+        AgentMessage & { __openclaw?: Record<string, unknown> }
+      >;
+      expect(messages[1]?.__openclaw?.persistedAt).toBe(Date.now());
+      expect(messages[1]?.__openclaw?.taggedAt).toBe(Date.now() - 90_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drains replay metadata when clearing pending tool calls", () => {

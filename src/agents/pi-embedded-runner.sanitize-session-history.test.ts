@@ -985,6 +985,51 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
+  it("keeps fresh diagnostic tool results when only the persisted replay timestamp is recent", async () => {
+    setNonGoogleModelApi();
+    const taggedAt = Date.now() - 2 * 60 * 60 * 1000;
+    const persistedAt = Date.now() - 5_000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_recent", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: taggedAt - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_recent",
+        toolName: "exec",
+        content: [{ type: "text", text: "latest plugin output" }],
+        isError: false,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt,
+          persistedAt,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: [{ type: "text", text: "latest plugin output" }],
+      __openclaw: expect.objectContaining({
+        diagnosticType: "openclaw.plugins_list",
+      }),
+    });
+    expect(
+      (result[1] as { __openclaw?: { replayOmitted?: boolean } }).__openclaw?.replayOmitted,
+    ).not.toBe(true);
+  });
+
   it("preserves latest assistant thinking blocks for github-copilot models", async () => {
     setNonGoogleModelApi();
 

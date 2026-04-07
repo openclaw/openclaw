@@ -327,7 +327,7 @@ function omitStaleTransientDiagnosticToolResults(messages: AgentMessage[]): Agen
     }
     const latestIndex = latestByDiagnosticType.get(meta.diagnosticType) ?? i;
     const timestamp = parseMessageTimestamp(
-      (message as { timestamp?: unknown }).timestamp ?? meta.taggedAt ?? null,
+      (message as { timestamp?: unknown }).timestamp ?? meta.persistedAt ?? null,
     );
     const staleByNewerResult = latestIndex > i;
     const staleByAge =

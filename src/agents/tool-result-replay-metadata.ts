@@ -12,6 +12,7 @@ type ToolResultReplayPolicyMeta = {
   transient: true;
   diagnosticType: ReplayDiagnosticType;
   taggedAt: number;
+  persistedAt?: number;
   sourceTool: string;
 };
 
@@ -20,6 +21,7 @@ type OpenClawReplayMetaEnvelope = {
     transient?: boolean;
     diagnosticType?: string;
     taggedAt?: number;
+    persistedAt?: number;
     sourceTool?: string;
     replayOmitted?: boolean;
   };
@@ -200,8 +202,37 @@ export function getToolResultReplayMetadata(
     transient: true,
     diagnosticType: meta.diagnosticType as ReplayDiagnosticType,
     taggedAt: typeof meta.taggedAt === "number" ? meta.taggedAt : 0,
+    persistedAt: typeof meta.persistedAt === "number" ? meta.persistedAt : undefined,
     sourceTool: typeof meta.sourceTool === "string" ? meta.sourceTool : "unknown",
   };
+}
+
+export function stampPersistedToolResultReplayMetadata(
+  message: AgentMessage,
+  meta: ToolResultReplayPolicyMeta | null,
+): AgentMessage {
+  if (!meta || (message as { role?: unknown }).role !== "toolResult") {
+    return message;
+  }
+  const next = message as AgentMessage &
+    OpenClawReplayMetaEnvelope & {
+      timestamp?: unknown;
+    };
+  const persistedAt =
+    typeof next.timestamp === "number" && Number.isFinite(next.timestamp)
+      ? next.timestamp
+      : Date.now();
+  return {
+    ...next,
+    __openclaw: {
+      ...next.__openclaw,
+      transient: true,
+      diagnosticType: meta.diagnosticType,
+      taggedAt: meta.taggedAt,
+      persistedAt,
+      sourceTool: meta.sourceTool,
+    },
+  } as unknown as AgentMessage;
 }
 
 export function replaceToolResultReplayContent(
