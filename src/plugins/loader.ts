@@ -615,6 +615,13 @@ function defaultChainContainsPluginExport(
   depth: number,
 ): boolean {
   if (
+    depth > 0 &&
+    (typeof candidate.register === "function" || typeof candidate.activate === "function") &&
+    !isForwardedPluginIdentityWrapper(candidate, next)
+  ) {
+    return false;
+  }
+  if (
     hasPluginDefinitionIdentity(candidate) &&
     !isForwardedPluginIdentityWrapper(candidate, next)
   ) {

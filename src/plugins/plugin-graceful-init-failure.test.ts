@@ -208,6 +208,22 @@ describe("plugin module default-unwrapping", () => {
     expect(loaded?.error).toBeUndefined();
   });
 
+  it("does not unwrap register-only nested definitions into helper objects", async () => {
+    const plugin = writePlugin({
+      id: "nested-default-register-only-definition-helper-object",
+      body: `module.exports = { default: { register() {}, default: { register() { throw new Error("helper object register should not run"); } } } };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "nested-default-register-only-definition-helper-object",
+    );
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+    expect(loaded?.error).toBeUndefined();
+  });
+
   it("keeps unwrapping metadata wrappers to default function exports", async () => {
     const plugin = writePlugin({
       id: "default-wrapper-with-metadata-and-default-function",
