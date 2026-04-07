@@ -3,6 +3,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
@@ -54,7 +55,7 @@ function cloneGoogleTemplateModel(params: {
 }
 
 function isGoogleGeminiCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === GOOGLE_GEMINI_CLI_PROVIDER_ID;
+  return normalizeOptionalLowercaseString(providerId) === GOOGLE_GEMINI_CLI_PROVIDER_ID;
 }
 
 function templateIdsForProvider(

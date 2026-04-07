@@ -309,11 +309,65 @@ async function writeDreamingPatch(
   }
 }
 
+function lookupIncludesDreamingProperty(value: unknown): boolean {
+  const lookup = asRecord(value);
+  const children = Array.isArray(lookup?.children) ? lookup.children : [];
+  for (const child of children) {
+    const childRecord = asRecord(child);
+    if (normalizeTrimmedString(childRecord?.key) === "dreaming") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function lookupDisallowsUnknownProperties(value: unknown): boolean {
+  const lookup = asRecord(value);
+  const schema = asRecord(lookup?.schema);
+  return schema?.additionalProperties === false;
+}
+
+async function ensureDreamingPathSupported(
+  state: DreamingState,
+  pluginId: string,
+): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return true;
+  }
+  try {
+    const lookup = await state.client.request("config.schema.lookup", {
+      path: `plugins.entries.${pluginId}.config`,
+    });
+    if (lookupIncludesDreamingProperty(lookup)) {
+      return true;
+    }
+    if (lookupDisallowsUnknownProperties(lookup)) {
+      const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
+      state.dreamingStatusError = message;
+      state.lastError = message;
+      return false;
+    }
+  } catch {
+    return true;
+  }
+  return true;
+}
+
 export async function updateDreamingEnabled(
   state: DreamingState,
   enabled: boolean,
 ): Promise<boolean> {
+  if (state.dreamingModeSaving) {
+    return false;
+  }
+  if (!state.configSnapshot?.hash) {
+    state.dreamingStatusError = "Config hash missing; refresh and retry.";
+    return false;
+  }
   const { pluginId } = resolveConfiguredDreaming(asRecord(state.configSnapshot?.config) ?? null);
+  if (!(await ensureDreamingPathSupported(state, pluginId))) {
+    return false;
+  }
   const ok = await writeDreamingPatch(state, {
     plugins: {
       entries: {

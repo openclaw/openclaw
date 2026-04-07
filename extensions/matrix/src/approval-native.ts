@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -55,7 +56,7 @@ function resolveMatrixNativeTarget(raw: string): string | null {
 }
 
 function resolveTurnSourceMatrixOriginTarget(request: ApprovalRequest): MatrixOriginTarget | null {
-  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   const turnSourceTo = request.request.turnSourceTo?.trim() || "";
   const target = resolveMatrixNativeTarget(turnSourceTo);
   if (turnSourceChannel !== "matrix" || !target) {

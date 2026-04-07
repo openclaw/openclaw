@@ -327,7 +327,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     mode: raw.mode ?? "final",
     provider:
       normalizeConfiguredSpeechProviderId(raw.provider) ??
-      (providerSource === "config" ? raw.provider?.trim().toLowerCase() || "" : ""),
+      (providerSource === "config"
+        ? (normalizeOptionalString(raw.provider)?.toLowerCase() ?? "")
+        : ""),
     providerSource,
     summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),

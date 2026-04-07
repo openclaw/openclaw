@@ -373,6 +373,45 @@ describe("secrets apply", () => {
     });
   });
 
+  it("ignores unrelated auth-profile store refs during no-op write apply", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            ...createOpenAiProviderConfig(),
+            apiKey: OPENAI_API_KEY_ENV_REF,
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "MISSING_AUTH_STORE_KEY" },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).resolves.toMatchObject({
+      mode: "write",
+      changed: false,
+      changedFiles: [],
+      checks: { resolvabilityComplete: true },
+    });
+  });
+
   it("rejects write mode for exec plans unless allowExec is set", async () => {
     const plan = createPlan({
       targets: [

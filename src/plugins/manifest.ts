@@ -73,6 +73,13 @@ export type PluginManifestConfigContracts = {
    * not reference the plugin at all.
    */
   compatibilityMigrationPaths?: string[];
+  /**
+   * Root-relative compatibility paths that this plugin can service during
+   * runtime before plugin code fully activates. Use this for legacy surfaces
+   * that should cheaply narrow bundled candidate sets without importing every
+   * compatible plugin runtime.
+   */
+  compatibilityRuntimePaths?: string[];
   dangerousFlags?: PluginManifestDangerousConfigFlag[];
   secretInputs?: PluginManifestSecretInputContracts;
 };
@@ -285,6 +292,7 @@ function normalizeManifestConfigContracts(
     return undefined;
   }
   const compatibilityMigrationPaths = normalizeTrimmedStringList(value.compatibilityMigrationPaths);
+  const compatibilityRuntimePaths = normalizeTrimmedStringList(value.compatibilityRuntimePaths);
   const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
   const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
   const secretInputPaths = rawSecretInputs
@@ -303,6 +311,7 @@ function normalizeManifestConfigContracts(
       : undefined;
   const configContracts = {
     ...(compatibilityMigrationPaths.length > 0 ? { compatibilityMigrationPaths } : {}),
+    ...(compatibilityRuntimePaths.length > 0 ? { compatibilityRuntimePaths } : {}),
     ...(dangerousFlags ? { dangerousFlags } : {}),
     ...(secretInputs ? { secretInputs } : {}),
   } satisfies PluginManifestConfigContracts;

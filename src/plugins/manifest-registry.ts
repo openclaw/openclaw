@@ -147,6 +147,33 @@ export function resolveManifestContractPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(params: {
+  contract: PluginManifestContractListKey;
+  path: string | undefined;
+  origin?: PluginOrigin;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  const normalizedPath = params.path?.trim();
+  if (!normalizedPath) {
+    return [];
+  }
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .plugins.filter(
+      (plugin) =>
+        (!params.origin || plugin.origin === params.origin) &&
+        listContractValues(plugin, params.contract).length > 0 &&
+        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolveManifestContractOwnerPluginId(params: {
   contract: PluginManifestContractListKey;
   value: string | undefined;

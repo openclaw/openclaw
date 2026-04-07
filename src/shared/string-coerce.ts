@@ -18,6 +18,10 @@ export function normalizeOptionalLowercaseString(value: unknown): string | undef
   return normalizeOptionalString(value)?.toLowerCase();
 }
 
+export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalLowercaseString(value) ?? "";
+}
+
 export function resolvePrimaryStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
@@ -64,6 +64,35 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
+} as const;
+
+function prefixExtensionPackageBoundaryPaths(
+  paths: Record<string, readonly string[]>,
+  prefix: string,
+): Record<string, readonly string[]> {
+  return Object.fromEntries(
+    Object.entries(paths).map(([key, values]) => [
+      key,
+      values.map((value) => posix.join(prefix, value)),
+    ]),
+  );
+}
+
+export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
+  ...prefixExtensionPackageBoundaryPaths(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS, "../"),
+  "openclaw/plugin-sdk/cli-runtime": [
+    "../../packages/plugin-sdk/dist/src/plugin-sdk/cli-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/provider-env-vars": [
+    "../../packages/plugin-sdk/dist/src/plugin-sdk/provider-env-vars.d.ts",
+  ],
+  "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
+  "@openclaw/*": ["../*"],
+  "@openclaw/plugin-sdk/*": ["../../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
+  "@openclaw/anthropic-vertex/api.js": ["./.boundary-stubs/anthropic-vertex-api.d.ts"],
+  "@openclaw/ollama/api.js": ["./.boundary-stubs/ollama-api.d.ts"],
+  "@openclaw/ollama/runtime-api.js": ["./.boundary-stubs/ollama-runtime-api.d.ts"],
+  "@openclaw/speech-core/runtime-api.js": ["./.boundary-stubs/speech-core-runtime-api.d.ts"],
 } as const;
 
 export type ExtensionPackageBoundaryTsConfigJson = {

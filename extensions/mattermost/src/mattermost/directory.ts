@@ -1,4 +1,5 @@
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -69,7 +70,7 @@ export async function listMattermostDirectoryGroups(
   if (!clients.length) {
     return [];
   }
-  const q = params.query?.trim().toLowerCase() || "";
+  const q = normalizeLowercaseStringOrEmpty(params.query);
   const seenIds = new Set<string>();
   const entries: ChannelDirectoryEntry[] = [];
 
@@ -140,7 +141,7 @@ export async function listMattermostDirectoryPeers(
     }
     // Uses first team — multi-team setups may need iteration in the future
     const teamId = teams[0].id;
-    const q = params.query?.trim().toLowerCase() || "";
+    const q = normalizeLowercaseStringOrEmpty(params.query);
 
     let users: MattermostUser[];
     if (q) {

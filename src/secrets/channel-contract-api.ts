@@ -31,6 +31,7 @@ function getBundledChannelDirName(channelId: string): string | undefined {
     bundledChannelDirNameByChannelId = new Map(
       loadPluginManifestRegistry({})
         .plugins.filter((entry) => entry.origin === "bundled")
+        .filter((entry) => typeof entry.rootDir === "string" && entry.rootDir.trim().length > 0)
         .flatMap((entry) =>
           entry.channels.map(
             (candidateChannelId) =>

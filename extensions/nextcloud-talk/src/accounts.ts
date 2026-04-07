@@ -11,7 +11,7 @@ import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 function isTruthyEnvValue(value?: string): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase() ?? "";
   return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 

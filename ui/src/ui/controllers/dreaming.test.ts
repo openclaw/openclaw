@@ -193,6 +193,48 @@ describe("dreaming controller", () => {
     });
   });
 
+  it("blocks dreaming patch when selected plugin config rejects unknown keys", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+        },
+      },
+    };
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.schema.lookup") {
+        return {
+          path: "plugins.entries.memory-lancedb.config",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          children: [
+            { key: "retentionDays", path: "plugins.entries.memory-lancedb.config.retentionDays" },
+          ],
+        };
+      }
+      if (method === "config.patch") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const ok = await updateDreamingEnabled(state, true);
+
+    expect(ok).toBe(false);
+    expect(request).toHaveBeenCalledWith("config.schema.lookup", {
+      path: "plugins.entries.memory-lancedb.config",
+    });
+    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    expect(state.dreamingStatusError).toContain("memory-lancedb");
+    expect(state.dreamingStatusError).toContain("does not support dreaming settings");
+  });
+
   it("reads dreaming enabled state from the selected memory slot plugin", () => {
     expect(
       resolveConfiguredDreaming({

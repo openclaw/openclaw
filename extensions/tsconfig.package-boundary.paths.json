@@ -9,10 +9,10 @@
         "../packages/plugin-sdk/dist/src/plugin-sdk/account-id.d.ts"
       ],
       "openclaw/plugin-sdk/channel-entry-contract": [
-        "../dist/plugin-sdk/src/plugin-sdk/channel-entry-contract.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-entry-contract.d.ts"
       ],
       "openclaw/plugin-sdk/browser-maintenance": [
-        "../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts"
+        "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts"
       ],
       "openclaw/plugin-sdk/browser-config-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/browser-config-runtime.d.ts"
@@ -36,16 +36,10 @@
         "../packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/provider-catalog-shared": [
-        "../dist/plugin-sdk/src/plugin-sdk/provider-catalog-shared.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts"
       ],
       "openclaw/plugin-sdk/provider-entry": [
-        "../dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts"
-      ],
-      "openclaw/plugin-sdk/provider-web-fetch-contract": [
-        "../dist/plugin-sdk/src/plugin-sdk/provider-web-fetch-contract.d.ts"
-      ],
-      "openclaw/plugin-sdk/provider-web-search-contract": [
-        "../dist/plugin-sdk/src/plugin-sdk/provider-web-search-contract.d.ts"
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts"
       ],
       "openclaw/plugin-sdk/provider-web-search-contract": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-web-search-contract.d.ts"

@@ -267,6 +267,9 @@ export class GatewayClient {
     const ws = new WebSocket(url, wsOptions as ClientOptions);
     this.ws = ws;
     this.socketOpened = false;
+    this.connectNonce = null;
+    this.connectSent = false;
+    this.clearConnectChallengeTimeout();
 
     ws.on("open", () => {
       this.socketOpened = true;

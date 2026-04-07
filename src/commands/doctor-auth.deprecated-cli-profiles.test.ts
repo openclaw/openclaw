@@ -12,6 +12,7 @@ import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 const resolvePluginProvidersMock = vi.fn<() => ProviderPlugin[]>(() => []);
 
 vi.mock("../plugins/providers.runtime.js", () => ({
+  isPluginProvidersLoadInFlight: () => false,
   resolvePluginProviders: () => resolvePluginProvidersMock(),
 }));
 

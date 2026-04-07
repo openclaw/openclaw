@@ -116,6 +116,34 @@ function tryLoadBundledPublicArtifactModule(params: {
   return null;
 }
 
+function tryLoadBundledProviderEntriesDirect<TProvider>(params: {
+  pluginIds: readonly string[];
+  artifactCandidates: readonly string[];
+  suffix: string;
+  isProvider: (value: unknown) => value is TProvider;
+}): Array<TProvider & { pluginId: string }> | null {
+  const providers: Array<TProvider & { pluginId: string }> = [];
+  for (const pluginId of params.pluginIds) {
+    const mod = tryLoadBundledPublicArtifactModule({
+      dirName: pluginId,
+      artifactCandidates: params.artifactCandidates,
+    });
+    if (!mod) {
+      return null;
+    }
+    const loadedProviders = collectProviderFactories({
+      mod,
+      suffix: params.suffix,
+      isProvider: params.isProvider,
+    });
+    if (loadedProviders.length === 0) {
+      return null;
+    }
+    providers.push(...loadedProviders.map((provider) => ({ ...provider, pluginId })));
+  }
+  return providers;
+}
+
 function resolveBundledCandidatePluginIds(params: {
   contract: "webSearchProviders" | "webFetchProviders";
   configKey: "webSearch" | "webFetch";
@@ -178,6 +206,15 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
   if (pluginIds.length === 0) {
     return [];
   }
+  const directProviders = tryLoadBundledProviderEntriesDirect({
+    pluginIds,
+    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
+    suffix: "WebSearchProvider",
+    isProvider: isWebSearchProviderPlugin,
+  });
+  if (directProviders) {
+    return directProviders;
+  }
   const recordsByPluginId = resolveBundledManifestRecordsByPluginId({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -224,6 +261,15 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
   });
   if (pluginIds.length === 0) {
     return [];
+  }
+  const directProviders = tryLoadBundledProviderEntriesDirect({
+    pluginIds,
+    artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
+    suffix: "WebFetchProvider",
+    isProvider: isWebFetchProviderPlugin,
+  });
+  if (directProviders) {
+    return directProviders;
   }
   const recordsByPluginId = resolveBundledManifestRecordsByPluginId({
     config: params.config,
