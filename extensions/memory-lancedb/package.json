@@ -8,6 +8,9 @@
     "@sinclair/typebox": "0.34.49",
     "openai": "^6.33.0"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

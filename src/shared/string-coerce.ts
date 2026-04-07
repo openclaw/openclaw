@@ -14,6 +14,36 @@ export function normalizeOptionalString(value: unknown): string | undefined {
   return normalizeNullableString(value) ?? undefined;
 }
 
+export function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  return normalizeOptionalString(value)?.toLowerCase();
+}
+
+export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalLowercaseString(value) ?? "";
+}
+
+export function resolvePrimaryStringValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return normalizeOptionalString(value);
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return normalizeOptionalString((value as { primary?: unknown }).primary);
+}
+
+export function normalizeOptionalThreadValue(value: unknown): string | number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+  }
+  return normalizeOptionalString(value);
+}
+
+export function normalizeOptionalStringifiedId(value: unknown): string | undefined {
+  const normalized = normalizeOptionalThreadValue(value);
+  return normalized == null ? undefined : String(normalized);
+}
+
 export function hasNonEmptyString(value: unknown): value is string {
   return normalizeOptionalString(value) !== undefined;
 }

@@ -1,4 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const authProfilesStoreMock = vi.hoisted(() => ({
+  profiles: {} as Record<string, { type: "api_key"; provider: string; key: string }>,
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  clearRuntimeAuthProfileStoreSnapshots: () => {
+    authProfilesStoreMock.profiles = {};
+  },
+  ensureAuthProfileStore: () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  }),
+  replaceRuntimeAuthProfileStoreSnapshots: (
+    snapshots: Array<{
+      store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
+    }>,
+  ) => {
+    authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+  },
+  resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
+}));
+
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,

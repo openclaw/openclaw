@@ -1,5 +1,8 @@
 import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
 import {
   CHANNEL_IDS,
@@ -32,12 +35,12 @@ function findRegisteredChannelPluginEntry(
   normalizedKey: string,
 ): RegisteredChannelPluginEntry | undefined {
   return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = normalizeOptionalString(String(entry.plugin.id ?? ""))?.toLowerCase() ?? "";
+    const id = normalizeOptionalLowercaseString(String(entry.plugin.id ?? "")) ?? "";
     if (id && id === normalizedKey) {
       return true;
     }
     return (entry.plugin.meta?.aliases ?? []).some(
-      (alias) => normalizeOptionalString(alias)?.toLowerCase() === normalizedKey,
+      (alias) => normalizeOptionalLowercaseString(alias) === normalizedKey,
     );
   });
 }
@@ -45,18 +48,14 @@ function findRegisteredChannelPluginEntry(
 function findRegisteredChannelPluginEntryById(
   id: string,
 ): RegisteredChannelPluginEntry | undefined {
-  const normalizedId = normalizeChannelKey(id);
+  const normalizedId = normalizeOptionalLowercaseString(id);
   if (!normalizedId) {
     return undefined;
   }
   return listRegisteredChannelPluginEntries().find(
-    (entry) => normalizeChannelKey(entry.plugin.id) === normalizedId,
+    (entry) => normalizeOptionalLowercaseString(entry.plugin.id) === normalizedId,
   );
 }
-
-const normalizeChannelKey = (raw?: string | null): string | undefined => {
-  return normalizeOptionalString(raw)?.toLowerCase();
-};
 export {
   CHAT_CHANNEL_ALIASES,
   getChatChannelMeta,
@@ -76,7 +75,7 @@ export function normalizeChannelId(raw?: string | null): ChatChannelId | null {
 // Keep this light: we do not import channel plugins here (those are "heavy" and can pull in
 // monitors, web login, etc). The plugin registry must be initialized first.
 export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
-  const key = normalizeChannelKey(raw);
+  const key = normalizeOptionalLowercaseString(raw);
   if (!key) {
     return null;
   }

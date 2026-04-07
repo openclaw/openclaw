@@ -8,17 +8,13 @@ export type SenderLabelParams = {
   id?: string;
 };
 
-function normalize(value?: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeSenderLabelParams(params: SenderLabelParams) {
   return {
-    name: normalize(params.name),
-    username: normalize(params.username),
-    tag: normalize(params.tag),
-    e164: normalize(params.e164),
-    id: normalize(params.id),
+    name: normalizeOptionalString(params.name),
+    username: normalizeOptionalString(params.username),
+    tag: normalizeOptionalString(params.tag),
+    e164: normalizeOptionalString(params.e164),
+    id: normalizeOptionalString(params.id),
   };
 }
 

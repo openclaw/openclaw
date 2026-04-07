@@ -23,6 +23,9 @@ const {
   ),
   resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => buildTestWebFetchProviders()),
 }));
+const { resolveManifestContractPluginIdsByCompatibilityRuntimePathMock } = vi.hoisted(() => ({
+  resolveManifestContractPluginIdsByCompatibilityRuntimePathMock: vi.fn(() => ["brave"]),
+}));
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
@@ -47,6 +50,17 @@ vi.mock("../plugins/web-provider-public-artifacts.js", () => ({
   resolveBundledWebFetchProvidersFromPublicArtifacts:
     resolveBundledWebFetchProvidersFromPublicArtifactsMock,
 }));
+
+vi.mock("../plugins/manifest-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
+    "../plugins/manifest-registry.js",
+  );
+  return {
+    ...actual,
+    resolveManifestContractPluginIdsByCompatibilityRuntimePath:
+      resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -263,6 +277,7 @@ describe("runtime web tools resolution", () => {
     resolvePluginWebFetchProvidersMock.mockClear();
     resolveBundledWebSearchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
+    resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
   });
 
   afterEach(() => {
@@ -762,6 +777,39 @@ describe("runtime web tools resolution", () => {
       expect.objectContaining({
         bundledAllowlistCompat: true,
         onlyPluginIds: ["google"],
+      }),
+    );
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("limits legacy top-level web search apiKey auto-detect to compatibility owners", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              apiKey: { source: "env", provider: "default", id: "LEGACY_WEB_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        LEGACY_WEB_SEARCH_REF: "legacy-web-search-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(resolveManifestContractPluginIdsByCompatibilityRuntimePathMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contract: "webSearchProviders",
+        path: "tools.web.search.apiKey",
+        origin: "bundled",
+      }),
+    );
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+        onlyPluginIds: ["brave"],
       }),
     );
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
@@ -11,20 +12,18 @@ import {
   applyCliBackendLiveEnv,
   createBootstrapWorkspace,
   ensurePairedTestGatewayClientIdentity,
-  DEFAULT_CLAUDE_ARGS,
-  DEFAULT_CLEAR_ENV,
-  DEFAULT_CODEX_ARGS,
   getFreeGatewayPort,
   matchesCliBackendReply,
   parseImageMode,
   parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
+  shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
-  verifyClaudeCliCronMcpProbe,
+  verifyCliCronMcpProbe,
   verifyCliBackendImageProbe,
-  withMcpConfigOverrides,
+  withClaudeMcpConfigOverrides,
   connectTestGatewayClient,
 } from "./gateway-cli-backend.live-helpers.js";
 import { startGatewayServer } from "./server.js";
@@ -36,7 +35,9 @@ const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME
 const CLI_DEBUG = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
-const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
+const DEFAULT_PROVIDER = "claude-cli";
+const DEFAULT_MODEL =
+  resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 420_000;
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -77,22 +78,16 @@ describeLive("gateway live (cli backend)", () => {
 
       const providerId = parsed.provider;
       const modelKey = `${providerId}/${parsed.model}`;
+      const backendResolved = resolveCliBackendConfig(providerId);
       const enableCliImageProbe = shouldRunCliImageProbe(providerId);
-      logCliBackendLiveStep("model-selected", { providerId, modelKey, enableCliImageProbe });
-      const providerDefaults =
-        providerId === "claude-cli"
-          ? {
-              command: "claude",
-              args: DEFAULT_CLAUDE_ARGS,
-            }
-          : providerId === "codex-cli"
-            ? {
-                command: "codex",
-                args: DEFAULT_CODEX_ARGS,
-                imageArg: "--image",
-                imageMode: "repeat" as const,
-              }
-            : null;
+      const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
+      logCliBackendLiveStep("model-selected", {
+        providerId,
+        modelKey,
+        enableCliImageProbe,
+        enableCliMcpProbe,
+      });
+      const providerDefaults = backendResolved?.config;
 
       const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
       if (!cliCommand) {
@@ -114,7 +109,9 @@ describeLive("gateway live (cli backend)", () => {
         parseJsonStringArray(
           "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
           process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
-        ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
+        ) ??
+        providerDefaults?.clearEnv ??
+        [];
       const filteredCliClearEnv = cliClearEnv.filter((name) => !preservedEnv.has(name));
       const preservedCliEnv = Object.fromEntries(
         [...preservedEnv]
@@ -136,14 +133,21 @@ describeLive("gateway live (cli backend)", () => {
       const stateDir = path.join(tempDir, "state");
       await fs.mkdir(stateDir, { recursive: true });
       process.env.OPENCLAW_STATE_DIR = stateDir;
+      const bundleMcp = backendResolved?.bundleMcp === true;
       const bootstrapWorkspace =
-        providerId === "claude-cli" ? await createBootstrapWorkspace(tempDir) : null;
+        backendResolved?.bundleMcpMode === "claude-config-file"
+          ? await createBootstrapWorkspace(tempDir)
+          : null;
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
       let cliArgs = baseCliArgs;
-      if (providerId === "claude-cli" && disableMcpConfig) {
+      if (
+        bundleMcp &&
+        disableMcpConfig &&
+        backendResolved?.bundleMcpMode === "claude-config-file"
+      ) {
         const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
         await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-        cliArgs = withMcpConfigOverrides(baseCliArgs, mcpConfigPath);
+        cliArgs = withClaudeMcpConfigOverrides(baseCliArgs, mcpConfigPath);
       }
 
       const cfg: OpenClawConfig = {};
@@ -158,6 +162,7 @@ describeLive("gateway live (cli backend)", () => {
       const nextCfg = {
         ...cfg,
         gateway: {
+          mode: "local",
           ...cfg.gateway,
           port,
           auth: { mode: "token", token },
@@ -176,7 +181,7 @@ describeLive("gateway live (cli backend)", () => {
                 args: cliArgs,
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
-                systemPromptWhen: providerId === "claude-cli" ? "first" : "never",
+                systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
                 ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
               },
             },
@@ -287,10 +292,11 @@ describeLive("gateway live (cli backend)", () => {
           logCliBackendLiveStep("image-probe:done");
         }
 
-        if (providerId === "claude-cli") {
+        if (enableCliMcpProbe) {
           logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
-          await verifyClaudeCliCronMcpProbe({
+          await verifyCliCronMcpProbe({
             client,
+            providerId,
             sessionKey,
             port,
             token,

@@ -92,10 +92,6 @@ type PendingOutboundMessageId = {
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
 
-function trimOrUndefined(value?: string | null): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeSnippet(value: string): string {
   return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -268,8 +264,8 @@ function rememberPendingOutboundMessageId(entry: {
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     outboundTarget: entry.outboundTarget,
-    chatGuid: trimOrUndefined(entry.chatGuid),
-    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatGuid: normalizeOptionalString(entry.chatGuid),
+    chatIdentifier: normalizeOptionalString(entry.chatIdentifier),
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
@@ -290,14 +286,14 @@ function chatsMatch(
   left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
   right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
 ): boolean {
-  const leftGuid = trimOrUndefined(left.chatGuid);
-  const rightGuid = trimOrUndefined(right.chatGuid);
+  const leftGuid = normalizeOptionalString(left.chatGuid);
+  const rightGuid = normalizeOptionalString(right.chatGuid);
   if (leftGuid && rightGuid) {
     return leftGuid === rightGuid;
   }
 
-  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
-  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  const leftIdentifier = normalizeOptionalString(left.chatIdentifier);
+  const rightIdentifier = normalizeOptionalString(right.chatIdentifier);
   if (leftIdentifier && rightIdentifier) {
     return leftIdentifier === rightIdentifier;
   }

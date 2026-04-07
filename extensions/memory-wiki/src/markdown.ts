@@ -16,6 +16,24 @@ export type ParsedWikiMarkdown = {
   body: string;
 };
 
+export type WikiClaimEvidence = {
+  sourceId?: string;
+  path?: string;
+  lines?: string;
+  weight?: number;
+  note?: string;
+  updatedAt?: string;
+};
+
+export type WikiClaim = {
+  id?: string;
+  text: string;
+  status?: string;
+  confidence?: number;
+  evidence: WikiClaimEvidence[];
+  updatedAt?: string;
+};
+
 export type WikiPageSummary = {
   absolutePath: string;
   relativePath: string;
@@ -25,6 +43,7 @@ export type WikiPageSummary = {
   pageType?: string;
   sourceIds: string[];
   linkTargets: string[];
+  claims: WikiClaim[];
   contradictions: string[];
   questions: string[];
   confidence?: number;
@@ -86,6 +105,71 @@ export function extractTitleFromMarkdown(body: string): string | undefined {
 
 export function normalizeSourceIds(value: unknown): string[] {
   return normalizeSingleOrTrimmedStringList(value);
+}
+
+function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const sourceId = normalizeOptionalString(record.sourceId);
+  const evidencePath = normalizeOptionalString(record.path);
+  const lines = normalizeOptionalString(record.lines);
+  const note = normalizeOptionalString(record.note);
+  const updatedAt = normalizeOptionalString(record.updatedAt);
+  const weight =
+    typeof record.weight === "number" && Number.isFinite(record.weight) ? record.weight : undefined;
+  if (!sourceId && !evidencePath && !lines && !note && weight === undefined && !updatedAt) {
+    return null;
+  }
+  return {
+    ...(sourceId ? { sourceId } : {}),
+    ...(evidencePath ? { path: evidencePath } : {}),
+    ...(lines ? { lines } : {}),
+    ...(weight !== undefined ? { weight } : {}),
+    ...(note ? { note } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
+export function normalizeWikiClaims(value: unknown): WikiClaim[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    const text = normalizeOptionalString(record.text);
+    if (!text) {
+      return [];
+    }
+    const evidence = Array.isArray(record.evidence)
+      ? record.evidence.flatMap((candidate) => {
+          const normalized = normalizeWikiClaimEvidence(candidate);
+          return normalized ? [normalized] : [];
+        })
+      : [];
+    const confidence =
+      typeof record.confidence === "number" && Number.isFinite(record.confidence)
+        ? record.confidence
+        : undefined;
+    return [
+      {
+        ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
+        text,
+        ...(normalizeOptionalString(record.status)
+          ? { status: normalizeOptionalString(record.status) }
+          : {}),
+        ...(confidence !== undefined ? { confidence } : {}),
+        evidence,
+        ...(normalizeOptionalString(record.updatedAt)
+          ? { updatedAt: normalizeOptionalString(record.updatedAt) }
+          : {}),
+      },
+    ];
+  });
 }
 
 export function extractWikiLinks(markdown: string): string[] {
@@ -174,6 +258,7 @@ export function toWikiPageSummary(params: {
     pageType: normalizeOptionalString(parsed.frontmatter.pageType),
     sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
     linkTargets: extractWikiLinks(params.raw),
+    claims: normalizeWikiClaims(parsed.frontmatter.claims),
     contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
     questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
     confidence:

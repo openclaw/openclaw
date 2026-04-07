@@ -1,7 +1,10 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,
@@ -34,9 +37,9 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
-    return (sessionKey ?? "").trim().toLowerCase() === "main";
+    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
   }
-  return parsed.rest.trim().toLowerCase() === "main";
+  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
@@ -59,7 +62,7 @@ function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boole
 }
 
 function isDirectSessionKey(sessionKey?: string): boolean {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return false;
   }

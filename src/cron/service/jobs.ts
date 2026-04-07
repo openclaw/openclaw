@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -27,8 +30,6 @@ import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import {
   normalizeOptionalAgentId,
-  normalizeOptionalSessionKey,
-  normalizeOptionalText,
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
@@ -543,9 +544,9 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
-    sessionKey: normalizeOptionalSessionKey((input as { sessionKey?: unknown }).sessionKey),
+    sessionKey: normalizeOptionalString((input as { sessionKey?: unknown }).sessionKey),
     name: normalizeRequiredName(input.name),
-    description: normalizeOptionalText(input.description),
+    description: normalizeOptionalString(input.description),
     enabled,
     deleteAfterRun,
     createdAtMs: now,
@@ -577,7 +578,7 @@ export function applyJobPatch(
     job.name = normalizeRequiredName(patch.name);
   }
   if ("description" in patch) {
-    job.description = normalizeOptionalText(patch.description);
+    job.description = normalizeOptionalString(patch.description);
   }
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
@@ -637,7 +638,7 @@ export function applyJobPatch(
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
   if ("sessionKey" in patch) {
-    job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
+    job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
@@ -717,17 +718,6 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   };
 }
 
-function normalizeOptionalTrimmedString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
-function normalizeOptionalThreadId(value: unknown): string | number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return normalizeOptionalTrimmedString(value);
-}
-
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
@@ -746,16 +736,16 @@ function mergeCronDelivery(
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
   }
   if ("channel" in patch) {
-    next.channel = normalizeOptionalTrimmedString(patch.channel);
+    next.channel = normalizeOptionalString(patch.channel);
   }
   if ("to" in patch) {
-    next.to = normalizeOptionalTrimmedString(patch.to);
+    next.to = normalizeOptionalString(patch.to);
   }
   if ("threadId" in patch) {
-    next.threadId = normalizeOptionalThreadId(patch.threadId);
+    next.threadId = normalizeOptionalThreadValue(patch.threadId);
   }
   if ("accountId" in patch) {
-    next.accountId = normalizeOptionalTrimmedString(patch.accountId);
+    next.accountId = normalizeOptionalString(patch.accountId);
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
@@ -815,10 +805,10 @@ function mergeCronFailureAlert(
     next.after = after > 0 ? Math.floor(after) : undefined;
   }
   if ("channel" in patch) {
-    next.channel = normalizeOptionalTrimmedString(patch.channel);
+    next.channel = normalizeOptionalString(patch.channel);
   }
   if ("to" in patch) {
-    next.to = normalizeOptionalTrimmedString(patch.to);
+    next.to = normalizeOptionalString(patch.to);
   }
   if ("cooldownMs" in patch) {
     const cooldownMs =

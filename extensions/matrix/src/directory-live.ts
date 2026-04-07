@@ -36,10 +36,6 @@ type MatrixResolvedAuth = Awaited<ReturnType<typeof resolveMatrixAuth>>;
 
 const MATRIX_DIRECTORY_TIMEOUT_MS = 10_000;
 
-function normalizeQuery(value?: string | null): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
 function resolveMatrixDirectoryLimit(limit?: number | null): number {
   return typeof limit === "number" && Number.isFinite(limit) && limit > 0
     ? Math.max(1, Math.floor(limit))
@@ -61,7 +57,7 @@ async function resolveMatrixDirectoryContext(params: MatrixDirectoryLiveParams):
   query: string;
   queryLower: string;
 } | null> {
-  const query = normalizeQuery(params.query);
+  const query = normalizeOptionalString(params.query) ?? "";
   if (!query) {
     return null;
   }
@@ -106,7 +102,7 @@ async function requestMatrixJson<T>(
 export async function listMatrixDirectoryPeersLive(
   params: MatrixDirectoryLiveParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const query = normalizeQuery(params.query);
+  const query = normalizeOptionalString(params.query) ?? "";
   if (!query) {
     return [];
   }
@@ -182,7 +178,7 @@ async function fetchMatrixRoomName(
 export async function listMatrixDirectoryGroupsLive(
   params: MatrixDirectoryLiveParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const query = normalizeQuery(params.query);
+  const query = normalizeOptionalString(params.query) ?? "";
   if (!query) {
     return [];
   }

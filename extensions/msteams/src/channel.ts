@@ -204,13 +204,6 @@ function resolveActionContent(params: Record<string, unknown>): string {
         : "";
 }
 
-function readOptionalTrimmedString(
-  params: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  return normalizeOptionalString(params[key]);
-}
-
 function resolveActionUploadFilePath(params: Record<string, unknown>): string | undefined {
   for (const key of ["filePath", "path", "media"] as const) {
     if (typeof params[key] === "string") {
@@ -640,8 +633,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   text: resolveActionContent(ctx.params),
                   mediaUrl,
                   filename:
-                    readOptionalTrimmedString(ctx.params, "filename") ??
-                    readOptionalTrimmedString(ctx.params, "title"),
+                    normalizeOptionalString(ctx.params.filename) ??
+                    normalizeOptionalString(ctx.params.title),
                   mediaLocalRoots: ctx.mediaLocalRoots,
                   mediaReadFile: ctx.mediaReadFile,
                 });

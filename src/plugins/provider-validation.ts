@@ -21,10 +21,6 @@ function pushProviderDiagnostic(params: {
   });
 }
 
-function normalizeText(value: string | undefined): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeTextList(values: string[] | undefined): string[] | undefined {
   const normalized = Array.from(new Set(normalizeTrimmedStringList(values)));
   return normalized.length > 0 ? normalized : undefined;
@@ -52,8 +48,8 @@ function normalizeProviderOAuthProfileIdRepairs(
   }
   const normalized = values
     .map((value) => {
-      const legacyProfileId = normalizeText(value?.legacyProfileId);
-      const promptLabel = normalizeText(value?.promptLabel);
+      const legacyProfileId = normalizeOptionalString(value?.legacyProfileId);
+      const promptLabel = normalizeOptionalString(value?.promptLabel);
       if (!legacyProfileId && !promptLabel) {
         return null;
       }
@@ -99,7 +95,7 @@ function buildNormalizedModelAllowlist(
   }
   const allowedKeys = normalizeTextList(modelAllowlist.allowedKeys);
   const initialSelections = normalizeTextList(modelAllowlist.initialSelections);
-  const message = normalizeText(modelAllowlist.message);
+  const message = normalizeOptionalString(modelAllowlist.message);
   if (!allowedKeys && !initialSelections && !message) {
     return undefined;
   }
@@ -114,12 +110,12 @@ function buildNormalizedWizardSetup(params: {
   setup: ProviderWizardSetup;
   methodId: string | undefined;
 }): ProviderWizardSetup {
-  const choiceId = normalizeText(params.setup.choiceId);
-  const choiceLabel = normalizeText(params.setup.choiceLabel);
-  const choiceHint = normalizeText(params.setup.choiceHint);
-  const groupId = normalizeText(params.setup.groupId);
-  const groupLabel = normalizeText(params.setup.groupLabel);
-  const groupHint = normalizeText(params.setup.groupHint);
+  const choiceId = normalizeOptionalString(params.setup.choiceId);
+  const choiceLabel = normalizeOptionalString(params.setup.choiceLabel);
+  const choiceHint = normalizeOptionalString(params.setup.choiceHint);
+  const groupId = normalizeOptionalString(params.setup.groupId);
+  const groupLabel = normalizeOptionalString(params.setup.groupLabel);
+  const groupHint = normalizeOptionalString(params.setup.groupHint);
   const onboardingScopes = normalizeOnboardingScopes(params.setup.onboardingScopes);
   const modelAllowlist = buildNormalizedModelAllowlist(params.setup.modelAllowlist);
   return {
@@ -147,8 +143,8 @@ function buildNormalizedModelPicker(
   modelPicker: ProviderWizardModelPicker,
   methodId: string | undefined,
 ): ProviderWizardModelPicker {
-  const label = normalizeText(modelPicker.label);
-  const hint = normalizeText(modelPicker.hint);
+  const label = normalizeOptionalString(modelPicker.label);
+  const hint = normalizeOptionalString(modelPicker.hint);
   return {
     ...(label ? { label } : {}),
     ...(hint ? { hint } : {}),
@@ -183,7 +179,7 @@ function normalizeProviderWizardSetup(params: {
     pluginId: params.pluginId,
     source: params.source,
     auth: params.auth,
-    methodId: normalizeText(params.setup.methodId),
+    methodId: normalizeOptionalString(params.setup.methodId),
     metadataKind: "setup",
     pushDiagnostic: params.pushDiagnostic,
   });
@@ -204,7 +200,7 @@ function normalizeProviderAuthMethods(params: {
   const normalized: ProviderAuthMethod[] = [];
 
   for (const method of params.auth) {
-    const methodId = normalizeText(method.id);
+    const methodId = normalizeOptionalString(method.id);
     if (!methodId) {
       pushProviderDiagnostic({
         level: "error",
@@ -240,8 +236,10 @@ function normalizeProviderAuthMethods(params: {
     normalized.push({
       ...method,
       id: methodId,
-      label: normalizeText(method.label) ?? methodId,
-      ...(normalizeText(method.hint) ? { hint: normalizeText(method.hint) } : {}),
+      label: normalizeOptionalString(method.label) ?? methodId,
+      ...(normalizeOptionalString(method.hint)
+        ? { hint: normalizeOptionalString(method.hint) }
+        : {}),
       ...(wizard ? { wizard } : {}),
     });
   }
@@ -299,7 +297,7 @@ function normalizeProviderWizard(params: {
         pluginId: params.pluginId,
         source: params.source,
         auth: params.auth,
-        methodId: normalizeText(modelPicker.methodId),
+        methodId: normalizeOptionalString(modelPicker.methodId),
         metadataKind: "model-picker",
         pushDiagnostic: params.pushDiagnostic,
       }),
@@ -323,7 +321,7 @@ export function normalizeRegisteredProvider(params: {
   provider: ProviderPlugin;
   pushDiagnostic: (diag: PluginDiagnostic) => void;
 }): ProviderPlugin | null {
-  const id = normalizeText(params.provider.id);
+  const id = normalizeOptionalString(params.provider.id);
   if (!id) {
     pushProviderDiagnostic({
       level: "error",
@@ -342,7 +340,7 @@ export function normalizeRegisteredProvider(params: {
     auth: params.provider.auth ?? [],
     pushDiagnostic: params.pushDiagnostic,
   });
-  const docsPath = normalizeText(params.provider.docsPath);
+  const docsPath = normalizeOptionalString(params.provider.docsPath);
   const aliases = normalizeTextList(params.provider.aliases);
   const deprecatedProfileIds = normalizeTextList(params.provider.deprecatedProfileIds);
   const oauthProfileIdRepairs = normalizeProviderOAuthProfileIdRepairs(
@@ -380,7 +378,7 @@ export function normalizeRegisteredProvider(params: {
   return {
     ...restProvider,
     id,
-    label: normalizeText(params.provider.label) ?? id,
+    label: normalizeOptionalString(params.provider.label) ?? id,
     ...(docsPath ? { docsPath } : {}),
     ...(aliases ? { aliases } : {}),
     ...(deprecatedProfileIds ? { deprecatedProfileIds } : {}),

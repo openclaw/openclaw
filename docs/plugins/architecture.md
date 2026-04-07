@@ -1494,14 +1494,23 @@ Use this when your plugin needs to replace or extend the default context
 pipeline rather than just add memory search or hooks.
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function (api) {
   api.registerContextEngine("lossless-claw", () => ({
     info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact() {
       return { ok: true, compacted: false };
@@ -1514,7 +1523,10 @@ If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
 ```ts
-import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", () => ({
@@ -1526,8 +1538,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact(params) {
       return await delegateCompactionToRuntime(params);

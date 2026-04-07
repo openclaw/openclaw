@@ -23,10 +23,6 @@ export type MatrixProfileSyncResult = {
   convertedAvatarFromHttp: boolean;
 };
 
-function normalizeOptionalText(value: string | null | undefined): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
 export function isMatrixMxcUri(value: string): boolean {
   return normalizeOptionalString(value)?.toLowerCase().startsWith("mxc://") ?? false;
 }
@@ -66,7 +62,7 @@ async function resolveAvatarUrl(params: {
   uploadedAvatarSource: "http" | "path" | null;
   convertedAvatarFromHttp: boolean;
 }> {
-  const avatarPath = normalizeOptionalText(params.avatarPath);
+  const avatarPath = normalizeOptionalString(params.avatarPath) ?? null;
   if (avatarPath) {
     if (!params.loadAvatarFromPath) {
       throw new Error("Matrix avatar path upload requires a media loader.");
@@ -83,7 +79,7 @@ async function resolveAvatarUrl(params: {
     };
   }
 
-  const avatarUrl = normalizeOptionalText(params.avatarUrl);
+  const avatarUrl = normalizeOptionalString(params.avatarUrl) ?? null;
   if (!avatarUrl) {
     return {
       resolvedAvatarUrl: null,
@@ -130,7 +126,7 @@ export async function syncMatrixOwnProfile(params: {
   loadAvatarFromUrl?: (url: string, maxBytes: number) => Promise<MatrixProfileLoadResult>;
   loadAvatarFromPath?: (path: string, maxBytes: number) => Promise<MatrixProfileLoadResult>;
 }): Promise<MatrixProfileSyncResult> {
-  const desiredDisplayName = normalizeOptionalText(params.displayName);
+  const desiredDisplayName = normalizeOptionalString(params.displayName) ?? null;
   const avatar = await resolveAvatarUrl({
     client: params.client,
     avatarUrl: params.avatarUrl ?? null,
@@ -156,8 +152,8 @@ export async function syncMatrixOwnProfile(params: {
   let currentAvatarUrl: string | undefined;
   try {
     const currentProfile = await params.client.getUserProfile(params.userId);
-    currentDisplayName = normalizeOptionalText(currentProfile.displayname) ?? undefined;
-    currentAvatarUrl = normalizeOptionalText(currentProfile.avatar_url) ?? undefined;
+    currentDisplayName = normalizeOptionalString(currentProfile.displayname);
+    currentAvatarUrl = normalizeOptionalString(currentProfile.avatar_url);
   } catch {
     // If profile fetch fails, attempt writes directly.
   }

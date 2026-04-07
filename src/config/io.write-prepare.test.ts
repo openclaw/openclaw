@@ -65,7 +65,7 @@ describe("config io write prepare", () => {
     const input: OpenClawConfig = {
       gateway: { mode: "local" },
       commands: { ownerDisplay: "hash" },
-    };
+    } satisfies OpenClawConfig;
 
     const next = unsetPathForWrite(input, ["commands", "ownerDisplay"]);
 
@@ -80,7 +80,7 @@ describe("config io write prepare", () => {
     const input: OpenClawConfig = {
       gateway: { mode: "local" },
       tools: { alsoAllow: ["exec", "fetch", "read"] },
-    };
+    } satisfies OpenClawConfig;
 
     const next = unsetPathForWrite(input, ["tools", "alsoAllow", "1"]);
 
@@ -95,7 +95,7 @@ describe("config io write prepare", () => {
     const input: OpenClawConfig = {
       gateway: { mode: "local" },
       commands: { ownerDisplay: "hash" },
-    };
+    } satisfies OpenClawConfig;
 
     const next = unsetPathForWrite(input, ["commands", "missingKey"]);
 
@@ -111,7 +111,7 @@ describe("config io write prepare", () => {
     const input: OpenClawConfig = {
       gateway: { mode: "local" },
       commands: { ownerDisplay: "hash" },
-    };
+    } satisfies OpenClawConfig;
 
     const blocked = [
       ["commands", "__proto__"],
@@ -279,7 +279,7 @@ describe("config io write prepare", () => {
           password: "test-password",
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     const runtimeConfig: OpenClawConfig = {
       gateway: { port: 18789 },
@@ -290,9 +290,9 @@ describe("config io write prepare", () => {
           enrichGroupParticipantsFromContacts: true,
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
-    const nextConfig = structuredClone(runtimeConfig);
+    const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {
       ...nextConfig.gateway,
       auth: { mode: "token" },
@@ -328,7 +328,7 @@ describe("config io write prepare", () => {
         },
       },
       gateway: { port: 18789 },
-    };
+    } satisfies OpenClawConfig;
 
     const nextConfig = structuredClone(sourceConfig);
     delete (nextConfig.channels?.discord?.dm as { enabled?: boolean; policy?: string } | undefined)
@@ -382,9 +382,9 @@ describe("config io write prepare", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
-    const nextConfig = {
+    const nextConfig: OpenClawConfig = {
       ...structuredClone(sourceConfig),
       gateway: {
         auth: { mode: "token" },

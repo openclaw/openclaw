@@ -120,7 +120,15 @@ export type ConfigAuditProcessInfo = {
 
 export type ConfigWriteAuditRecordBase = Omit<
   ConfigWriteAuditRecord,
-  "result" | "errorCode" | "errorMessage"
+  | "result"
+  | "nextDev"
+  | "nextIno"
+  | "nextMode"
+  | "nextNlink"
+  | "nextUid"
+  | "nextGid"
+  | "errorCode"
+  | "errorMessage"
 > & {
   nextHash: string;
   nextBytes: number;
@@ -219,17 +227,11 @@ export function createConfigWriteAuditRecordBase(params: {
     previousBytes: params.previousBytes,
     nextBytes: params.nextBytes,
     previousDev: params.previousMetadata.dev,
-    nextDev: null,
     previousIno: params.previousMetadata.ino,
-    nextIno: null,
     previousMode: params.previousMetadata.mode,
-    nextMode: null,
     previousNlink: params.previousMetadata.nlink,
-    nextNlink: null,
     previousUid: params.previousMetadata.uid,
-    nextUid: null,
     previousGid: params.previousMetadata.gid,
-    nextGid: null,
     changedPathCount: typeof params.changedPathCount === "number" ? params.changedPathCount : null,
     hasMetaBefore: params.hasMetaBefore,
     hasMetaAfter: params.hasMetaAfter,

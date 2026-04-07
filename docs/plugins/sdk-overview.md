@@ -386,6 +386,7 @@ AI CLI backend such as `codex-cli`.
 | Method                                     | What it registers                     |
 | ------------------------------------------ | ------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
+| `api.registerMemoryCapability(capability)` | Unified memory capability             |
 | `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
 | `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
 | `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
@@ -396,8 +397,13 @@ AI CLI backend such as `codex-cli`.
 | ---------------------------------------------- | ---------------------------------------------- |
 | `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
 
+- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
+  so companion plugins can consume exported memory artifacts through
+  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
+  memory plugin's private layout.
 - `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are exclusive to memory plugins.
+  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
 - `registerMemoryEmbeddingProvider` lets the active memory plugin register one
   or more embedding adapter ids (for example `openai`, `gemini`, or a custom
   plugin-defined id).

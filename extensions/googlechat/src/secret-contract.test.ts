@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../../src/config/types.js";
 import { resolveSecretRefValues } from "../../../src/secrets/resolve.js";
 import {
   applyResolvedAssignments,
@@ -24,8 +25,8 @@ describe("googlechat secret contract", () => {
           },
         },
       },
-    };
-    const resolvedConfig = structuredClone(sourceConfig);
+    } satisfies OpenClawConfig;
+    const resolvedConfig: OpenClawConfig = structuredClone(sourceConfig);
     const context = createResolverContext({
       sourceConfig,
       env: {
@@ -52,9 +53,8 @@ describe("googlechat secret contract", () => {
       resolved,
     });
 
-    expect(resolvedConfig.channels.googlechat.accounts.work.serviceAccount).toBe(
-      '{"client_email":"bot@example.com"}',
-    );
+    const workAccount = resolvedConfig.channels?.googlechat?.accounts?.work;
+    expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
     expect(context.warnings).toEqual([]);
   });
 });

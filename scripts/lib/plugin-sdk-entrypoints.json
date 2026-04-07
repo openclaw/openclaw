@@ -205,6 +205,7 @@
   "provider-entry",
   "provider-env-vars",
   "provider-http",
+  "provider-model-types",
   "provider-model-shared",
   "volc-model-catalog-shared",
   "provider-onboard",

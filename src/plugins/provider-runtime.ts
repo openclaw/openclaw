@@ -4,6 +4,7 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -442,6 +443,11 @@ export function normalizeProviderConfigWithPlugin(params: {
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.normalizeConfig) {
+    const normalized = bundledSurface.normalizeConfig(params.context);
+    return normalized && hasConfigChange(normalized) ? normalized : undefined;
+  }
   const matchedPlugin = resolveProviderHookPlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
   if (normalizedMatched && hasConfigChange(normalizedMatched)) {
@@ -481,6 +487,10 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveConfigApiKeyContext;
 }): string | undefined {
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.resolveConfigApiKey) {
+    return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
+  }
   return normalizeOptionalString(
     resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context),
   );
@@ -759,6 +769,10 @@ export function applyProviderConfigDefaultsWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderApplyConfigDefaultsContext;
 }) {
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.applyConfigDefaults) {
+    return bundledSurface.applyConfigDefaults(params.context) ?? undefined;
+  }
   return resolveProviderRuntimePlugin(params)?.applyConfigDefaults?.(params.context) ?? undefined;
 }
 

@@ -1,7 +1,10 @@
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
@@ -31,10 +34,6 @@ export type ProviderModelPickerEntry = {
   hint?: string;
 };
 
-function normalizeChoiceId(choiceId: string): string {
-  return normalizeOptionalString(choiceId) ?? "";
-}
-
 function resolveWizardSetupChoiceId(
   provider: ProviderPlugin,
   wizard: ProviderPluginWizardSetup,
@@ -57,12 +56,12 @@ function resolveMethodById(
   provider: ProviderPlugin,
   methodId?: string,
 ): ProviderAuthMethod | undefined {
-  const normalizedMethodId = normalizeOptionalString(methodId)?.toLowerCase();
+  const normalizedMethodId = normalizeOptionalLowercaseString(methodId);
   if (!normalizedMethodId) {
     return provider.auth[0];
   }
   return provider.auth.find(
-    (method) => normalizeOptionalString(method.id)?.toLowerCase() === normalizedMethodId,
+    (method) => normalizeOptionalLowercaseString(method.id) === normalizedMethodId,
   );
 }
 
@@ -85,7 +84,7 @@ function buildSetupOptionForMethod(params: {
 }): ProviderWizardOption {
   const normalizedGroupId = normalizeOptionalString(params.wizard.groupId) || params.provider.id;
   return {
-    value: normalizeChoiceId(params.value),
+    value: normalizeOptionalString(params.value) ?? "",
     label:
       normalizeOptionalString(params.wizard.choiceLabel) ||
       (params.provider.auth.length === 1 ? params.provider.label : params.method.label),
@@ -105,7 +104,7 @@ function buildSetupOptionForMethod(params: {
 }
 
 export function buildProviderPluginMethodChoice(providerId: string, methodId: string): string {
-  return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${normalizeChoiceId(providerId)}:${normalizeChoiceId(methodId)}`;
+  return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${normalizeOptionalString(providerId) ?? ""}:${normalizeOptionalString(methodId) ?? ""}`;
 }
 
 function resolveProviderWizardProviders(params: {
@@ -223,7 +222,7 @@ export function resolveProviderPluginChoice(params: {
   method: ProviderAuthMethod;
   wizard?: ProviderPluginWizardSetup;
 } | null {
-  const choice = normalizeChoiceId(params.choice);
+  const choice = normalizeOptionalString(params.choice) ?? "";
   if (!choice) {
     return null;
   }
@@ -248,14 +247,14 @@ export function resolveProviderPluginChoice(params: {
       const choiceId =
         normalizeOptionalString(wizard.choiceId) ||
         buildProviderPluginMethodChoice(provider.id, method.id);
-      if (normalizeChoiceId(choiceId) === choice) {
+      if ((normalizeOptionalString(choiceId) ?? "") === choice) {
         return { provider, method, wizard };
       }
     }
     const setup = provider.wizard?.setup;
     if (setup) {
       const setupChoiceId = resolveWizardSetupChoiceId(provider, setup);
-      if (normalizeChoiceId(setupChoiceId) === choice) {
+      if ((normalizeOptionalString(setupChoiceId) ?? "") === choice) {
         const method = resolveMethodById(provider, setup.methodId);
         if (method) {
           return { provider, method, wizard: setup };

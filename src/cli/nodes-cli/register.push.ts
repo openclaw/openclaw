@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -16,7 +19,7 @@ function normalizeEnvironment(value: unknown): "sandbox" | "production" | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "sandbox" || normalized === "production") {
     return normalized;
   }

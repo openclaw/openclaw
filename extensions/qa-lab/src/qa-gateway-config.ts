@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  defaultQaModelForMode,
+  isQaFastModeModelRef,
+  splitQaModelRef,
+  type QaProviderMode,
+} from "./model-selection.js";
 
 const DISABLED_BUNDLED_CHANNELS = Object.freeze({
   bluebubbles: { enabled: false },
@@ -33,21 +39,10 @@ export function buildQaGatewayConfig(params: {
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
   controlUiEnabled?: boolean;
-  providerMode?: "mock-openai" | "live-openai";
+  providerMode?: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
 }): OpenClawConfig {
-  const splitModelRef = (ref: string) => {
-    const slash = ref.indexOf("/");
-    if (slash <= 0 || slash === ref.length - 1) {
-      return null;
-    }
-    return {
-      provider: ref.slice(0, slash),
-      model: ref.slice(slash + 1),
-    };
-  };
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
@@ -102,12 +97,9 @@ export function buildQaGatewayConfig(params: {
     ],
   };
   const providerMode = params.providerMode ?? "mock-openai";
-  const primaryModel =
-    params.primaryModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4");
+  const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
-    params.alternateModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
+    params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
   const imageGenerationModelRef =
     providerMode === "live-openai" ? "openai/gpt-image-1" : "mock-openai/gpt-image-1";
   const selectedProviderIds =
@@ -115,7 +107,7 @@ export function buildQaGatewayConfig(params: {
       ? [
           ...new Set(
             [primaryModel, alternateModel, imageGenerationModelRef]
-              .map((ref) => splitModelRef(ref)?.provider)
+              .map((ref) => splitQaModelRef(ref)?.provider)
               .filter((provider): provider is string => Boolean(provider)),
           ),
         ]
@@ -130,15 +122,15 @@ export function buildQaGatewayConfig(params: {
       : ["memory-core", "qa-channel"];
   const liveModelParams =
     providerMode === "live-openai"
-      ? {
+      ? (modelRef: string) => ({
           transport: "sse",
           openaiWsWarmup: false,
-          ...(params.fastMode ? { fastMode: true } : {}),
-        }
-      : {
+          ...(isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
+        })
+      : (_modelRef: string) => ({
           transport: "sse",
           openaiWsWarmup: false,
-        };
+        });
   const allowedOrigins =
     params.controlUiAllowedOrigins && params.controlUiAllowedOrigins.length > 0
       ? params.controlUiAllowedOrigins
@@ -181,10 +173,10 @@ export function buildQaGatewayConfig(params: {
         },
         models: {
           [primaryModel]: {
-            params: liveModelParams,
+            params: liveModelParams(primaryModel),
           },
           [alternateModel]: {
-            params: liveModelParams,
+            params: liveModelParams(alternateModel),
           },
         },
         subagents: {

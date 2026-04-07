@@ -64,11 +64,6 @@ function resolveLimit(req: IncomingMessage): number | undefined {
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
 }
 
-function resolveCursor(req: IncomingMessage): string | undefined {
-  const raw = getRequestUrl(req).searchParams.get("cursor");
-  return normalizeOptionalString(raw);
-}
-
 function canonicalizePath(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -152,7 +147,7 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const limit = resolveLimit(req);
-  const cursor = resolveCursor(req);
+  const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars =
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars

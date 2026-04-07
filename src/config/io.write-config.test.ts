@@ -17,7 +17,9 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() =>
     }),
   ),
 );
-const mockMaintainConfigBackups = vi.hoisted(() => vi.fn(async () => {}));
+const mockMaintainConfigBackups = vi.hoisted(() =>
+  vi.fn<typeof import("./backup-rotation.js").maintainConfigBackups>(async () => {}),
+);
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
@@ -27,8 +29,7 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backup-rotation.js")>();
   return {
     ...actual,
-    maintainConfigBackups: (..._args: Parameters<typeof actual.maintainConfigBackups>) =>
-      mockMaintainConfigBackups(),
+    maintainConfigBackups: mockMaintainConfigBackups,
   };
 });
 

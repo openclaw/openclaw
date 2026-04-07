@@ -5,10 +5,10 @@ import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   isSameMemoryDreamingDay,
-  resolveMemoryCorePluginConfig,
-  resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryLightDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
@@ -116,19 +116,19 @@ function resolveDreamingConfig(
   | "phaseSignalError"
 > {
   const resolved = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   const light = resolveMemoryLightDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   const deep = resolveMemoryDeepDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   const rem = resolveMemoryRemDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   return {

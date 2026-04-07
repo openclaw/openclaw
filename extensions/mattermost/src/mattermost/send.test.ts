@@ -45,6 +45,13 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   convertMarkdownTables: vi.fn((text: string) => text),
+  normalizeOptionalString: vi.fn((value: string | null | undefined) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }),
 }));
 
 vi.mock("./accounts.js", () => ({

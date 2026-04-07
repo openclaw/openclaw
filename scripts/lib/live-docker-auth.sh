@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.gemini .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
   .codex/config.toml
@@ -30,6 +30,9 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
+    gemini | gemini-cli | google-gemini-cli)
+      printf '%s\n' ".gemini"
+      ;;
     minimax | minimax-portal)
       printf '%s\n' ".minimax"
       ;;
@@ -49,9 +52,6 @@ openclaw_live_should_include_auth_file_for_provider() {
       printf '%s\n' ".claude/.credentials.json"
       printf '%s\n' ".claude/settings.json"
       printf '%s\n' ".claude/settings.local.json"
-      ;;
-    gemini | gemini-cli | google-gemini-cli)
-      printf '%s\n' ".gemini/settings.json"
       ;;
   esac
 }

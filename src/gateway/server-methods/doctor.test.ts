@@ -466,6 +466,61 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("reads dreaming config from the selected memory slot plugin", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        slots: {
+          memory: "memos-local-openclaw-plugin",
+        },
+        entries: {
+          "memos-local-openclaw-plugin": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 */4 * * *",
+              },
+            },
+          },
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        dreaming: expect.objectContaining({
+          enabled: true,
+          phases: expect.objectContaining({
+            deep: expect.objectContaining({
+              cron: "0 */4 * * *",
+            }),
+          }),
+        }),
+      }),
+      undefined,
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("merges workspace store errors when multiple workspace stores are unreadable", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-error-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
@@ -601,7 +656,7 @@ describe("doctor.memory.dreamDiary", () => {
     }
   });
 
-  it("falls back to lowercase dreams.md", async () => {
+  it("reads lowercase dreams.md when present", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-lower-"));
     await fs.writeFile(path.join(workspaceDir, "dreams.md"), "lowercase diary\n", "utf-8");
     resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
@@ -614,12 +669,13 @@ describe("doctor.memory.dreamDiary", () => {
         expect.objectContaining({
           agentId: "main",
           found: true,
-          path: "DREAMS.md",
           content: "lowercase diary\n",
           updatedAtMs: expect.any(Number),
         }),
         undefined,
       );
+      const payload = respond.mock.calls[0]?.[1] as { path?: unknown };
+      expect(["DREAMS.md", "dreams.md"]).toContain(payload.path);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

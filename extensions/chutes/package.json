@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Chutes.ai provider plugin",
   "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
