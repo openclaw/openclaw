@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
 import { registerMemoryDreamingPhases } from "./dreaming-phases.js";
 import {
@@ -317,6 +318,124 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.endLine).toBe(4);
     expect(after[0]?.snippet).toContain("Move backups to S3 Glacier.");
     expect(after[0]?.snippet).toContain("Keep retention at 365 days.");
+  });
+
+  it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "session",
+          id: "dreaming-main",
+          timestamp: "2026-04-05T18:00:00.000Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content: [{ type: "text", text: "Move backups to S3 Glacier." }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-05T18:02:00.000Z",
+            content: [{ type: "text", text: "Set retention to 365 days." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              enabled: true,
+              sources: ["memory", "sessions"],
+              experimental: {
+                sessionMemory: true,
+              },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    const readSpy = vi.spyOn(fs, "readFile");
+    let transcriptReadCount = 0;
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      transcriptReadCount = readSpy.mock.calls.filter(
+        ([target]) => String(target) === transcriptPath,
+      ).length;
+      readSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+
+    expect(transcriptReadCount).toBeLessThanOrEqual(1);
+
+    await expect(
+      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
+    ).resolves.toBeUndefined();
+
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
+    });
+    expect(ranked.map((candidate) => candidate.path)).toContain(
+      "memory/.dreams/session-corpus/2026-04-05.txt",
+    );
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Move backups to S3 Glacier."),
+        expect.stringContaining("Set retention to 365 days."),
+      ]),
+    );
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
