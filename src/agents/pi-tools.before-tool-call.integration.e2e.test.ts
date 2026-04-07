@@ -243,6 +243,54 @@ describe("before_tool_call hook integration", () => {
     });
     expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toBeUndefined();
   });
+
+  it("passes precedingText and messageId from the assistant tool-call message", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "read", execute, description: "read", parameters: {} } as any;
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const [def] = toToolDefinitions([wrapped]);
+    const extensionContext = {
+      sessionManager: {
+        getLeafEntry: () => ({
+          id: "msg-assistant-1",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "I should inspect the target file first." },
+              {
+                type: "toolCall",
+                id: "call-ctx",
+                name: "read",
+                arguments: { path: "/tmp/file" },
+              },
+            ],
+          },
+        }),
+      },
+    } as Parameters<typeof def.execute>[4];
+
+    await def.execute("call-ctx", { path: "/tmp/file" }, undefined, undefined, extensionContext);
+
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "read",
+        params: { path: "/tmp/file" },
+        toolCallId: "call-ctx",
+        precedingText: "I should inspect the target file first.",
+        messageId: "msg-assistant-1",
+      },
+      {
+        toolName: "read",
+        agentId: "main",
+        sessionKey: "main",
+        toolCallId: "call-ctx",
+      },
+    );
+  });
 });
 
 describe("before_tool_call hook deduplication (#15502)", () => {
@@ -335,5 +383,63 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+  });
+
+  it("passes precedingText and messageId to client tool hooks", async () => {
+    const onClientToolCall = vi.fn();
+    const handler = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => undefined,
+    });
+    const [tool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+      ],
+      onClientToolCall,
+      { agentId: "main", sessionKey: "main" },
+    );
+    const extensionContext = {
+      sessionManager: {
+        getLeafEntry: () => ({
+          id: "msg-client-1",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Need client-side confirmation before dispatch." },
+              {
+                type: "toolCall",
+                id: "client-call-ctx",
+                name: "client_tool",
+                arguments: { value: "ok" },
+              },
+            ],
+          },
+        }),
+      },
+    } as Parameters<typeof tool.execute>[4];
+    await tool.execute("client-call-ctx", { value: "ok" }, undefined, undefined, extensionContext);
+
+    expect(handler).toHaveBeenCalledWith(
+      {
+        toolName: "client_tool",
+        params: { value: "ok" },
+        toolCallId: "client-call-ctx",
+        precedingText: "Need client-side confirmation before dispatch.",
+        messageId: "msg-client-1",
+      },
+      {
+        toolName: "client_tool",
+        agentId: "main",
+        sessionKey: "main",
+        toolCallId: "client-call-ctx",
+      },
+    );
   });
 });
