@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-migrate.js";
+import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
+import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -6,6 +12,7 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -45,6 +52,20 @@ describe("plugins.slots.contextEngine", () => {
       plugins: {
         slots: {
           contextEngine: "my-context-engine",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("auth.cooldowns auth_permanent backoff config", () => {
+  it("accepts auth_permanent backoff knobs", () => {
+    const result = OpenClawSchema.safeParse({
+      auth: {
+        cooldowns: {
+          authPermanentBackoffMinutes: 10,
+          authPermanentMaxMinutes: 60,
         },
       },
     });
@@ -149,31 +170,6 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
-  });
-});
-
-describe("talk.voiceAliases", () => {
-  it("accepts a string map of voice aliases", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: "EXAVITQu4vr4xnSDxMaL",
-          Roger: "CwhRBWXzGAHq8TQ4Fs17",
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects non-string voice alias values", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: 123,
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
   });
 });
 
@@ -382,7 +378,7 @@ describe("broadcast", () => {
 
 describe("model compat config schema", () => {
   it("accepts full openai-completions compat fields", () => {
-    const res = validateConfigObject({
+    const res = OpenClawSchema.safeParse({
       models: {
         providers: {
           local: {
@@ -395,6 +391,7 @@ describe("model compat config schema", () => {
                 compat: {
                   supportsUsageInStreaming: true,
                   supportsStrictMode: false,
+                  requiresStringContent: true,
                   thinkingFormat: "qwen",
                   requiresToolResultName: true,
                   requiresAssistantAfterToolResult: false,
@@ -409,7 +406,7 @@ describe("model compat config schema", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.success).toBe(true);
   });
 });
 
@@ -473,28 +470,197 @@ describe("config strict validation", () => {
     }
   });
 
-  it("rejects removed legacy config entries without auto-migrating", async () => {
+  it("accepts top-level memorySearch via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        memorySearch: { provider: "local", fallback: "none" },
+        memorySearch: {
+          provider: "local",
+          fallback: "none",
+          query: { maxResults: 7 },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.issues).toEqual([]);
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
+        provider: "local",
+        fallback: "none",
+        query: { maxResults: 7 },
+      });
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toBeUndefined();
+    });
+  });
+
+  it("accepts top-level heartbeat agent settings via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        heartbeat: {
+          every: "30m",
+          model: "anthropic/claude-3-5-haiku-20241022",
+        },
       });
 
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toMatchObject({
+        every: "30m",
+        model: "anthropic/claude-3-5-haiku-20241022",
+      });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
+    });
+  });
+
+  it("accepts top-level heartbeat visibility via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        heartbeat: {
+          showOk: true,
+          showAlerts: false,
+          useIndicator: true,
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toMatchObject({
+        showOk: true,
+        showAlerts: false,
+        useIndicator: true,
+      });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
     });
   });
 
   it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
+    const raw = {
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: "voice-1",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "messages.tts")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      messages?: {
+        tts?: {
+          providers?: {
+            elevenlabs?: {
+              apiKey?: string;
+              voiceId?: string;
+            };
+          };
+          elevenlabs?: unknown;
+        };
+      };
+    } | null;
+    expect(next?.messages?.tts?.providers?.elevenlabs).toEqual({
+      apiKey: "test-key",
+      voiceId: "voice-1",
+    });
+    expect(next?.messages?.tts?.elevenlabs).toBeUndefined();
+  });
+
+  it("accepts legacy talk flat fields via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      talk: {
+        voiceId: "voice-1",
+        modelId: "eleven_v3",
+        apiKey: "test-key",
+      },
+    };
+    const issues = findLegacyConfigIssues(
+      raw,
+      raw,
+      listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
+    );
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "talk")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      talk?: {
+        providers?: {
+          elevenlabs?: {
+            voiceId?: string;
+            modelId?: string;
+            apiKey?: string;
+          };
+        };
+        voiceId?: unknown;
+        modelId?: unknown;
+        apiKey?: unknown;
+      };
+    } | null;
+    expect(next?.talk?.providers?.elevenlabs).toEqual({
+      voiceId: "voice-1",
+      modelId: "eleven_v3",
+      apiKey: "test-key",
+    });
+    expect(next?.talk?.voiceId).toBeUndefined();
+    expect(next?.talk?.modelId).toBeUndefined();
+    expect(next?.talk?.apiKey).toBeUndefined();
+  });
+
+  it("accepts legacy sandbox perSession via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        messages: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
+        agents: {
+          defaults: {
+            sandbox: {
+              perSession: true,
+            },
+          },
+          list: [
+            {
+              id: "pi",
+              sandbox: {
+                perSession: false,
+              },
+            },
+          ],
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
+      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({
+        scope: "session",
+      });
+      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({
+        scope: "shared",
+      });
+    });
+  });
+
+  it("accepts legacy x_search auth via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            x_search: {
               apiKey: "test-key",
-              voiceId: "voice-1",
             },
           },
         },
@@ -503,29 +669,331 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
-      expect(snap.sourceConfig.messages?.tts?.providers?.elevenlabs).toEqual({
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
         apiKey: "test-key",
-        voiceId: "voice-1",
       });
       expect(
-        (snap.sourceConfig.messages?.tts as Record<string, unknown> | undefined)?.elevenlabs,
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
       ).toBeUndefined();
     });
   });
 
-  it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
+  it("accepts legacy x_search SecretRefs via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        plugins: {
-          entries: {
-            "voice-call": {
-              config: {
-                tts: {
-                  provider: "openai",
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "alloy",
+        tools: {
+          web: {
+            x_search: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "X_SEARCH_KEY_REF",
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "X_SEARCH_KEY_REF",
+        },
+      });
+      expect(
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
+    });
+  });
+
+  it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      session: {
+        threadBindings: {
+          ttlHours: 24,
+        },
+      },
+      channels: {
+        discord: {
+          threadBindings: {
+            ttlHours: 12,
+          },
+          accounts: {
+            alpha: {
+              threadBindings: {
+                ttlHours: 6,
+              },
+            },
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      session?: {
+        threadBindings?: {
+          idleHours?: number;
+          ttlHours?: unknown;
+        };
+      };
+      channels?: {
+        discord?: {
+          threadBindings?: {
+            idleHours?: number;
+            ttlHours?: unknown;
+          };
+          accounts?: {
+            alpha?: {
+              threadBindings?: {
+                idleHours?: number;
+                ttlHours?: unknown;
+              };
+            };
+          };
+        };
+      };
+    } | null;
+    expect(next?.session?.threadBindings).toMatchObject({
+      idleHours: 24,
+    });
+    expect(next?.channels?.discord?.threadBindings).toMatchObject({
+      idleHours: 12,
+    });
+    expect(next?.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+      idleHours: 6,
+    });
+    expect(next?.session?.threadBindings?.ttlHours).toBeUndefined();
+    expect(next?.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
+    expect(next?.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
+  });
+
+  it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              streamMode: "block",
+              draftChunk: {
+                maxChars: 900,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const migrated = applyLegacyDoctorMigrations(raw);
+    expect(migrated.next).not.toBeNull();
+
+    if (!migrated.next) {
+      return;
+    }
+    const channels = (
+      migrated.next as {
+        channels?: {
+          discord?: { accounts?: { work?: unknown } };
+        };
+      }
+    ).channels;
+    expect(channels?.discord?.accounts?.work).toMatchObject({
+      streaming: {
+        mode: "block",
+        preview: {
+          chunk: {
+            maxChars: 900,
+          },
+        },
+      },
+    });
+  });
+
+  it("accepts legacy nested channel allow aliases via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              channels: {
+                general: {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "spaces/bbb": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              guilds: {
+                "200": {
+                  channels: {
+                    help: {
+                      allow: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "channels.slack")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.slack.accounts")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.googlechat")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.googlechat.accounts")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.discord")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.discord.accounts")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      channels?: {
+        slack?: {
+          channels?: {
+            ops?: {
+              enabled?: boolean;
+              allow?: unknown;
+            };
+          };
+        };
+        googlechat?: {
+          groups?: {
+            "spaces/aaa"?: {
+              enabled?: boolean;
+              allow?: unknown;
+            };
+          };
+        };
+        discord?: {
+          guilds?: {
+            "100"?: {
+              channels?: {
+                general?: {
+                  enabled?: boolean;
+                  allow?: unknown;
+                };
+              };
+            };
+          };
+        };
+      };
+    } | null;
+    expect(next?.channels?.slack?.channels?.ops).toMatchObject({
+      enabled: false,
+    });
+    expect(next?.channels?.googlechat?.groups?.["spaces/aaa"]).toMatchObject({
+      enabled: false,
+    });
+    expect(next?.channels?.discord?.guilds?.["100"]?.channels?.general).toMatchObject({
+      enabled: false,
+    });
+    expect(next?.channels?.slack?.channels?.ops?.allow).toBeUndefined();
+    expect(next?.channels?.googlechat?.groups?.["spaces/aaa"]?.allow).toBeUndefined();
+    expect(next?.channels?.discord?.guilds?.["100"]?.channels?.general?.allow).toBeUndefined();
+  });
+
+  it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      channels?: {
+        telegram?: {
+          groups?: {
+            "*"?: {
+              requireMention?: boolean;
+            };
+          };
+          groupMentionsOnly?: unknown;
+        };
+      };
+    } | null;
+    expect(next?.channels?.telegram?.groups?.["*"]).toMatchObject({
+      requireMention: true,
+    });
+    expect(next?.channels?.telegram?.groupMentionsOnly).toBeUndefined();
+  });
+
+  it("accepts legacy discord voice tts provider keys via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                provider: "elevenlabs",
+                elevenlabs: {
+                  voiceId: "voice-1",
+                },
+              },
+            },
+            accounts: {
+              main: {
+                voice: {
+                  tts: {
+                    edge: {
+                      voice: "en-US-AvaNeural",
+                    },
                   },
                 },
               },
@@ -537,31 +1005,35 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
-      const voiceCallTts = (
-        snap.sourceConfig.plugins?.entries as
-          | Record<
-              string,
-              {
-                config?: {
-                  tts?: {
-                    providers?: Record<string, unknown>;
-                    openai?: unknown;
-                  };
-                };
-              }
-            >
-          | undefined
-      )?.["voice-call"]?.config?.tts;
-      expect(voiceCallTts?.providers?.openai).toEqual({
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.voice.tts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.channels?.discord?.voice?.tts?.providers?.elevenlabs).toEqual({
+        voiceId: "voice-1",
       });
-      expect(voiceCallTts?.openai).toBeUndefined();
+      expect(
+        snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts?.providers?.microsoft,
+      ).toEqual({
+        voice: "en-US-AvaNeural",
+      });
+      expect(
+        (snap.sourceConfig.channels?.discord?.voice?.tts as Record<string, unknown> | undefined)
+          ?.elevenlabs,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts as
+            | Record<string, unknown>
+            | undefined
+        )?.edge,
+      ).toBeUndefined();
     });
   });
 
-  it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
+  it("does not treat resolved-only gateway.bind aliases as source-literal legacy or invalid", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "${OPENCLAW_BIND}" },
@@ -571,9 +1043,9 @@ describe("config strict validation", () => {
       process.env.OPENCLAW_BIND = "0.0.0.0";
       try {
         const snap = await readConfigFileSnapshot();
-        expect(snap.valid).toBe(false);
+        expect(snap.valid).toBe(true);
         expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+        expect(snap.issues).toHaveLength(0);
       } finally {
         if (prev === undefined) {
           delete process.env.OPENCLAW_BIND;

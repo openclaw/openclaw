@@ -3,6 +3,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { formatErrorMessage } from "./errors.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -36,12 +37,14 @@ export type ExecApprovalChannelRuntimeAdapter<
   isConfigured: () => boolean;
   shouldHandle: (request: TRequest) => boolean;
   deliverRequested: (request: TRequest) => Promise<TPending[]>;
+  beforeGatewayClientStart?: () => Promise<void> | void;
   finalizeResolved: (params: {
     request: TRequest;
     resolved: TResolved;
     entries: TPending[];
   }) => Promise<void>;
   finalizeExpired?: (params: { request: TRequest; entries: TPending[] }) => Promise<void>;
+  onStopped?: () => Promise<void> | void;
   nowMs?: () => number;
 };
 
@@ -75,7 +78,7 @@ export function createExecApprovalChannelRuntime<
 
   const spawn = (label: string, promise: Promise<void>): void => {
     void promise.catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       log.error(`${label}: ${message}`);
     });
   };
@@ -238,9 +241,17 @@ export function createExecApprovalChannelRuntime<
           client.stop();
           return;
         }
-        client.start();
+        await adapter.beforeGatewayClientStart?.();
         gatewayClient = client;
         started = true;
+        try {
+          client.start();
+        } catch (error) {
+          gatewayClient = null;
+          started = false;
+          client.stop();
+          throw error;
+        }
       })().finally(() => {
         startPromise = null;
       });
@@ -254,6 +265,7 @@ export function createExecApprovalChannelRuntime<
         await startPromise.catch(() => {});
       }
       if (!started && !gatewayClient) {
+        await adapter.onStopped?.();
         return;
       }
       started = false;
@@ -265,6 +277,7 @@ export function createExecApprovalChannelRuntime<
       pending.clear();
       gatewayClient?.stop();
       gatewayClient = null;
+      await adapter.onStopped?.();
       log.debug("stopped");
     },
 

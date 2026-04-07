@@ -9,6 +9,8 @@ import {
   normalizeMimeType,
   resolveInputFileLimits,
 } from "../media/input-files.js";
+import { wrapExternalContent } from "../security/external-content.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -70,10 +72,7 @@ const TEXT_EXT_MIME = new Map<string, string>([
 ]);
 
 function sanitizeMimeType(value?: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -100,6 +99,13 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
+}
+
+function wrapUntrustedAttachmentContent(content: string): string {
+  return wrapExternalContent(content, {
+    source: "unknown",
+    includeWarning: false,
+  });
 }
 
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
@@ -426,7 +432,7 @@ async function extractFileBlocks(params: {
       continue;
     }
     const text = extracted?.text?.trim() ?? "";
-    let blockText = text;
+    let blockText = text ? wrapUntrustedAttachmentContent(text) : "";
     if (!blockText) {
       if (extracted?.images && extracted.images.length > 0) {
         blockText = "[PDF content rendered to images; images not forwarded to model]";

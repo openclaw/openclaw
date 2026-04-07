@@ -1,24 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
   discoverBundledPluginRuntimeDeps,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const cleanupDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const { createTempDirAsync } = createScriptTestHarness();
 
 async function createExtensionsDir() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-postinstall-"));
-  cleanupDirs.push(root);
+  const root = await createTempDirAsync("openclaw-postinstall-");
   const extensionsDir = path.join(root, "dist", "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
   return extensionsDir;
@@ -68,7 +61,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     const spawnSync = vi.fn();
@@ -82,7 +75,7 @@ describe("bundled plugin postinstall", () => {
         "--omit=dev",
         "--no-save",
         "--package-lock=false",
-        "acpx@0.4.0",
+        "acpx@0.4.1",
       ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
@@ -96,7 +89,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
@@ -115,7 +108,7 @@ describe("bundled plugin postinstall", () => {
         "--omit=dev",
         "--no-save",
         "--package-lock=false",
-        "acpx@0.4.0",
+        "acpx@0.4.1",
       ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
@@ -123,7 +116,7 @@ describe("bundled plugin postinstall", () => {
 
     expect(spawnSync).toHaveBeenCalledWith(
       "npm",
-      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.0"],
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.1"],
       {
         cwd: packageRoot,
         encoding: "utf8",
@@ -143,7 +136,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });

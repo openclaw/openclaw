@@ -1,176 +1,163 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
+import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-const { resolvePluginToolsMock } = vi.hoisted(() => ({
-  resolvePluginToolsMock: vi.fn((params?: unknown) => {
-    void params;
-    return [];
-  }),
-}));
-
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: resolvePluginToolsMock,
-  copyPluginToolMeta: vi.fn(),
-  getPluginToolMeta: vi.fn(() => undefined),
-}));
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
-let createOpenClawCodingTools: typeof import("./pi-tools.js").createOpenClawCodingTools;
-
-describe("createOpenClawTools plugin context", () => {
-  beforeEach(async () => {
-    resolvePluginToolsMock.mockClear();
-    vi.resetModules();
-    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-    ({ createOpenClawCodingTools } = await import("./pi-tools.js"));
-  });
-
-  it("forwards trusted requester sender identity to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      requesterSenderId: "trusted-sender",
-      senderIsOwner: true,
+describe("openclaw plugin tool context", () => {
+  it("forwards trusted requester sender identity", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        requesterSenderId: "trusted-sender",
+        senderIsOwner: true,
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          requesterSenderId: "trusted-sender",
-          senderIsOwner: true,
-        }),
+        requesterSenderId: "trusted-sender",
+        senderIsOwner: true,
       }),
     );
   });
 
-  it("forwards ephemeral sessionId to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      agentSessionKey: "agent:main:telegram:direct:12345",
-      sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  it("forwards fs policy for plugin tool sandbox enforcement", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        fsPolicy: { workspaceOnly: true },
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          sessionKey: "agent:main:telegram:direct:12345",
-          sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        }),
+        fsPolicy: { workspaceOnly: true },
       }),
     );
   });
 
-  it("infers the default agent workspace for plugin tools when workspaceDir is omitted", () => {
+  it("forwards ephemeral sessionId", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentSessionKey: "agent:main:telegram:direct:12345",
+        sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      },
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:12345",
+        sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      }),
+    );
+  });
+
+  it("infers the default agent workspace when workspaceDir is omitted", () => {
     const workspaceDir = path.join(process.cwd(), "tmp-main-workspace");
-    createOpenClawTools({
-      config: {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {
+          agents: {
+            defaults: { workspace: workspaceDir },
+            list: [{ id: "main", default: true }],
+          },
+        } as never,
+        agentSessionKey: "main",
+      },
+      resolvedConfig: {
         agents: {
           defaults: { workspace: workspaceDir },
           list: [{ id: "main", default: true }],
         },
       } as never,
-      agentSessionKey: "main",
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          agentId: "main",
-          workspaceDir,
-        }),
+        agentId: "main",
+        workspaceDir,
       }),
     );
   });
 
-  it("infers the session agent workspace for plugin tools when workspaceDir is omitted", () => {
+  it("infers the session agent workspace when workspaceDir is omitted", () => {
     const supportWorkspace = path.join(process.cwd(), "tmp-support-workspace");
-    createOpenClawTools({
-      config: {
-        agents: {
-          defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
-          list: [
-            { id: "main", default: true },
-            { id: "support", workspace: supportWorkspace },
-          ],
+    const config = {
+      agents: {
+        defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
+        list: [
+          { id: "main", default: true },
+          { id: "support", workspace: supportWorkspace },
+        ],
+      },
+    } as never;
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config,
+        agentSessionKey: "agent:support:main",
+      },
+      resolvedConfig: config,
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        agentId: "support",
+        workspaceDir: supportWorkspace,
+      }),
+    );
+  });
+
+  it("forwards browser session wiring", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        sandboxBrowserBridgeUrl: "http://127.0.0.1:9999",
+        allowHostBrowserControl: true,
+      },
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        browser: {
+          sandboxBridgeUrl: "http://127.0.0.1:9999",
+          allowHostControl: true,
         },
-      } as never,
-      agentSessionKey: "agent:support:main",
-    });
-
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          agentId: "support",
-          workspaceDir: supportWorkspace,
-        }),
       }),
     );
   });
 
-  it("forwards browser session wiring to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      sandboxBrowserBridgeUrl: "http://127.0.0.1:9999",
-      allowHostBrowserControl: true,
-    });
-
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          browser: {
-            sandboxBridgeUrl: "http://127.0.0.1:9999",
-            allowHostControl: true,
-          },
-        }),
-      }),
-    );
-  });
-
-  it("forwards gateway subagent binding for plugin tools", () => {
-    createOpenClawTools({
-      config: {} as never,
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it("forwards gateway subagent binding", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
         allowGatewaySubagentBinding: true,
-      }),
-    );
-  });
-
-  it("forwards gateway subagent binding through coding tools", () => {
-    createOpenClawCodingTools({
-      config: {} as never,
-      allowGatewaySubagentBinding: true,
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
+    expect(result.allowGatewaySubagentBinding).toBe(true);
   });
 
-  it("forwards ambient deliveryContext to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      agentChannel: "slack",
-      agentTo: "channel:C123",
-      agentAccountId: "work",
-      agentThreadId: "1710000000.000100",
+  it("forwards ambient deliveryContext", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "slack",
+        agentTo: "channel:C123",
+        agentAccountId: "work",
+        agentThreadId: "1710000000.000100",
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          deliveryContext: {
-            channel: "slack",
-            to: "channel:C123",
-            accountId: "work",
-            threadId: "1710000000.000100",
-          },
-        }),
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "work",
+          threadId: "1710000000.000100",
+        },
       }),
     );
   });
@@ -192,19 +179,16 @@ describe("createOpenClawTools plugin context", () => {
       },
       execute: executeMock,
     };
-    resolvePluginToolsMock.mockImplementation(() => [sharedTool] as never);
 
-    const first = createOpenClawTools({
-      config: {} as never,
-      agentThreadId: "111.222",
-    }).find((tool) => tool.name === "plugin-thread-default");
-    const second = createOpenClawTools({
-      config: {} as never,
-      agentThreadId: "333.444",
-    }).find((tool) => tool.name === "plugin-thread-default");
+    const [first] = applyPluginToolDeliveryDefaults({
+      tools: [sharedTool],
+      deliveryContext: { threadId: "111.222" },
+    });
+    const [second] = applyPluginToolDeliveryDefaults({
+      tools: [sharedTool],
+      deliveryContext: { threadId: "333.444" },
+    });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
     expect(first).toBe(sharedTool);
     expect(second).toBe(sharedTool);
 
@@ -232,12 +216,11 @@ describe("createOpenClawTools plugin context", () => {
       },
       execute: executeMock,
     };
-    resolvePluginToolsMock.mockReturnValue([tool] as never);
 
-    const wrapped = createOpenClawTools({
-      config: {} as never,
-      agentThreadId: "77",
-    }).find((candidate) => candidate.name === tool.name);
+    const [wrapped] = applyPluginToolDeliveryDefaults({
+      tools: [tool],
+      deliveryContext: { threadId: "77" },
+    });
 
     await wrapped?.execute("call-1", undefined);
 
@@ -261,12 +244,11 @@ describe("createOpenClawTools plugin context", () => {
       },
       execute: executeMock,
     };
-    resolvePluginToolsMock.mockReturnValue([tool] as never);
 
-    const wrapped = createOpenClawTools({
-      config: {} as never,
-      agentThreadId: "77",
-    }).find((candidate) => candidate.name === tool.name);
+    const [wrapped] = applyPluginToolDeliveryDefaults({
+      tools: [tool],
+      deliveryContext: { threadId: "77" },
+    });
 
     await wrapped?.execute("call-1", {});
 
@@ -290,12 +272,11 @@ describe("createOpenClawTools plugin context", () => {
       },
       execute: executeMock,
     };
-    resolvePluginToolsMock.mockReturnValue([tool] as never);
 
-    const wrapped = createOpenClawTools({
-      config: {} as never,
-      agentThreadId: "111.222",
-    }).find((candidate) => candidate.name === tool.name);
+    const [wrapped] = applyPluginToolDeliveryDefaults({
+      tools: [tool],
+      deliveryContext: { threadId: "111.222" },
+    });
 
     await wrapped?.execute("call-1", { threadId: "explicit" });
 

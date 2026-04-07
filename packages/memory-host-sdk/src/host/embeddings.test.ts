@@ -1,7 +1,20 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as authModule from "../../../../src/agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
+import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+
+const { createOllamaEmbeddingProviderMock } = vi.hoisted(() => ({
+  createOllamaEmbeddingProviderMock: vi.fn(async () => {
+    throw new Error("Unexpected ollama provider in embeddings.test.ts");
+  }),
+}));
+
+const { hasAwsCredentialsMock } = vi.hoisted(() => ({
+  hasAwsCredentialsMock: vi.fn(async () => false),
+}));
 
 vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: async (params: {
@@ -21,6 +34,19 @@ vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
     };
   },
 }));
+
+vi.mock("./embeddings-ollama.js", () => ({
+  createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
+}));
+
+vi.mock("./embeddings-bedrock.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./embeddings-bedrock.js")>("./embeddings-bedrock.js");
+  return {
+    ...actual,
+    hasAwsCredentials: hasAwsCredentialsMock,
+  };
+});
 
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -45,22 +71,15 @@ function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
   return { url, init: init as RequestInit | undefined };
 }
 
-type EmbeddingsModule = typeof import("./embeddings.js");
-type AuthModule = typeof import("../../../../src/agents/model-auth.js");
-type ResolvedProviderAuth = Awaited<ReturnType<AuthModule["resolveApiKeyForProvider"]>>;
+type ResolvedProviderAuth = Awaited<ReturnType<typeof authModule.resolveApiKeyForProvider>>;
 
-let authModule: AuthModule;
-let nodeLlamaModule: typeof import("./node-llama.js");
-let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
-let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
-
-beforeEach(async () => {
-  vi.resetModules();
-  authModule = await import("../../../../src/agents/model-auth.js");
-  nodeLlamaModule = await import("./node-llama.js");
+beforeEach(() => {
   vi.spyOn(authModule, "resolveApiKeyForProvider");
   vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
-  ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
 });
 
 afterEach(() => {
@@ -68,7 +87,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function requireProvider(result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>) {
+function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
   if (!result.provider) {
     throw new Error("Expected embedding provider");
   }
@@ -101,7 +120,7 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 }
 
 function expectAutoSelectedProvider(
-  result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>,
+  result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
   expectedId: "openai" | "gemini" | "mistral",
 ) {
   expect(result.requestedProvider).toBe("auto");
@@ -570,16 +589,6 @@ describe("local embedding normalization", () => {
 });
 
 describe("local embedding ensureContext concurrency", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.doUnmock("./node-llama.js");
-  });
-
-  afterEach(() => {
-    vi.resetModules();
-    vi.doUnmock("./node-llama.js");
-  });
-
   async function setupLocalProviderWithMockedInit(params?: {
     initializationDelayMs?: number;
     failFirstGetLlama?: boolean;
@@ -589,7 +598,6 @@ describe("local embedding ensureContext concurrency", () => {
     const createContextSpy = vi.fn();
     let shouldFail = params?.failFirstGetLlama ?? false;
 
-    const nodeLlamaModule = await import("./node-llama.js");
     vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp").mockResolvedValue({
       getLlama: async (...args: unknown[]) => {
         getLlamaSpy(...args);
@@ -623,7 +631,6 @@ describe("local embedding ensureContext concurrency", () => {
       LlamaLogLevel: { error: 0 },
     } as never);
 
-    const { createEmbeddingProvider } = await import("./embeddings.js");
     const result = await createEmbeddingProvider({
       config: {} as never,
       provider: "local",
@@ -705,11 +712,6 @@ describe("local embedding ensureContext concurrency", () => {
 });
 
 describe("FTS-only fallback when no provider available", () => {
-  beforeEach(async () => {
-    authModule = await import("../../../../src/agents/model-auth.js");
-    ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
-  });
-
   it("returns null provider when all requested auth paths fail", async () => {
     vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
       new Error("No API key found for provider"),

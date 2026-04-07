@@ -1,26 +1,23 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-heavy-check-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const { createTempDir } = createScriptTestHarness();
+const GIB = 1024 ** 3;
+const CONSTRAINED_HOST = {
+  totalMemoryBytes: 16 * GIB,
+  logicalCpuCount: 8,
+};
+const ROOMY_HOST = {
+  totalMemoryBytes: 128 * GIB,
+  logicalCpuCount: 16,
+};
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
@@ -31,15 +28,15 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
-  it("tightens local tsgo runs to a single checker with a Go memory limit", () => {
-    const { args, env } = applyLocalTsgoPolicy([], makeEnv());
+  it("tightens local tsgo runs on constrained hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
     expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
-  it("keeps explicit tsgo flags and Go env overrides intact", () => {
+  it("keeps explicit tsgo flags and Go env overrides intact when throttled", () => {
     const { args, env } = applyLocalTsgoPolicy(
       ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],
       makeEnv({
@@ -47,6 +44,7 @@ describe("local-heavy-check-runtime", () => {
         GOMEMLIMIT: "5GiB",
         OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile",
       }),
+      CONSTRAINED_HOST,
     );
 
     expect(args).toEqual(["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"]);
@@ -54,14 +52,55 @@ describe("local-heavy-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
-  it("serializes local oxlint runs onto one thread", () => {
-    const { args } = applyLocalOxlintPolicy([], makeEnv());
+  it("keeps local tsgo at full speed on roomy hosts in auto mode", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual(["--type-aware", "--tsconfig", "tsconfig.oxlint.json", "--threads=1"]);
+    expect(args).toEqual([]);
+    expect(env.GOGC).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
+  it("allows forcing the throttled tsgo policy on roomy hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("serializes local oxlint runs onto one thread on constrained hosts", () => {
+    const { args } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
+
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+      "--threads=1",
+    ]);
+  });
+
+  it("keeps local oxlint parallel on roomy hosts in auto mode", () => {
+    const { args } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+    ]);
   });
 
   it("reclaims stale local heavy-check locks from dead pids", () => {
-    const cwd = makeTempDir();
+    const cwd = createTempDir("openclaw-local-heavy-check-");
     const commonDir = path.join(cwd, ".git");
     const lockDir = path.join(commonDir, "openclaw-local-checks", "heavy-check.lock");
     fs.mkdirSync(lockDir, { recursive: true });

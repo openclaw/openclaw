@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
@@ -68,7 +70,7 @@ function resolveCopilotProxyHost(proxyEp: string): string | null {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       return null;
     }
-    return url.hostname.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(url.hostname);
   } catch {
     return null;
   }
@@ -135,6 +137,7 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });
 

@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export function formatProviderModelRef(providerRaw: string, modelRaw: string): string {
   const provider = String(providerRaw ?? "").trim();
@@ -10,7 +11,7 @@ export function formatProviderModelRef(providerRaw: string, modelRaw: string): s
     return provider;
   }
   const prefix = `${provider}/`;
-  if (model.toLowerCase().startsWith(prefix.toLowerCase())) {
+  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
     const normalizedModel = model.slice(prefix.length).trim();
     if (normalizedModel) {
       return `${provider}/${normalizedModel}`;
@@ -31,7 +32,7 @@ function normalizeModelWithinProvider(provider: string, modelRaw: string): strin
     return model;
   }
   const prefix = `${provider}/`;
-  if (model.toLowerCase().startsWith(prefix.toLowerCase())) {
+  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
     const withoutPrefix = model.slice(prefix.length).trim();
     if (withoutPrefix) {
       return withoutPrefix;

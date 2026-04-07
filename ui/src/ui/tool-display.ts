@@ -152,8 +152,3 @@ export function resolveToolDisplay(params: {
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   return formatToolDetailText(display.detail, { prefixWithWith: true });
 }
-
-export function formatToolSummary(display: ToolDisplay): string {
-  const detail = formatToolDetail(display);
-  return detail ? `${display.label}: ${detail}` : display.label;
-}

@@ -5,9 +5,14 @@ import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -55,22 +60,11 @@ const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 function nullableStringSchema(description: string) {
-  return Type.Optional(
-    Type.Unsafe<string | null>({
-      type: ["string", "null"],
-      description,
-    }),
-  );
+  return Type.Optional(Type.String({ description }));
 }
 
 function nullableStringArraySchema(description: string) {
-  return Type.Optional(
-    Type.Unsafe<string[] | null>({
-      type: ["array", "null"],
-      items: { type: "string" },
-      description,
-    }),
-  );
+  return Type.Optional(Type.Array(Type.String(), { description }));
 }
 
 function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
@@ -138,12 +132,14 @@ const CronDeliverySchema = Type.Optional(
   ),
 );
 
-// Keep `false` expressible without reintroducing anyOf/oneOf into the raw tool schema.
 // Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
+// Runtime handles `failureAlert === false` in cron/service/timer.ts.
+// The schema declares `type: "object"` to stay compatible with providers that
+// enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
+// description tells the LLM that `false` is also accepted.
 const CronFailureAlertSchema = Type.Optional(
   Type.Unsafe<Record<string, unknown> | false>({
-    type: ["object", "boolean"],
-    not: { const: true },
+    type: "object",
     properties: {
       after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
@@ -153,7 +149,8 @@ const CronFailureAlertSchema = Type.Optional(
       accountId: Type.Optional(Type.String()),
     },
     additionalProperties: true,
-    description: "Failure alert object, or false to disable alerts for this job",
+    description:
+      "Failure alert config object, or the boolean value false to disable alerts for this job",
   }),
 );
 
@@ -364,7 +361,7 @@ async function buildReminderContextLines(params: {
 }
 
 function stripThreadSuffixFromSessionKey(sessionKey: string): string {
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   const idx = normalized.lastIndexOf(":thread:");
   if (idx <= 0) {
     return sessionKey;
@@ -386,7 +383,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   if (parts.length === 0) {
     return null;
   }
-  const head = parts[0]?.trim().toLowerCase();
+  const head = normalizeOptionalLowercaseString(parts[0]);
   if (!head || head === "main" || head === "subagent" || head === "acp") {
     return null;
   }
@@ -416,7 +413,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
 
   let channel: CronMessageChannel | undefined;
   if (markerIndex >= 1) {
-    channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+    channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
   const delivery: CronDelivery = { mode: "announce", to: peerId };
@@ -432,8 +429,8 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     label: "Cron",
     name: "cron",
     ownerOnly: true,
-    displaySummary: "Schedule and manage cron jobs and wake events.",
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
+    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
 Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
 
@@ -593,7 +590,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const deliveryValue = (job as { delivery?: unknown }).delivery;
             const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
             const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
-            const mode = modeRaw.trim().toLowerCase();
+            const mode = normalizeLowercaseStringOrEmpty(modeRaw);
             if (mode === "webhook") {
               const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
               if (!webhookUrl) {

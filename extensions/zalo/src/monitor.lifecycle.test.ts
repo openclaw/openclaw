@@ -1,6 +1,6 @@
-import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/testing";
-import { setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
@@ -10,8 +10,8 @@ const deleteWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }))
 const getUpdatesMock = vi.fn(() => new Promise(() => {}));
 const setWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
+vi.mock("./api.js", async () => {
+  const actual = await vi.importActual<typeof import("./api.js")>("./api.js");
   return {
     ...actual,
     deleteWebhook: deleteWebhookMock,

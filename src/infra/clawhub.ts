@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -12,7 +15,13 @@ const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
-export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
+// Keep aligned with @openclaw/plugin-package-contract ExternalPluginCompatibility.
+export type ClawHubPackageCompatibility = {
+  pluginApiRange?: string;
+  builtWithOpenClawVersion?: string;
+  pluginSdkVersion?: string;
+  minGatewayVersion?: string;
+};
 export type ClawHubPackageListItem = {
   name: string;
   displayName: string;
@@ -75,7 +84,13 @@ export type ClawHubPackageVersion = {
     createdAt: number;
     changelog: string;
     distTags?: string[];
-    files?: unknown;
+    files?: Array<{
+      path: string;
+      size: number;
+      sha256: string;
+      contentType?: string;
+    }>;
+    sha256hash?: string | null;
     compatibility?: ClawHubPackageCompatibility | null;
     capabilities?: ClawHubPackageDetail["package"] extends infer T
       ? T extends { capabilities?: infer C }
@@ -201,20 +216,16 @@ function normalizeBaseUrl(baseUrl?: string): string {
   return value || DEFAULT_CLAWHUB_URL;
 }
 
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function extractTokenFromClawHubConfig(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const record = value as ClawHubConfigLike;
   return (
-    readNonEmptyString(record.accessToken) ??
-    readNonEmptyString(record.authToken) ??
-    readNonEmptyString(record.apiToken) ??
-    readNonEmptyString(record.token) ??
+    normalizeOptionalString(record.accessToken) ??
+    normalizeOptionalString(record.authToken) ??
+    normalizeOptionalString(record.apiToken) ??
+    normalizeOptionalString(record.token) ??
     extractTokenFromClawHubConfig(record.auth) ??
     extractTokenFromClawHubConfig(record.session) ??
     extractTokenFromClawHubConfig(record.credentials) ??
@@ -407,13 +418,48 @@ export function formatSha256Integrity(bytes: Uint8Array): string {
   return `sha256-${digest}`;
 }
 
+export function normalizeClawHubSha256Integrity(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const prefixedBase64 = /^sha256-([A-Za-z0-9+/]+={0,1})$/.exec(trimmed);
+  if (prefixedBase64?.[1]) {
+    try {
+      const decoded = Buffer.from(prefixedBase64[1], "base64");
+      if (decoded.length === 32) {
+        return `sha256-${decoded.toString("base64")}`;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  const prefixedHex = /^sha256:([A-Fa-f0-9]{64})$/.exec(trimmed);
+  if (prefixedHex?.[1]) {
+    return `sha256-${Buffer.from(prefixedHex[1], "hex").toString("base64")}`;
+  }
+  if (/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
+    return `sha256-${Buffer.from(trimmed, "hex").toString("base64")}`;
+  }
+  return null;
+}
+
+export function normalizeClawHubSha256Hex(value: string): string | null {
+  const trimmed = value.trim();
+  if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
+    return null;
+  }
+  return trimmed.toLowerCase();
+}
+
 export function parseClawHubPluginSpec(raw: string): {
   name: string;
   version?: string;
   baseUrl?: string;
 } | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("clawhub:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("clawhub:")) {
     return null;
   }
   const spec = trimmed.slice("clawhub:".length).trim();

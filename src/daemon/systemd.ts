@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
@@ -298,7 +299,7 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
     normalized.includes(" is-enabled ") &&
@@ -613,7 +614,7 @@ export async function readSystemdServiceRuntime(
   } catch (err) {
     return {
       status: "unknown",
-      detail: err instanceof Error ? err.message : String(err),
+      detail: formatErrorMessage(err),
     };
   }
   const serviceName = resolveSystemdServiceName(env);
@@ -712,3 +713,4 @@ export async function uninstallLegacySystemdUnits({
 
   return units;
 }
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

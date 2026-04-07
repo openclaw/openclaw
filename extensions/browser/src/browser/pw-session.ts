@@ -459,7 +459,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
       } catch (err) {
         lastErr = err;
         // Don't retry rate-limit errors; retrying worsens the 429.
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         if (errMsg.includes("rate limit")) {
           break;
         }
@@ -665,13 +665,29 @@ export async function getPageForTargetId(opts: {
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  if (!request.isNavigationRequest()) {
+  let sameMainFrame = false;
+  try {
+    sameMainFrame = request.frame() === page.mainFrame();
+  } catch {
+    // Frame resolution can fail during redirect/renderer churn; fail closed.
+    sameMainFrame = true;
+  }
+  if (!sameMainFrame) {
     return false;
   }
+
   try {
-    return request.frame() === page.mainFrame();
+    if (request.isNavigationRequest()) {
+      return true;
+    }
   } catch {
-    return true;
+    // Ignore and fall back to resource-type check below.
+  }
+
+  try {
+    return request.resourceType() === "document";
+  } catch {
+    return false;
   }
 }
 

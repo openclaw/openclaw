@@ -24,7 +24,7 @@ describe("doctor empty allowlist policy warnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining("this channel does not fall back to allowFrom"),
+      expect.stringContaining('channels.imessage.groupPolicy is "allowlist"'),
     ]);
   });
 
