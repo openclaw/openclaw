@@ -99,7 +99,7 @@ async function workspaceList(
   const items = await fs.readdir(targetPath, { withFileTypes: true });
 
   for (const item of items) {
-    const itemPath = path.join(relativePath, item.name);
+    const itemPath = path.join(relativePath, item.name).split(path.sep).join("/");
     const fullPath = path.join(workspaceDir, itemPath);
 
     let type: "file" | "directory" | "symlink";
