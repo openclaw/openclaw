@@ -18,13 +18,13 @@ import {
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
 } from "./command-gates.js";
-import { resolveChannelAccountId } from "./channel-context.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";

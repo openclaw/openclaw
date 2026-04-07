@@ -23,7 +23,7 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
-import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
+import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -326,7 +326,12 @@ function resolveToolPolicies(params: {
 }
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return hasBundledWebSearchCredential({ config: cfg, env });
+  return hasConfiguredWebSearchCredential({
+    config: cfg,
+    env,
+    origin: "bundled",
+    bundledAllowlistCompat: true,
+  });
 }
 
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

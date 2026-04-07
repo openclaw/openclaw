@@ -11,6 +11,7 @@ export function createExtensionChannelsVitestConfig(
     dir: "extensions",
     env,
     exclude: extensionChannelOverrideExcludeGlobs,
+    name: "extension-channels",
     passWithNoTests: true,
   });
 }

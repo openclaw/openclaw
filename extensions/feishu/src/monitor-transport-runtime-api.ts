@@ -1,5 +1,5 @@
 export type { RuntimeEnv } from "../runtime-api.js";
-export { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+export { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 export {
   applyBasicWebhookRequestGuards,
   isRequestBodyLimitError,

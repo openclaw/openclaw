@@ -1,12 +1,7 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { isRecord } from "../utils.js";
-
-type ChannelUnsupportedSecretRefSurface = {
-  unsupportedSecretRefSurfacePatterns?: readonly string[];
-  collectUnsupportedSecretRefConfigCandidates?: (
-    raw: unknown,
-  ) => UnsupportedSecretRefConfigCandidate[];
-};
+import { loadBundledChannelSecurityContractApi } from "./channel-contract-api.js";
 
 const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
   "commands.ownerDisplaySecret",
@@ -16,20 +11,39 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
   "auth-profiles.oauth.*",
 ] as const;
 
-function listChannelUnsupportedSecretRefSurfaces(): ChannelUnsupportedSecretRefSurface[] {
-  return getBundledChannelContractSurfaces() as ChannelUnsupportedSecretRefSurface[];
+function listBundledChannelIds(): string[] {
+  return [
+    ...new Set(
+      listBundledPluginMetadata({
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      }).flatMap((entry) => entry.manifest.channels ?? []),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
-  return listChannelUnsupportedSecretRefSurfaces().flatMap(
-    (surface) => surface.unsupportedSecretRefSurfacePatterns ?? [],
-  );
+  const patterns: string[] = [];
+  for (const channelId of listBundledChannelIds()) {
+    const contract = loadBundledChannelSecurityContractApi(channelId);
+    patterns.push(
+      ...(contract?.unsupportedSecretRefSurfacePatterns ??
+        getBootstrapChannelPlugin(channelId)?.secrets?.unsupportedSecretRefSurfacePatterns ??
+        []),
+    );
+  }
+  return patterns;
 }
 
-export const UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
-  ...collectChannelUnsupportedSecretRefSurfacePatterns(),
-] as const;
+let cachedUnsupportedSecretRefSurfacePatterns: string[] | null = null;
+
+export function getUnsupportedSecretRefSurfacePatterns(): string[] {
+  cachedUnsupportedSecretRefSurfacePatterns ??= [
+    ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+    ...collectChannelUnsupportedSecretRefSurfacePatterns(),
+  ];
+  return cachedUnsupportedSecretRefSurfacePatterns;
+}
 
 export type UnsupportedSecretRefConfigCandidate = {
   path: string;
@@ -79,12 +93,19 @@ export function collectUnsupportedSecretRefConfigCandidates(
     }
   }
 
-  for (const surface of listChannelUnsupportedSecretRefSurfaces()) {
-    const channelCandidates = surface.collectUnsupportedSecretRefConfigCandidates?.(raw);
-    if (!channelCandidates?.length) {
-      continue;
+  if (isRecord(raw.channels)) {
+    for (const channelId of Object.keys(raw.channels)) {
+      const contract = loadBundledChannelSecurityContractApi(channelId);
+      const channelCandidates =
+        contract?.collectUnsupportedSecretRefConfigCandidates?.(raw) ??
+        getBootstrapChannelPlugin(
+          channelId,
+        )?.secrets?.collectUnsupportedSecretRefConfigCandidates?.(raw);
+      if (!channelCandidates?.length) {
+        continue;
+      }
+      candidates.push(...channelCandidates);
     }
-    candidates.push(...channelCandidates);
   }
 
   return candidates;

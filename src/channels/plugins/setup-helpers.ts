@@ -1,7 +1,8 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { getBundledChannelContractSurfaceEntries } from "./contract-surfaces.js";
+import { getBundledChannelPlugin } from "./bundled.js";
+import { getChannelPlugin } from "./registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -149,6 +150,8 @@ export function prepareScopedSetupConfig(params: {
     alwaysUseAccounts: params.alwaysUseAccounts,
   });
 }
+
+export function clearSetupPromotionRuntimeModuleCache(): void {}
 
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
@@ -406,6 +409,11 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "defaultTo",
 ]);
 
+const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
+  // Some setup/migration paths run before the channel setup surface has been loaded.
+  telegram: ["streaming"],
+};
+
 type ChannelSetupPromotionSurface = {
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
@@ -415,13 +423,11 @@ type ChannelSetupPromotionSurface = {
 };
 
 function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const entry = getBundledChannelContractSurfaceEntries().find(
-    (candidate) => candidate.pluginId === channelKey,
-  );
-  if (!entry || !entry.surface || typeof entry.surface !== "object") {
+  const setup = getChannelPlugin(channelKey)?.setup ?? getBundledChannelPlugin(channelKey)?.setup;
+  if (!setup || typeof setup !== "object") {
     return null;
   }
-  return entry.surface as ChannelSetupPromotionSurface;
+  return setup as ChannelSetupPromotionSurface;
 }
 
 export function shouldMoveSingleAccountChannelKey(params: {
@@ -433,6 +439,10 @@ export function shouldMoveSingleAccountChannelKey(params: {
   }
   const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
   if (contractKeys?.includes(params.key)) {
+    return true;
+  }
+  const fallbackKeys = BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
+  if (fallbackKeys?.includes(params.key)) {
     return true;
   }
   return false;
@@ -473,14 +483,22 @@ export function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
 }): string {
+  const accounts = params.channel.accounts ?? {};
+  const resolveExistingAccountId = (targetAccountId: string): string => {
+    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
+    const matchedAccountId = Object.keys(accounts).find(
+      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
+    );
+    return matchedAccountId ?? normalizedTargetAccountId;
+  };
   const surface = getChannelSetupPromotionSurface(params.channelKey);
   const resolved = surface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
   });
   if (typeof resolved === "string" && resolved.trim()) {
-    return normalizeAccountId(resolved);
+    return resolveExistingAccountId(resolved);
   }
-  return DEFAULT_ACCOUNT_ID;
+  return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
 }
 
 function cloneIfObject<T>(value: T): T {
@@ -522,6 +540,18 @@ function moveSingleAccountKeysIntoAccount(params: {
   } as OpenClawConfig;
 }
 
+function resolveExistingAccountKey(
+  accounts: Record<string, Record<string, unknown>>,
+  targetAccountId: string,
+): string {
+  for (const existingKey of Object.keys(accounts)) {
+    if (normalizeAccountId(existingKey) === targetAccountId) {
+      return existingKey;
+    }
+  }
+  return targetAccountId;
+}
+
 // When promoting a single-account channel config to multi-account,
 // move top-level account settings into accounts.default so the original
 // account keeps working without duplicate account values at channel root.
@@ -551,14 +581,15 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
       channelKey: params.channelKey,
       channel: base,
     });
+    const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);
     return moveSingleAccountKeysIntoAccount({
       cfg: params.cfg,
       channelKey: params.channelKey,
       channel: base,
       accounts,
       keysToMove,
-      targetAccountId,
-      baseAccount: accounts[targetAccountId],
+      targetAccountId: resolvedTargetAccountKey,
+      baseAccount: accounts[resolvedTargetAccountKey],
     });
   }
   const keysToMove = resolveSingleAccountKeysToMove({

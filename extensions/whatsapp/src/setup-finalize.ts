@@ -29,7 +29,7 @@ function mergeWhatsAppConfig(
   patch: Partial<WhatsAppAccountConfig>,
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
-  const channelConfig: WhatsAppConfig = { ...(cfg.channels?.whatsapp ?? {}) };
+  const channelConfig: WhatsAppConfig = { ...cfg.channels?.whatsapp };
   const mutableChannelConfig = channelConfig as Record<string, unknown>;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     for (const [key, value] of Object.entries(patch)) {
@@ -50,9 +50,9 @@ function mergeWhatsAppConfig(
     };
   }
   const accounts = {
-    ...((channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined) ?? {}),
+    ...(channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined),
   };
-  const nextAccount: WhatsAppAccountConfig = { ...(accounts[accountId] ?? {}) };
+  const nextAccount: WhatsAppAccountConfig = { ...accounts[accountId] };
   const mutableNextAccount = nextAccount as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
@@ -63,7 +63,7 @@ function mergeWhatsAppConfig(
     }
     mutableNextAccount[key] = value;
   }
-  accounts[accountId] = nextAccount as WhatsAppAccountConfig;
+  accounts[accountId] = nextAccount;
   return {
     ...cfg,
     channels: {

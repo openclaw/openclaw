@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
+import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
@@ -31,9 +32,7 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
 }
 
 /** Coerce a raw JSON field to string, returning undefined for non-string types. */
-function toStringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+const toStringOrUndefined = readStringValue;
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
@@ -727,29 +726,49 @@ export function hasDurableExecApproval(params: {
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
 }): boolean {
-  const normalizedCommand = params.commandText?.trim();
-  const commandPattern = normalizedCommand
-    ? buildDurableCommandApprovalPattern(normalizedCommand)
-    : null;
-  const exactCommandMatch = normalizedCommand
-    ? (params.allowlist ?? []).some(
-        (entry) =>
-          entry.source === "allow-always" &&
-          (entry.pattern === commandPattern ||
-            (typeof entry.commandText === "string" &&
-              entry.commandText.trim() === normalizedCommand)),
-      )
-    : false;
-  const allowlistMatch =
-    params.analysisOk &&
-    params.segmentAllowlistEntries.length > 0 &&
-    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always");
-  return exactCommandMatch || allowlistMatch;
+  return (
+    hasExactCommandDurableExecApproval({
+      allowlist: params.allowlist,
+      commandText: params.commandText,
+    }) ||
+    hasSegmentDurableExecApproval({
+      analysisOk: params.analysisOk,
+      segmentAllowlistEntries: params.segmentAllowlistEntries,
+    })
+  );
 }
 
 function buildDurableCommandApprovalPattern(commandText: string): string {
   const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
   return `=command:${digest}`;
+}
+
+function hasExactCommandDurableExecApproval(params: {
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
+}): boolean {
+  const normalizedCommand = params.commandText?.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  const commandPattern = buildDurableCommandApprovalPattern(normalizedCommand);
+  return (params.allowlist ?? []).some(
+    (entry) =>
+      entry.source === "allow-always" &&
+      (entry.pattern === commandPattern ||
+        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
+  );
+}
+
+function hasSegmentDurableExecApproval(params: {
+  analysisOk: boolean;
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+}): boolean {
+  return (
+    params.analysisOk &&
+    params.segmentAllowlistEntries.length > 0 &&
+    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always")
+  );
 }
 
 export function recordAllowlistUse(
@@ -780,7 +799,9 @@ export function recordAllowlistUse(
   saveExecApprovals(approvals);
 }
 
-function buildAllowlistEntryMatchKey(entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">): string {
+function buildAllowlistEntryMatchKey(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
+): string {
   return `${entry.pattern}\x00${entry.argPattern?.trim() ?? ""}`;
 }
 
@@ -833,8 +854,7 @@ export function addAllowlistEntry(
   }
   const trimmedArgPattern = options?.argPattern?.trim() || undefined;
   const existingEntry = allowlist.find(
-    (entry) =>
-      entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
+    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
   );
   if (existingEntry && (!options?.source || existingEntry.source === options.source)) {
     return;

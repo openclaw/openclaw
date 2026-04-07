@@ -204,7 +204,8 @@ describe("ollama setup", () => {
       isRemote: false,
       openUrl: vi.fn(async () => undefined),
     });
-    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
+    const models = result.config.models?.providers?.ollama?.models;
+    const modelIds = models?.map((m) => m.id);
 
     expect(modelIds).toEqual([
       "kimi-k2.5:cloud",
@@ -213,6 +214,10 @@ describe("ollama setup", () => {
       "llama3:8b",
       "glm-4.7-flash",
       "deepseek-r1:14b",
+    ]);
+    expect(models?.find((model) => model.id === "kimi-k2.5:cloud")?.input).toEqual([
+      "text",
+      "image",
     ]);
   });
 

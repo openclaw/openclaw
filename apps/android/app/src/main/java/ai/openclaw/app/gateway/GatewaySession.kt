@@ -64,6 +64,7 @@ data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
+  val reason: String? = null,
 )
 
 private data class SelectedConnectAuth(
@@ -115,6 +116,8 @@ class GatewaySession(
     val message: String,
     val details: GatewayConnectErrorDetails? = null,
   )
+
+  data class RpcResult(val ok: Boolean, val payloadJson: String?, val error: ErrorShape?)
 
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
@@ -196,6 +199,13 @@ class GatewaySession(
   }
 
   suspend fun request(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
+    val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
+    if (res.ok) return res.payloadJson ?: ""
+    val err = res.error
+    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+  }
+
+  suspend fun requestDetailed(method: String, paramsJson: String?, timeoutMs: Long = 15_000): RpcResult {
     val conn = currentConnection ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
@@ -204,9 +214,7 @@ class GatewaySession(
         json.parseToJsonElement(paramsJson)
       }
     val res = conn.request(method, params, timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    val err = res.error
-    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+    return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
   suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
@@ -418,11 +426,63 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      handleConnectSuccess(res, identity.deviceId)
+      handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
       connectDeferred.complete(Unit)
     }
 
-    private fun handleConnectSuccess(res: RpcResponse, deviceId: String) {
+    private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
+      if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
+      if (isLoopbackGatewayHost(endpoint.host)) return true
+      return tls != null
+    }
+
+    private fun filteredBootstrapHandoffScopes(role: String, scopes: List<String>): List<String>? {
+      return when (role.trim()) {
+        "node" -> emptyList()
+        "operator" -> {
+          val allowedOperatorScopes =
+            setOf(
+              "operator.approvals",
+              "operator.read",
+              "operator.talk.secrets",
+              "operator.write",
+            )
+          scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
+        }
+        else -> null
+      }
+    }
+
+    private fun persistBootstrapHandoffToken(
+      deviceId: String,
+      role: String,
+      token: String,
+      scopes: List<String>,
+    ) {
+      val filteredScopes = filteredBootstrapHandoffScopes(role, scopes) ?: return
+      deviceAuthStore.saveToken(deviceId, role, token, filteredScopes)
+    }
+
+    private fun persistIssuedDeviceToken(
+      authSource: GatewayConnectAuthSource,
+      deviceId: String,
+      role: String,
+      token: String,
+      scopes: List<String>,
+    ) {
+      if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
+        if (!shouldPersistBootstrapHandoffTokens(authSource)) return
+        persistBootstrapHandoffToken(deviceId, role, token, scopes)
+        return
+      }
+      deviceAuthStore.saveToken(deviceId, role, token, scopes)
+    }
+
+    private fun handleConnectSuccess(
+      res: RpcResponse,
+      deviceId: String,
+      authSource: GatewayConnectAuthSource,
+    ) {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       pendingDeviceTokenRetry = false
@@ -432,8 +492,27 @@ class GatewaySession(
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
+      val authScopes =
+        authObj?.get("scopes").asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull() }
+          ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        deviceAuthStore.saveToken(deviceId, authRole, deviceToken)
+        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+      }
+      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+        authObj?.get("deviceTokens").asArrayOrNull()
+          ?.mapNotNull { it.asObjectOrNull() }
+          ?.forEach { tokenEntry ->
+            val handoffToken = tokenEntry["deviceToken"].asStringOrNull()
+            val handoffRole = tokenEntry["role"].asStringOrNull()
+            val handoffScopes =
+              tokenEntry["scopes"].asArrayOrNull()
+                ?.mapNotNull { it.asStringOrNull() }
+                ?: emptyList()
+            if (!handoffToken.isNullOrBlank() && !handoffRole.isNullOrBlank()) {
+              persistBootstrapHandoffToken(deviceId, handoffRole, handoffToken, handoffScopes)
+            }
+          }
       }
       val rawCanvas = obj["canvasHostUrl"].asStringOrNull()
       canvasHostUrl = normalizeCanvasHostUrl(rawCanvas, endpoint, isTlsConnection = tls != null)
@@ -560,6 +639,7 @@ class GatewaySession(
                 code = it["code"].asStringOrNull(),
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
+                reason = it["reason"].asStringOrNull(),
               )
             }
           ErrorShape(code, msg, details)
@@ -898,6 +978,8 @@ private fun formatGatewayAuthorityHost(host: String): String {
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonElement?.asStringOrNull(): String? =
   when (this) {

@@ -1,16 +1,103 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+  type: "text" | "toolUse" | "toolCall" | "functionCall" | "toolResult" | "tool";
   text?: string;
   id?: string;
   name?: string;
   toolUseId?: string;
+  toolCallId?: string;
 };
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function isToolCallBlock(block: AnthropicContentBlock): boolean {
+  return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
+}
+
+function isAbortedAssistantTurn(message: AgentMessage): boolean {
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  return stopReason === "aborted" || stopReason === "error";
+}
+
+function extractToolResultIdsFromRecord(record: Record<string, unknown>): string[] {
+  const ids = [
+    trimNonEmptyString(record.toolUseId),
+    trimNonEmptyString(record.toolCallId),
+    trimNonEmptyString(record.tool_use_id),
+    trimNonEmptyString(record.tool_call_id),
+    trimNonEmptyString(record.callId),
+    trimNonEmptyString(record.call_id),
+  ].filter((value): value is string => typeof value === "string");
+  return [...new Set(ids)];
+}
+
+function collectMatchingToolResultIds(message: AgentMessage): Set<string> {
+  const ids = new Set<string>();
+  const role = (message as { role?: unknown }).role;
+  if (role === "toolResult") {
+    const toolResultId = extractToolResultId(
+      message as Extract<AgentMessage, { role: "toolResult" }>,
+    );
+    if (toolResultId) {
+      ids.add(toolResultId);
+    }
+  } else if (role === "tool") {
+    for (const id of extractToolResultIdsFromRecord(
+      message as unknown as Record<string, unknown>,
+    )) {
+      ids.add(id);
+    }
+  }
+
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return ids;
+  }
+
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type !== "toolResult" && record.type !== "tool") {
+      continue;
+    }
+    for (const id of extractToolResultIdsFromRecord(record)) {
+      ids.add(id);
+    }
+  }
+
+  return ids;
+}
+
+function collectFutureToolResultIds(messages: AgentMessage[], startIndex: number): Set<string> {
+  const ids = new Set<string>();
+  for (let index = startIndex + 1; index < messages.length; index += 1) {
+    const candidate = messages[index];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if ((candidate as { role?: unknown }).role === "assistant") {
+      break;
+    }
+    for (const id of collectMatchingToolResultIds(candidate)) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
 /**
- * Strips dangling tool_use blocks from assistant messages when the immediately
- * following user message does not contain a matching tool_result block.
+ * Strips dangling tool-call blocks from assistant messages when no later
+ * tool-result span before the next assistant turn resolves them.
  * This fixes the "tool_use ids found without tool_result blocks" error from Anthropic.
  */
 function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
@@ -32,51 +119,42 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     const assistantMsg = msg as {
       content?: AnthropicContentBlock[];
     };
-
-    // Get the next message to check for tool_result blocks
-    const nextMsg = messages[i + 1];
-    const nextMsgRole =
-      nextMsg && typeof nextMsg === "object"
-        ? ((nextMsg as { role?: unknown }).role as string | undefined)
-        : undefined;
-
-    // If next message is not user, keep the assistant message as-is
-    if (nextMsgRole !== "user") {
+    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+    if (originalContent.length === 0) {
       result.push(msg);
       continue;
     }
-
-    // Collect tool_use_ids from the next user message's tool_result blocks
-    const nextUserMsg = nextMsg as {
-      content?: AnthropicContentBlock[];
-    };
-    const validToolUseIds = new Set<string>();
-    if (Array.isArray(nextUserMsg.content)) {
-      for (const block of nextUserMsg.content) {
-        if (block && block.type === "toolResult" && block.toolUseId) {
-          validToolUseIds.add(block.toolUseId);
-        }
-      }
+    if (
+      extractToolCallsFromAssistant(msg as Extract<AgentMessage, { role: "assistant" }>).length ===
+      0
+    ) {
+      result.push(msg);
+      continue;
     }
+    const validToolUseIds = collectFutureToolResultIds(messages, i);
 
-    // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
       }
-      if (block.type !== "toolUse") {
+      if (!isToolCallBlock(block)) {
         return true;
       }
-      // Keep tool_use if its id is in the valid set
-      return validToolUseIds.has(block.id || "");
+      const blockId = trimNonEmptyString(block.id);
+      return blockId ? validToolUseIds.has(blockId) : false;
     });
 
-    // If all content would be removed, insert a minimal fallback text block
+    if (filteredContent.length === originalContent.length) {
+      result.push(msg);
+      continue;
+    }
+
     if (originalContent.length > 0 && filteredContent.length === 0) {
       result.push({
         ...assistantMsg,
-        content: [{ type: "text", text: "[tool calls omitted]" }],
+        content: isAbortedAssistantTurn(msg)
+          ? []
+          : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
       } as AgentMessage);
     } else {
       result.push({
@@ -190,7 +268,7 @@ export function mergeConsecutiveUserTurns(
  * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
-  // First, strip dangling tool_use blocks from assistant messages
+  // First, strip dangling tool-call blocks from assistant messages.
   const stripped = stripDanglingAnthropicToolUses(messages);
 
   return validateTurnsWithConsecutiveMerge({

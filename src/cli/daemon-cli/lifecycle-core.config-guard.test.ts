@@ -132,6 +132,28 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("aborts before not-loaded start recovery when config is invalid", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "started" as const,
+      loaded: true,
+    }));
+    setConfigSnapshot({
+      exists: true,
+      valid: false,
+      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceStart({
+        ...createServiceRunArgs(),
+        onNotLoaded,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("proceeds with start when config is valid", async () => {
     setConfigSnapshot({ exists: true, valid: true });
 

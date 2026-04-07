@@ -1,4 +1,4 @@
-import { extractKeywords, isQueryStopWordToken } from "../../plugin-sdk/memory-core-host-query.js";
+import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 

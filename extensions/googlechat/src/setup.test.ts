@@ -296,7 +296,6 @@ describe("googlechat setup", () => {
           },
         },
       } as OpenClawConfig,
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
     });
 
@@ -328,10 +327,7 @@ describe("googlechat setup", () => {
 
     expect(next?.channels?.googlechat?.dm?.policy).toBeUndefined();
     expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual([
-      "users/123",
-      "*",
-    ]);
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual(["users/123", "*"]);
   });
 
   it("keeps startAccount pending until abort, then unregisters", async () => {

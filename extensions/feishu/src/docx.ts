@@ -205,7 +205,7 @@ function normalizeConvertedBlockTree(
       const parentId = typeof block?.parent_id === "string" ? block.parent_id : "";
       return !childIds.has(blockId) && (!parentId || !byId.has(parentId));
     })
-    .sort(
+    .toSorted(
       (a, b) =>
         (originalOrder.get(a.block_id ?? "__missing__") ?? 0) -
         (originalOrder.get(b.block_id ?? "__missing__") ?? 0),
@@ -396,7 +396,7 @@ async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
 }
 
 /** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
-async function chunkedInsertBlocks(
+async function _chunkedInsertBlocks(
   client: Lark.Client,
   docToken: string,
   blocks: FeishuDocxBlock[],
@@ -894,7 +894,7 @@ async function createDoc(
   }
   const shouldGrantToRequester = options?.grantToRequester !== false;
   const requesterOpenId = options?.requesterOpenId?.trim();
-  const requesterPermType: "edit" = "edit";
+  const requesterPermType = "edit" as const;
 
   let requesterPermissionAdded = false;
   let requesterPermissionSkippedReason: string | undefined;
@@ -1009,7 +1009,9 @@ async function insertDoc(
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: afterBlockId },
   });
-  if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
+  if (blockInfo.code !== 0) {
+    throw new Error(blockInfo.msg);
+  }
 
   const parentId = blockInfo.data?.block?.parent_id ?? docToken;
 
@@ -1023,7 +1025,9 @@ async function insertDoc(
       path: { document_id: docToken, block_id: parentId },
       params: pageToken ? { page_token: pageToken } : {},
     });
-    if (childrenRes.code !== 0) throw new Error(childrenRes.msg);
+    if (childrenRes.code !== 0) {
+      throw new Error(childrenRes.msg);
+    }
     items.push(...(childrenRes.data?.items ?? []));
     pageToken = childrenRes.data?.page_token ?? undefined;
   } while (pageToken);
@@ -1039,7 +1043,9 @@ async function insertDoc(
 
   logger?.info?.("feishu_doc: Converting markdown...");
   const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
-  if (blocks.length === 0) throw new Error("Content is empty");
+  if (blocks.length === 0) {
+    throw new Error("Content is empty");
+  }
   const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
 
   logger?.info?.(
@@ -1144,8 +1150,8 @@ async function writeTableCells(
   }
 
   const tableData = tableBlock.table;
-  const rows = tableData?.property?.row_size as number | undefined;
-  const cols = tableData?.property?.column_size as number | undefined;
+  const rows = tableData?.property?.row_size;
+  const cols = tableData?.property?.column_size;
   const cellIds = tableData?.cells ?? [];
 
   if (!rows || !cols || !cellIds.length) {
@@ -1163,7 +1169,9 @@ async function writeTableCells(
 
     for (let c = 0; c < writeCols; c++) {
       const cellId = cellIds[r * cols + c];
-      if (!cellId) continue;
+      if (!cellId) {
+        continue;
+      }
 
       // table cell is a container block: clear existing children, then create text child blocks
       const childrenRes = await client.docx.documentBlockChildren.get({

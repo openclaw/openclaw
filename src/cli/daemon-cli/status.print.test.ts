@@ -20,7 +20,7 @@ vi.mock("../../terminal/theme.js", async () => {
   };
 });
 
-vi.mock("../../commands/onboard-helpers.js", () => ({
+vi.mock("../../gateway/control-ui-links.js", () => ({
   resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
 }));
 
@@ -42,10 +42,6 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
 
 vi.mock("../../infra/wsl.js", () => ({
   isWSLEnv: () => false,
-}));
-
-vi.mock("../../logging.js", () => ({
-  getResolvedLoggerSettings: () => ({ file: "/tmp/openclaw.log" }),
 }));
 
 vi.mock("./shared.js", () => ({
@@ -87,6 +83,7 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
         },
+        logFile: "/tmp/openclaw.log",
         gateway: {
           bindMode: "loopback",
           bindHost: "127.0.0.1",

@@ -22,9 +22,17 @@ import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
+import type { SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
+type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
+
+let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
+
+async function loadSlackSendRuntime() {
+  slackSendRuntimePromise ??= import("./send.runtime.js");
+  return await slackSendRuntimePromise;
+}
 
 function resolveRenderedInteractiveBlocks(
   interactive?: InteractiveReply,
@@ -51,7 +59,7 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
 }
 
 async function applySlackMessageSendingHooks(params: {
-  cfg: NonNullable<NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"]>;
+  cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
   to: string;
   text: string;
   threadTs?: string;
@@ -85,7 +93,7 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
-  cfg: NonNullable<NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"]>;
+  cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
   to: string;
   text: string;
   mediaUrl?: string;
@@ -95,7 +103,7 @@ async function sendSlackOutboundMessage(params: {
   };
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
+  blocks?: NonNullable<Parameters<SlackSendFn>[2]>["blocks"];
   accountId?: string | null;
   deps?: { [channelId: string]: unknown } | null;
   replyToId?: string | null;
@@ -103,7 +111,8 @@ async function sendSlackOutboundMessage(params: {
   identity?: OutboundIdentity;
 }) {
   const send =
-    resolveOutboundSendDep<typeof sendMessageSlack>(params.deps, "slack") ?? sendMessageSlack;
+    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
+    (await loadSlackSendRuntime()).sendMessageSlack;
   const threadTs =
     params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);
   const hookResult = await applySlackMessageSendingHooks({

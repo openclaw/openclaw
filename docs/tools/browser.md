@@ -245,6 +245,15 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 
+Stopping behavior differs by profile mode:
+
+- local managed profiles: `openclaw browser stop` stops the browser process that
+  OpenClaw launched
+- attach-only and remote CDP profiles: `openclaw browser stop` closes the active
+  control session and releases Playwright/CDP emulation overrides (viewport,
+  color scheme, locale, timezone, offline mode, and similar state), even
+  though no browser process was launched by OpenClaw
+
 Remote CDP URLs can include auth:
 
 - Query tokens (e.g., `https://provider.example?token=<token>`)
@@ -357,7 +366,15 @@ Notes:
 Key ideas:
 
 - Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
-- If browser control is enabled and no auth is configured, OpenClaw auto-generates `gateway.auth.token` on startup and persists it to config.
+- The standalone loopback browser HTTP API uses **shared-secret auth only**:
+  gateway token bearer auth, `x-openclaw-password`, or HTTP Basic auth with the
+  configured gateway password.
+- Tailscale Serve identity headers and `gateway.auth.mode: "trusted-proxy"` do
+  **not** authenticate this standalone loopback browser API.
+- If browser control is enabled and no shared-secret auth is configured, OpenClaw
+  auto-generates `gateway.auth.token` on startup and persists it to config.
+- OpenClaw does **not** auto-generate that token when `gateway.auth.mode` is
+  already `password`, `none`, or `trusted-proxy`.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
@@ -481,10 +498,26 @@ Notes:
   Chromium user data directory.
 - Existing-session screenshots support page captures and `--ref` element
   captures from snapshots, but not CSS `--element` selectors.
+- Existing-session page screenshots work without Playwright through Chrome MCP.
+  Ref-based element screenshots (`--ref`) also work there, but `--full-page`
+  cannot be combined with `--ref` or `--element`.
+- Existing-session actions are still more limited than the managed browser
+  path:
+  - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require
+    snapshot refs instead of CSS selectors
+  - `click` is left-button only (no button overrides or modifiers)
+  - `type` does not support `slowly=true`; use `fill` or `press`
+  - `press` does not support `delayMs`
+  - `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not
+    support per-call timeout overrides
+  - `select` currently supports a single value only
 - Existing-session `wait --url` supports exact, substring, and glob patterns
   like other browser drivers. `wait --load networkidle` is not supported yet.
-- Some features still require the managed browser path, such as PDF export and
-  download interception.
+- Existing-session upload hooks require `ref` or `inputRef`, support one file
+  at a time, and do not support CSS `element` targeting.
+- Existing-session dialog hooks do not support timeout overrides.
+- Some features still require the managed browser path, including batch
+  actions, PDF export, download interception, and `responsebody`.
 - Existing-session is host-local. If Chrome lives on a different machine or a
   different network namespace, use remote CDP or a node host instead.
 
@@ -531,16 +564,42 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 
 All endpoints accept `?profile=<name>`.
 
-If gateway auth is configured, browser HTTP routes require auth too:
+If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`
 - `x-openclaw-password: <gateway password>` or HTTP Basic auth with that password
 
+Notes:
+
+- This standalone loopback browser API does **not** consume trusted-proxy or
+  Tailscale Serve identity headers.
+- If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
+  routes do not inherit those identity-bearing modes; keep them loopback-only.
+
 ### Playwright requirement
 
-Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
-Playwright. If Playwright isn’t installed, those endpoints return a clear 501
-error. ARIA snapshots and basic screenshots still work for openclaw-managed Chrome.
+Some features (navigate/act/AI snapshot/role snapshot, element screenshots,
+PDF) require Playwright. If Playwright isn’t installed, those endpoints return
+a clear 501 error.
+
+What still works without Playwright:
+
+- ARIA snapshots
+- Page screenshots for the managed `openclaw` browser when a per-tab CDP
+  WebSocket is available
+- Page screenshots for `existing-session` / Chrome MCP profiles
+- `existing-session` ref-based screenshots (`--ref`) from snapshot output
+
+What still needs Playwright:
+
+- `navigate`
+- `act`
+- AI snapshots / role snapshots
+- CSS-selector element screenshots (`--element`)
+- full browser PDF export
+
+Element screenshots also reject `--full-page`; the route returns `fullPage is
+not supported for element screenshots`.
 
 If you see `Playwright is not available in this gateway build`, install the full
 Playwright package (not `playwright-core`) and restart the gateway, or reinstall
@@ -606,6 +665,13 @@ Inspection:
 - `openclaw browser snapshot --selector "#main" --interactive`
 - `openclaw browser snapshot --frame "iframe#main" --interactive`
 - `openclaw browser console --level error`
+
+Lifecycle note:
+
+- For attach-only and remote CDP profiles, `openclaw browser stop` is still the
+  right cleanup command after tests. It closes the active control session and
+  clears temporary emulation overrides instead of killing the underlying
+  browser.
 - `openclaw browser errors --clear`
 - `openclaw browser requests --filter api --clear`
 - `openclaw browser pdf`

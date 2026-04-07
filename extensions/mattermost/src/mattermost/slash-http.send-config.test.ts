@@ -236,4 +236,29 @@ describe("slash-http cfg threading", () => {
       }),
     );
   });
+
+  it("does not rely on Set.has for command token validation", async () => {
+    const commandTokens = new Set(["valid-token"]);
+    const hasSpy = vi.fn(() => {
+      throw new Error("Set.has should not be used for slash token validation");
+    });
+    Object.defineProperty(commandTokens, "has", {
+      value: hasSpy,
+      configurable: true,
+    });
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens,
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Processing");
+    expect(hasSpy).not.toHaveBeenCalled();
+  });
 });

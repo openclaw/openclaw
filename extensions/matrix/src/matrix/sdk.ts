@@ -10,6 +10,7 @@ import {
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeNullableString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
@@ -25,7 +26,10 @@ import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
 import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-lock.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
-import { MatrixRecoveryKeyStore } from "./sdk/recovery-key-store.js";
+import {
+  MatrixRecoveryKeyStore,
+  isRepairableSecretStorageAccessError,
+} from "./sdk/recovery-key-store.js";
 import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
 import type {
   MatrixClientEventMap,
@@ -170,10 +174,7 @@ async function loadMatrixCryptoRuntime(): Promise<MatrixCryptoRuntime> {
   return await matrixCryptoRuntimePromise;
 }
 
-function normalizeOptionalString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
-}
+const normalizeOptionalString = normalizeNullableString;
 
 function isUnsupportedAuthenticatedMediaEndpointError(err: unknown): boolean {
   const statusCode = (err as { statusCode?: number })?.statusCode;
@@ -1151,6 +1152,12 @@ export class MatrixClient {
 
     previousVersion = await this.resolveRoomKeyBackupVersion();
 
+    // Probe backup-secret access directly before reset. This keeps the reset preflight
+    // focused on durable secret-storage health instead of the broader backup status flow,
+    // and still catches stale SSSS/recovery-key state even when the server backup is gone.
+    const forceNewSecretStorage =
+      await this.shouldForceSecretStorageRecreationForBackupReset(crypto);
+
     try {
       if (previousVersion) {
         try {
@@ -1168,6 +1175,12 @@ export class MatrixClient {
 
       await this.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
         setupNewKeyBackup: true,
+        // Force SSSS recreation when the existing SSSS key is broken (bad MAC), so
+        // the new backup key is written into a fresh SSSS consistent with recovery_key.json.
+        forceNewSecretStorage,
+        // Also allow recreation if bootstrapSecretStorage itself surfaces a repairable
+        // error (e.g. bad MAC from a different SSSS entry).
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
       });
       await this.enableTrustedRoomKeyBackupIfPossible(crypto);
 
@@ -1425,6 +1438,26 @@ export class MatrixClient {
       this.resolveCachedRoomKeyBackupDecryptionKey(crypto),
     ]);
     return { activeVersion, decryptionKeyCached };
+  }
+
+  private async shouldForceSecretStorageRecreationForBackupReset(
+    crypto: MatrixCryptoBootstrapApi,
+  ): Promise<boolean> {
+    const decryptionKeyCached = await this.resolveCachedRoomKeyBackupDecryptionKey(crypto);
+    if (decryptionKeyCached !== false) {
+      return false;
+    }
+    const loadSessionBackupPrivateKeyFromSecretStorage =
+      crypto.loadSessionBackupPrivateKeyFromSecretStorage; // pragma: allowlist secret
+    if (typeof loadSessionBackupPrivateKeyFromSecretStorage !== "function") {
+      return false;
+    }
+    try {
+      await loadSessionBackupPrivateKeyFromSecretStorage.call(crypto); // pragma: allowlist secret
+      return false;
+    } catch (err) {
+      return isRepairableSecretStorageAccessError(err);
+    }
   }
 
   private async resolveRoomKeyBackupTrustState(

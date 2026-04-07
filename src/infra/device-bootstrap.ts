@@ -6,6 +6,7 @@ import {
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import {
   createAsyncLock,
@@ -113,6 +114,17 @@ function bootstrapProfileSatisfiesProfile(params: {
     }
   }
   return true;
+}
+
+function normalizeBootstrapPublicKey(publicKey: string): string {
+  const trimmed = publicKey.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.includes("BEGIN") || /[+/=]/.test(trimmed)) {
+    return normalizeDevicePublicKeyBase64Url(trimmed) ?? trimmed;
+  }
+  return trimmed;
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
@@ -306,7 +318,7 @@ export async function verifyDeviceBootstrapToken(params: {
     const [tokenKey, record] = found;
 
     const deviceId = params.deviceId.trim();
-    const publicKey = params.publicKey.trim();
+    const publicKey = normalizeBootstrapPublicKey(params.publicKey);
     const role = params.role.trim();
     if (!deviceId || !publicKey || !role) {
       return { ok: false, reason: "bootstrap_token_invalid" };
@@ -326,7 +338,10 @@ export async function verifyDeviceBootstrapToken(params: {
     }
 
     const boundDeviceId = record.deviceId?.trim();
-    const boundPublicKey = record.publicKey?.trim();
+    const boundPublicKey =
+      typeof record.publicKey === "string"
+        ? normalizeBootstrapPublicKey(record.publicKey)
+        : undefined;
     if (boundDeviceId || boundPublicKey) {
       if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
         return { ok: false, reason: "bootstrap_token_invalid" };
@@ -351,5 +366,46 @@ export async function verifyDeviceBootstrapToken(params: {
     };
     await persistState(state, params.baseDir);
     return { ok: true };
+  });
+}
+
+/**
+ * Reads the already-bound bootstrap profile for a verified device identity.
+ *
+ * Call this only after `verifyDeviceBootstrapToken()` has returned `{ ok: true }`
+ * for the same `token` / `deviceId` / `publicKey` tuple in the current handshake.
+ */
+export async function getBoundDeviceBootstrapProfile(params: {
+  token: string;
+  deviceId: string;
+  publicKey: string;
+  baseDir?: string;
+}): Promise<DeviceBootstrapProfile | null> {
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    const providedToken = params.token.trim();
+    if (!providedToken) {
+      return null;
+    }
+    const found = Object.entries(state).find(([, candidate]) =>
+      verifyPairingToken(providedToken, candidate.token),
+    );
+    if (!found) {
+      return null;
+    }
+    const [, record] = found;
+    const deviceId = params.deviceId.trim();
+    const publicKey = normalizeBootstrapPublicKey(params.publicKey);
+    if (!deviceId || !publicKey) {
+      return null;
+    }
+    const recordPublicKey =
+      typeof record.publicKey === "string"
+        ? normalizeBootstrapPublicKey(record.publicKey)
+        : undefined;
+    if (record.deviceId?.trim() !== deviceId || recordPublicKey !== publicKey) {
+      return null;
+    }
+    return resolvePersistedBootstrapProfile(record);
   });
 }

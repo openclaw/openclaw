@@ -4,11 +4,12 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  formatSlackStreamingBooleanMigrationMessage,
-  formatSlackStreamModeMigrationMessage,
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-} from "./streaming-compat.js";
+  hasLegacyAccountStreamingAliases,
+  hasLegacyStreamingAliases,
+  normalizeLegacyDmAliases,
+  normalizeLegacyStreamingAliases,
+} from "openclaw/plugin-sdk/runtime-doctor";
+import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -16,91 +17,22 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function normalizeSlackStreamingAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
-  let updated = params.entry;
-  const hadLegacyStreamMode = updated.streamMode !== undefined;
-  const legacyStreaming = updated.streaming;
-  const beforeStreaming = updated.streaming;
-  const beforeNativeStreaming = updated.nativeStreaming;
-  const resolvedStreaming = resolveSlackStreamingMode(updated);
-  const resolvedNativeStreaming = resolveSlackNativeStreaming(updated);
-  const shouldNormalize =
-    hadLegacyStreamMode ||
-    typeof legacyStreaming === "boolean" ||
-    (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming);
-  if (!shouldNormalize) {
-    return { entry: updated, changed: false };
-  }
-
-  let changed = false;
-  if (beforeStreaming !== resolvedStreaming) {
-    updated = { ...updated, streaming: resolvedStreaming };
-    changed = true;
-  }
-  if (
-    typeof beforeNativeStreaming !== "boolean" ||
-    beforeNativeStreaming !== resolvedNativeStreaming
-  ) {
-    updated = { ...updated, nativeStreaming: resolvedNativeStreaming };
-    changed = true;
-  }
-  if (hadLegacyStreamMode) {
-    const { streamMode: _ignored, ...rest } = updated;
-    updated = rest;
-    changed = true;
-    params.changes.push(
-      formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming),
-    );
-  }
-  if (typeof legacyStreaming === "boolean") {
-    params.changes.push(
-      formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
-    );
-  } else if (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming) {
-    params.changes.push(
-      `Normalized ${params.pathPrefix}.streaming (${legacyStreaming}) → (${resolvedStreaming}).`,
-    );
-  }
-
-  return { entry: updated, changed };
-}
-
 function hasLegacySlackStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    (typeof entry.streaming === "string" && entry.streaming !== resolveSlackStreamingMode(entry))
-  );
-}
-
-function hasLegacySlackAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacySlackStreamingAliases(account));
+  return hasLegacyStreamingAliases(value, { includeNativeTransport: true });
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "slack"],
     message:
-      "channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming and channels.slack.nativeStreaming.",
+      "channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
     match: hasLegacySlackStreamingAliases,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
-      "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming and channels.slack.accounts.<id>.nativeStreaming.",
-    match: hasLegacySlackAccountStreamingAliases,
+      "channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases),
   },
 ];
 
@@ -118,13 +50,23 @@ export function normalizeCompatibilityConfig({
   let updated = rawEntry;
   let changed = false;
 
-  const baseStreaming = normalizeSlackStreamingAliases({
+  const dm = normalizeLegacyDmAliases({
     entry: updated,
     pathPrefix: "channels.slack",
     changes,
   });
-  updated = baseStreaming.entry;
-  changed = changed || baseStreaming.changed;
+  updated = dm.entry;
+  changed = changed || dm.changed;
+
+  const streaming = normalizeLegacyStreamingAliases({
+    entry: updated,
+    pathPrefix: "channels.slack",
+    changes,
+    resolvedMode: resolveSlackStreamingMode(updated),
+    resolvedNativeTransport: resolveSlackNativeStreaming(updated),
+  });
+  updated = streaming.entry;
+  changed = changed || streaming.changed;
 
   const rawAccounts = asObjectRecord(updated.accounts);
   if (rawAccounts) {
@@ -135,13 +77,26 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      const streaming = normalizeSlackStreamingAliases({
-        entry: account,
+      let accountEntry = account;
+      let accountChanged = false;
+      const accountDm = normalizeLegacyDmAliases({
+        entry: accountEntry,
         pathPrefix: `channels.slack.accounts.${accountId}`,
         changes,
       });
-      if (streaming.changed) {
-        accounts[accountId] = streaming.entry;
+      accountEntry = accountDm.entry;
+      accountChanged = accountDm.changed;
+      const accountStreaming = normalizeLegacyStreamingAliases({
+        entry: accountEntry,
+        pathPrefix: `channels.slack.accounts.${accountId}`,
+        changes,
+        resolvedMode: resolveSlackStreamingMode(accountEntry),
+        resolvedNativeTransport: resolveSlackNativeStreaming(accountEntry),
+      });
+      accountEntry = accountStreaming.entry;
+      accountChanged = accountChanged || accountStreaming.changed;
+      if (accountChanged) {
+        accounts[accountId] = accountEntry;
         accountsChanged = true;
       }
     }

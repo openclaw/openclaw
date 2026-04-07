@@ -8,6 +8,7 @@ import {
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
   resolveContextWindowInfo,
+  type ContextWindowInfo,
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
@@ -103,7 +104,10 @@ export function resolveEffectiveRuntimeModel(params: {
   provider: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
-}) {
+}): {
+  ctxInfo: ContextWindowInfo;
+  effectiveModel: ProviderRuntimeModel;
+} {
   const ctxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.provider,

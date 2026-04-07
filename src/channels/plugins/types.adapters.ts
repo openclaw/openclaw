@@ -13,6 +13,8 @@ import type {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
+import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
   ChannelAccountSnapshot,
@@ -95,6 +97,11 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
+  singleAccountKeysToMove?: readonly string[];
+  namedAccountPromotionKeys?: readonly string[];
+  resolveSingleAccountPromotionTarget?: (params: {
+    channel: Record<string, unknown>;
+  }) => string | undefined;
 };
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
@@ -108,11 +115,15 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     enabled: boolean;
   }) => OpenClawConfig;
   deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
-  isEnabled?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean;
-  disabledReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
-  isConfigured?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>;
-  unconfiguredReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
-  describeAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot;
+  isEnabled?: BivariantCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;
+  disabledReason?: BivariantCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => string>;
+  isConfigured?: BivariantCallback<
+    (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>
+  >;
+  unconfiguredReason?: BivariantCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => string>;
+  describeAccount?: BivariantCallback<
+    (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot
+  >;
   resolveAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -122,11 +133,26 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  hasConfiguredState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   resolveDefaultTo?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string | undefined;
+};
+
+export type ChannelSecretsAdapter = {
+  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
+  unsupportedSecretRefSurfacePatterns?: readonly string[];
+  collectUnsupportedSecretRefConfigCandidates?: (raw: unknown) => Array<{
+    path: string;
+    value: unknown;
+  }>;
+  collectRuntimeConfigAssignments?: (params: {
+    config: OpenClawConfig;
+    defaults: SecretDefaults | undefined;
+    context: ResolverContext;
+  }) => void;
 };
 
 export type ChannelGroupAdapter = {
@@ -203,7 +229,14 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     hint?: ChannelOutboundPayloadHint;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
+   */
   shouldTreatRoutedTextAsVisible?: (params: {
+    kind: "tool" | "block" | "final";
+    text?: string;
+  }) => boolean;
+  shouldTreatDeliveredTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;
   }) => boolean;
@@ -232,26 +265,28 @@ export type ChannelOutboundAdapter = {
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
   skipStaleSocketHealthCheck?: boolean;
-  buildChannelSummary?: (params: {
-    account: ResolvedAccount;
-    cfg: OpenClawConfig;
-    defaultAccountId: string;
-    snapshot: ChannelAccountSnapshot;
-  }) => Record<string, unknown> | Promise<Record<string, unknown>>;
-  probeAccount?: (params: {
-    account: ResolvedAccount;
-    timeoutMs: number;
-    cfg: OpenClawConfig;
-  }) => Promise<Probe>;
+  buildChannelSummary?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      cfg: OpenClawConfig;
+      defaultAccountId: string;
+      snapshot: ChannelAccountSnapshot;
+    }) => Record<string, unknown> | Promise<Record<string, unknown>>
+  >;
+  probeAccount?: BivariantCallback<
+    (params: { account: ResolvedAccount; timeoutMs: number; cfg: OpenClawConfig }) => Promise<Probe>
+  >;
   formatCapabilitiesProbe?: BivariantCallback<
     (params: { probe: Probe }) => ChannelCapabilitiesDisplayLine[]
   >;
-  auditAccount?: (params: {
-    account: ResolvedAccount;
-    timeoutMs: number;
-    cfg: OpenClawConfig;
-    probe?: Probe;
-  }) => Promise<Audit>;
+  auditAccount?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      timeoutMs: number;
+      cfg: OpenClawConfig;
+      probe?: Probe;
+    }) => Promise<Audit>
+  >;
   buildCapabilitiesDiagnostics?: BivariantCallback<
     (params: {
       account: ResolvedAccount;
@@ -262,25 +297,31 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
       target?: string;
     }) => Promise<ChannelCapabilitiesDiagnostics | undefined>
   >;
-  buildAccountSnapshot?: (params: {
-    account: ResolvedAccount;
-    cfg: OpenClawConfig;
-    runtime?: ChannelAccountSnapshot;
-    probe?: Probe;
-    audit?: Audit;
-  }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>;
-  logSelfId?: (params: {
-    account: ResolvedAccount;
-    cfg: OpenClawConfig;
-    runtime: RuntimeEnv;
-    includeChannelPrefix?: boolean;
-  }) => void;
-  resolveAccountState?: (params: {
-    account: ResolvedAccount;
-    cfg: OpenClawConfig;
-    configured: boolean;
-    enabled: boolean;
-  }) => ChannelAccountState;
+  buildAccountSnapshot?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      cfg: OpenClawConfig;
+      runtime?: ChannelAccountSnapshot;
+      probe?: Probe;
+      audit?: Audit;
+    }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>
+  >;
+  logSelfId?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      cfg: OpenClawConfig;
+      runtime: RuntimeEnv;
+      includeChannelPrefix?: boolean;
+    }) => void
+  >;
+  resolveAccountState?: BivariantCallback<
+    (params: {
+      account: ResolvedAccount;
+      cfg: OpenClawConfig;
+      configured: boolean;
+      enabled: boolean;
+    }) => ChannelAccountState
+  >;
   collectStatusIssues?: (accounts: ChannelAccountSnapshot[]) => ChannelStatusIssue[];
 };
 
@@ -712,6 +753,17 @@ export type ChannelApprovalRenderAdapter = {
   };
 };
 
+export type ChannelApprovalAdapter = {
+  delivery?: ChannelApprovalDeliveryAdapter;
+  render?: ChannelApprovalRenderAdapter;
+  native?: ChannelApprovalNativeAdapter;
+  describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
+};
+
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
   getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
@@ -721,12 +773,6 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     senderId?: string | null;
     approvalKind: ChannelApprovalKind;
   }) => ChannelApproveCommandBehavior | undefined;
-};
-
-export type ChannelApprovalAdapter = {
-  delivery?: ChannelApprovalDeliveryAdapter;
-  render?: ChannelApprovalRenderAdapter;
-  native?: ChannelApprovalNativeAdapter;
 };
 
 export type ChannelAllowlistAdapter = {
@@ -901,31 +947,35 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
   }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
-  resolveDmPolicy?: (
-    ctx: ChannelSecurityContext<ResolvedAccount>,
-  ) => ChannelSecurityDmPolicy | null;
-  collectWarnings?: (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[];
-  collectAuditFindings?: (
-    ctx: ChannelSecurityContext<ResolvedAccount> & {
-      sourceConfig: OpenClawConfig;
-      orderedAccountIds: string[];
-      hasExplicitAccountPath: boolean;
-    },
-  ) =>
-    | Promise<
-        Array<{
+  resolveDmPolicy?: BivariantCallback<
+    (ctx: ChannelSecurityContext<ResolvedAccount>) => ChannelSecurityDmPolicy | null
+  >;
+  collectWarnings?: BivariantCallback<
+    (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[]
+  >;
+  collectAuditFindings?: BivariantCallback<
+    (
+      ctx: ChannelSecurityContext<ResolvedAccount> & {
+        sourceConfig: OpenClawConfig;
+        orderedAccountIds: string[];
+        hasExplicitAccountPath: boolean;
+      },
+    ) =>
+      | Promise<
+          Array<{
+            checkId: string;
+            severity: "info" | "warn" | "critical";
+            title: string;
+            detail: string;
+            remediation?: string;
+          }>
+        >
+      | Array<{
           checkId: string;
           severity: "info" | "warn" | "critical";
           title: string;
           detail: string;
           remediation?: string;
         }>
-      >
-    | Array<{
-        checkId: string;
-        severity: "info" | "warn" | "critical";
-        title: string;
-        detail: string;
-        remediation?: string;
-      }>;
+  >;
 };

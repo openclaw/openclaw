@@ -10,7 +10,6 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import {
   redactConfigObject,
@@ -21,6 +20,7 @@ import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -276,7 +276,7 @@ async function ensureResolvableSecretRefsOrRespond(params: {
     });
     return true;
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = formatErrorMessage(error);
     params.respond(
       false,
       undefined,
@@ -489,9 +489,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const migrated = applyLegacyMigrations(restoredMerge.result);
-    const resolved = migrated.next ?? restoredMerge.result;
-    const validated = validateConfigObjectWithPlugins(resolved);
+    const validated = validateConfigObjectWithPlugins(restoredMerge.result);
     if (!validated.ok) {
       respond(
         false,

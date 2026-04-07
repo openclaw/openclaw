@@ -1,7 +1,4 @@
-import { fileURLToPath } from "node:url";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
-import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../../plugins/bundled-plugin-metadata.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -9,7 +6,7 @@ import {
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
-import { getChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
+import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
 export type ResolvedSessionConversation = {
   id: string;
@@ -47,7 +44,6 @@ type BundledSessionKeyModule = {
   ) => SessionConversationHookResult | null;
 };
 
-const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
@@ -65,7 +61,7 @@ function normalizeResolvedChannel(channel: string): string {
 function getMessagingAdapter(channel: string) {
   const normalizedChannel = normalizeResolvedChannel(channel);
   try {
-    return getChannelPlugin(normalizedChannel)?.messaging;
+    return getLoadedChannelPlugin(normalizedChannel)?.messaging;
   } catch {
     return undefined;
   }
@@ -140,21 +136,16 @@ function resolveBundledSessionConversationFallback(params: {
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
   const dirName = normalizeResolvedChannel(params.channel);
-  if (
-    !resolveBundledPluginPublicSurfacePath({
-      rootDir: OPENCLAW_PACKAGE_ROOT,
-      bundledPluginsDir: resolveBundledPluginsDir(),
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })
-  ) {
+  let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
+  try {
+    resolveSessionConversation =
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+        dirName,
+        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+      })?.resolveSessionConversation;
+  } catch {
     return null;
   }
-  const resolveSessionConversation =
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })?.resolveSessionConversation;
   if (typeof resolveSessionConversation !== "function") {
     return null;
   }

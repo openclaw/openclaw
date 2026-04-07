@@ -1,7 +1,18 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
-import { createVitestRunSpecs, writeVitestIncludeFile } from "./test-projects.test-support.mjs";
+import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
+import {
+  buildFullSuiteVitestRunPlans,
+  createVitestRunSpecs,
+  parseTestProjectsArgs,
+  resolveChangedTargetArgs,
+  writeVitestIncludeFile,
+} from "./test-projects.test-support.mjs";
+import {
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
@@ -37,16 +48,21 @@ function runVitestSpec(spec) {
   }
   return new Promise((resolve, reject) => {
     const child = spawnPnpmRunner({
+      cwd: process.cwd(),
+      detached: shouldUseDetachedVitestProcessGroup(),
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
     });
+    const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
 
     child.on("exit", (code, signal) => {
+      teardownChildCleanup();
       cleanupVitestRunSpec(spec);
       resolve({ code: code ?? 1, signal });
     });
 
     child.on("error", (error) => {
+      teardownChildCleanup();
       cleanupVitestRunSpec(spec);
       reject(error);
     });
@@ -54,11 +70,36 @@ function runVitestSpec(spec) {
 }
 
 async function main() {
-  const runSpecs = createVitestRunSpecs(process.argv.slice(2), {
-    baseEnv: process.env,
-    cwd: process.cwd(),
-  });
+  const args = process.argv.slice(2);
+  const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+  const changedTargetArgs =
+    targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
+  const runSpecs =
+    targetArgs.length === 0 && changedTargetArgs === null
+      ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
+          config: plan.config,
+          continueOnFailure: true,
+          env: process.env,
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [
+            "exec",
+            "node",
+            ...resolveVitestNodeArgs(process.env),
+            resolveVitestCliEntry(),
+            ...(plan.watchMode ? [] : ["run"]),
+            "--config",
+            plan.config,
+            ...plan.forwardedArgs,
+          ],
+          watchMode: plan.watchMode,
+        }))
+      : createVitestRunSpecs(args, {
+          baseEnv: process.env,
+          cwd: process.cwd(),
+        });
 
+  let exitCode = 0;
   for (const spec of runSpecs) {
     const result = await runVitestSpec(spec);
     if (result.signal) {
@@ -67,12 +108,18 @@ async function main() {
       return;
     }
     if (result.code !== 0) {
-      releaseLockOnce();
-      process.exit(result.code);
+      exitCode = exitCode || result.code;
+      if (spec.continueOnFailure !== true) {
+        releaseLockOnce();
+        process.exit(result.code);
+      }
     }
   }
 
   releaseLockOnce();
+  if (exitCode !== 0) {
+    process.exit(exitCode);
+  }
 }
 
 main().catch((error) => {

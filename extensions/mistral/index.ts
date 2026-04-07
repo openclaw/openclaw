@@ -89,6 +89,8 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
     },
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     contributeResolvedModelCompat: ({ modelId, model }) =>
       shouldContributeMistralCompat({ modelId, model }) ? MISTRAL_MODEL_COMPAT_PATCH : undefined,

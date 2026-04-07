@@ -17,7 +17,6 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-// eslint-disable-next-line no-var -- var avoids TDZ when bundler reorders module bodies in a chunk
 var reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {

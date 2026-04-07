@@ -196,6 +196,46 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("classifies provider-scoped generic upstream errors for failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "Provider returned error",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("does not classify provider-scoped upstream errors without the matching provider", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
+  });
+
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -473,13 +513,13 @@ describe("failover-error", () => {
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
-    expect(err?.model).toBe("claude-opus-4-5");
+    expect(err?.model).toBe("claude-opus-4-6");
   });
 
   it("maps overloaded to a 503 fallback status", () => {
@@ -510,6 +550,46 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403, message: "api key revoked" })).toBe(
       "auth_permanent",
     );
+  });
+
+  it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
+    // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
+    // when the monthly key spending limit is reached. This must trigger billing failover
+    // (model fallback), not generic auth.
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "Key limit exceeded",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
+  it("401 billing-style message returns billing instead of generic auth", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 401,
+        message: "401 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
+  it("does not treat OpenRouter key-limit text as billing without provider context", () => {
+    expect(resolveFailoverReasonFromError({ message: "Key limit exceeded" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("auth");
   });
 
   it("resolveFailoverStatus maps auth_permanent to 403", () => {

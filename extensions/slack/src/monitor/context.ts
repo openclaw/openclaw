@@ -51,9 +51,10 @@ export type SlackMonitorContext = {
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
+  threadRequireExplicitMention: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-runtime").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
@@ -118,6 +119,7 @@ export function createSlackMonitorContext(params: {
   replyToMode: SlackMonitorContext["replyToMode"];
   threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
+  threadRequireExplicitMention: SlackMonitorContext["threadRequireExplicitMention"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   ackReactionScope: string;
@@ -418,6 +420,7 @@ export function createSlackMonitorContext(params: {
     replyToMode: params.replyToMode,
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
+    threadRequireExplicitMention: params.threadRequireExplicitMention,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
