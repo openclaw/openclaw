@@ -19,9 +19,7 @@ import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
-export function resolveQueuedReplyRuntimeConfig(
-  config: OpenClawConfig | undefined,
-): OpenClawConfig | undefined {
+export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   return (
     (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
   );

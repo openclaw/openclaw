@@ -43,11 +43,13 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
       models: {
         providers: {
           openai: {
+            baseUrl: "https://api.openai.com/v1",
             apiKey: {
               source: "env",
               provider: "default",
               id: "OPENAI_API_KEY",
             },
+            models: [],
           },
         },
       },
@@ -56,7 +58,9 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
       models: {
         providers: {
           openai: {
+            baseUrl: "https://api.openai.com/v1",
             apiKey: "resolved-runtime-key",
+            models: [],
           },
         },
       },

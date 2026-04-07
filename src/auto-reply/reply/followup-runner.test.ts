@@ -432,61 +432,6 @@ describe("createFollowupRunner runtime config", () => {
   });
 });
 
-describe("createFollowupRunner runtime config", () => {
-  it("uses the active runtime snapshot for queued embedded followup runs", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          openai: {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "OPENAI_API_KEY",
-            },
-          },
-        },
-      },
-    };
-    const runtimeConfig = {
-      models: {
-        providers: {
-          openai: {
-            apiKey: "resolved-runtime-key",
-          },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {},
-    });
-
-    const runner = createFollowupRunner({
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "openai/gpt-5.4",
-    });
-
-    await runner(
-      createQueuedRun({
-        run: {
-          config: sourceConfig,
-          provider: "openai",
-          model: "gpt-5.4",
-        },
-      }),
-    );
-
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
-  });
-});
-
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
     const storePath = path.join(
