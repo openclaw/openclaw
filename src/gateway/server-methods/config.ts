@@ -592,7 +592,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueSharedGatewayAuthGenerationRefresh(disconnectSharedAuthClients, validated.config, context);
+    queueSharedGatewayAuthGenerationRefresh(true, validated.config, context);
     queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
@@ -660,7 +660,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueSharedGatewayAuthGenerationRefresh(disconnectSharedAuthClients, parsed.config, context);
+    queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
     queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.openFile": async ({ params, respond, context }) => {
