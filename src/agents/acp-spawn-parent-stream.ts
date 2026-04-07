@@ -30,10 +30,6 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars - 1)}…`;
 }
 
-function toTrimmedString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -112,7 +108,7 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
-  const logPath = toTrimmedString(params.logPath);
+  const logPath = normalizeOptionalString(params.logPath);
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -349,7 +345,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
-    const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
+    const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushPending();
@@ -375,7 +371,9 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     if (phase === "error") {
       flushPending();
-      const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
+      const errorText = normalizeOptionalString(
+        (event.data as { error?: unknown } | undefined)?.error,
+      );
       if (errorText) {
         emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
       } else {

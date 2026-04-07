@@ -17,10 +17,6 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
-function trimToUndefined(value: string | undefined): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;
@@ -46,7 +42,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const cliUrlOverride = normalizeOptionalString(options.url);
   const envUrlOverride = cliUrlOverride
     ? undefined
-    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+    : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;

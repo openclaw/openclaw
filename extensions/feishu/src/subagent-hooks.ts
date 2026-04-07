@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -221,8 +222,8 @@ function resolveMatchingChildBinding(params: {
       (entry) =>
         entry.accountId === requesterConversation.accountId &&
         entry.conversationId === requesterConversation.conversationId &&
-        (entry.parentConversationId?.trim() || undefined) ===
-          (requesterConversation.parentConversationId?.trim() || undefined),
+        normalizeOptionalString(entry.parentConversationId) ===
+          normalizeOptionalString(requesterConversation.parentConversationId),
     );
     if (matched) {
       return matched;

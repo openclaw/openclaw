@@ -24,14 +24,6 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
-function normalizeTo(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
-function normalizeAccountId(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeThreadId(value: unknown): string | number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -61,13 +53,13 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryChannel = normalizeChannel(
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
-  const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
+  const deliveryTo = normalizeOptionalString((delivery as { to?: unknown } | undefined)?.to);
   const deliveryThreadId = normalizeThreadId(
     (delivery as { threadId?: unknown } | undefined)?.threadId,
   );
   const channel = deliveryChannel ?? "last";
   const to = deliveryTo;
-  const deliveryAccountId = normalizeAccountId(
+  const deliveryAccountId = normalizeOptionalString(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
   if (hasDelivery) {
@@ -140,15 +132,15 @@ export function resolveFailureDestination(
 
   if (globalConfig) {
     channel = normalizeChannel(globalConfig.channel);
-    to = normalizeTo(globalConfig.to);
-    accountId = normalizeAccountId(globalConfig.accountId);
+    to = normalizeOptionalString(globalConfig.to);
+    accountId = normalizeOptionalString(globalConfig.accountId);
     mode = normalizeFailureMode(globalConfig.mode);
   }
 
   if (hasJobFailureDest) {
     const jobChannel = normalizeChannel(jobFailureDest.channel);
-    const jobTo = normalizeTo(jobFailureDest.to);
-    const jobAccountId = normalizeAccountId(jobFailureDest.accountId);
+    const jobTo = normalizeOptionalString(jobFailureDest.to);
+    const jobAccountId = normalizeOptionalString(jobFailureDest.accountId);
     const jobMode = normalizeFailureMode(jobFailureDest.mode);
     const hasJobChannelField = "channel" in jobFailureDest;
     const hasJobToField = "to" in jobFailureDest;

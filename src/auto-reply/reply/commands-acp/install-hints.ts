@@ -5,17 +5,13 @@ import { resolveBundledPluginWorkspaceSourcePath } from "../../../plugins/bundle
 import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 
-export function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string {
-  return normalizeOptionalString(cfg.acp?.backend) || "acpx";
-}
-
 export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
   const configured = normalizeOptionalString(cfg.acp?.runtime?.installCommand);
   if (configured) {
     return configured;
   }
   const workspaceDir = process.cwd();
-  const backendId = resolveConfiguredAcpBackendId(cfg).toLowerCase();
+  const backendId = normalizeOptionalString(cfg.acp?.backend)?.toLowerCase() ?? "acpx";
   if (backendId === "acpx") {
     const workspaceLocalPath = resolveBundledPluginWorkspaceSourcePath({
       rootDir: workspaceDir,

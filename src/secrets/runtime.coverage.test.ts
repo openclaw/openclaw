@@ -53,6 +53,10 @@ const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
+const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
+  "channels.googlechat.accounts.*.serviceAccount",
+  "tools.web.fetch.firecrawl.apiKey",
+]);
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
 let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
@@ -513,7 +517,9 @@ describe("secrets runtime target coverage", () => {
 
   it("handles every openclaw.json registry target when configured as active", async () => {
     const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) => entry.configFile === "openclaw.json",
+      (entry) =>
+        entry.configFile === "openclaw.json" &&
+        !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
     );
     for (const batch of buildCoverageBatches(entries)) {
       logCoverageBatch("openclaw.json", batch);

@@ -311,9 +311,9 @@ export async function listElevenLabsVoices(params: {
     ? json.voices
         .map((voice) => ({
           id: voice.voice_id?.trim() ?? "",
-          name: voice.name?.trim() || undefined,
-          category: voice.category?.trim() || undefined,
-          description: voice.description?.trim() || undefined,
+          name: trimToUndefined(voice.name),
+          category: trimToUndefined(voice.category),
+          description: trimToUndefined(voice.description),
         }))
         .filter((voice) => voice.id.length > 0)
     : [];

@@ -24,10 +24,6 @@ type ApprovalProfileParams = {
   accountId?: string | null;
 };
 
-function defaultNormalizeSenderId(value: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
   const execApprovals = cfg.approvals?.exec;
   if (!execApprovals?.enabled) {
@@ -60,7 +56,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
     normalizedAccountId?: string;
   }) => boolean;
 }): boolean {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
   const normalizedSenderId = params.senderId ? normalizeSenderId(params.senderId) : undefined;
   const normalizedChannel = params.channel.trim().toLowerCase();
   if (!normalizedSenderId || !isApprovalTargetsMode(params.cfg)) {
@@ -100,7 +96,7 @@ export function createChannelExecApprovalProfile(params: {
   fallbackAgentIdFromSessionKey?: boolean;
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
 
   const isClientEnabled = (input: ApprovalProfileParams): boolean => {
     const config = params.resolveConfig(input);

@@ -15,10 +15,6 @@ let sessionsResolutionDeps: {
   callGateway: GatewayCaller;
 } = defaultSessionsResolutionDeps;
 
-function normalizeKey(value?: string) {
-  return normalizeOptionalString(value);
-}
-
 export function resolveMainSessionAlias(cfg: OpenClawConfig) {
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
@@ -149,7 +145,7 @@ export async function isResolvedSessionVisibleToRequester(params: {
 export { looksLikeSessionId };
 
 export function looksLikeSessionKey(value: string): boolean {
-  const raw = value.trim();
+  const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {
     return false;
   }
@@ -460,7 +456,7 @@ export async function resolveVisibleSessionReference(params: {
 }
 
 export function normalizeOptionalKey(value?: string) {
-  return normalizeKey(value);
+  return normalizeOptionalString(value);
 }
 
 export const __testing = {

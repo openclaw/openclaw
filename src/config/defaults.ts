@@ -335,6 +335,9 @@ export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  if (!cfg.agents?.defaults) {
+    return cfg;
+  }
   return (
     applyProviderConfigDefaultsWithPlugin({
       provider: "anthropic",

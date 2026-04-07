@@ -66,6 +66,13 @@ export type PluginManifestSecretInputContracts = {
 };
 
 export type PluginManifestConfigContracts = {
+  /**
+   * Root-relative config paths that indicate this plugin's setup-time
+   * compatibility migrations might apply. Use this to keep generic runtime
+   * config reads from loading every plugin setup surface when the config does
+   * not reference the plugin at all.
+   */
+  compatibilityMigrationPaths?: string[];
   dangerousFlags?: PluginManifestDangerousConfigFlag[];
   secretInputs?: PluginManifestSecretInputContracts;
 };
@@ -277,6 +284,7 @@ function normalizeManifestConfigContracts(
   if (!isRecord(value)) {
     return undefined;
   }
+  const compatibilityMigrationPaths = normalizeTrimmedStringList(value.compatibilityMigrationPaths);
   const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
   const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
   const secretInputPaths = rawSecretInputs
@@ -294,6 +302,7 @@ function normalizeManifestConfigContracts(
         } satisfies PluginManifestSecretInputContracts)
       : undefined;
   const configContracts = {
+    ...(compatibilityMigrationPaths.length > 0 ? { compatibilityMigrationPaths } : {}),
     ...(dangerousFlags ? { dangerousFlags } : {}),
     ...(secretInputs ? { secretInputs } : {}),
   } satisfies PluginManifestConfigContracts;

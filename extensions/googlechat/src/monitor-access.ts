@@ -1,4 +1,5 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -397,6 +398,6 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     ok: true,
     commandAuthorized,
     effectiveWasMentioned,
-    groupSystemPrompt: groupEntry?.systemPrompt?.trim() || undefined,
+    groupSystemPrompt: normalizeOptionalString(groupEntry?.systemPrompt),
   };
 }

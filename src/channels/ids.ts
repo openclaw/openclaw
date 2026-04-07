@@ -9,19 +9,15 @@ type BundledChatChannelEntry = {
   order: number;
 };
 
-function normalizeChannelKey(raw?: string | null): string | undefined {
-  return normalizeOptionalString(raw)?.toLowerCase();
-}
-
 function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
   return listChannelCatalogEntries({ origin: "bundled" })
     .flatMap(({ channel }) => {
-      const id = normalizeChannelKey(channel.id);
+      const id = normalizeOptionalString(channel.id)?.toLowerCase();
       if (!id) {
         return [];
       }
       const aliases = (channel.aliases ?? [])
-        .map((alias) => normalizeChannelKey(alias))
+        .map((alias) => normalizeOptionalString(alias)?.toLowerCase())
         .filter((alias): alias is string => Boolean(alias));
       return [
         {
@@ -59,7 +55,7 @@ export function listChatChannelAliases(): string[] {
 }
 
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
-  const normalized = normalizeChannelKey(raw);
+  const normalized = normalizeOptionalString(raw)?.toLowerCase();
   if (!normalized) {
     return null;
   }

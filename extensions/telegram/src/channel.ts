@@ -32,6 +32,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
@@ -331,7 +332,7 @@ function resolveTelegramInboundConversation(params: {
     parsedTarget.messageThreadId != null
       ? String(parsedTarget.messageThreadId)
       : params.threadId != null
-        ? String(params.threadId).trim() || undefined
+        ? normalizeOptionalString(String(params.threadId))
         : undefined;
   if (threadId) {
     const parsedTopic = parseTelegramTopicConversation({

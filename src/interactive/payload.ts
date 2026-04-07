@@ -38,12 +38,8 @@ export type InteractiveReply = {
   blocks: InteractiveReplyBlock[];
 };
 
-function readTrimmedString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeButtonStyle(value: unknown): InteractiveButtonStyle | undefined {
-  const style = readTrimmedString(value)?.toLowerCase();
+  const style = normalizeOptionalString(value)?.toLowerCase();
   return style === "primary" || style === "secondary" || style === "success" || style === "danger"
     ? style
     : undefined;
@@ -54,11 +50,11 @@ function normalizeInteractiveButton(raw: unknown): InteractiveReplyButton | unde
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const label = readTrimmedString(record.label) ?? readTrimmedString(record.text);
+  const label = normalizeOptionalString(record.label) ?? normalizeOptionalString(record.text);
   const value =
-    readTrimmedString(record.value) ??
-    readTrimmedString(record.callbackData) ??
-    readTrimmedString(record.callback_data);
+    normalizeOptionalString(record.value) ??
+    normalizeOptionalString(record.callbackData) ??
+    normalizeOptionalString(record.callback_data);
   if (!label || !value) {
     return undefined;
   }
@@ -74,8 +70,8 @@ function normalizeInteractiveOption(raw: unknown): InteractiveReplyOption | unde
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const label = readTrimmedString(record.label) ?? readTrimmedString(record.text);
-  const value = readTrimmedString(record.value);
+  const label = normalizeOptionalString(record.label) ?? normalizeOptionalString(record.text);
+  const value = normalizeOptionalString(record.value);
   if (!label || !value) {
     return undefined;
   }
@@ -87,9 +83,9 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const type = readTrimmedString(record.type)?.toLowerCase();
+  const type = normalizeOptionalString(record.type)?.toLowerCase();
   if (type === "text") {
-    const text = readTrimmedString(record.text);
+    const text = normalizeOptionalString(record.text);
     return text ? { type: "text", text } : undefined;
   }
   if (type === "buttons") {
@@ -109,7 +105,7 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
     return options.length > 0
       ? {
           type: "select",
-          placeholder: readTrimmedString(record.placeholder),
+          placeholder: normalizeOptionalString(record.placeholder),
           options,
         }
       : undefined;
@@ -148,10 +144,12 @@ export function hasReplyContent(params: {
   hasChannelData?: boolean;
   extraContent?: boolean;
 }): boolean {
+  const text = normalizeOptionalString(params.text);
+  const mediaUrl = normalizeOptionalString(params.mediaUrl);
   return Boolean(
-    params.text?.trim() ||
-    params.mediaUrl?.trim() ||
-    params.mediaUrls?.some((entry) => Boolean(entry?.trim())) ||
+    text ||
+    mediaUrl ||
+    params.mediaUrls?.some((entry) => Boolean(normalizeOptionalString(entry))) ||
     hasInteractiveReplyBlocks(params.interactive) ||
     params.hasChannelData ||
     params.extraContent,
@@ -186,7 +184,7 @@ export function resolveInteractiveTextFallback(params: {
   text?: string;
   interactive?: InteractiveReply;
 }): string | undefined {
-  const text = readTrimmedString(params.text);
+  const text = normalizeOptionalString(params.text);
   if (text) {
     return params.text;
   }

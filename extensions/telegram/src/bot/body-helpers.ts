@@ -186,7 +186,7 @@ export type TelegramForwardedContext = {
 
 function normalizeForwardedUserLabel(user: User) {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-  const username = user.username?.trim() || undefined;
+  const username = normalizeOptionalString(user.username);
   const id = String(user.id);
   const display =
     (name && username
@@ -196,8 +196,8 @@ function normalizeForwardedUserLabel(user: User) {
 }
 
 function normalizeForwardedChatLabel(chat: Chat, fallbackKind: "chat" | "channel") {
-  const title = chat.title?.trim() || undefined;
-  const username = chat.username?.trim() || undefined;
+  const title = normalizeOptionalString(chat.title);
+  const username = normalizeOptionalString(chat.username);
   const id = String(chat.id);
   const display = title || (username ? `@${username}` : undefined) || `${fallbackKind}:${id}`;
   return { display, title, username, id };
@@ -251,9 +251,9 @@ function buildForwardedContextFromChat(params: {
   if (!display) {
     return null;
   }
-  const signature = params.signature?.trim() || undefined;
+  const signature = normalizeOptionalString(params.signature);
   const from = signature ? `${display} (${signature})` : display;
-  const chatType = (params.chat.type?.trim() || undefined) as Chat["type"] | undefined;
+  const chatType = normalizeOptionalString(params.chat.type) as Chat["type"] | undefined;
   return {
     from,
     date: params.date,

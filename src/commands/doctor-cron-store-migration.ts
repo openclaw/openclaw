@@ -1,8 +1,9 @@
 import { normalizeCronJobIdentityFields } from "../cron/normalize-job-identity.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
-import { inferLegacyName, normalizeOptionalText } from "../cron/service/normalize.js";
+import { inferLegacyName } from "../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
 import { migrateLegacyCronPayload } from "./doctor-cron-payload-migration.js";
 
@@ -239,7 +240,7 @@ export function normalizeStoredCronJobs(
       raw.name = nameRaw.trim();
     }
 
-    const desc = normalizeOptionalText(raw.description);
+    const desc = normalizeOptionalString(raw.description);
     if (raw.description !== desc) {
       raw.description = desc;
       mutated = true;
@@ -247,7 +248,7 @@ export function normalizeStoredCronJobs(
 
     if ("sessionKey" in raw) {
       const sessionKey =
-        typeof raw.sessionKey === "string" ? normalizeOptionalText(raw.sessionKey) : undefined;
+        typeof raw.sessionKey === "string" ? normalizeOptionalString(raw.sessionKey) : undefined;
       if (raw.sessionKey !== sessionKey) {
         raw.sessionKey = sessionKey;
         mutated = true;

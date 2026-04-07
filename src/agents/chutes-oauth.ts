@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -66,8 +67,8 @@ export function parseOAuthCallbackInput(
     }
   }
 
-  const code = url.searchParams.get("code")?.trim();
-  const state = url.searchParams.get("state")?.trim();
+  const code = normalizeOptionalString(url.searchParams.get("code"));
+  const state = normalizeOptionalString(url.searchParams.get("state"));
   if (!code) {
     return { error: "Missing 'code' parameter in URL" };
   }
@@ -181,7 +182,7 @@ export async function refreshChutesTokens(params: {
   if (!clientId) {
     throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
   }
-  const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
+  const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
 
   const body = new URLSearchParams({
     grant_type: "refresh_token",

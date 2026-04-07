@@ -93,7 +93,7 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
   const controllerId =
     syncMode === "managed"
-      ? (normalizeText(record.controllerId) ?? "core/legacy-restored")
+      ? (normalizeOptionalString(record.controllerId) ?? "core/legacy-restored")
       : undefined;
   return {
     ...record,
@@ -103,9 +103,9 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
       : {}),
     ...(controllerId ? { controllerId } : {}),
-    currentStep: normalizeText(record.currentStep),
-    blockedTaskId: normalizeText(record.blockedTaskId),
-    blockedSummary: normalizeText(record.blockedSummary),
+    currentStep: normalizeOptionalString(record.currentStep),
+    blockedTaskId: normalizeOptionalString(record.blockedTaskId),
+    blockedSummary: normalizeOptionalString(record.blockedSummary),
     ...(record.stateJson !== undefined
       ? { stateJson: cloneStructuredValue(record.stateJson)! }
       : {}),
@@ -136,20 +136,12 @@ function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
   return notifyPolicy ?? "done_only";
 }
 
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  return normalizeOptionalString(ownerKey);
-}
-
-function normalizeText(value?: string | null): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function normalizeJsonBlob(value: JsonValue | null | undefined): JsonValue | undefined {
   return value === undefined ? undefined : cloneStructuredValue(value);
 }
 
 function assertFlowOwnerKey(ownerKey: string): string {
-  const normalized = normalizeOwnerKey(ownerKey);
+  const normalized = normalizeOptionalString(ownerKey);
   if (!normalized) {
     throw new Error("Flow ownerKey is required.");
   }
@@ -157,15 +149,11 @@ function assertFlowOwnerKey(ownerKey: string): string {
 }
 
 function assertControllerId(controllerId?: string | null): string {
-  const normalized = normalizeText(controllerId);
+  const normalized = normalizeOptionalString(controllerId);
   if (!normalized) {
     throw new Error("Managed flow controllerId is required.");
   }
   return normalized;
-}
-
-function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
-  return normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task");
 }
 
 function resolveFlowBlockedSummary(
@@ -287,9 +275,9 @@ function buildFlowRecord(params: {
     status: params.status ?? "queued",
     notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
     goal: params.goal,
-    currentStep: normalizeText(params.currentStep),
-    blockedTaskId: normalizeText(params.blockedTaskId),
-    blockedSummary: normalizeText(params.blockedSummary),
+    currentStep: normalizeOptionalString(params.currentStep),
+    blockedTaskId: normalizeOptionalString(params.blockedTaskId),
+    blockedSummary: normalizeOptionalString(params.blockedSummary),
     ...(normalizeJsonBlob(params.stateJson) !== undefined
       ? { stateJson: normalizeJsonBlob(params.stateJson)! }
       : {}),
@@ -305,7 +293,9 @@ function buildFlowRecord(params: {
 
 function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFlowRecord {
   const controllerId =
-    patch.controllerId === undefined ? current.controllerId : normalizeText(patch.controllerId);
+    patch.controllerId === undefined
+      ? current.controllerId
+      : normalizeOptionalString(patch.controllerId);
   if (current.syncMode === "managed") {
     assertControllerId(controllerId);
   }
@@ -316,15 +306,17 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
     ...(patch.goal ? { goal: patch.goal } : {}),
     controllerId,
     currentStep:
-      patch.currentStep === undefined ? current.currentStep : normalizeText(patch.currentStep),
+      patch.currentStep === undefined
+        ? current.currentStep
+        : normalizeOptionalString(patch.currentStep),
     blockedTaskId:
       patch.blockedTaskId === undefined
         ? current.blockedTaskId
-        : normalizeText(patch.blockedTaskId),
+        : normalizeOptionalString(patch.blockedTaskId),
     blockedSummary:
       patch.blockedSummary === undefined
         ? current.blockedSummary
-        : normalizeText(patch.blockedSummary),
+        : normalizeOptionalString(patch.blockedSummary),
     stateJson:
       patch.stateJson === undefined ? current.stateJson : normalizeJsonBlob(patch.stateJson),
     waitJson: patch.waitJson === undefined ? current.waitJson : normalizeJsonBlob(patch.waitJson),
@@ -431,7 +423,8 @@ export function createTaskFlowForTask(params: {
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,
-    goal: resolveFlowGoal(params.task),
+    goal:
+      normalizeOptionalString(params.task.label) ?? (params.task.task.trim() || "Background task"),
     blockedTaskId:
       terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
@@ -494,7 +487,8 @@ export function setFlowWaiting(params: {
     expectedRevision: params.expectedRevision,
     patch: {
       status:
-        normalizeText(params.blockedTaskId) || normalizeText(params.blockedSummary)
+        normalizeOptionalString(params.blockedTaskId) ||
+        normalizeOptionalString(params.blockedSummary)
           ? "blocked"
           : "waiting",
       currentStep: params.currentStep,
@@ -637,7 +631,7 @@ export function syncFlowFromTask(
   return updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
-    goal: resolveFlowGoal(task),
+    goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
     blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,

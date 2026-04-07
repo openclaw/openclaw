@@ -16,7 +16,7 @@ describe("lintMemoryWikiVault", () => {
       },
     });
     await Promise.all(
-      ["entities", "concepts", "sources"].map((dir) =>
+      ["entities", "concepts", "sources", "syntheses"].map((dir) =>
         fs.mkdir(path.join(rootDir, dir), { recursive: true }),
       ),
     );
@@ -29,6 +29,14 @@ describe("lintMemoryWikiVault", () => {
         contradictions: ["Conflicts with source.beta"],
         questions: ["Is Alpha still active?"],
         confidence: 0.2,
+        claims: [
+          {
+            id: "claim.alpha.db",
+            text: "Alpha uses PostgreSQL for production writes.",
+            confidence: 0.2,
+            evidence: [],
+          },
+        ],
       },
       body: "# Alpha\n\n[[missing-page]]\n",
     });
@@ -47,6 +55,35 @@ describe("lintMemoryWikiVault", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-db.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.alpha.db",
+          title: "Alpha Database",
+          sourceIds: ["source.bridge.alpha"],
+          updatedAt: "2025-10-01T00:00:00.000Z",
+          claims: [
+            {
+              id: "claim.alpha.db",
+              text: "Alpha uses MySQL for production writes.",
+              status: "contested",
+              confidence: 0.7,
+              evidence: [
+                {
+                  sourceId: "source.bridge.alpha",
+                  lines: "1-3",
+                  updatedAt: "2025-10-01T00:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Alpha Database\n",
+      }),
+      "utf8",
+    );
 
     const result = await lintMemoryWikiVault(config);
 
@@ -56,14 +93,24 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).toContain("missing-import-provenance");
     expect(result.issues.map((issue) => issue.code)).toContain("broken-wikilink");
     expect(result.issues.map((issue) => issue.code)).toContain("contradiction-present");
+    expect(result.issues.map((issue) => issue.code)).toContain("claim-conflict");
     expect(result.issues.map((issue) => issue.code)).toContain("open-question");
     expect(result.issues.map((issue) => issue.code)).toContain("low-confidence");
-    expect(result.issuesByCategory.contradictions).toHaveLength(2);
-    expect(result.issuesByCategory["open-questions"]).toHaveLength(2);
+    expect(result.issues.map((issue) => issue.code)).toContain("claim-missing-evidence");
+    expect(result.issues.map((issue) => issue.code)).toContain("claim-low-confidence");
+    expect(result.issues.map((issue) => issue.code)).toContain("stale-page");
+    expect(result.issues.map((issue) => issue.code)).toContain("stale-claim");
+    expect(
+      result.issuesByCategory.contradictions.some((issue) => issue.code === "claim-conflict"),
+    ).toBe(true);
+    expect(result.issuesByCategory["open-questions"].length).toBeGreaterThanOrEqual(2);
     expect(
       result.issuesByCategory.provenance.some(
         (issue) => issue.code === "missing-import-provenance",
       ),
+    ).toBe(true);
+    expect(
+      result.issuesByCategory.provenance.some((issue) => issue.code === "claim-missing-evidence"),
     ).toBe(true);
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Errors");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");

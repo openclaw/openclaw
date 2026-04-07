@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import type {
   ZaloAuthStatus,
@@ -500,7 +501,7 @@ function resolveUploadedVoiceAsset(
       continue;
     }
     if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: item.fileName?.trim() || undefined };
+      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
     }
   }
   return undefined;
@@ -963,7 +964,8 @@ export async function listZaloGroupMembers(
       continue;
     }
     currentById.set(id, {
-      displayName: member.dName?.trim() || member.zaloName?.trim() || undefined,
+      displayName:
+        normalizeOptionalString(member.dName) ?? normalizeOptionalString(member.zaloName),
       avatar: member.avatar || undefined,
     });
   }
@@ -990,7 +992,9 @@ export async function listZaloGroupMembers(
         continue;
       }
       profileMap.set(id, {
-        displayName: profileValue.displayName?.trim() || profileValue.zaloName?.trim() || undefined,
+        displayName:
+          normalizeOptionalString(profileValue.displayName) ??
+          normalizeOptionalString(profileValue.zaloName),
         avatar: profileValue.avatar || undefined,
       });
     }
@@ -1024,7 +1028,7 @@ export async function resolveZaloGroupContext(
     | undefined;
   const context: ZaloGroupContext = {
     groupId: normalizedGroupId,
-    name: groupInfo?.name?.trim() || undefined,
+    name: normalizeOptionalString(groupInfo?.name),
     members: extractGroupMembersFromInfo(groupInfo),
   };
   writeCachedGroupContext(profile, context);

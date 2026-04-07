@@ -14,21 +14,8 @@ function loadGroupsRuntime() {
   return groupsRuntimePromise;
 }
 
-function resolveGroupId(raw: string | undefined | null): string | undefined {
-  const trimmed = (raw ?? "").trim();
-  return extractExplicitGroupId(trimmed) ?? (trimmed || undefined);
-}
-
-function resolveLooseChannelId(raw?: string | null): string | null {
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  return normalized;
-}
-
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
-  const normalized = resolveLooseChannelId(raw);
+  const normalized = normalizeOptionalString(raw)?.toLowerCase();
   if (!normalized) {
     return null;
   }
@@ -58,7 +45,9 @@ export async function resolveGroupRequireMention(params: {
   if (!channel) {
     return true;
   }
-  const groupId = groupResolution?.id ?? resolveGroupId(ctx.From);
+  const rawGroupId = (ctx.From ?? "").trim();
+  const groupId =
+    groupResolution?.id ?? extractExplicitGroupId(rawGroupId) ?? (rawGroupId || undefined);
   const groupChannel =
     normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject);
   const groupSpace = normalizeOptionalString(ctx.GroupSpace);

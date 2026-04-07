@@ -15,7 +15,6 @@ import {
   ACP_SESSIONS_USAGE,
   formatAcpCapabilitiesText,
   resolveAcpInstallCommandHint,
-  resolveConfiguredAcpBackendId,
   stopWithText,
 } from "./shared.js";
 import { resolveBoundAcpThreadSessionKey } from "./targets.js";
@@ -28,7 +27,7 @@ export async function handleAcpDoctorAction(
     return stopWithText(`⚠️ ${ACP_DOCTOR_USAGE}`);
   }
 
-  const backendId = resolveConfiguredAcpBackendId(params.cfg);
+  const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(params.cfg);
@@ -116,7 +115,7 @@ export function handleAcpInstallAction(
   if (restTokens.length > 0) {
     return stopWithText(`⚠️ ${ACP_INSTALL_USAGE}`);
   }
-  const backendId = resolveConfiguredAcpBackendId(params.cfg);
+  const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const lines = [
     "ACP install:",

@@ -1,17 +1,13 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 
-function normalizeProviderValue(value?: string): string | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
-  return normalized || undefined;
-}
-
 export function resolveOriginMessageProvider(params: {
   originatingChannel?: OriginatingChannelType;
   provider?: string;
 }): string | undefined {
   return (
-    normalizeProviderValue(params.originatingChannel) ?? normalizeProviderValue(params.provider)
+    normalizeOptionalString(params.originatingChannel)?.toLowerCase() ??
+    normalizeOptionalString(params.provider)?.toLowerCase()
   );
 }
 
