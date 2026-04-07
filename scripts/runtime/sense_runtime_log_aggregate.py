@@ -448,6 +448,11 @@ def main() -> int:
             str(item.get('route_signature') or ''),
         )
     )
+    digest_bucket_totals: dict[str, int] = defaultdict(int)
+    for item in route_severity_compact:
+        bucket = derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or ''))
+        digest_bucket_totals[bucket] += int(item.get('count', 0))
+
     notification_digest_grouped: dict[str, dict[str, object]] = {}
     for item in route_severity_compact:
         group_key = str(item.get('notification_group_key') or '')
@@ -460,6 +465,10 @@ def main() -> int:
                 'notification_title': item.get('notification_title'),
                 'notification_title_short': item.get('notification_title_short'),
                 'count': 0,
+                'digest_bucket_total': digest_bucket_totals.get(
+                    derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or '')),
+                    0,
+                ),
                 'latest_timestamp': item.get('latest_timestamp'),
                 'max_recovery_rank': 0,
                 'band': item.get('band', 'none'),
@@ -507,6 +516,7 @@ def main() -> int:
                 'notification_title': aggregate['notification_title'],
                 'notification_title_short': aggregate['notification_title_short'],
                 'count': aggregate['count'],
+                'digest_bucket_total': aggregate['digest_bucket_total'],
                 'latest_timestamp': aggregate['latest_timestamp'],
                 'max_recovery_rank': aggregate['max_recovery_rank'],
                 'band': aggregate['band'],
