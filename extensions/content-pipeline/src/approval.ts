@@ -160,38 +160,40 @@ export async function handleApproval(runId: string): Promise<Record<string, stri
     );
   }
 
-  // Facebook — share YouTube link to Page (video upload requires app review)
+  // Facebook — upload video directly to Page via graph-video.facebook.com
   try {
     const pageId = process.env.FACEBOOK_PAGE_ID;
     const pageToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-    const youtubeUrl = results.youtube;
     if (pageId && pageToken) {
       const content = JSON.parse(readFileSync(join(req.outputDir, "script.json"), "utf-8"));
-      const message = `🎬 ${content.videoTitle}\n\n${content.videoDescription ?? ""}\n\n${content.tags?.map((t: string) => `#${t.replace(/\s+/g, "")}`).join(" ") ?? ""}`;
+      const videoPath = join(req.outputDir, "video_landscape.mp4");
 
-      const postBody: Record<string, string> = {
-        access_token: pageToken,
-        message,
-      };
-      if (youtubeUrl && youtubeUrl.startsWith("http")) {
-        postBody.link = youtubeUrl;
+      if (existsSync(videoPath)) {
+        const { readFileSync: rfs } = await import("node:fs");
+        const videoData = rfs(videoPath);
+        const description = `${content.videoDescription ?? ""}\n\n${content.tags?.map((t: string) => `#${t.replace(/\s+/g, "")}`).join(" ") ?? ""}`;
+
+        const formData = new FormData();
+        formData.append("access_token", pageToken);
+        formData.append("title", content.videoTitle);
+        formData.append("description", description);
+        formData.append("source", new Blob([videoData]), "video.mp4");
+
+        const resp = await fetch(`https://graph-video.facebook.com/v25.0/${pageId}/videos`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!resp.ok) {
+          const err = await resp.text();
+          throw new Error(err.slice(0, 100));
+        }
+
+        const data = (await resp.json()) as { id?: string };
+        const fbUrl = `https://facebook.com/${pageId}/videos/${data.id}`;
+        results.facebook = fbUrl;
+        await postToChannel(CHANNELS.teamStatus, `  ✅ Facebook: ${fbUrl}`);
       }
-
-      const resp = await fetch(`https://graph.facebook.com/v25.0/${pageId}/feed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(postBody).toString(),
-      });
-
-      if (!resp.ok) {
-        const err = await resp.text();
-        throw new Error(err.slice(0, 100));
-      }
-
-      const data = (await resp.json()) as { id?: string };
-      const fbUrl = `https://facebook.com/${data.id}`;
-      results.facebook = fbUrl;
-      await postToChannel(CHANNELS.teamStatus, `  ✅ Facebook: ${fbUrl}`);
     }
   } catch (err) {
     results.facebook = `error: ${(err as Error).message.slice(0, 100)}`;
