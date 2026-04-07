@@ -79,6 +79,10 @@ export function ensurePluginRegistryLoaded(options?: {
             env: context.env,
           })
         : [];
+  if (!scopedLoad && scope === "configured-channels" && expectedChannelPluginIds.length === 0) {
+    pluginRegistryLoaded = scope;
+    return;
+  }
   const active = getActivePluginRegistry();
   if (
     !scopedLoad &&

@@ -154,4 +154,15 @@ describe("ensurePluginRegistryLoaded", () => {
       expect.objectContaining({ onlyPluginIds: ["demo-b"] }),
     );
   });
+
+  it("skips plugin loading when no configured channels are present", () => {
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: {} as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
 });
