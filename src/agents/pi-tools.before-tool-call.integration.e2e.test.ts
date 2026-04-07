@@ -396,6 +396,63 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves extensionContext through abort-wrapped before_tool_call hooks", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "read", execute, description: "read", parameters: {} } as any;
+
+    const abortController = new AbortController();
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const withAbort = wrapToolWithAbortSignal(wrapped, abortController.signal);
+    const [def] = toToolDefinitions([withAbort]);
+    const extensionContext = {
+      sessionManager: {
+        getLeafEntry: () => ({
+          id: "msg-abort-ctx-1",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Need to inspect the file before continuing." },
+              {
+                type: "toolCall",
+                id: "call-abort-ctx",
+                name: "read",
+                arguments: { path: "/tmp/file" },
+              },
+            ],
+          },
+        }),
+      },
+    } as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-abort-ctx",
+      { path: "/tmp/file" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "read",
+        params: { path: "/tmp/file" },
+        toolCallId: "call-abort-ctx",
+        precedingText: "Need to inspect the file before continuing.",
+        messageId: "msg-abort-ctx-1",
+      },
+      {
+        toolName: "read",
+        agentId: "main",
+        sessionKey: "main",
+        toolCallId: "call-abort-ctx",
+      },
+    );
+  });
 });
 
 describe("before_tool_call hook integration for client tools", () => {

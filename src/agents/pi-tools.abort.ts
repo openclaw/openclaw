@@ -58,12 +58,12 @@ export function wrapToolWithAbortSignal(
   }
   const wrappedTool: AnyAgentTool = {
     ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+    execute: async (toolCallId, params, signal, onUpdate, extensionContext?: unknown) => {
       const combined = combineAbortSignals(signal, abortSignal);
       if (combined?.aborted) {
         throwAbortError();
       }
-      return await execute(toolCallId, params, combined, onUpdate);
+      return await execute(toolCallId, params, combined, onUpdate, extensionContext);
     },
   };
   copyPluginToolMeta(tool, wrappedTool);
