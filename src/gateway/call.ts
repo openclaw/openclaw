@@ -822,7 +822,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   );
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
-    configuredConnectChallengeTimeoutMs,
+    Math.max(10_000, configuredConnectChallengeTimeoutMs),
   );
   const resolvedCredentials = await resolveGatewayCredentials(context);
   ensureExplicitGatewayAuth({

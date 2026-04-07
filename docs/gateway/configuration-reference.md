@@ -2329,7 +2329,7 @@ Notes:
         maxConcurrent: 8,
         startupWaitTimeoutMs: 60000,
         runTimeoutSeconds: 900,
-        completionAnnounceTimeoutMs: 90000,
+        completionAnnounceTimeoutMs: 120000,
         archiveAfterMinutes: 60,
       },
     },
@@ -2341,7 +2341,7 @@ Notes:
 - `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
 - `startupWaitTimeoutMs`: requester-side patience in milliseconds for sub-agent startup/setup RPCs before the child is considered launched. Default: `60000`. This affects early spawn bookkeeping and the primary startup RPC; it does not change child runtime abort behavior.
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
-- `completionAnnounceTimeoutMs`: preferred gateway timeout in milliseconds for sub-agent completion announce delivery calls. Default: `90000`.
+- `completionAnnounceTimeoutMs`: preferred gateway timeout in milliseconds for sub-agent completion announce delivery calls. Default: `120000`.
 - `announceTimeoutMs`: backward-compatible alias for `completionAnnounceTimeoutMs`. If both are set, `completionAnnounceTimeoutMs` wins.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 

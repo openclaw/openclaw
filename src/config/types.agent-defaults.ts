@@ -329,7 +329,7 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent startup/setup RPCs before launch is considered failed (default: 60000). */
     startupWaitTimeoutMs?: number;
-    /** Preferred gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
+    /** Preferred gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     completionAnnounceTimeoutMs?: number;
     /** Legacy alias for completionAnnounceTimeoutMs. */
     announceTimeoutMs?: number;
