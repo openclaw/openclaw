@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
@@ -11,7 +12,6 @@ import {
   resolveProfile,
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
-import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -315,8 +315,6 @@ export async function ensureSandboxBrowser(params: {
 
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
-  const policyMatches =
-    !existing || isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy);
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -324,13 +322,13 @@ export async function ensureSandboxBrowser(params: {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
-  if (existing && shouldReuse && (!policyMatches || !authMatches)) {
+  if (existing && shouldReuse && !authMatches) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
   const bridge = (() => {
-    if (shouldReuse && policyMatches && authMatches && existing) {
+    if (shouldReuse && authMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -375,7 +373,7 @@ export async function ensureSandboxBrowser(params: {
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse || !policyMatches || !authMatches) {
+  if (!shouldReuse || !authMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,
