@@ -4,25 +4,10 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import { ResolvedGatewayAuth } from "./auth.js";
 import { AuthRateLimiter } from "./auth-rate-limit.js";
 import { sendJson } from "./http-common.js";
-import { loadConfig } from "../config/config.js";
-import { createDeduplicateSequence } from "./deduplicate-sequence.js";
-import { createAgentEventHandler } from "./server-chat.js";
-import { createSessionEventSubscriberRegistry } from "./server-chat.js";
-import { createSessionMessageSubscriberRegistry } from "./server-chat.js";
-import { NodeRegistry } from "./node-registry.js";
-import { createChannelManager } from "./server-channels.js";
-import { buildGatewayCronService } from "./server-cron.js";
+import { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } from "./http-utils.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createDefaultDeps } from "../cli/deps.js";
-import { createGatewayCloseHandler } from "./server-close.js";
-import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
-import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { getFallbackGatewayContext } from "./server-plugins.js";
 import { GATEWAY_CLIENT_MODES } from "../utils/message-channel.js";
-import { ErrorCodes } from "./protocol/index.js";
 
 interface JsonRpcRequest {
   jsonrpc: string;
@@ -93,6 +78,8 @@ function createJsonRpcSuccess(
   };
 }
 
+const MAX_RPC_BODY_BYTES = 1024 * 1024; // 1MB max
+
 export async function handleHttpRpcEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
@@ -115,12 +102,33 @@ export async function handleHttpRpcEndpoint(
     return true;
   }
 
+  // Enforce authentication
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    req,
+    res,
+    auth,
+    rateLimiter,
+  });
+  if (!requestAuth) {
+    return true; // Response already sent by authorizeGatewayHttpRequestOrReply
+  }
+
   // Parse request body
   let body: unknown;
   try {
     const chunks: Buffer[] = [];
+    let totalLength = 0;
     for await (const chunk of req) {
-      chunks.push(chunk as Buffer);
+      const bufferChunk = chunk as Buffer;
+      totalLength += bufferChunk.length;
+      
+      // Check size limit
+      if (totalLength > MAX_RPC_BODY_BYTES) {
+        sendJson(res, 413, createJsonRpcError(undefined, -32600, "Invalid Request: Request body too large"));
+        return true;
+      }
+      
+      chunks.push(bufferChunk);
     }
     
     const bodyStr = Buffer.concat(chunks).toString("utf8");
@@ -135,9 +143,22 @@ export async function handleHttpRpcEndpoint(
     return true;
   }
 
+  // Get the real gateway context
+  const context = getFallbackGatewayContext();
+  if (!context) {
+    sendJson(res, 500, createJsonRpcError(undefined, -32603, "Internal error: Gateway context not available"));
+    return true;
+  }
+
   // Validate JSON-RPC 2.0 format
   if (Array.isArray(body)) {
     // Batch request - for simplicity in this implementation, we'll handle sequentially
+    if (body.length === 0) {
+      // JSON-RPC 2.0 spec: empty batch requests should return Invalid Request error
+      sendJson(res, 400, createJsonRpcError(undefined, -32600, "Invalid Request: Empty batch"));
+      return true;
+    }
+    
     const responses: JsonRpcResponse[] = [];
     for (const item of body) {
       if (!isValidJsonRpcRequest(item)) {
@@ -145,15 +166,23 @@ export async function handleHttpRpcEndpoint(
         continue;
       }
       
-      const response = await handleSingleRequest(item, auth, rateLimiter);
-      if (item.id !== undefined) { // Only include response if request had an id (notifications don't get responses)
+      const response = await handleSingleRequest(item, auth, context, requestAuth);
+      if (item.id !== undefined && item.id !== null) { // Only include response if request had an id (notifications don't get responses)
         responses.push(response);
       }
     }
     
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(responses));
+    // Only send response if there are responses to return (batch notifications return empty array)
+    if (responses.length > 0) {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(responses));
+    } else {
+      // For batch notifications, return empty response body with 200 status
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end("[]");
+    }
     return true;
   } else {
     // Single request
@@ -162,11 +191,18 @@ export async function handleHttpRpcEndpoint(
       return true;
     }
 
-    const response = await handleSingleRequest(body, auth, rateLimiter);
+    const response = await handleSingleRequest(body, auth, context, requestAuth);
     
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(response));
+    // For notifications (requests without id), don't return a response
+    if (body.id === undefined || body.id === null) {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(); // No body for notifications
+    } else {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(response));
+    }
     return true;
   }
 }
@@ -174,17 +210,15 @@ export async function handleHttpRpcEndpoint(
 async function handleSingleRequest(
   request: JsonRpcRequest,
   auth: ResolvedGatewayAuth,
-  rateLimiter?: AuthRateLimiter
+  context: GatewayRequestContext,
+  requestAuth: Awaited<ReturnType<typeof authorizeGatewayHttpRequestOrReply>>
 ): Promise<JsonRpcResponse> {
-  // Create a minimal gateway request context
-  // This is a simplified version - in a production implementation, 
-  // you'd want to properly initialize all required dependencies
-  const config = loadConfig();
-  
-  // Create a mock client with appropriate scopes based on the auth
+  // Create a client with appropriate scopes based on the auth
+  // Since we don't have access to the original req object here, we'll use a conservative approach
+  // For authenticated requests, use default operator scopes; for unauthenticated requests, use no scopes
   const client = {
     connect: {
-      scopes: ["operator.read", "operator.write"], // Scopes determined by auth
+      scopes: requestAuth ? ["operator.read", "operator.write"] : [],
       client: {
         id: "http-rpc", // Using a custom client ID for HTTP RPC
         version: "1.0.0",
@@ -196,13 +230,6 @@ async function handleSingleRequest(
   };
 
   return new Promise<JsonRpcResponse>((resolve) => {
-    // Create a minimal context - in a real implementation, you'd need to 
-    // properly initialize all the required services and state
-    const deps = createMinimalDeps();
-    
-    // Create a minimal request context
-    const context = createMinimalRequestContext(deps);
-
     // Prepare the response handler
     const respond = (
       ok: boolean,
@@ -227,7 +254,7 @@ async function handleSingleRequest(
       }
     };
 
-    // Call the gateway handler
+    // Call the gateway handler with the real context
     handleGatewayRequest({
       req: {
         method: request.method,
@@ -243,73 +270,4 @@ async function handleSingleRequest(
       resolve(createJsonRpcError(request.id, -32603, `Internal error: ${err.message}`));
     });
   });
-}
-
-// Create a minimal set of dependencies for the HTTP RPC handler
-function createMinimalDeps() {
-  // This creates minimal stubs for dependencies
-  // In a real implementation, you'd want to properly initialize these
-  return createDefaultDeps();
-}
-
-// Create a minimal request context
-function createMinimalRequestContext(deps: ReturnType<typeof createDefaultDeps>): GatewayRequestContext {
-  // Creating a minimal context with stub implementations
-  // This is a simplified version for HTTP RPC - in production you'd want complete implementations
-  const execApproval = new ExecApprovalManager({} as any);
-  return {
-    deps,
-    cron: buildGatewayCronService({} as any, {} as any),
-    cronStorePath: "",
-    execApprovalManager: execApproval,
-    pluginApprovalManager: execApproval,
-    loadGatewayModelCatalog: () => Promise.resolve([]),
-    getHealthCache: () => null,
-    refreshHealthSnapshot: async () => ({ ok: true }),
-    logHealth: { error: console.error },
-    logGateway: {
-      info: console.info,
-      warn: console.warn,
-      error: console.error,
-      debug: console.debug
-    },
-    incrementPresenceVersion: () => 0,
-    getHealthVersion: () => 0,
-    broadcast: () => {},
-    broadcastToConnIds: () => {},
-    nodeSendToSession: () => {},
-    nodeSendToAllSubscribed: () => {},
-    nodeSubscribe: () => {},
-    nodeUnsubscribe: () => {},
-    nodeUnsubscribeAll: () => {},
-    hasConnectedMobileNode: () => false,
-    hasExecApprovalClients: undefined,
-    disconnectClientsForDevice: undefined,
-    nodeRegistry: new NodeRegistry(),
-    agentRunSeq: new Map(),
-    chatAbortControllers: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    addChatRun: () => {},
-    removeChatRun: () => undefined,
-    subscribeSessionEvents: () => {},
-    unsubscribeSessionEvents: () => {},
-    subscribeSessionMessageEvents: () => {},
-    unsubscribeSessionMessageEvents: () => {},
-    unsubscribeAllSessionEvents: () => {},
-    getSessionEventSubscriberConnIds: () => new Set(),
-    registerToolEventRecipient: () => {},
-    dedupe: new Map(),
-    wizardSessions: new Map(),
-    findRunningWizard: () => null,
-    purgeWizardSession: () => {},
-    getRuntimeSnapshot: () => ({} as any),
-    startChannel: async () => {},
-    stopChannel: async () => {},
-    markChannelLoggedOut: () => {},
-    wizardRunner: async () => {},
-    broadcastVoiceWakeChanged: () => {},
-  };
 }
