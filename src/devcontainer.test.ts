@@ -90,9 +90,9 @@ describe(".devcontainer", () => {
       expect(dockerfile).toContain("@anthropic-ai/claude-code");
     });
 
-    it("installs Copilot as a gh extension", async () => {
-      const dockerfile = await readFile(join(devcontainerDir, "Dockerfile"), "utf8");
-      expect(dockerfile).toContain("gh extension install github/gh-copilot");
+    it("installs Copilot via on-create script (requires auth)", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain("gh extension install github/gh-copilot");
     });
 
     it("enables corepack for pnpm", async () => {
@@ -138,6 +138,11 @@ describe(".devcontainer", () => {
       const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
       expect(script).toContain("gh api user");
       expect(script).toContain("git config --global user.name");
+    });
+
+    it("requires both git name and email before reporting success", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain('[ -n "$final_name" ] && [ -n "$final_email" ]');
     });
 
     it("checks SSH agent forwarding", async () => {
