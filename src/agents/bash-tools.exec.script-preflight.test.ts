@@ -74,6 +74,22 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates scripts under literal tilde directories in workdir", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const literalTildeDir = path.join(tmp, "~");
+      await fs.mkdir(literalTildeDir, { recursive: true });
+      await fs.writeFile(path.join(literalTildeDir, "bad.js"), "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-literal-tilde-path", {
+          command: 'node "~/bad.js"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates python scripts when interpreter is prefixed with env", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");

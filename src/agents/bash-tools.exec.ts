@@ -9,7 +9,7 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { SafeOpenError, readPathWithinRoot } from "../infra/fs-safe.js";
+import { SafeOpenError, readFileWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
@@ -114,6 +114,18 @@ const SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES = new Set([
   "ENOTDIR",
   "EPERM",
 ]);
+
+function resolvePreflightRelativePath(params: { rootDir: string; absPath: string }): string | null {
+  const root = path.resolve(params.rootDir);
+  const candidate = path.resolve(params.absPath);
+  const relative = path.relative(root, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+  // Preserve literal "~" path segments under the workdir. `readFileWithinRoot`
+  // expands home prefixes for relative paths, so normalize `~/...` to `./~/...`.
+  return /^~(?:$|[\\/])/u.test(relative) ? `.${path.sep}${relative}` : relative;
+}
 
 function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
@@ -931,15 +943,22 @@ async function validateScriptFileForShellBleed(params: {
     const absPath = path.isAbsolute(relOrAbsPath)
       ? path.resolve(relOrAbsPath)
       : path.resolve(params.workdir, relOrAbsPath);
+    const relativePath = resolvePreflightRelativePath({
+      rootDir: params.workdir,
+      absPath,
+    });
+    if (!relativePath) {
+      continue;
+    }
 
     // Best-effort: only validate files that safely resolve within workdir and
     // are reasonably small. This keeps preflight checks on a pinned file
     // identity instead of trusting mutable pathnames across multiple ops.
     let content: string;
     try {
-      const safeRead = await readPathWithinRoot({
+      const safeRead = await readFileWithinRoot({
         rootDir: params.workdir,
-        filePath: absPath,
+        relativePath,
         maxBytes: 512 * 1024,
       });
       content = safeRead.buffer.toString("utf-8");
