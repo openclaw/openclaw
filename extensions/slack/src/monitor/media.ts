@@ -45,7 +45,11 @@ function createSlackMediaFetch(token: string): FetchLike {
     if (!url) {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
-    const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
+    // Strip dispatcher from init to avoid version mismatch between external undici
+    // (used by the SSRF guard) and Node's built-in fetch (undici 8.x).
+    // SSRF DNS-pinning has already been validated before this fetcher is called.
+    const { headers: initHeaders, redirect: _redirect, dispatcher: _d, ...rest } =
+      (init ?? {}) as RequestInit & { dispatcher?: unknown };
     const headers = new Headers(initHeaders);
 
     if (includeAuth) {
