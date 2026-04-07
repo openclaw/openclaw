@@ -6,7 +6,7 @@ const state = vi.hoisted(() => ({
   requestEmbeddedRunModelSwitchMock: vi.fn(),
   consumeEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
-  resolvePersistedSelectedModelRefMock: vi.fn(),
+  resolvePersistedOverrideModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
@@ -29,8 +29,8 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 vi.mock("./model-selection.js", () => ({
   resolveDefaultModelForAgent: (...args: unknown[]) =>
     state.resolveDefaultModelForAgentMock(...args),
-  resolvePersistedSelectedModelRef: (...args: unknown[]) =>
-    state.resolvePersistedSelectedModelRefMock(...args),
+  resolvePersistedOverrideModelRef: (...args: unknown[]) =>
+    state.resolvePersistedOverrideModelRefMock(...args),
 }));
 
 vi.mock("../config/sessions/store.js", () => ({
@@ -64,13 +64,11 @@ describe("live model switch", () => {
     state.resolveDefaultModelForAgentMock
       .mockReset()
       .mockReturnValue({ provider: "anthropic", model: "claude-opus-4-6" });
-    state.resolvePersistedSelectedModelRefMock
+    state.resolvePersistedOverrideModelRefMock
       .mockReset()
       .mockImplementation(
         (params: {
           defaultProvider: string;
-          runtimeProvider?: string;
-          runtimeModel?: string;
           overrideProvider?: string;
           overrideModel?: string;
         }) => {
@@ -88,21 +86,6 @@ describe("live model switch", () => {
             return {
               provider: overrideModel.slice(0, slash),
               model: overrideModel.slice(slash + 1),
-            };
-          }
-          const runtimeProvider = params.runtimeProvider?.trim();
-          const runtimeModel = params.runtimeModel?.trim();
-          if (runtimeModel) {
-            if (runtimeProvider) {
-              return { provider: runtimeProvider, model: runtimeModel };
-            }
-            const slash = runtimeModel.indexOf("/");
-            if (slash <= 0 || slash === runtimeModel.length - 1) {
-              return { provider: defaultProvider, model: runtimeModel };
-            }
-            return {
-              provider: runtimeModel.slice(0, slash),
-              model: runtimeModel.slice(slash + 1),
             };
           }
           return null;
