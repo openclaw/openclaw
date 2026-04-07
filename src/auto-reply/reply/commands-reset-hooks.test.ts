@@ -7,11 +7,7 @@ import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resetMocks = vi.hoisted(() => ({
-  performGatewaySessionReset: vi.fn().mockResolvedValue({
-    ok: true as const,
-    key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
-    entry: { sessionId: "next-session", updatedAt: 1 },
-  }),
+  resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
   resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
 }));
 
@@ -41,9 +37,9 @@ vi.mock("../commands-registry.js", () => ({
   shouldHandleTextCommands: () => true,
 }));
 
-vi.mock("./commands-reset.runtime.js", () => ({
-  performGatewaySessionReset: (...args: unknown[]) =>
-    resetMocks.performGatewaySessionReset(...args),
+vi.mock("../../channels/plugins/binding-targets.js", () => ({
+  resetConfiguredBindingTargetInPlace: (...args: unknown[]) =>
+    resetMocks.resetConfiguredBindingTargetInPlace(...args),
 }));
 
 vi.mock("./commands-acp/targets.js", () => ({
@@ -106,11 +102,7 @@ function buildResetParams(
 describe("handleCommands reset hooks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetMocks.performGatewaySessionReset.mockResolvedValue({
-      ok: true,
-      key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
-      entry: { sessionId: "next-session", updatedAt: 1 },
-    });
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
     resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
   });
 
@@ -185,8 +177,9 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
-    expect(resetMocks.performGatewaySessionReset).toHaveBeenCalledWith({
-      key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    expect(resetMocks.resetConfiguredBindingTargetInPlace).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       reason: "reset",
       commandSource: "discord:native",
     });

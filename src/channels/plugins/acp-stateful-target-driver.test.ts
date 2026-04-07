@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const lifecycleMocks = vi.hoisted(() => ({
-  resetAcpSessionInPlace: vi.fn(async () => ({ ok: true as const })),
+const resetMocks = vi.hoisted(() => ({
+  performGatewaySessionReset: vi.fn(async () => ({
+    ok: true as const,
+    key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    entry: { sessionId: "next-session", updatedAt: 1 },
+  })),
 }));
 const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn(() => null),
@@ -13,7 +17,10 @@ const resolveMocks = vi.hoisted(() => ({
 vi.mock("../../acp/persistent-bindings.lifecycle.js", () => ({
   ensureConfiguredAcpBindingReady: vi.fn(),
   ensureConfiguredAcpBindingSession: vi.fn(),
-  resetAcpSessionInPlace: lifecycleMocks.resetAcpSessionInPlace,
+}));
+vi.mock("./acp-stateful-target-reset.runtime.js", () => ({
+  performGatewaySessionReset: (...args: unknown[]) =>
+    resetMocks.performGatewaySessionReset(...args),
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
@@ -27,17 +34,18 @@ import { acpStatefulBindingTargetDriver } from "./acp-stateful-target-driver.js"
 
 describe("acpStatefulBindingTargetDriver", () => {
   beforeEach(() => {
-    lifecycleMocks.resetAcpSessionInPlace.mockClear();
+    resetMocks.performGatewaySessionReset.mockClear();
     sessionMetaMocks.readAcpSessionEntry.mockClear();
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockClear();
   });
 
-  it("forces ACP metadata clearing for bound reset targets", async () => {
+  it("delegates bound resets to the gateway session reset authority", async () => {
     await expect(
       acpStatefulBindingTargetDriver.resetInPlace?.({
         cfg: {} as never,
         sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
         reason: "new",
+        commandSource: "discord:native",
         bindingTarget: {
           kind: "stateful",
           driverId: "acp",
@@ -47,11 +55,10 @@ describe("acpStatefulBindingTargetDriver", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(lifecycleMocks.resetAcpSessionInPlace).toHaveBeenCalledWith({
-      cfg: {} as never,
-      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    expect(resetMocks.performGatewaySessionReset).toHaveBeenCalledWith({
+      key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       reason: "new",
-      clearMeta: true,
+      commandSource: "discord:native",
     });
   });
 

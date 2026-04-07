@@ -1,8 +1,8 @@
+import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
-import { performGatewaySessionReset } from "./commands-reset.runtime.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
@@ -38,15 +38,14 @@ export async function maybeHandleResetCommand(
       ? boundAcpSessionKey.trim()
       : undefined;
   if (boundAcpKey) {
-    const resetResult = await performGatewaySessionReset({
-      key: boundAcpKey,
+    const resetResult = await resetConfiguredBindingTargetInPlace({
+      cfg: params.cfg,
+      sessionKey: boundAcpKey,
       reason: commandAction,
       commandSource: `${params.command.surface}:${params.ctx.CommandSource ?? "text"}`,
     });
     if (!resetResult.ok) {
-      logVerbose(
-        `acp reset failed for ${boundAcpKey}: ${resetResult.error.message ?? "unknown error"}`,
-      );
+      logVerbose(`acp reset failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`);
     }
     if (resetResult.ok) {
       params.command.resetHookTriggered = true;
