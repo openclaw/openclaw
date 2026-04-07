@@ -172,6 +172,9 @@ class Embeddings {
     }
     ensureGlobalUndiciEnvProxyDispatcher();
     const response = await this.client.embeddings.create(params);
+    if (!response.data || response.data.length === 0) {
+      throw new Error("Embeddings API returned empty data array");
+    }
     return response.data[0].embedding;
   }
 }
