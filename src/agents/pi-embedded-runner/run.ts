@@ -18,6 +18,7 @@ import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
+  resolveAuthProfileEligibility,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
@@ -294,6 +295,17 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
+      if (lockedProfileId) {
+        const eligibility = resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: authStore,
+          provider,
+          profileId: lockedProfileId,
+        });
+        if (!eligibility.eligible) {
+          throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
+        }
+      }
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
         : resolveAuthProfileOrder({
@@ -302,9 +314,6 @@ export async function runEmbeddedPiAgent(
             provider,
             preferredProfile: preferredProfileId,
           });
-      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
-        throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
-      }
       const profileCandidates = lockedProfileId
         ? [lockedProfileId]
         : profileOrder.length > 0
