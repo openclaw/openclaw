@@ -9,12 +9,12 @@
  * startup state. Stages 2-3 fill in the behavior.
  */
 
+import { AgentEngine } from "./agent.js";
 import type { MissedCallSmsConfig } from "./config.js";
 import { MissedCallSmsStore } from "./store.js";
-import { startWebhookServer, type WebhookServer } from "./webhook.js";
 import { TelnyxCallsClient } from "./telnyx-calls.js";
 import { TelnyxMessagingClient } from "./telnyx-sms.js";
-import { AgentEngine } from "./agent.js";
+import { startWebhookServer, type WebhookServer } from "./webhook.js";
 
 export interface RuntimeLogger {
   info: (msg: string) => void;

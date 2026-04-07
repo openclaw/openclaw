@@ -44,9 +44,7 @@ export class TelnyxMessagingClient {
     // Telnyx rejects messages over 1600 chars; SMBs occasionally paste
     // long responses. Truncate with a clear indicator rather than erroring.
     const text =
-      params.text.length > 1550
-        ? `${params.text.slice(0, 1540)}... [truncated]`
-        : params.text;
+      params.text.length > 1550 ? `${params.text.slice(0, 1540)}... [truncated]` : params.text;
 
     const resp = await fetch(`${TELNYX_API}/messages`, {
       method: "POST",
@@ -64,9 +62,7 @@ export class TelnyxMessagingClient {
 
     if (!resp.ok) {
       const body = await resp.text().catch(() => "");
-      throw new Error(
-        `telnyx SMS send failed: ${resp.status} ${resp.statusText} ${body}`,
-      );
+      throw new Error(`telnyx SMS send failed: ${resp.status} ${resp.statusText} ${body}`);
     }
 
     const json = (await resp.json()) as {
@@ -74,9 +70,7 @@ export class TelnyxMessagingClient {
     };
     const messageId = json.data?.id ?? "";
     if (!messageId) {
-      this.logger.warn(
-        "[missed-call-sms] telnyx SMS send returned no message id",
-      );
+      this.logger.warn("[missed-call-sms] telnyx SMS send returned no message id");
     }
     return { messageId, raw: json };
   }

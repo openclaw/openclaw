@@ -59,9 +59,7 @@ export class DeepgramClient {
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(
-        `deepgram transcribe failed: ${resp.status} ${resp.statusText} ${text}`,
-      );
+      throw new Error(`deepgram transcribe failed: ${resp.status} ${resp.statusText} ${text}`);
     }
 
     const json = (await resp.json()) as {
@@ -74,9 +72,7 @@ export class DeepgramClient {
 
     const alt = json.results?.channels?.[0]?.alternatives?.[0];
     if (!alt) {
-      this.logger.warn(
-        "[missed-call-sms] deepgram returned no transcription alternatives",
-      );
+      this.logger.warn("[missed-call-sms] deepgram returned no transcription alternatives");
       return { transcript: "", confidence: 0, rawResponse: json };
     }
     return {

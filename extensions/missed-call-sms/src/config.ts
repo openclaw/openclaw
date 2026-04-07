@@ -184,9 +184,7 @@ export interface ProviderValidation {
   errors: string[];
 }
 
-export function validateProviderConfig(
-  config: MissedCallSmsConfig,
-): ProviderValidation {
+export function validateProviderConfig(config: MissedCallSmsConfig): ProviderValidation {
   const errors: string[] = [];
   if (!config.telnyx.apiKey) errors.push("telnyx.apiKey is required");
   if (!config.telnyx.fromNumber) errors.push("telnyx.fromNumber is required");

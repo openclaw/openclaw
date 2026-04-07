@@ -81,9 +81,7 @@ const missedCallSmsPlugin = {
         throw new Error("missed-call-sms is disabled in plugin config");
       }
       if (!validation.valid) {
-        throw new Error(
-          `missed-call-sms misconfigured: ${validation.errors.join("; ")}`,
-        );
+        throw new Error(`missed-call-sms misconfigured: ${validation.errors.join("; ")}`);
       }
       if (runtime) return runtime;
       if (!runtimePromise) {
@@ -103,10 +101,7 @@ const missedCallSmsPlugin = {
       return runtime;
     };
 
-    const sendError = (
-      respond: (ok: boolean, payload?: unknown) => void,
-      err: unknown,
-    ) => {
+    const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
       respond(false, { error: err instanceof Error ? err.message : String(err) });
     };
 
@@ -117,10 +112,8 @@ const missedCallSmsPlugin = {
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          const status =
-            typeof params?.status === "string" ? params.status : "open";
-          const limit =
-            typeof params?.limit === "number" ? params.limit : 50;
+          const status = typeof params?.status === "string" ? params.status : "open";
+          const limit = typeof params?.limit === "number" ? params.limit : 50;
           const items = await rt.store.listConversations({ status, limit });
           respond(true, { items });
         } catch (err) {
@@ -133,10 +126,7 @@ const missedCallSmsPlugin = {
       "missedcall.get",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const id =
-            typeof params?.conversationId === "string"
-              ? params.conversationId.trim()
-              : "";
+          const id = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
           if (!id) {
             respond(false, { error: "conversationId required" });
             return;
@@ -158,12 +148,8 @@ const missedCallSmsPlugin = {
       "missedcall.reply",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const id =
-            typeof params?.conversationId === "string"
-              ? params.conversationId.trim()
-              : "";
-          const message =
-            typeof params?.message === "string" ? params.message.trim() : "";
+          const id = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+          const message = typeof params?.message === "string" ? params.message.trim() : "";
           if (!id || !message) {
             respond(false, { error: "conversationId and message required" });
             return;
@@ -181,10 +167,7 @@ const missedCallSmsPlugin = {
       "missedcall.takeover",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const id =
-            typeof params?.conversationId === "string"
-              ? params.conversationId.trim()
-              : "";
+          const id = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
           if (!id) {
             respond(false, { error: "conversationId required" });
             return;
@@ -202,10 +185,7 @@ const missedCallSmsPlugin = {
       "missedcall.close",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const id =
-            typeof params?.conversationId === "string"
-              ? params.conversationId.trim()
-              : "";
+          const id = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
           if (!id) {
             respond(false, { error: "conversationId required" });
             return;
@@ -229,9 +209,7 @@ const missedCallSmsPlugin = {
       parameters: MissedCallSmsToolSchema,
       async execute(_toolCallId, params) {
         const json = (payload: unknown) => ({
-          content: [
-            { type: "text" as const, text: JSON.stringify(payload, null, 2) },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
           details: payload,
         });
         try {
@@ -249,10 +227,7 @@ const missedCallSmsPlugin = {
               return json(convo ? { found: true, conversation: convo } : { found: false });
             }
             case "send_reply": {
-              const r = await rt.sendManualReply(
-                params.conversationId,
-                params.message,
-              );
+              const r = await rt.sendManualReply(params.conversationId, params.message);
               return json(r);
             }
             case "take_over": {

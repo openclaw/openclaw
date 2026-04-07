@@ -18,13 +18,9 @@
  */
 
 import type { MissedCallSmsConfig } from "./config.js";
-import type {
-  Conversation,
-  ConversationMessage,
-  MissedCallSmsStore,
-} from "./store.js";
-import type { TelnyxMessagingClient } from "./telnyx-sms.js";
 import type { RuntimeLogger } from "./runtime.js";
+import type { Conversation, ConversationMessage, MissedCallSmsStore } from "./store.js";
+import type { TelnyxMessagingClient } from "./telnyx-sms.js";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -87,10 +83,7 @@ export class AgentEngine {
     if (!convo) {
       // No active conversation — caller is replying out of band. Open
       // a new conversation so we don't drop the message.
-      convo = await this.store.getOrCreate(
-        callerPhone,
-        this.config.telnyx.fromNumber!,
-      );
+      convo = await this.store.getOrCreate(callerPhone, this.config.telnyx.fromNumber!);
     }
     await this.store.appendMessage(convo.id, {
       role: "caller",
@@ -104,22 +97,16 @@ export class AgentEngine {
 
     // Escalation keyword check — fast path before paying for an LLM call.
     const lowered = text.toLowerCase();
-    const hit = this.config.sms.escalationKeywords.find((kw) =>
-      lowered.includes(kw.toLowerCase()),
-    );
+    const hit = this.config.sms.escalationKeywords.find((kw) => lowered.includes(kw.toLowerCase()));
     if (hit) {
-      this.logger.info(
-        `[missed-call-sms] escalating ${convo.id} on keyword "${hit}"`,
-      );
+      this.logger.info(`[missed-call-sms] escalating ${convo.id} on keyword "${hit}"`);
       await this.escalate(fresh, `Caller used escalation keyword: "${hit}"`);
       return { success: true, newStatus: "escalated" };
     }
 
     // If a human has taken over, the autonomous agent stays silent.
     if (fresh.status === "human-takeover") {
-      this.logger.info(
-        `[missed-call-sms] ${convo.id} is in human-takeover, skipping agent turn`,
-      );
+      this.logger.info(`[missed-call-sms] ${convo.id} is in human-takeover, skipping agent turn`);
       return { success: true };
     }
 
@@ -137,10 +124,7 @@ export class AgentEngine {
 
   // -------------------- internal --------------------
 
-  private async runTurn(
-    convo: Conversation,
-    isFirstTurn: boolean,
-  ): Promise<AgentTurnResult> {
+  private async runTurn(convo: Conversation, isFirstTurn: boolean): Promise<AgentTurnResult> {
     try {
       const systemPrompt = this.buildSystemPrompt(isFirstTurn);
       const messages = this.buildMessages(convo, isFirstTurn);
@@ -272,9 +256,7 @@ Do not output anything outside the marker. Do not include quotes around the body
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(
-        `anthropic call failed: ${resp.status} ${resp.statusText} ${text}`,
-      );
+      throw new Error(`anthropic call failed: ${resp.status} ${resp.statusText} ${text}`);
     }
     const json = (await resp.json()) as {
       content?: Array<{ type: string; text?: string }>;
@@ -352,9 +334,7 @@ Do not output anything outside the marker. Do not include quotes around the body
     const vm = convo.voicemail?.transcript
       ? `VM: "${convo.voicemail.transcript.slice(0, 200)}"`
       : "(no voicemail)";
-    const lastCaller = [...convo.messages]
-      .reverse()
-      .find((m) => m.role === "caller");
+    const lastCaller = [...convo.messages].reverse().find((m) => m.role === "caller");
     const last = lastCaller ? `Last text: "${lastCaller.content.slice(0, 200)}"` : "";
     return `[${this.config.business.name}] Caller ${convo.callerPhone} needs human help. ${reason}. ${vm} ${last}`.trim();
   }

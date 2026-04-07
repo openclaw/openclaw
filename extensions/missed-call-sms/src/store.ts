@@ -16,10 +16,10 @@
  * backing store without changing the public API.
  */
 
-import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 export type ConversationStatus =
   // Voicemail captured, agent engaged, caller is responsive.
@@ -99,9 +99,7 @@ export class MissedCallSmsStore {
   private loaded = false;
 
   constructor(path?: string) {
-    this.path =
-      path ??
-      join(homedir(), ".openclaw", "missed-call-sms", "conversations.jsonl");
+    this.path = path ?? join(homedir(), ".openclaw", "missed-call-sms", "conversations.jsonl");
   }
 
   async init(): Promise<void> {
@@ -193,11 +191,7 @@ export class MissedCallSmsStore {
   }
 
   private isActiveStatus(status: ConversationStatus): boolean {
-    return (
-      status === "open" ||
-      status === "awaiting-reply" ||
-      status === "human-takeover"
-    );
+    return status === "open" || status === "awaiting-reply" || status === "human-takeover";
   }
 
   private async appendEvent(event: StoreEvent): Promise<void> {
@@ -206,10 +200,7 @@ export class MissedCallSmsStore {
   }
 
   /** Get (or create if none exists) the active conversation for a caller. */
-  async getOrCreate(
-    callerPhone: string,
-    businessPhone: string,
-  ): Promise<Conversation> {
+  async getOrCreate(callerPhone: string, businessPhone: string): Promise<Conversation> {
     await this.init();
     const existingId = this.activeByPhone.get(callerPhone);
     if (existingId) {
@@ -242,9 +233,7 @@ export class MissedCallSmsStore {
     return this.index.get(id);
   }
 
-  async getActiveByPhone(
-    callerPhone: string,
-  ): Promise<Conversation | undefined> {
+  async getActiveByPhone(callerPhone: string): Promise<Conversation | undefined> {
     await this.init();
     const id = this.activeByPhone.get(callerPhone);
     return id ? this.index.get(id) : undefined;
@@ -256,8 +245,7 @@ export class MissedCallSmsStore {
     const all = Array.from(this.index.values()).sort((a, b) =>
       b.updatedAt.localeCompare(a.updatedAt),
     );
-    const filtered =
-      status === "all" ? all : all.filter((c) => c.status === status);
+    const filtered = status === "all" ? all : all.filter((c) => c.status === status);
     return filtered.slice(0, limit);
   }
 
@@ -286,10 +274,7 @@ export class MissedCallSmsStore {
     return full;
   }
 
-  async attachVoicemail(
-    conversationId: string,
-    voicemail: VoicemailRecord,
-  ): Promise<void> {
+  async attachVoicemail(conversationId: string, voicemail: VoicemailRecord): Promise<void> {
     await this.init();
     await this.appendEvent({
       type: "voicemail-attached",
@@ -299,10 +284,7 @@ export class MissedCallSmsStore {
     });
   }
 
-  async setStatus(
-    conversationId: string,
-    status: ConversationStatus,
-  ): Promise<void> {
+  async setStatus(conversationId: string, status: ConversationStatus): Promise<void> {
     await this.init();
     await this.appendEvent({
       type: "status-changed",

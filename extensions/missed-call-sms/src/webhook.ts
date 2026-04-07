@@ -21,18 +21,18 @@
  * Disabled when config.skipSignatureVerification = true (dev only).
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { verify as nacl_verify } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AgentEngine } from "./agent.js";
 import type { MissedCallSmsConfig } from "./config.js";
+import { DeepgramClient } from "./deepgram.js";
+import type { RuntimeLogger } from "./runtime.js";
 import type { MissedCallSmsStore } from "./store.js";
 import type { TelnyxCallsClient } from "./telnyx-calls.js";
 import type { TelnyxMessagingClient } from "./telnyx-sms.js";
-import type { AgentEngine } from "./agent.js";
-import type { RuntimeLogger } from "./runtime.js";
-import { DeepgramClient } from "./deepgram.js";
 
 export interface WebhookServer {
   stop(): Promise<void>;
@@ -54,9 +54,7 @@ interface TelnyxEnvelope {
   };
 }
 
-export async function startWebhookServer(
-  opts: StartWebhookOptions,
-): Promise<WebhookServer> {
+export async function startWebhookServer(opts: StartWebhookOptions): Promise<WebhookServer> {
   const { config, store, telnyxCalls, telnyxSms, agent, logger } = opts;
   const deepgram = new DeepgramClient({
     apiKey: config.deepgram.apiKey!,
@@ -199,8 +197,7 @@ export async function startWebhookServer(
       }
     } else {
       const remote = req.socket.remoteAddress ?? "";
-      const isLoopback =
-        remote === "127.0.0.1" || remote === "::1" || remote.endsWith("127.0.0.1");
+      const isLoopback = remote === "127.0.0.1" || remote === "::1" || remote.endsWith("127.0.0.1");
       if (!isLoopback) {
         res.statusCode = 401;
         res.end("dashboardToken not configured; remote access denied");
@@ -217,9 +214,7 @@ export async function startWebhookServer(
     const method = req.method ?? "GET";
     // Strip query string for routing.
     const path = subPath.split("?")[0] ?? "";
-    const queryString = subPath.includes("?")
-      ? subPath.slice(subPath.indexOf("?") + 1)
-      : "";
+    const queryString = subPath.includes("?") ? subPath.slice(subPath.indexOf("?") + 1) : "";
     const query = new URLSearchParams(queryString);
 
     try {
@@ -353,17 +348,13 @@ export async function startWebhookServer(
       case "call.recording.saved": {
         // Telnyx delivers recording_id + (sometimes) public_recording_urls.
         const recordingId = String(payload.recording_id ?? "");
-        const inlineUrls = payload.public_recording_urls as
-          | { mp3?: string }
-          | undefined;
+        const inlineUrls = payload.public_recording_urls as { mp3?: string } | undefined;
         let recordingUrl = inlineUrls?.mp3;
         if (!recordingUrl && recordingId) {
           recordingUrl = await telnyxCalls.getRecordingUrl(recordingId);
         }
         if (!recordingUrl) {
-          logger.warn(
-            `[missed-call-sms] recording.saved with no URL for ccid=${callControlId}`,
-          );
+          logger.warn(`[missed-call-sms] recording.saved with no URL for ccid=${callControlId}`);
           return;
         }
 
@@ -402,9 +393,7 @@ export async function startWebhookServer(
         // Fire the agent's first turn (sends initial SMS to the caller).
         const turn = await agent.handleVoicemail(convo.id);
         if (!turn.success) {
-          logger.error(
-            `[missed-call-sms] first agent turn failed: ${turn.error}`,
-          );
+          logger.error(`[missed-call-sms] first agent turn failed: ${turn.error}`);
         }
         return;
       }
@@ -416,9 +405,7 @@ export async function startWebhookServer(
 
       default:
         // Unhandled event type — log at debug level only to avoid noise.
-        logger.debug?.(
-          `[missed-call-sms] ignoring voice event ${eventType}`,
-        );
+        logger.debug?.(`[missed-call-sms] ignoring voice event ${eventType}`);
         return;
     }
   }
@@ -447,15 +434,11 @@ export async function startWebhookServer(
       return;
     }
 
-    logger.info(
-      `[missed-call-sms] inbound SMS from=${callerPhone} text="${text.slice(0, 80)}"`,
-    );
+    logger.info(`[missed-call-sms] inbound SMS from=${callerPhone} text="${text.slice(0, 80)}"`);
 
     const result = await agent.handleInboundSms(callerPhone, text, providerMessageId);
     if (!result.success) {
-      logger.error(
-        `[missed-call-sms] inbound SMS handler failed: ${result.error}`,
-      );
+      logger.error(`[missed-call-sms] inbound SMS handler failed: ${result.error}`);
     }
   }
 

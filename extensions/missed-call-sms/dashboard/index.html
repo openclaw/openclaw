@@ -19,14 +19,21 @@
         --bad: #ef4444;
         --human: #c084fc;
       }
-      * { box-sizing: border-box; }
-      html, body {
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
         margin: 0;
         padding: 0;
         height: 100%;
         background: var(--bg);
         color: var(--text);
-        font-family: Inter, -apple-system, system-ui, sans-serif;
+        font-family:
+          Inter,
+          -apple-system,
+          system-ui,
+          sans-serif;
         font-size: 14px;
       }
       header {
@@ -43,8 +50,13 @@
         margin: 0;
         letter-spacing: 0.3px;
       }
-      header .accent { color: var(--accent); }
-      header .meta { color: var(--muted); font-size: 12px; }
+      header .accent {
+        color: var(--accent);
+      }
+      header .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
       main {
         display: grid;
         grid-template-columns: 360px 1fr;
@@ -72,30 +84,54 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .filters button:hover { color: var(--text); }
+      .filters button:hover {
+        color: var(--text);
+      }
       .filters button.active {
         background: var(--accent);
         color: #02020e;
         border-color: var(--accent);
       }
-      .convo-list { list-style: none; margin: 0; padding: 0; }
+      .convo-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
       .convo-list li {
         padding: 14px 16px;
         border-bottom: 1px solid var(--border);
         cursor: pointer;
         transition: background 0.15s;
       }
-      .convo-list li:hover { background: var(--panel-2); }
-      .convo-list li.selected { background: var(--panel-2); border-left: 3px solid var(--accent); padding-left: 13px; }
+      .convo-list li:hover {
+        background: var(--panel-2);
+      }
+      .convo-list li.selected {
+        background: var(--panel-2);
+        border-left: 3px solid var(--accent);
+        padding-left: 13px;
+      }
       .convo-row-head {
         display: flex;
         justify-content: space-between;
         align-items: center;
         margin-bottom: 4px;
       }
-      .phone { font-weight: 600; color: var(--text); }
-      .timestamp { color: var(--muted); font-size: 11px; }
-      .preview { color: var(--muted); font-size: 12px; line-height: 1.4; max-height: 32px; overflow: hidden; }
+      .phone {
+        font-weight: 600;
+        color: var(--text);
+      }
+      .timestamp {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .preview {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+        max-height: 32px;
+        overflow: hidden;
+      }
       .status-pill {
         display: inline-block;
         font-size: 10px;
@@ -106,11 +142,26 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
-      .status-open { background: rgba(50, 213, 131, 0.15); color: var(--good); }
-      .status-awaiting-reply { background: rgba(10, 158, 252, 0.15); color: var(--accent); }
-      .status-escalated { background: rgba(245, 176, 66, 0.15); color: var(--warn); }
-      .status-human-takeover { background: rgba(192, 132, 252, 0.15); color: var(--human); }
-      .status-closed { background: rgba(138, 146, 168, 0.15); color: var(--muted); }
+      .status-open {
+        background: rgba(50, 213, 131, 0.15);
+        color: var(--good);
+      }
+      .status-awaiting-reply {
+        background: rgba(10, 158, 252, 0.15);
+        color: var(--accent);
+      }
+      .status-escalated {
+        background: rgba(245, 176, 66, 0.15);
+        color: var(--warn);
+      }
+      .status-human-takeover {
+        background: rgba(192, 132, 252, 0.15);
+        color: var(--human);
+      }
+      .status-closed {
+        background: rgba(138, 146, 168, 0.15);
+        color: var(--muted);
+      }
 
       .detail {
         display: flex;
@@ -154,7 +205,10 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .detail-actions button:hover { border-color: var(--accent); color: var(--accent); }
+      .detail-actions button:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
       .voicemail-block {
         margin: 16px 24px;
         padding: 12px 16px;
@@ -179,7 +233,11 @@
         font-size: 11px;
         margin-top: 8px;
       }
-      .voicemail-block audio { display: block; margin-top: 8px; max-width: 100%; }
+      .voicemail-block audio {
+        display: block;
+        margin-top: 8px;
+        max-width: 100%;
+      }
       .messages {
         flex: 1;
         overflow-y: auto;
@@ -252,7 +310,10 @@
         cursor: pointer;
         font-family: inherit;
       }
-      .composer button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .composer button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
       .toast {
         position: fixed;
         bottom: 20px;
@@ -268,7 +329,9 @@
         transition: opacity 0.2s;
         pointer-events: none;
       }
-      .toast.show { opacity: 1; }
+      .toast.show {
+        opacity: 1;
+      }
     </style>
   </head>
   <body>
@@ -301,7 +364,9 @@
       const TOKEN_KEY = "mcs.dashboardToken";
       let token = localStorage.getItem(TOKEN_KEY) || "";
       if (!token) {
-        token = prompt("Enter the Mission Control dashboard token (or leave blank for loopback dev):") || "";
+        token =
+          prompt("Enter the Mission Control dashboard token (or leave blank for loopback dev):") ||
+          "";
         if (token) localStorage.setItem(TOKEN_KEY, token);
       }
 
@@ -320,9 +385,17 @@
       });
 
       function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, (c) => ({
-          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-        })[c]);
+        return String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
       }
 
       function fmtTime(iso) {
@@ -369,14 +442,13 @@
         }
         ul.innerHTML = cachedItems
           .map((c) => {
-            const lastMsg = c.messages && c.messages.length > 0
-              ? c.messages[c.messages.length - 1]
-              : null;
+            const lastMsg =
+              c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null;
             const preview = lastMsg
               ? `${lastMsg.role === "caller" ? "" : "→ "}${escapeHtml(lastMsg.content.slice(0, 100))}`
               : c.voicemail && c.voicemail.transcript
-              ? `📞 ${escapeHtml(c.voicemail.transcript.slice(0, 100))}`
-              : "(no messages yet)";
+                ? `📞 ${escapeHtml(c.voicemail.transcript.slice(0, 100))}`
+                : "(no messages yet)";
             return `
               <li data-id="${c.id}" class="${c.id === currentConvoId ? "selected" : ""}">
                 <div class="convo-row-head">
@@ -437,7 +509,14 @@
         const messagesHtml = (c.messages || [])
           .map((m) => {
             const cls = m.role;
-            const who = m.role === "caller" ? "Caller" : m.role === "agent" ? "AI Agent" : m.role === "human-owner" ? "You" : "System";
+            const who =
+              m.role === "caller"
+                ? "Caller"
+                : m.role === "agent"
+                  ? "AI Agent"
+                  : m.role === "human-owner"
+                    ? "You"
+                    : "System";
             return `
               <div class="msg ${cls}">
                 ${escapeHtml(m.content)}
@@ -504,7 +583,10 @@
 
       async function takeover(id) {
         if (!confirm("Take over this conversation? The AI agent will stop responding.")) return;
-        await fetch(`${apiBase}/conversations/${id}/takeover`, { method: "POST", headers: headers() });
+        await fetch(`${apiBase}/conversations/${id}/takeover`, {
+          method: "POST",
+          headers: headers(),
+        });
         toast("Conversation taken over");
         await fetchConversations();
         await selectConversation(id);

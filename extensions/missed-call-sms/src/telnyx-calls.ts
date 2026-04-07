@@ -105,9 +105,7 @@ export class TelnyxCallsClient {
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(
-        `telnyx POST ${path} failed: ${resp.status} ${resp.statusText} ${text}`,
-      );
+      throw new Error(`telnyx POST ${path} failed: ${resp.status} ${resp.statusText} ${text}`);
     }
     if (resp.status === 204) return null;
     return resp.json().catch(() => null);
@@ -119,9 +117,7 @@ export class TelnyxCallsClient {
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      throw new Error(
-        `telnyx GET ${path} failed: ${resp.status} ${resp.statusText} ${text}`,
-      );
+      throw new Error(`telnyx GET ${path} failed: ${resp.status} ${resp.statusText} ${text}`);
     }
     return resp.json();
   }
