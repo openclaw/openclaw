@@ -1,4 +1,5 @@
 import type { ChannelApprovalKind } from "../channels/plugins/types.adapters.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
@@ -124,9 +125,17 @@ function resolveFallbackRouteNoticeTarget(report: ApprovalRouteReport): RouteNot
   };
 }
 
-function didReportDeliverToOrigin(report: ApprovalRouteReport): boolean {
+function didReportDeliverToOrigin(report: ApprovalRouteReport, originAccountId?: string): boolean {
   const originTarget = report.deliveryPlan.originTarget;
   if (!originTarget) {
+    return false;
+  }
+  const reportAccountId = normalizeOptionalString(report.accountId);
+  if (
+    originAccountId !== undefined &&
+    reportAccountId !== undefined &&
+    reportAccountId !== originAccountId
+  ) {
     return false;
   }
   const originKey = buildChannelApprovalNativeTargetKey(originTarget);
@@ -159,6 +168,7 @@ function resolveApprovalRouteNotice(params: {
   if (!target) {
     return null;
   }
+  const originAccountId = normalizeOptionalString(target.accountId);
 
   // If any same-channel runtime already delivered into the origin chat, every
   // other fallback delivery becomes supplemental and should not trigger a notice.
@@ -166,7 +176,7 @@ function resolveApprovalRouteNotice(params: {
     if (originChannel && normalizeChannel(report.channel) !== originChannel) {
       return false;
     }
-    return didReportDeliverToOrigin(report);
+    return didReportDeliverToOrigin(report, originAccountId);
   });
   if (originDelivered) {
     return null;
@@ -181,6 +191,16 @@ function resolveApprovalRouteNotice(params: {
       originChannel &&
       reportChannel === originChannel &&
       !report.deliveryPlan.notifyOriginWhenDmOnly
+    ) {
+      return [];
+    }
+    const reportAccountId = normalizeOptionalString(report.accountId);
+    if (
+      originChannel &&
+      reportChannel === originChannel &&
+      originAccountId !== undefined &&
+      reportAccountId !== undefined &&
+      reportAccountId !== originAccountId
     ) {
       return [];
     }

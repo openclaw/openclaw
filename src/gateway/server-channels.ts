@@ -375,6 +375,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!preserveRestartAttempts) {
             restartAttempts.delete(rKey);
           }
+          stopApprovalBootstrap = await startChannelApprovalHandlerBootstrap({
+            plugin,
+            cfg,
+            accountId: id,
+            channelRuntime: channelRuntimeForTask,
+            logger: log,
+          });
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
@@ -384,14 +391,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastStartAt: Date.now(),
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
-          });
-
-          stopApprovalBootstrap = await startChannelApprovalHandlerBootstrap({
-            plugin,
-            cfg,
-            accountId: id,
-            channelRuntime: channelRuntimeForTask,
-            logger: log,
           });
           const task = Promise.resolve().then(() =>
             startAccount({
@@ -473,6 +472,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
           handedOffTask = true;
           store.tasks.set(id, trackedPromise);
+        } catch (error) {
+          if (!handedOffTask) {
+            setRuntime(channelId, id, {
+              accountId: id,
+              running: false,
+              restartPending: false,
+              lastError: formatErrorMessage(error),
+            });
+          }
+          throw error;
         } finally {
           resolveStart?.();
           if (store.starting.get(id) === startGate) {

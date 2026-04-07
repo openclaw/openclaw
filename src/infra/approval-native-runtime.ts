@@ -273,6 +273,9 @@ export function createChannelNativeApprovalRuntime<
     finalizeResolved: adapter.finalizeResolved,
     finalizeExpired: adapter.finalizeExpired,
     onStopped: adapter.onStopped,
+    beforeGatewayClientStart: () => {
+      routeReporter.start();
+    },
     nowMs,
     deliverRequested: async (request) => {
       const approvalKind = resolveApprovalKind(request);
@@ -363,10 +366,11 @@ export function createChannelNativeApprovalRuntime<
   return {
     ...runtime,
     async start() {
-      const shouldRegisterRoutes = adapter.isConfigured();
-      await runtime.start();
-      if (shouldRegisterRoutes) {
-        routeReporter.start();
+      try {
+        await runtime.start();
+      } catch (error) {
+        await routeReporter.stop();
+        throw error;
       }
     },
     async stop() {

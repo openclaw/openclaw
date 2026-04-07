@@ -37,6 +37,7 @@ export type ExecApprovalChannelRuntimeAdapter<
   isConfigured: () => boolean;
   shouldHandle: (request: TRequest) => boolean;
   deliverRequested: (request: TRequest) => Promise<TPending[]>;
+  beforeGatewayClientStart?: () => Promise<void> | void;
   finalizeResolved: (params: {
     request: TRequest;
     resolved: TResolved;
@@ -240,9 +241,17 @@ export function createExecApprovalChannelRuntime<
           client.stop();
           return;
         }
-        client.start();
+        await adapter.beforeGatewayClientStart?.();
         gatewayClient = client;
         started = true;
+        try {
+          client.start();
+        } catch (error) {
+          gatewayClient = null;
+          started = false;
+          client.stop();
+          throw error;
+        }
       })().finally(() => {
         startPromise = null;
       });

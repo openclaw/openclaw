@@ -23,6 +23,7 @@ import {
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -40,25 +41,19 @@ function resolveTurnSourceTelegramOriginTarget(
   }
   const rawThreadId =
     request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
-  const threadId =
-    typeof rawThreadId === "number"
-      ? rawThreadId
-      : typeof rawThreadId === "string"
-        ? Number.parseInt(rawThreadId, 10)
-        : undefined;
   return {
     to: turnSourceTo,
-    threadId: Number.isFinite(threadId) ? threadId : undefined,
+    threadId: parseTelegramThreadId(rawThreadId),
   };
 }
 
 function resolveSessionTelegramOriginTarget(sessionTarget: {
   to: string;
-  threadId?: number | null;
+  threadId?: string | number | null;
 }): TelegramOriginTarget {
   return {
     to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: sessionTarget.threadId ?? undefined,
+    threadId: parseTelegramThreadId(sessionTarget.threadId),
   };
 }
 

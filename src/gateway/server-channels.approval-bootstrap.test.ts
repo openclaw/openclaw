@@ -187,4 +187,27 @@ describe("server-channels approval bootstrap", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("keeps the account stopped when approval bootstrap startup fails", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const startAccount = vi.fn(async () => {});
+    hoisted.startChannelApprovalHandlerBootstrap.mockRejectedValue(new Error("boom"));
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager(createChannelManager, { channelRuntime });
+
+    await manager.startChannels();
+
+    expect(startAccount).not.toHaveBeenCalled();
+    const accountSnapshot =
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(accountSnapshot).toEqual(
+      expect.objectContaining({
+        accountId: DEFAULT_ACCOUNT_ID,
+        running: false,
+        restartPending: false,
+        lastError: "boom",
+      }),
+    );
+  });
 });

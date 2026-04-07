@@ -356,6 +356,73 @@ describe("createChannelNativeApprovalRuntime", () => {
     await deliveringRuntime.stop();
   });
 
+  it("captures approvals emitted during gateway startup before the first onEvent turn", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (params) => ({
+      start: () => {
+        params.onEvent({
+          event: "exec.approval.requested",
+          payload: {
+            id: "req-startup-race",
+            request: {
+              command: "echo hi",
+              turnSourceChannel: "slack",
+              turnSourceTo: "channel:C123",
+              turnSourceAccountId: "default",
+              turnSourceThreadId: "1712345678.123456",
+            },
+            createdAtMs: 0,
+            expiresAtMs: Date.now() + 60_000,
+          },
+        });
+      },
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    }));
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-startup-race",
+      clientDisplayName: "Slack",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "channel:C123", threadId: "1712345678.123456" }),
+        resolveApproverDmTargets: async () => [{ to: "user:owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "slack-dm:owner",
+        target: { chatId: "owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "default",
+        threadId: "1712345678.123456",
+        message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+        idempotencyKey: "approval-route-notice:req-startup-race",
+      });
+    });
+    await runtime.stop();
+  });
+
   it("inherits fallback account and thread when the request omits them", async () => {
     mockGatewayClientStarts.mockReset();
     mockGatewayClientStops.mockReset();

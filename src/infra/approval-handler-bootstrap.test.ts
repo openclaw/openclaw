@@ -282,7 +282,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       isEnabled: vi.fn().mockReturnValue(true),
       isVerboseEnabled: vi.fn().mockReturnValue(false),
       verbose: vi.fn(),
-    } as never;
+    };
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
@@ -312,7 +312,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       cfg: {} as never,
       accountId: "default",
       channelRuntime,
-      logger,
+      logger: logger as never,
     });
 
     channelRuntime.runtimeContexts.register({
@@ -333,6 +333,73 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(logger.error).toHaveBeenCalledWith(
       "failed to start native approval handler: Error: boom",
     );
+
+    await cleanup();
+  });
+
+  it("does not let a stale retry stop a newer active handler", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const firstStart = vi.fn().mockRejectedValueOnce(new Error("boom"));
+    const firstStop = vi.fn().mockResolvedValue(undefined);
+    const secondStart = vi.fn().mockResolvedValue(undefined);
+    const secondStop = vi.fn().mockResolvedValue(undefined);
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start: firstStart, stop: firstStop })
+      .mockResolvedValueOnce({ start: secondStart, stop: secondStop })
+      .mockResolvedValueOnce({ start: secondStart, stop: secondStop });
+
+    const cleanup = await startChannelApprovalHandlerBootstrap({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        approvalCapability: {
+          nativeRuntime: {
+            availability: {
+              isConfigured: vi.fn().mockReturnValue(true),
+              shouldHandle: vi.fn().mockReturnValue(true),
+            },
+            presentation: {
+              buildPendingPayload: vi.fn(),
+              buildResolvedResult: vi.fn(),
+              buildExpiredResult: vi.fn(),
+            },
+            transport: {
+              prepareTarget: vi.fn(),
+              deliverPending: vi.fn(),
+            },
+          },
+        },
+      } as never,
+      cfg: {} as never,
+      accountId: "default",
+      channelRuntime,
+    });
+
+    channelRuntime.runtimeContexts.register({
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app: { ok: "first" } },
+    });
+    await flushTransitions();
+    expect(firstStart).toHaveBeenCalledTimes(1);
+
+    channelRuntime.runtimeContexts.register({
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app: { ok: "second" } },
+    });
+    await flushTransitions();
+    expect(secondStart).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+
+    expect(firstStop).toHaveBeenCalledTimes(1);
+    expect(secondStart).toHaveBeenCalledTimes(1);
+    expect(secondStop).not.toHaveBeenCalled();
 
     await cleanup();
   });

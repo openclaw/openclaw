@@ -146,6 +146,45 @@ describe("telegram native approval adapter", () => {
     });
   });
 
+  it("parses numeric string thread ids from the session store for plugin approvals", async () => {
+    writeStore({
+      "agent:main:telegram:group:-1003841603622:topic:928": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003841603622",
+          accountId: "default",
+          threadId: "928",
+        },
+      },
+    });
+
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: {
+        ...buildConfig(),
+        session: { store: STORE_PATH },
+      },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-2",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "-1003841603622",
+      threadId: 928,
+    });
+  });
+
   it("marks DM-only telegram approvals to notify the origin chat after delivery", () => {
     const capabilities = telegramNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),

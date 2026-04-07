@@ -54,6 +54,9 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   };
 
   const startHandlerForContext = async (context: unknown, generation: number) => {
+    if (generation !== activeGeneration) {
+      return;
+    }
     await stopHandler();
     if (generation !== activeGeneration) {
       return;
