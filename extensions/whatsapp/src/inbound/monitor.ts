@@ -152,16 +152,22 @@ export async function monitorWebInbox(options: {
       // onMessage completes — without this ordering, Case 2 would fire
       // a "already processed" notification while the agent is still handling
       // the original body.
-      // Use try/finally so bookkeeping always runs even if onMessage rejects.
-      // Without this, a failed flush leaves IDs stuck in pendingMessageIds
-      // indefinitely, causing stale entries to misclassify later edits.
+      // Use try/finally so pendingMessageIds is always cleared even if
+      // onMessage rejects — preventing stale entries from accumulating.
+      // rememberProcessedId runs only on success: a failed flush means the
+      // agent never actually processed the message, so later edits should
+      // not trigger a "already processed" notification.
+      let deliverySucceeded = false;
       try {
         await options.onMessage(messageToDeliver);
+        deliverySucceeded = true;
       } finally {
         for (const entry of entries) {
           if (entry.id) {
             pendingMessageIds.delete(entry.id);
-            rememberProcessedId(entry.id);
+            if (deliverySucceeded) {
+              rememberProcessedId(entry.id);
+            }
           }
         }
       }
