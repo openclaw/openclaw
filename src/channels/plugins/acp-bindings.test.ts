@@ -19,8 +19,10 @@ vi.mock("./index.js", () => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: getActivePluginChannelRegistryVersionMock,
-  requireActivePluginChannelRegistry: requireActivePluginChannelRegistryMock,
+  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
+    getActivePluginChannelRegistryVersionMock(...args),
+  requireActivePluginChannelRegistry: (...args: unknown[]) =>
+    requireActivePluginChannelRegistryMock(...args),
 }));
 
 async function importConfiguredBindings() {
