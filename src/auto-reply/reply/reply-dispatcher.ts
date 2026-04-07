@@ -24,6 +24,12 @@ type ReplyDispatchDeliverer = (
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+/**
+ * Hard ceiling for human-delay so that custom configs with unbounded minMs/maxMs
+ * cannot exceed the block-reply pipeline timeout (default 15 s).  10 s leaves a
+ * comfortable 5 s budget for transport delivery within a single pipeline tick.
+ */
+const MAX_HUMAN_DELAY_MS = 10_000;
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -36,9 +42,9 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   const max =
     mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
   if (max <= min) {
-    return min;
+    return Math.min(min, MAX_HUMAN_DELAY_MS);
   }
-  return min + generateSecureInt(max - min + 1);
+  return Math.min(min + generateSecureInt(max - min + 1), MAX_HUMAN_DELAY_MS);
 }
 
 export type ReplyDispatcherOptions = {
