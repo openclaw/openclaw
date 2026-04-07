@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  normalizeOptionalString,
+  normalizeSingleOrTrimmedStringList,
+} from "openclaw/plugin-sdk/text-runtime";
 import YAML from "yaml";
 
 export const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
@@ -33,10 +37,6 @@ export type WikiPageSummary = {
   unsafeLocalRelativePath?: string;
   updatedAt?: string;
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n---\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
@@ -85,23 +85,7 @@ export function extractTitleFromMarkdown(body: string): string | undefined {
 }
 
 export function normalizeSourceIds(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []));
-  }
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
-  }
-  return [];
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []));
-  }
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
-  }
-  return [];
+  return normalizeSingleOrTrimmedStringList(value);
 }
 
 export function extractWikiLinks(markdown: string): string[] {
@@ -190,8 +174,8 @@ export function toWikiPageSummary(params: {
     pageType: normalizeOptionalString(parsed.frontmatter.pageType),
     sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
     linkTargets: extractWikiLinks(params.raw),
-    contradictions: normalizeStringList(parsed.frontmatter.contradictions),
-    questions: normalizeStringList(parsed.frontmatter.questions),
+    contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
+    questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
     confidence:
       typeof parsed.frontmatter.confidence === "number" &&
       Number.isFinite(parsed.frontmatter.confidence)

@@ -1,0 +1,156 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { normalizeProviderId } from "./provider-id.js";
+
+type ModelTarget = {
+  raw: string;
+  provider?: string;
+  modelId: string;
+};
+
+function normalizeCsvSet(values: Set<string> | null): Set<string> | null {
+  if (!values) {
+    return null;
+  }
+  const normalized = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    normalized.add(trimmed);
+  }
+  return normalized.size > 0 ? normalized : null;
+}
+
+function parseModelTarget(raw: string): ModelTarget | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash === -1) {
+    return {
+      raw: trimmed,
+      modelId: trimmed.toLowerCase(),
+    };
+  }
+  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const modelId = trimmed
+    .slice(slash + 1)
+    .trim()
+    .toLowerCase();
+  if (!provider || !modelId) {
+    return null;
+  }
+  return {
+    raw: trimmed,
+    provider,
+    modelId,
+  };
+}
+
+function hasSharedOwner(
+  left: string,
+  right: string,
+  params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    ownerCache: Map<string, readonly string[]>;
+  },
+): boolean {
+  const resolveOwners = (provider: string): readonly string[] => {
+    const normalized = normalizeProviderId(provider);
+    const cached = params.ownerCache.get(normalized);
+    if (cached) {
+      return cached;
+    }
+    const owners =
+      resolveOwningPluginIdsForProvider({
+        provider: normalized,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }) ?? [];
+    params.ownerCache.set(normalized, owners);
+    return owners;
+  };
+
+  const leftOwners = resolveOwners(left);
+  const rightOwners = resolveOwners(right);
+  return leftOwners.some((owner) => rightOwners.includes(owner));
+}
+
+export function createLiveTargetMatcher(params: {
+  providerFilter: Set<string> | null;
+  modelFilter: Set<string> | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const providerFilter = normalizeCsvSet(params.providerFilter);
+  const modelTargets = [...(normalizeCsvSet(params.modelFilter) ?? [])]
+    .map((value) => parseModelTarget(value))
+    .filter((value): value is ModelTarget => value !== null);
+  const ownerCache = new Map<string, readonly string[]>();
+
+  return {
+    matchesProvider(provider: string): boolean {
+      if (!providerFilter) {
+        return true;
+      }
+      const normalizedProvider = normalizeProviderId(provider);
+      for (const requested of providerFilter) {
+        const normalizedRequested = normalizeProviderId(requested);
+        if (normalizedRequested === normalizedProvider) {
+          return true;
+        }
+        if (
+          hasSharedOwner(normalizedRequested, normalizedProvider, {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            ownerCache,
+          })
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
+    matchesModel(provider: string, modelId: string): boolean {
+      if (modelTargets.length === 0) {
+        return true;
+      }
+      const normalizedProvider = normalizeProviderId(provider);
+      const normalizedModelId = modelId.trim().toLowerCase();
+      const directRef = `${normalizedProvider}/${normalizedModelId}`;
+      for (const target of modelTargets) {
+        if (target.raw.toLowerCase() === directRef) {
+          return true;
+        }
+        if (target.modelId !== normalizedModelId) {
+          continue;
+        }
+        if (!target.provider) {
+          return true;
+        }
+        if (target.provider === normalizedProvider) {
+          return true;
+        }
+        if (
+          hasSharedOwner(target.provider, normalizedProvider, {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            ownerCache,
+          })
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+}

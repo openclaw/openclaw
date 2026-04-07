@@ -34,6 +34,7 @@ import {
   detectSuspiciousPatterns,
   ensureAgentWorkspace,
   hasNonzeroUsage,
+  isCliProvider,
   isExternalHookSession,
   loadModelCatalog,
   logWarn,
@@ -169,6 +170,10 @@ function appendCronDeliveryInstruction(params: {
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadCliRunnerRuntime() {
+  return await import("../../agents/cli-runner.runtime.js");
 }
 
 async function loadUsageFormatRuntime() {
@@ -421,7 +426,7 @@ async function prepareCronRunContext(params: {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
 
-// Resolve auth profile for the session, mirroring the inbound auto-reply path
+  // Resolve auth profile for the session, mirroring the inbound auto-reply path
   // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
   // auth which may not match the configured auth-profiles, causing 401 errors.
   const authProfileResolved = await resolveSessionAuthProfileOverride({
@@ -441,7 +446,7 @@ async function prepareCronRunContext(params: {
     model,
     authProfileId,
     authProfileIdSource: authProfileId
-      ? authProfileIdSource ?? cronSession.sessionEntry.authProfileOverrideSource
+      ? (authProfileIdSource ?? cronSession.sessionEntry.authProfileOverrideSource)
       : undefined,
   };
 
@@ -508,6 +513,13 @@ async function finalizeCronRun(params: {
     model: modelUsed,
   });
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+  if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+    const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
+    if (cliSessionId) {
+      const { setCliSessionId } = await loadCliRunnerRuntime();
+      setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+    }
+  }
   if (hasNonzeroUsage(usage)) {
     const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
     const input = usage.input ?? 0;

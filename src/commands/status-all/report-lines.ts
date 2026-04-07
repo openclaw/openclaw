@@ -1,14 +1,13 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
-import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import {
-  buildStatusAgentTableRows,
-  buildStatusChannelDetailSections,
-  statusAgentsTableColumns,
-  statusOverviewTableColumns,
-} from "./report-tables.js";
+  buildStatusAgentsSection,
+  buildStatusChannelDetailsSections,
+  buildStatusChannelsSection,
+  buildStatusOverviewSection,
+} from "./report-sections.js";
 import { appendStatusReportSections, appendStatusSectionHeading } from "./text-report.js";
 
 type OverviewRow = { Item: string; Value: string };
@@ -71,51 +70,36 @@ export async function buildStatusAllReportLines(params: {
     lines,
     heading,
     sections: [
-      {
-        kind: "table",
-        title: "Overview",
+      buildStatusOverviewSection({
         width: tableWidth,
         renderTable,
-        columns: statusOverviewTableColumns,
         rows: params.overviewRows,
-      },
-      {
-        kind: "table",
-        title: "Channels",
+      }),
+      buildStatusChannelsSection({
         width: tableWidth,
         renderTable,
-        columns: statusChannelsTableColumns.map((column) =>
-          column.key === "Detail" ? { ...column, minWidth: 28 } : column,
-        ),
-        rows: buildStatusChannelsTableRows({
-          rows: params.channels.rows,
-          channelIssues: params.channelIssues,
-          ok,
-          warn,
-          muted,
-          accentDim: theme.accentDim,
-          formatIssueMessage: (message) => String(message).slice(0, 90),
-        }),
-      },
-      ...buildStatusChannelDetailSections({
+        rows: params.channels.rows,
+        channelIssues: params.channelIssues,
+        ok,
+        warn,
+        muted,
+        accentDim: theme.accentDim,
+        formatIssueMessage: (message) => String(message).slice(0, 90),
+      }),
+      ...buildStatusChannelDetailsSections({
         details: params.channels.details,
         width: tableWidth,
         renderTable,
         ok,
         warn,
       }),
-      {
-        kind: "table",
-        title: "Agents",
+      buildStatusAgentsSection({
         width: tableWidth,
         renderTable,
-        columns: statusAgentsTableColumns,
-        rows: buildStatusAgentTableRows({
-          agentStatus: params.agentStatus,
-          ok,
-          warn,
-        }),
-      },
+        agentStatus: params.agentStatus,
+        ok,
+        warn,
+      }),
     ],
   });
   appendStatusSectionHeading({

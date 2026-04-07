@@ -14,7 +14,6 @@ import {
 export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyExport = any;
 type MockWebListener = {
   close: () => Promise<void>;

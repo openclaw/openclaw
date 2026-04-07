@@ -1409,6 +1409,47 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
+  it.each(["toolCall", "functionCall"] as const)(
+    "preserves matching Anthropic user tool_result blocks after %s replay turns",
+    async (toolCallType) => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: toolCallType, id: "call_1", name: "read", arguments: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "toolResult",
+              toolUseId: "call_1",
+              content: [{ type: "text", text: "kept result" }],
+            },
+            { type: "text", text: "retry" },
+          ],
+        },
+      ];
+      const baseFn = vi.fn((_model, _context) =>
+        createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+      );
+
+      const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+      });
+      const stream = wrapped({} as never, { messages } as never, {} as never) as
+        | FakeWrappedStream
+        | Promise<FakeWrappedStream>;
+      await Promise.resolve(stream);
+
+      expect(baseFn).toHaveBeenCalledTimes(1);
+      const seenContext = baseFn.mock.calls[0]?.[1] as {
+        messages: Array<{ role?: string; content?: unknown[] }>;
+      };
+      expect(seenContext.messages).toEqual(messages);
+    },
+  );
+
   it("drops orphaned Anthropic user tool_result blocks after dropping an assistant replay turn", async () => {
     const messages = [
       {

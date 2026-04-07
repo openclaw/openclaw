@@ -48,6 +48,7 @@ export function createPluginRecord(
     toolNames: [],
     hookNames: [],
     channelIds: [],
+    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],

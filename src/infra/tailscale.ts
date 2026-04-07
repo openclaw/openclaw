@@ -4,6 +4,7 @@ import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
@@ -435,7 +436,7 @@ export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
 }
 
 function getString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

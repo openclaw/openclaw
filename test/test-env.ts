@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+import { applyLegacyDoctorMigrations } from "../src/commands/doctor/shared/legacy-config-migrate.js";
+import { validateConfigObjectWithPlugins } from "../src/config/validation.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
@@ -118,6 +120,14 @@ function loadProfileEnv(homeDir = os.homedir()): void {
 function resolveRestoreEntries(): RestoreEntry[] {
   return [
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
+    {
+      key: "OPENCLAW_STRICT_FAST_REPLY_CONFIG",
+      value: process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG,
+    },
+    {
+      key: "OPENCLAW_ALLOW_SLOW_REPLY_TESTS",
+      value: process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS,
+    },
     { key: "HOME", value: process.env.HOME },
     { key: "USERPROFILE", value: process.env.USERPROFILE },
     { key: "XDG_CONFIG_HOME", value: process.env.XDG_CONFIG_HOME },
@@ -156,6 +166,8 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_TEST_HOME = tempHome;
   process.env.OPENCLAW_TEST_FAST = "1";
+  process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG = "1";
+  delete process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS;
 
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   delete process.env.OPENCLAW_CONFIG_PATH;
@@ -276,7 +288,13 @@ function sanitizeLiveConfig(raw: string): string {
       });
     }
 
-    return `${JSON.stringify(parsed, null, 2)}\n`;
+    const migrated = applyLegacyDoctorMigrations(parsed);
+    if (!migrated.next) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const validated = validateConfigObjectWithPlugins(migrated.next);
+    return `${JSON.stringify(validated.ok ? validated.config : migrated.next, null, 2)}\n`;
   } catch {
     return raw;
   }

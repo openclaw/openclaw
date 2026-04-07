@@ -274,6 +274,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
+  it("skips config loading when explicit url and token are provided", async () => {
+    loadConfig.mockImplementation(() => {
+      throw new Error("loadConfig should not run");
+    });
+
+    await callGatewayCli({
+      method: "health",
+      url: "ws://127.0.0.1:18800",
+      token: "test-token",
+    });
+
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+    expect(lastClientOptions?.token).toBe("test-token");
+  });
+
   it("keeps device identity enabled for local loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 

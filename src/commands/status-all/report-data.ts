@@ -1,14 +1,16 @@
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
-import { VERSION } from "../../version.js";
-import { buildStatusAllAgentsValue, buildStatusSecretsValue } from "../status-overview-values.ts";
+import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
+import {
+  buildStatusOverviewSurfaceFromOverview,
+  type StatusOverviewSurface,
+} from "../status-overview-surface.ts";
 import {
   resolveStatusGatewayHealthSafe,
   type resolveStatusServiceSummaries,
@@ -16,12 +18,12 @@ import {
 import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import type { StatusScanOverviewResult } from "../status.scan-overview.ts";
-import { buildStatusOverviewSurfaceRows } from "./format.js";
 
 type StatusServiceSummaries = Awaited<ReturnType<typeof resolveStatusServiceSummaries>>;
 type StatusGatewayServiceSummary = StatusServiceSummaries[0];
 type StatusNodeServiceSummary = StatusServiceSummaries[1];
 type StatusGatewayHealthSafe = Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>>;
+type ConfigFileSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 
 type StatusAllProgress = {
   setLabel(label: string): void;
@@ -45,7 +47,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
   configPath: string;
   health: StatusGatewayHealthSafe | undefined;
   diagnosis: {
-    snap: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+    snap: ConfigFileSnapshot | null;
     remoteUrlMissing: boolean;
     secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
     sentinel: Awaited<ReturnType<typeof readRestartSentinel>> | null;
@@ -80,7 +82,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
         timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
         gatewayReachable: params.gatewayReachable,
         gatewayProbeError: params.gatewayProbe?.error ?? null,
-        callOverrides: params.gatewayCallOverrides ?? {},
+        ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
       });
 
   params.progress.setLabel("Checking local state…");
@@ -166,46 +168,19 @@ export async function buildStatusAllReportData(params: {
     timeoutMs: params.timeoutMs,
   });
 
-  const overviewRows = buildStatusOverviewSurfaceRows({
-    cfg: params.overview.cfg,
-    update: params.overview.update,
-    tailscaleMode: params.overview.tailscaleMode,
-    tailscaleDns: params.overview.tailscaleDns,
-    tailscaleHttpsUrl: params.overview.tailscaleHttpsUrl,
-    tailscaleBackendState: diagnosis.tailscale.backendState,
-    includeBackendStateWhenOff: true,
-    includeBackendStateWhenOn: true,
-    includeDnsNameWhenOff: true,
-    gatewayMode: gatewaySnapshot.gatewayMode,
-    remoteUrlMissing: gatewaySnapshot.remoteUrlMissing,
-    gatewayConnection: gatewaySnapshot.gatewayConnection,
-    gatewayReachable: gatewaySnapshot.gatewayReachable,
-    gatewayProbe: gatewaySnapshot.gatewayProbe,
-    gatewayProbeAuth: gatewaySnapshot.gatewayProbeAuth,
-    gatewayProbeAuthWarning: gatewaySnapshot.gatewayProbeAuthWarning,
-    gatewaySelf: gatewaySnapshot.gatewaySelf,
+  const overviewSurface: StatusOverviewSurface = buildStatusOverviewSurfaceFromOverview({
+    overview: params.overview,
     gatewayService: params.daemon,
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
-    prefixRows: [
-      { Item: "Version", Value: VERSION },
-      { Item: "OS", Value: params.overview.osSummary.label },
-      { Item: "Node", Value: process.versions.node },
-      { Item: "Config", Value: configPath },
-    ],
-    middleRows: [
-      { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
-    ],
-    agentsValue: buildStatusAllAgentsValue({
-      agentStatus: params.overview.agentStatus,
-    }),
-    suffixRows: [
-      {
-        Item: "Secrets",
-        Value: buildStatusSecretsValue(params.overview.secretDiagnostics.length),
-      },
-    ],
-    gatewaySelfFallbackValue: "unknown",
+  });
+  const overviewRows = buildStatusAllOverviewRows({
+    surface: overviewSurface,
+    osLabel: params.overview.osSummary.label,
+    configPath,
+    secretDiagnosticsCount: params.overview.secretDiagnostics.length,
+    agentStatus: params.overview.agentStatus,
+    tailscaleBackendState: diagnosis.tailscale.backendState,
   });
 
   return {

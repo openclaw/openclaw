@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isTruthyEnvValue } from "./env.js";
+import { formatErrorMessage } from "./errors.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -128,7 +129,7 @@ function probeLoginShellEnv(params: {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     return { ok: true, shellEnv: parseShellEnv(stdout) };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 

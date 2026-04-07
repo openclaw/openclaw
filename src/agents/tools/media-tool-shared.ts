@@ -2,6 +2,7 @@ import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeProviderId } from "../provider-id.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -214,10 +215,8 @@ export function resolvePromptAndModelOverride(
   prompt: string;
   modelOverride?: string;
 } {
-  const prompt =
-    typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : defaultPrompt;
-  const modelOverride =
-    typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined;
+  const prompt = normalizeOptionalString(args.prompt) ?? defaultPrompt;
+  const modelOverride = normalizeOptionalString(args.model);
   return { prompt, modelOverride };
 }
 

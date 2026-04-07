@@ -201,8 +201,8 @@ export async function sendBlueBubblesMedia(params: {
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.bluebubbles?.accounts?.[accountId]?.mediaMaxMb ??
-      cfg.channels?.bluebubbles?.mediaMaxMb,
+      (cfg.channels?.bluebubbles?.accounts?.[accountId] as { mediaMaxMb?: number } | undefined)
+        ?.mediaMaxMb ?? cfg.channels?.bluebubbles?.mediaMaxMb,
     accountId,
   });
   const mediaLocalRoots = resolveMediaLocalRoots({ cfg, accountId });

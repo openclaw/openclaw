@@ -71,7 +71,9 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   modelSupport?: PluginManifestModelSupport;
+  cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
+  channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
   settingsFiles?: string[];
@@ -289,7 +291,9 @@ function buildRecord(params: {
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
     modelSupport: params.manifest.modelSupport,
+    cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
+    channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -352,6 +356,7 @@ function buildBundleRecord(params: {
     bundleCapabilities: params.manifest.capabilities,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],

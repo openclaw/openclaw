@@ -79,7 +79,7 @@ export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 
 type FacadeModule = typeof import("@openclaw/zalouser/contract-api.js");
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

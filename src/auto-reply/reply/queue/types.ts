@@ -81,6 +81,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
+    skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
     /** Fallback models for image model override (from agents.defaults.imageModel.fallbacks). */
     imageModelFallbacks?: string[];

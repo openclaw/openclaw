@@ -1,4 +1,5 @@
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
@@ -7,12 +8,6 @@ import {
 } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
-let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
-
-function loadPluginRegistryModule() {
-  pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
-  return pluginRegistryModulePromise;
-}
 
 type StatusJsonScanPolicy = {
   commandName: string;
@@ -41,15 +36,10 @@ export async function scanStatusJsonWithPolicy(
     includeChannelsData: false,
   });
   if (overview.hasConfiguredChannels) {
-    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    const { loggingState } = await import("../logging/state.js");
-    const previousForceStderr = loggingState.forceConsoleToStderr;
-    loggingState.forceConsoleToStderr = true;
-    try {
-      ensurePluginRegistryLoaded({ scope: "configured-channels" });
-    } finally {
-      loggingState.forceConsoleToStderr = previousForceStderr;
-    }
+    await ensureCliPluginRegistryLoaded({
+      scope: "configured-channels",
+      routeLogsToStderr: true,
+    });
   }
 
   return await executeStatusScanFromOverview({

@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { readStringValue } from "../shared/string-coerce.js";
 import type {
   FunctionToolDefinition,
   InputItem,
@@ -94,9 +95,9 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
   }
 
   const supportsResponsesStoreField = resolveProviderRequestPolicyConfig({
-    provider: typeof params.model.provider === "string" ? params.model.provider : undefined,
-    api: typeof params.model.api === "string" ? params.model.api : undefined,
-    baseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
+    provider: readStringValue(params.model.provider),
+    api: readStringValue(params.model.api),
+    baseUrl: readStringValue(params.model.baseUrl),
     compat: (params.model as { compat?: { supportsStore?: boolean } }).compat,
     capability: "llm",
     transport: "websocket",

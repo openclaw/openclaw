@@ -115,8 +115,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-2",
       {
         path: outsideFile,
-        oldText: "old content",
-        newText: "new content",
+        edits: [{ oldText: "old content", newText: "new content" }],
       },
       false,
     );
@@ -134,8 +133,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-2b",
       {
         path: relativeOutsidePath,
-        oldText: "old relative content",
-        newText: "new relative content",
+        edits: [{ oldText: "old relative content", newText: "new relative content" }],
       },
       false,
     );
@@ -179,8 +177,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-3b",
       {
         path: outsideUnsetFile,
-        oldText: "before",
-        newText: "after",
+        edits: [{ oldText: "before", newText: "after" }],
       },
       undefined,
     );

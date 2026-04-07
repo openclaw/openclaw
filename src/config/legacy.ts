@@ -28,7 +28,7 @@ export function findLegacyConfigIssues(
   const issues: LegacyConfigIssue[] = [];
   for (const rule of [
     ...LEGACY_CONFIG_RULES,
-    ...collectChannelLegacyConfigRules(),
+    ...collectChannelLegacyConfigRules(raw),
     ...extraRules,
   ]) {
     const cursor = getPathValue(root, rule.path);

@@ -8,6 +8,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import {
   buildBackupArchiveRoot,
   encodeAbsolutePathForBackupArchive,
+  resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import { backupCreateCommand } from "./backup.js";
@@ -88,13 +89,25 @@ describe("backup commands", () => {
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
-    await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), "{}", "utf8");
-    await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
-    await fs.writeFile(path.join(stateDir, "workspace", "SOUL.md"), "# soul\n", "utf8");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const oauthDir = path.join(stateDir, "credentials");
+    const workspaceDir = path.join(stateDir, "workspace");
+    await fs.writeFile(configPath, JSON.stringify({}), "utf8");
+    await fs.mkdir(oauthDir, { recursive: true });
+    await fs.writeFile(path.join(oauthDir, "oauth.json"), "{}", "utf8");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
 
-    const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
+    const plan = await resolveBackupPlanFromPaths({
+      stateDir,
+      configPath,
+      oauthDir,
+      workspaceDirs: [workspaceDir],
+      includeWorkspace: true,
+      configInsideState: true,
+      oauthInsideState: true,
+      nowMs: 123,
+    });
     expectWorkspaceCoveredByState(plan);
   });
 
@@ -111,19 +124,16 @@ describe("backup commands", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
       await fs.symlink(workspaceDir, workspaceLink);
-      await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify({
-          agents: {
-            defaults: {
-              workspace: workspaceLink,
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
+      const plan = await resolveBackupPlanFromPaths({
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+        oauthDir: path.join(stateDir, "credentials"),
+        workspaceDirs: [workspaceLink],
+        includeWorkspace: true,
+        configInsideState: true,
+        oauthInsideState: true,
+        nowMs: 123,
+      });
       expectWorkspaceCoveredByState(plan);
     } finally {
       await fs.rm(symlinkDir, { recursive: true, force: true });

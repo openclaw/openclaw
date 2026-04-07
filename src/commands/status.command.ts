@@ -1,6 +1,7 @@
 import { withProgress } from "../cli/progress.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import { type RuntimeEnv } from "../runtime.js";
+import { runStatusJsonCommand } from "./status-json-command.ts";
+import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
   loadStatusProviderUsageModule,
   resolveStatusGatewayHealth,
@@ -100,25 +101,24 @@ export async function statusCommand(
     return;
   }
 
-  const scan = opts.json
-    ? await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
-        scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
-      )
-    : await loadStatusScanModule().then(({ scanStatus }) =>
-        scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
-      );
   if (opts.json) {
-    writeRuntimeJson(
+    await runStatusJsonCommand({
+      opts,
       runtime,
-      await resolveStatusJsonOutput({
-        scan,
-        opts,
-        includeSecurityAudit: true,
-        includePluginCompatibility: true,
-      }),
-    );
+      includeSecurityAudit: opts.all === true,
+      includePluginCompatibility: true,
+      suppressHealthErrors: true,
+      scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
+        await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
+          scanStatusJsonFast(scanOpts, runtimeForScan),
+        ),
+    });
     return;
   }
+
+  const scan = await loadStatusScanModule().then(({ scanStatus }) =>
+    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+  );
 
   const {
     cfg,
@@ -193,6 +193,7 @@ export async function statusCommand(
   const {
     buildStatusUpdateSurface,
     formatCliCommand,
+    formatHealthChannelLines,
     formatKTokens,
     formatPromptCacheCompact,
     formatPluginCompatibilityNotice,
@@ -253,12 +254,10 @@ export async function statusCommand(
         formatUsageReportLines(usage),
       )
     : undefined;
-  const lines = await buildStatusCommandReportLines(
-    await buildStatusCommandReportData({
-      opts,
+  const overviewSurface = buildStatusOverviewSurfaceFromScan({
+    scan: {
       cfg,
       update,
-      osSummary,
       tailscaleMode,
       tailscaleDns,
       tailscaleHttpsUrl,
@@ -270,9 +269,16 @@ export async function statusCommand(
       gatewayProbeAuth,
       gatewayProbeAuthWarning,
       gatewaySelf,
-      gatewayService: daemon,
-      nodeService: nodeDaemon,
-      nodeOnlyGateway,
+    },
+    gatewayService: daemon,
+    nodeService: nodeDaemon,
+    nodeOnlyGateway,
+  });
+  const lines = await buildStatusCommandReportLines(
+    await buildStatusCommandReportData({
+      opts,
+      surface: overviewSurface,
+      osSummary,
       summary,
       securityAudit,
       health,

@@ -13,6 +13,7 @@ import type {
   ReplyToMode,
 } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
+import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
   formatMatrixMediaTooLargeText,
@@ -36,8 +37,8 @@ import {
   sendReadReceiptMatrix,
   sendTypingMatrix,
 } from "../send.js";
-import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
+import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -906,7 +907,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (isMatrixMediaSizeLimitError(err)) {
               mediaSizeLimitExceeded = true;
             }
-            const errorText = err instanceof Error ? err.message : String(err);
+            const errorText = formatMatrixErrorMessage(err);
             logVerboseMessage(
               `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
             );

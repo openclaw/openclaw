@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
@@ -228,7 +229,7 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
     }
   }
   if (mapping.matchSource) {
-    const source = typeof ctx.payload.source === "string" ? ctx.payload.source : undefined;
+    const source = readStringValue(ctx.payload.source);
     if (!source || source !== mapping.matchSource) {
       return false;
     }

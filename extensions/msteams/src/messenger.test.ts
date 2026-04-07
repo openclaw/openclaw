@@ -1,5 +1,4 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,11 +19,10 @@ vi.mock("./graph-upload.js", () => {
 });
 
 import {
-  type MSTeamsAdapter,
-  type MSTeamsRenderedMessage,
   buildActivity,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
+  type MSTeamsAdapter,
 } from "./messenger.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 

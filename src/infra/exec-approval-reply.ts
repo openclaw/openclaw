@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -348,9 +349,9 @@ export function buildExecApprovalPendingReplyPayload(
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
         approvalKind: "exec",
-        agentId: params.agentId?.trim() || undefined,
+        agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
-        sessionKey: params.sessionKey?.trim() || undefined,
+        sessionKey: normalizeOptionalString(params.sessionKey),
       },
     },
   };

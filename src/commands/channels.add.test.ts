@@ -202,7 +202,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                signalNumber: input.signalNumber,
+                account: input.signalNumber,
               },
             },
           },
@@ -228,6 +228,11 @@ describe("channelsAddCommand", () => {
   beforeEach(async () => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -310,18 +315,12 @@ describe("channelsAddCommand", () => {
     expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
       expect.objectContaining({ entry: catalogEntry }),
     );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-      }),
-    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
           msteams: {
             enabled: true,
-            tenantId: "tenant-scoped",
           },
         },
       }),
@@ -357,18 +356,12 @@ describe("channelsAddCommand", () => {
     );
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-      }),
-    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
           msteams: {
             enabled: true,
-            tenantId: "tenant-installed",
           },
         },
       }),
@@ -436,10 +429,14 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@vendor/teams-runtime",
+        channels: {
+          msteams: {
+            enabled: true,
+          },
+        },
       }),
     );
     expect(runtime.error).not.toHaveBeenCalled();
@@ -463,7 +460,7 @@ describe("channelsAddCommand", () => {
             enabled: true,
             accounts: {
               ops: {
-                signalNumber: "+15550001",
+                account: "+15550001",
               },
             },
           },

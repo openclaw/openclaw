@@ -1,175 +1,181 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
-    if (
-      !provider ||
-      ![
-        "amazon-bedrock",
-        "anthropic",
-        "google",
-        "kilocode",
-        "kimi",
-        "kimi-code",
-        "minimax",
-        "minimax-portal",
-        "mistral",
-        "moonshot",
-        "openai",
-        "openai-codex",
-        "opencode",
-        "opencode-go",
-        "ollama",
-        "openrouter",
-        "sglang",
-        "vllm",
-        "xai",
-        "zai",
-      ].includes(provider)
-    ) {
-      return undefined;
-    }
-    if (provider === "sglang" || provider === "vllm") {
-      return {};
-    }
-    return {
-      buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
-        const modelId = context?.modelId?.toLowerCase() ?? "";
-        switch (provider) {
-          case "amazon-bedrock":
-          case "anthropic":
-            return {
-              sanitizeMode: "full",
-              sanitizeToolCallIds: true,
-              toolCallIdMode: "strict",
-              preserveSignatures: true,
-              repairToolUseResultPairing: true,
-              validateAnthropicTurns: true,
-              allowSyntheticToolResults: true,
-              ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
-            };
-          case "minimax":
-          case "minimax-portal":
-            return context?.modelApi === "openai-completions"
-              ? {
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
+      if (
+        !provider ||
+        ![
+          "amazon-bedrock",
+          "anthropic",
+          "google",
+          "kilocode",
+          "kimi",
+          "kimi-code",
+          "minimax",
+          "minimax-portal",
+          "mistral",
+          "moonshot",
+          "openai",
+          "openai-codex",
+          "opencode",
+          "opencode-go",
+          "ollama",
+          "openrouter",
+          "sglang",
+          "vllm",
+          "xai",
+          "zai",
+        ].includes(provider)
+      ) {
+        return undefined;
+      }
+      if (provider === "sglang" || provider === "vllm") {
+        return {};
+      }
+      return {
+        buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
+          const modelId = context?.modelId?.toLowerCase() ?? "";
+          switch (provider) {
+            case "amazon-bedrock":
+            case "anthropic":
+              return {
+                sanitizeMode: "full",
+                sanitizeToolCallIds: true,
+                toolCallIdMode: "strict",
+                preserveSignatures: true,
+                repairToolUseResultPairing: true,
+                validateAnthropicTurns: true,
+                allowSyntheticToolResults: true,
+                ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+              };
+            case "minimax":
+            case "minimax-portal":
+              return context?.modelApi === "openai-completions"
+                ? {
+                    sanitizeToolCallIds: true,
+                    toolCallIdMode: "strict",
+                    applyAssistantFirstOrderingFix: true,
+                    validateGeminiTurns: true,
+                    validateAnthropicTurns: true,
+                  }
+                : {
+                    sanitizeMode: "full",
+                    sanitizeToolCallIds: true,
+                    toolCallIdMode: "strict",
+                    preserveSignatures: true,
+                    repairToolUseResultPairing: true,
+                    validateAnthropicTurns: true,
+                    allowSyntheticToolResults: true,
+                    ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                  };
+            case "moonshot":
+            case "ollama":
+            case "zai":
+              return context?.modelApi === "openai-completions"
+                ? {
+                    sanitizeToolCallIds: true,
+                    toolCallIdMode: "strict",
+                    applyAssistantFirstOrderingFix: true,
+                    validateGeminiTurns: true,
+                    validateAnthropicTurns: true,
+                  }
+                : undefined;
+            case "google":
+              return {
+                sanitizeMode: "full",
+                sanitizeToolCallIds: true,
+                toolCallIdMode: "strict",
+                sanitizeThoughtSignatures: {
+                  allowBase64Only: true,
+                  includeCamelCase: true,
+                },
+                repairToolUseResultPairing: true,
+                applyAssistantFirstOrderingFix: true,
+                validateGeminiTurns: true,
+                validateAnthropicTurns: false,
+                allowSyntheticToolResults: true,
+              };
+            case "mistral":
+              return {
+                sanitizeToolCallIds: true,
+                toolCallIdMode: "strict9",
+              };
+            case "openai":
+            case "openai-codex":
+              return {
+                sanitizeMode: "images-only",
+                sanitizeToolCallIds: context?.modelApi === "openai-completions",
+                ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+                applyAssistantFirstOrderingFix: false,
+                validateGeminiTurns: false,
+                validateAnthropicTurns: false,
+              };
+            case "kimi":
+            case "kimi-code":
+              return {
+                preserveSignatures: false,
+              };
+            case "openrouter":
+            case "opencode":
+            case "opencode-go":
+              return {
+                applyAssistantFirstOrderingFix: false,
+                validateGeminiTurns: false,
+                validateAnthropicTurns: false,
+                ...(modelId.includes("gemini")
+                  ? {
+                      sanitizeThoughtSignatures: {
+                        allowBase64Only: true,
+                        includeCamelCase: true,
+                      },
+                    }
+                  : {}),
+              };
+            case "xai":
+              if (
+                context?.modelApi === "openai-completions" ||
+                context?.modelApi === "openai-responses"
+              ) {
+                return {
                   sanitizeToolCallIds: true,
                   toolCallIdMode: "strict",
-                  applyAssistantFirstOrderingFix: true,
-                  validateGeminiTurns: true,
-                  validateAnthropicTurns: true,
-                }
-              : {
-                  sanitizeMode: "full",
-                  sanitizeToolCallIds: true,
-                  toolCallIdMode: "strict",
-                  preserveSignatures: true,
-                  repairToolUseResultPairing: true,
-                  validateAnthropicTurns: true,
-                  allowSyntheticToolResults: true,
-                  ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                  ...(context.modelApi === "openai-completions"
+                    ? {
+                        applyAssistantFirstOrderingFix: true,
+                        validateGeminiTurns: true,
+                        validateAnthropicTurns: true,
+                      }
+                    : {
+                        applyAssistantFirstOrderingFix: false,
+                        validateGeminiTurns: false,
+                        validateAnthropicTurns: false,
+                      }),
                 };
-          case "moonshot":
-          case "ollama":
-          case "zai":
-            return context?.modelApi === "openai-completions"
-              ? {
-                  sanitizeToolCallIds: true,
-                  toolCallIdMode: "strict",
-                  applyAssistantFirstOrderingFix: true,
-                  validateGeminiTurns: true,
-                  validateAnthropicTurns: true,
-                }
-              : undefined;
-          case "google":
-            return {
-              sanitizeMode: "full",
-              sanitizeToolCallIds: true,
-              toolCallIdMode: "strict",
-              sanitizeThoughtSignatures: {
-                allowBase64Only: true,
-                includeCamelCase: true,
-              },
-              repairToolUseResultPairing: true,
-              applyAssistantFirstOrderingFix: true,
-              validateGeminiTurns: true,
-              validateAnthropicTurns: false,
-              allowSyntheticToolResults: true,
-            };
-          case "mistral":
-            return {
-              sanitizeToolCallIds: true,
-              toolCallIdMode: "strict9",
-            };
-          case "openai":
-          case "openai-codex":
-            return {
-              sanitizeMode: "images-only",
-              sanitizeToolCallIds: context?.modelApi === "openai-completions",
-              ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
-              applyAssistantFirstOrderingFix: false,
-              validateGeminiTurns: false,
-              validateAnthropicTurns: false,
-            };
-          case "kimi":
-          case "kimi-code":
-            return {
-              preserveSignatures: false,
-            };
-          case "openrouter":
-          case "opencode":
-          case "opencode-go":
-            return {
-              applyAssistantFirstOrderingFix: false,
-              validateGeminiTurns: false,
-              validateAnthropicTurns: false,
-              ...(modelId.includes("gemini")
+              }
+              return undefined;
+            case "kilocode":
+              return modelId.includes("gemini")
                 ? {
                     sanitizeThoughtSignatures: {
                       allowBase64Only: true,
                       includeCamelCase: true,
                     },
                   }
-                : {}),
-            };
-          case "xai":
-            if (
-              context?.modelApi === "openai-completions" ||
-              context?.modelApi === "openai-responses"
-            ) {
-              return {
-                sanitizeToolCallIds: true,
-                toolCallIdMode: "strict",
-                ...(context.modelApi === "openai-completions"
-                  ? {
-                      applyAssistantFirstOrderingFix: true,
-                      validateGeminiTurns: true,
-                      validateAnthropicTurns: true,
-                    }
-                  : {
-                      applyAssistantFirstOrderingFix: false,
-                      validateGeminiTurns: false,
-                      validateAnthropicTurns: false,
-                    }),
-              };
-            }
-            return undefined;
-          case "kilocode":
-            return modelId.includes("gemini")
-              ? {
-                  sanitizeThoughtSignatures: {
-                    allowBase64Only: true,
-                    includeCamelCase: true,
-                  },
-                }
-              : undefined;
-          default:
-            return undefined;
-        }
-      },
-    };
-  }),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
-}));
+                : undefined;
+            default:
+              return undefined;
+          }
+        },
+      };
+    }),
+    resetProviderRuntimeHookCacheForTest: vi.fn(),
+  };
+});
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 

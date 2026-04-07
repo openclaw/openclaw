@@ -5,6 +5,7 @@ import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
 export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
@@ -90,7 +91,7 @@ export function stopWithText(text: string): CommandHandlerResult {
 }
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
-  const action = tokens[0]?.trim().toLowerCase();
+  const action = normalizeOptionalString(tokens[0])?.toLowerCase();
   if (
     action === "spawn" ||
     action === "cancel" ||
@@ -199,7 +200,7 @@ export function parseSpawnInput(
       if (modeOption.error) {
         return { ok: false, error: `${modeOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = modeOption.value?.trim().toLowerCase();
+      const raw = normalizeOptionalString(modeOption.value)?.toLowerCase();
       if (raw !== "persistent" && raw !== "oneshot") {
         return {
           ok: false,
@@ -216,7 +217,7 @@ export function parseSpawnInput(
       if (bindOption.error) {
         return { ok: false, error: `${bindOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = bindOption.value?.trim().toLowerCase();
+      const raw = normalizeOptionalString(bindOption.value)?.toLowerCase();
       if (raw !== "here" && raw !== "off") {
         return {
           ok: false,
@@ -237,7 +238,7 @@ export function parseSpawnInput(
       if (threadOption.error) {
         return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = threadOption.value?.trim().toLowerCase();
+      const raw = normalizeOptionalString(threadOption.value)?.toLowerCase();
       if (raw !== "auto" && raw !== "here" && raw !== "off") {
         return {
           ok: false,
@@ -255,7 +256,7 @@ export function parseSpawnInput(
       if (cwdOption.error) {
         return { ok: false, error: `${cwdOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      cwd = cwdOption.value?.trim();
+      cwd = normalizeOptionalString(cwdOption.value);
       i = cwdOption.nextIndex;
       continue;
     }
@@ -265,7 +266,7 @@ export function parseSpawnInput(
       if (labelOption.error) {
         return { ok: false, error: `${labelOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      label = labelOption.value?.trim();
+      label = normalizeOptionalString(labelOption.value);
       i = labelOption.nextIndex;
       continue;
     }
@@ -278,7 +279,7 @@ export function parseSpawnInput(
     }
 
     if (!rawAgentId) {
-      rawAgentId = token.trim();
+      rawAgentId = normalizeOptionalString(token);
       i += 1;
       continue;
     }
@@ -289,8 +290,8 @@ export function parseSpawnInput(
     };
   }
 
-  const fallbackAgent = params.cfg.acp?.defaultAgent?.trim() || "";
-  const selectedAgent = (rawAgentId?.trim() || fallbackAgent).trim();
+  const fallbackAgent = normalizeOptionalString(params.cfg.acp?.defaultAgent) ?? "";
+  const selectedAgent = normalizeOptionalString(rawAgentId) ?? fallbackAgent;
   if (!selectedAgent) {
     return {
       ok: false,
@@ -316,7 +317,7 @@ export function parseSpawnInput(
       thread,
       bind,
       cwd,
-      label: label || undefined,
+      label,
     },
   };
 }
@@ -341,7 +342,7 @@ export function parseSteerInput(
           error: `${sessionOption.error}. ${ACP_STEER_USAGE}`,
         };
       }
-      sessionToken = sessionOption.value?.trim() || undefined;
+      sessionToken = normalizeOptionalString(sessionOption.value);
       i = sessionOption.nextIndex;
       continue;
     }
@@ -371,14 +372,14 @@ export function parseSingleValueCommandInput(
   tokens: string[],
   usage: string,
 ): { ok: true; value: ParsedSingleValueCommandInput } | { ok: false; error: string } {
-  const value = tokens[0]?.trim() || "";
+  const value = normalizeOptionalString(tokens[0]) ?? "";
   if (!value) {
     return { ok: false, error: usage };
   }
   if (tokens.length > 2) {
     return { ok: false, error: usage };
   }
-  const sessionToken = tokens[1]?.trim() || undefined;
+  const sessionToken = normalizeOptionalString(tokens[1]);
   return {
     ok: true,
     value: {
@@ -391,8 +392,8 @@ export function parseSingleValueCommandInput(
 export function parseSetCommandInput(
   tokens: string[],
 ): { ok: true; value: ParsedSetCommandInput } | { ok: false; error: string } {
-  const key = tokens[0]?.trim() || "";
-  const value = tokens[1]?.trim() || "";
+  const key = normalizeOptionalString(tokens[0]) ?? "";
+  const value = normalizeOptionalString(tokens[1]) ?? "";
   if (!key || !value) {
     return {
       ok: false,
@@ -405,7 +406,7 @@ export function parseSetCommandInput(
       error: ACP_SET_USAGE,
     };
   }
-  const sessionToken = tokens[2]?.trim() || undefined;
+  const sessionToken = normalizeOptionalString(tokens[2]);
   return {
     ok: true,
     value: {
@@ -423,7 +424,7 @@ export function parseOptionalSingleTarget(
   if (tokens.length > 1) {
     return { ok: false, error: usage };
   }
-  const token = tokens[0]?.trim() || "";
+  const token = normalizeOptionalString(tokens[0]) ?? "";
   return {
     ok: true,
     ...(token ? { sessionToken: token } : {}),
@@ -492,8 +493,11 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
     params.ctx.MessageSid ??
     params.ctx.MessageSidFirst ??
     params.ctx.MessageSidLast;
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+  if (typeof value === "string") {
+    const normalizedValue = normalizeOptionalString(value);
+    if (normalizedValue) {
+      return normalizedValue;
+    }
   }
   if (typeof value === "number" || typeof value === "bigint") {
     return String(value);

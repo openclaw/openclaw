@@ -144,7 +144,7 @@ async function resolveRuntimeModel(params: {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
 
-  const resolved = await resolveSessionAuthProfileOverride({
+  const resolvedAuthProfile = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
     provider: params.provider,
     agentDir: params.agentDir,
@@ -156,8 +156,8 @@ async function resolveRuntimeModel(params: {
   });
   return {
     model,
-    authProfileId: resolved.authProfileId,
-    authProfileIdSource: resolved.authProfileIdSource,
+    authProfileId: resolvedAuthProfile.authProfileId,
+    authProfileIdSource: resolvedAuthProfile.authProfileIdSource,
   };
 }
 

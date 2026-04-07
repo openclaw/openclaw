@@ -1,7 +1,8 @@
 import type { EventEmitter } from "node:events";
 import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
-import type {
+import {
   DiscordGatewayEvent,
+  DiscordGatewayLifecycleError,
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
 
@@ -59,7 +60,7 @@ export async function waitForDiscordGatewayStop(
     const onGatewayEvent = (event: DiscordGatewayEvent) => {
       const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
       if (shouldStop) {
-        finishReject(event.err);
+        finishReject(new DiscordGatewayLifecycleError(event));
       }
     };
     const onForceStop = (err: unknown) => {

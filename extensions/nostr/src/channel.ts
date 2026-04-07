@@ -43,7 +43,7 @@ const activeBuses = new Map<string, NostrBusHandle>();
 // Store metrics snapshots per account (for status reporting)
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 
-function normalizeNostrAllowEntry(entry: string): string | "*" | null {
+function normalizeNostrAllowEntry(entry: string): string | null {
   const trimmed = entry.trim();
   if (!trimmed) {
     return null;

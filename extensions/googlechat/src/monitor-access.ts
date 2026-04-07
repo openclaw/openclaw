@@ -129,7 +129,7 @@ function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, 
   }
   const key = deprecated
     .map((v) => v.toLowerCase())
-    .sort()
+    .toSorted()
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -152,7 +152,7 @@ function warnMutableGroupKeysConfigured(
   }
   const warningKey = mutableKeys
     .map((key) => key.toLowerCase())
-    .sort()
+    .toSorted()
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;
