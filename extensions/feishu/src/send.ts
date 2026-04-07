@@ -151,30 +151,69 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
-  }
+  const card = parsed as {
+    header?: { title?: { content?: unknown } };
+    elements?: unknown;
+    body?: { elements?: unknown[] };
+  };
 
   const texts: string[] = [];
-  for (const element of candidate.elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
+
+  const headerTitle = card.header?.title?.content;
+  if (typeof headerTitle === "string" && headerTitle.trim()) {
+    texts.push(headerTitle.trim());
+  }
+
+  // Support both schema 1.0 (card.elements) and schema 2.0 (card.body.elements).
+  // Some schema 2.0 cards include an empty top-level `elements: []` plus the real
+  // content in `body.elements`.
+  const cardElements: unknown[] =
+    Array.isArray(card.elements) && card.elements.length > 0
+      ? card.elements
+      : Array.isArray(card.body?.elements)
+        ? card.body.elements
+        : [];
+
+  for (const element of cardElements) {
+    if (!element || typeof element !== "object") continue;
     const item = element as {
       tag?: string;
-      content?: string;
-      text?: { content?: string };
+      content?: unknown;
+      text?: { content?: unknown };
+      title?: { content?: unknown };
     };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
+
+    if (item.tag === "div") {
+      const divText = item.text?.content;
+      if (typeof divText === "string" && divText.trim()) {
+        texts.push(divText.trim());
+      }
       continue;
     }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
+
+    if (item.tag === "markdown") {
+      if (typeof item.content === "string" && item.content.trim()) {
+        texts.push(item.content.trim());
+      }
+      continue;
+    }
+
+    const maybeTitle = item.title?.content;
+    if (typeof maybeTitle === "string" && maybeTitle.trim()) {
+      texts.push(maybeTitle.trim());
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+
+  const extracted = texts.join("\n").trim();
+  if (extracted) return extracted;
+
+  // If we couldn't extract any readable text, fall back to JSON so callers still
+  // get something useful for debugging/reasoning.
+  try {
+    return JSON.stringify(card);
+  } catch {
+    return "[Interactive Card]";
+  }
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
@@ -198,7 +237,7 @@ function parseQuotedMessageContent(rawContent: string, msgType: string): string 
     return parsePostContent(rawContent).textContent;
   }
 
-  if (msgType === "interactive") {
+  if (msgType === "interactive" || msgType === "interactive_card") {
     return parseInteractiveCardContent(parsed);
   }
 

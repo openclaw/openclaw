@@ -69,6 +69,116 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("extracts text content from interactive card body.elements (schema 2.0)", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_2",
+            chat_id: "oc_2",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                header: { title: { content: "Header" } },
+                body: {
+                  elements: [
+                    { tag: "markdown", content: "schema 2.0 markdown" },
+                    { tag: "div", text: { content: "schema 2.0 div" } },
+                  ],
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_2",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_2",
+        chatId: "oc_2",
+        contentType: "interactive",
+        content: "Header\nschema 2.0 markdown\nschema 2.0 div",
+      }),
+    );
+  });
+
+  it("supports interactive_card alias", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_alias",
+            chat_id: "oc_alias",
+            msg_type: "interactive_card",
+            body: {
+              content: JSON.stringify({
+                header: { title: { content: "Alias" } },
+                elements: [{ tag: "markdown", content: "alias body" }],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_alias",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_alias",
+        chatId: "oc_alias",
+        contentType: "interactive_card",
+        content: "Alias\nalias body",
+      }),
+    );
+  });
+
+  it("falls back to raw JSON when no readable text can be extracted", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_empty",
+            chat_id: "oc_empty",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                header: {},
+                elements: [{ tag: "div", text: { content: "   " } }],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_empty",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_empty",
+        chatId: "oc_empty",
+        contentType: "interactive",
+        content: '{"header":{},"elements":[{"tag":"div","text":{"content":"   "}}]}',
+      }),
+    );
+  });
+
   it("extracts text content from post messages", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
