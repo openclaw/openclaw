@@ -26,6 +26,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { isAudioFileName } from "../../media/mime.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -110,6 +111,16 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   ].filter(Boolean) as string[];
   const types = rawTypes.map((type) => normalizeMediaType(type));
   if (types.some((type) => type === "audio" || type.startsWith("audio/"))) {
+    return true;
+  }
+
+  const attachmentRefs = [
+    typeof ctx.MediaPath === "string" ? ctx.MediaPath : undefined,
+    ...(Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : []),
+    typeof ctx.MediaUrl === "string" ? ctx.MediaUrl : undefined,
+    ...(Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : []),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  if (attachmentRefs.some((value) => isAudioFileName(value.trim()))) {
     return true;
   }
 

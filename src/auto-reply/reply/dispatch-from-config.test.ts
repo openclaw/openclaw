@@ -973,6 +973,32 @@ describe("dispatchReplyFromConfig", () => {
     expect(routed?.payload?.text).toBeUndefined();
   });
 
+  it("treats audio attachments with generic mime as inbound audio for TTS gating", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Body: "transcribed voice text",
+      BodyForAgent: "transcribed voice text",
+      BodyForCommands: "transcribed voice text",
+      RawBody: "transcribed voice text",
+      CommandBody: "transcribed voice text",
+      MediaPath: "/tmp/voice-note.ogg",
+      MediaType: "application/octet-stream",
+      MediaTypes: ["application/octet-stream"],
+    });
+
+    const replyResolver = async () => ({ text: "reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: true,
+      }),
+    );
+  });
+
   it("provides onToolResult in DM sessions", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
