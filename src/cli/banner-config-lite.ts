@@ -16,35 +16,59 @@ export function parseTaglineMode(value: unknown): TaglineMode | undefined {
  * help-generation callback (e.g. `openclaw tui -h`).
  *
  * The config import is deferred behind a dynamic `import()` behind a
- * dedicated `*.runtime.ts` boundary. The first banner render returns
- * `undefined` (random tagline) while the config loads asynchronously in
- * the background. Subsequent renders use the cached result.
+ * dedicated `*.runtime.ts` boundary. If the runtime module has already been
+ * loaded by the normal CLI bootstrap path (preAction hook / config guard),
+ * the import resolves synchronously from cache and the first call returns
+ * the real configured value. Otherwise (help-only cold path) the first
+ * render falls back to `undefined` (random tagline) while config loads
+ * asynchronously; subsequent renders use the cached result.
  */
 let cachedTaglineMode: TaglineMode | undefined | null = null; // null = not yet resolved
-let configImportStarted = false;
 
-function tryResolveTaglineModeFromConfig(env: NodeJS.ProcessEnv): void {
-  if (configImportStarted) {
-    return;
+function resolveTaglineModeFromConfig(env: NodeJS.ProcessEnv): TaglineMode | undefined {
+  try {
+    // Dynamic import that resolves synchronously when the module is already
+    // in the ESM cache (the normal CLI startup path loads config early via
+    // the preAction hook). Uses a dedicated *.runtime.ts boundary per the
+    // dynamic import guardrail.
+    let resolved: TaglineMode | undefined;
+    let syncResolved = false;
+
+    import("./banner-config-lite.runtime.js")
+      .then((mod) => {
+        try {
+          const parsed = mod.createConfigIO({ env }).loadConfig() as {
+            cli?: { banner?: { taglineMode?: unknown } };
+          };
+          resolved = parseTaglineMode(parsed.cli?.banner?.taglineMode);
+        } catch {
+          resolved = undefined;
+        }
+        syncResolved = true;
+      })
+      .catch(() => {
+        resolved = undefined;
+        syncResolved = true;
+      });
+
+    // If the module was already cached, the .then() microtask will have
+    // executed synchronously before we reach this point (Node.js resolves
+    // cached dynamic imports as already-fulfilled promises whose .then()
+    // callbacks run in the same microtask checkpoint). In that case we can
+    // return the real value immediately — no behavioral regression.
+    if (syncResolved) {
+      cachedTaglineMode = resolved;
+      return cachedTaglineMode;
+    }
+
+    // Module not yet loaded — fall back to undefined for this call.
+    // The async resolution will populate the cache for future calls.
+    cachedTaglineMode = undefined;
+    return undefined;
+  } catch {
+    cachedTaglineMode = undefined;
+    return undefined;
   }
-  configImportStarted = true;
-  // Fire-and-forget: resolve config asynchronously so the result is ready
-  // for subsequent banner renders without blocking the first one.
-  // Uses a dedicated *.runtime.ts boundary per dynamic import guardrail.
-  import("./banner-config-lite.runtime.js")
-    .then((mod) => {
-      try {
-        const parsed = mod.createConfigIO({ env }).loadConfig() as {
-          cli?: { banner?: { taglineMode?: unknown } };
-        };
-        cachedTaglineMode = parseTaglineMode(parsed.cli?.banner?.taglineMode) ?? undefined;
-      } catch {
-        cachedTaglineMode = undefined;
-      }
-    })
-    .catch(() => {
-      cachedTaglineMode = undefined;
-    });
 }
 
 export function readCliBannerTaglineMode(
@@ -53,8 +77,5 @@ export function readCliBannerTaglineMode(
   if (cachedTaglineMode !== null) {
     return cachedTaglineMode;
   }
-  // Start the async config resolution for future calls; return undefined
-  // (random tagline) for this call to avoid synchronous deadlock.
-  tryResolveTaglineModeFromConfig(env);
-  return undefined;
+  return resolveTaglineModeFromConfig(env);
 }
