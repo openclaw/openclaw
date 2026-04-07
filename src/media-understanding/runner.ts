@@ -24,6 +24,7 @@ import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-r
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -131,7 +132,7 @@ function resolveCatalogImageModelId(params: {
     return undefined;
   }
   const autoEntry = matches.find((entry) => entry.id.trim().toLowerCase() === "auto");
-  return (autoEntry ?? matches[0])?.id.trim() || undefined;
+  return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
 async function resolveAutoImageModelId(params: {
@@ -139,7 +140,7 @@ async function resolveAutoImageModelId(params: {
   providerId: string;
   explicitModel?: string;
 }): Promise<string | undefined> {
-  const explicit = params.explicitModel?.trim();
+  const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
     return explicit;
   }

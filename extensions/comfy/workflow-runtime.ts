@@ -17,7 +17,11 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -87,17 +91,8 @@ export function _setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | 
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function readConfigString(config: ComfyProviderConfig, key: string): string | undefined {
-  const value = config[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(config[key]);
 }
 
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
@@ -165,11 +160,11 @@ export function getComfyCapabilityConfig(
 }
 
 export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
-  return readConfigString(config, "mode") === "cloud" ? "cloud" : "local";
+  return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
 }
 
 function getRequiredConfigString(config: ComfyProviderConfig, key: string): string {
-  const value = readConfigString(config, key);
+  const value = normalizeOptionalString(config[key]);
   if (!value) {
     throw new Error(`models.providers.comfy.${key} is required`);
   }
@@ -184,7 +179,7 @@ function resolveComfyWorkflowSource(config: ComfyProviderConfig): {
   if (isRecord(workflow)) {
     return { workflow: structuredClone(workflow) };
   }
-  const workflowPath = readConfigString(config, "workflowPath");
+  const workflowPath = normalizeOptionalString(config.workflowPath);
   return { workflowPath };
 }
 
@@ -234,7 +229,7 @@ function resolveComfyNetworkPolicy(params: {
     return {};
   }
 
-  const hostname = parsed.hostname.trim().toLowerCase();
+  const hostname = normalizeOptionalString(parsed.hostname)?.toLowerCase() ?? "";
   if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
     return {};
   }

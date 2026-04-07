@@ -34,6 +34,7 @@ import {
   detectSuspiciousPatterns,
   ensureAgentWorkspace,
   hasNonzeroUsage,
+  isCliProvider,
   isExternalHookSession,
   loadModelCatalog,
   logWarn,
@@ -169,6 +170,10 @@ function appendCronDeliveryInstruction(params: {
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadCliRunnerRuntime() {
+  return await import("../../agents/cli-runner.runtime.js");
 }
 
 async function loadUsageFormatRuntime() {
@@ -503,6 +508,13 @@ async function finalizeCronRun(params: {
     model: modelUsed,
   });
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+  if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+    const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
+    if (cliSessionId) {
+      const { setCliSessionId } = await loadCliRunnerRuntime();
+      setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+    }
+  }
   if (hasNonzeroUsage(usage)) {
     const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
     const input = usage.input ?? 0;

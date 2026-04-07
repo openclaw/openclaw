@@ -15,6 +15,15 @@ OpenClaw agents can generate videos from text prompts, reference images, or exis
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
 </Note>
 
+OpenClaw treats video generation as three runtime modes:
+
+- `generate` for text-to-video requests with no reference media
+- `imageToVideo` when the request includes one or more reference images
+- `videoToVideo` when the request includes one or more reference videos
+
+Providers can support any subset of those modes. The tool validates the active
+mode before submission and reports supported modes in `action=list`.
+
 ## Quick start
 
 1. Set an API key for any supported provider:
@@ -48,6 +57,25 @@ While a job is in flight, duplicate `video_generate` calls in the same session r
 
 Outside of session-backed agent runs (for example, direct tool invocations), the tool falls back to inline generation and returns the final media path in the same turn.
 
+### Task lifecycle
+
+Each `video_generate` request moves through four states:
+
+1. **queued** -- task created, waiting for the provider to accept it.
+2. **running** -- provider is processing (typically 30 seconds to 5 minutes depending on provider and resolution).
+3. **succeeded** -- video ready; the agent wakes and posts it to the conversation.
+4. **failed** -- provider error or timeout; the agent wakes with error details.
+
+Check status from the CLI:
+
+```bash
+openclaw tasks list
+openclaw tasks show <taskId>
+openclaw tasks cancel <taskId>
+```
+
+Duplicate prevention: if a video task is already `queued` or `running` for the current session, `video_generate` returns the existing task status instead of starting a new one. Use `action: "status"` to check explicitly without triggering a new generation.
+
 ## Supported providers
 
 | Provider | Default model                   | Text | Image ref         | Video ref        | API key                                  |
@@ -67,7 +95,28 @@ Outside of session-backed agent runs (for example, direct tool invocations), the
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
-Run `video_generate action=list` to inspect available providers and models at runtime.
+Run `video_generate action=list` to inspect available providers, models, and
+runtime modes at runtime.
+
+### Declared capability matrix
+
+This is the explicit mode contract used by `video_generate`, contract tests,
+and the shared live sweep.
+
+| Provider | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                                                  |
+| -------- | ---------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Alibaba  | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
+| BytePlus | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| ComfyUI  | Yes        | Yes            | No             | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                               |
+| fal      | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| Google   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input  |
+| MiniMax  | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| OpenAI   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side inpaint/remix access |
+| Qwen     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
+| Runway   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                      |
+| Together | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| Vydra    | Yes        | Yes            | No             | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL            |
+| xAI      | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL                                |
 
 ## Tool parameters
 
@@ -91,7 +140,7 @@ Run `video_generate action=list` to inspect available providers and models at ru
 | Parameter         | Type    | Description                                                              |
 | ----------------- | ------- | ------------------------------------------------------------------------ |
 | `aspectRatio`     | string  | `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`  |
-| `resolution`      | string  | `480P`, `720P`, or `1080P`                                               |
+| `resolution`      | string  | `480P`, `720P`, `768P`, or `1080P`                                       |
 | `durationSeconds` | number  | Target duration in seconds (rounded to nearest provider-supported value) |
 | `size`            | string  | Size hint when the provider supports it                                  |
 | `audio`           | boolean | Enable generated audio when supported                                    |
@@ -105,7 +154,18 @@ Run `video_generate action=list` to inspect available providers and models at ru
 | `model`    | string | Provider/model override (e.g. `runway/gen4.5`)  |
 | `filename` | string | Output filename hint                            |
 
-Not all providers support all parameters. Unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
+Not all providers support all parameters. OpenClaw already normalizes duration to the closest provider-supported value, and it also remaps translated geometry hints such as size-to-aspect-ratio when a fallback provider exposes a different control surface. Truly unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
+
+Tool results report the applied settings. When OpenClaw remaps duration or geometry during provider fallback, the returned `durationSeconds`, `size`, `aspectRatio`, and `resolution` values reflect what was submitted, and `details.normalization` captures the requested-to-applied translation.
+
+Reference inputs also select the runtime mode:
+
+- No reference media: `generate`
+- Any image reference: `imageToVideo`
+- Any video reference: `videoToVideo`
+
+Mixed image and video references are not a stable shared capability surface.
+Prefer one reference type per request.
 
 ## Actions
 
@@ -123,6 +183,10 @@ When generating a video, OpenClaw resolves the model in this order:
 4. **Auto-detection** -- uses providers that have valid auth, starting with the current default provider, then remaining providers in alphabetical order.
 
 If a provider fails, the next candidate is tried automatically. If all candidates fail, the error includes details from each attempt.
+
+Set `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want
+video generation to use only the explicit `model`, `primary`, and `fallbacks`
+entries.
 
 ```json5
 {
@@ -153,6 +217,67 @@ If a provider fails, the next candidate is tried automatically. If all candidate
 | Together | Single image reference only.                                                                                                                                |
 | Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL. |
 | xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                 |
+
+## Provider capability modes
+
+The shared video-generation contract now lets providers declare mode-specific
+capabilities instead of only flat aggregate limits. New provider
+implementations should prefer explicit mode blocks:
+
+```typescript
+capabilities: {
+  generate: {
+    maxVideos: 1,
+    maxDurationSeconds: 10,
+    supportsResolution: true,
+  },
+  imageToVideo: {
+    enabled: true,
+    maxVideos: 1,
+    maxInputImages: 1,
+    maxDurationSeconds: 5,
+  },
+  videoToVideo: {
+    enabled: true,
+    maxVideos: 1,
+    maxInputVideos: 1,
+    maxDurationSeconds: 5,
+  },
+}
+```
+
+Flat aggregate fields such as `maxInputImages` and `maxInputVideos` are not
+enough to advertise transform-mode support. Providers should declare
+`generate`, `imageToVideo`, and `videoToVideo` explicitly so live tests,
+contract tests, and the shared `video_generate` tool can validate mode support
+deterministically.
+
+## Live tests
+
+Opt-in live coverage for the shared bundled providers:
+
+```bash
+OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts
+```
+
+Repo wrapper:
+
+```bash
+pnpm test:live:media video
+```
+
+This live file loads missing provider env vars from `~/.profile`, prefers
+live/env API keys ahead of stored auth profiles by default, and runs the
+declared modes it can exercise safely with local media:
+
+- `generate` for every provider in the sweep
+- `imageToVideo` when `capabilities.imageToVideo.enabled`
+- `videoToVideo` when `capabilities.videoToVideo.enabled` and the provider/model
+  accepts buffer-backed local video input in the shared sweep
+
+Today the shared `videoToVideo` live lane covers:
+
+- `runway` only when you select `runway/gen4_aleph`
 
 ## Configuration
 

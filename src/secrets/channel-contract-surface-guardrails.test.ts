@@ -40,14 +40,6 @@ const CORE_SECRET_SURFACE_GUARDS = [
     ],
   },
   {
-    path: "src/config/bundled-channel-config-runtime.ts",
-    forbiddenPatterns: [
-      /\bstaticBundledChannelSchemas\b/,
-      /\bMSTeamsConfigSchema\b/,
-      /\bWhatsAppConfigSchema\b/,
-    ],
-  },
-  {
     path: "src/plugin-sdk/command-auth.ts",
     forbiddenPatterns: [/\bpluginId:\s*"telegram"/],
   },

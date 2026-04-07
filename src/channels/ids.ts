@@ -1,4 +1,5 @@
 import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ChatChannelId = string;
 
@@ -9,8 +10,7 @@ type BundledChatChannelEntry = {
 };
 
 function normalizeChannelKey(raw?: string | null): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalString(raw)?.toLowerCase();
 }
 
 function listBundledChatChannelEntries(): BundledChatChannelEntry[] {

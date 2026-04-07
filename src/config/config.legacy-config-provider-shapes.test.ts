@@ -36,7 +36,7 @@ describe("legacy provider-shaped config snapshots", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("detects legacy messages.tts provider keys and reports legacyIssues", async () => {
+  it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         messages: {
@@ -52,19 +52,24 @@ describe("legacy provider-shaped config snapshots", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
       expect(snap.sourceConfig.messages?.tts).toEqual({
         provider: "elevenlabs",
-        elevenlabs: {
-          apiKey: "test-key",
-          voiceId: "voice-1",
+        providers: {
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: "voice-1",
+          },
         },
       });
+      expect(
+        (snap.sourceConfig.messages?.tts as Record<string, unknown> | undefined)?.elevenlabs,
+      ).toBeUndefined();
     });
   });
 
-  it("reports legacy talk flat fields without auto-migrating them at config load", async () => {
+  it("accepts legacy talk flat fields via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         talk: {
@@ -76,17 +81,26 @@ describe("legacy provider-shaped config snapshots", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk).toEqual({
+      expect(snap.sourceConfig.talk?.providers?.elevenlabs).toEqual({
         voiceId: "voice-1",
         modelId: "eleven_v3",
         apiKey: "test-key",
       });
+      expect(
+        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.voiceId,
+      ).toBeUndefined();
+      expect(
+        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.modelId,
+      ).toBeUndefined();
+      expect(
+        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
     });
   });
 
-  it("detects legacy plugins.entries.*.config.tts provider keys", async () => {
+  it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         plugins: {
@@ -108,7 +122,7 @@ describe("legacy provider-shaped config snapshots", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
       const voiceCallTts = (
         snap.sourceConfig.plugins?.entries as
@@ -127,15 +141,18 @@ describe("legacy provider-shaped config snapshots", () => {
       )?.["voice-call"]?.config?.tts;
       expect(voiceCallTts).toEqual({
         provider: "openai",
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "alloy",
+        providers: {
+          openai: {
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+          },
         },
       });
+      expect(voiceCallTts?.openai).toBeUndefined();
     });
   });
 
-  it("detects legacy discord voice tts provider keys and reports legacyIssues", async () => {
+  it("accepts legacy discord voice tts provider keys via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -165,7 +182,7 @@ describe("legacy provider-shaped config snapshots", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.voice.tts")).toBe(
         true,
       );
@@ -174,13 +191,17 @@ describe("legacy provider-shaped config snapshots", () => {
       );
       expect(snap.sourceConfig.channels?.discord?.voice?.tts).toEqual({
         provider: "elevenlabs",
-        elevenlabs: {
-          voiceId: "voice-1",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-1",
+          },
         },
       });
       expect(snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts).toEqual({
-        edge: {
-          voice: "en-US-AvaNeural",
+        providers: {
+          microsoft: {
+            voice: "en-US-AvaNeural",
+          },
         },
       });
     });

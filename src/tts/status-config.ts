@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
@@ -32,7 +33,7 @@ function resolveConfiguredTtsAutoMode(raw: TtsConfig): TtsAutoMode {
 function normalizeConfiguredSpeechProviderId(
   providerId: string | undefined,
 ): TtsProvider | undefined {
-  const normalized = providerId?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(providerId)?.toLowerCase();
   if (!normalized) {
     return undefined;
   }
@@ -40,10 +41,11 @@ function normalizeConfiguredSpeechProviderId(
 }
 
 function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
-  if (prefsPath?.trim()) {
-    return resolveUserPath(prefsPath.trim());
+  const configuredPath = normalizeOptionalString(prefsPath);
+  if (configuredPath) {
+    return resolveUserPath(configuredPath);
   }
-  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
+  const envPath = normalizeOptionalString(process.env.OPENCLAW_TTS_PREFS);
   if (envPath) {
     return resolveUserPath(envPath);
   }

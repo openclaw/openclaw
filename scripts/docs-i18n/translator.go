@@ -22,6 +22,14 @@ type PiTranslator struct {
 	client *docsPiClient
 }
 
+type docsTranslator interface {
+	Translate(context.Context, string, string, string) (string, error)
+	TranslateRaw(context.Context, string, string, string) (string, error)
+	Close()
+}
+
+type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
+
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
 	client, err := startDocsPiClient(context.Background(), docsPiClientOptions{
 		SystemPrompt: translationPrompt(srcLang, tgtLang, glossary),

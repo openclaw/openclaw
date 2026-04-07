@@ -331,7 +331,9 @@ describe("config plugin validation", () => {
     }
     expect(res.warnings).toContainEqual({
       path: "plugins.entries.google",
-      message: "plugin disabled (not in allowlist) but config is present",
+      message: expect.stringContaining(
+        "plugin google: duplicate plugin id detected; bundled plugin will be overridden by config plugin",
+      ),
     });
   });
 

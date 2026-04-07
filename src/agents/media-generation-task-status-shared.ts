@@ -32,7 +32,7 @@ export function findActiveMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
   sourcePrefix: string;
-}): TaskRecord | null {
+}): TaskRecord | undefined {
   return findActiveSessionTask({
     sessionKey: params.sessionKey,
     runtime: "cli",

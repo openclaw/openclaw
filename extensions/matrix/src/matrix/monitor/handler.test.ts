@@ -488,7 +488,7 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(getMemberDisplayName).not.toHaveBeenCalledWith("!room:example.org", "@bot:example.org");
   });
 
-  it("drops forged metadata-only mentions before agent routing", async () => {
+  it("drops forged metadata-only mentions before session recording", async () => {
     const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       mentionRegexes: [/@bot/i],
@@ -505,6 +505,7 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
   });
 
   it("skips media downloads for unmentioned group media messages", async () => {
@@ -1383,7 +1384,7 @@ describe("matrix monitor handler pairing account scope", () => {
         sender: "@user:example.org",
         body: "hello there",
         mentions: { room: true },
-      }) as MatrixRawEvent,
+      }),
     );
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();

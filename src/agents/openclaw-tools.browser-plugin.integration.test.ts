@@ -1,59 +1,68 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 
-function resetPluginState() {
-  clearPluginLoaderCache();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
-  resetPluginRuntimeStateForTest();
-}
+const hoisted = vi.hoisted(() => ({
+  resolvePluginTools: vi.fn(),
+}));
+
+vi.mock("../plugins/tools.js", () => ({
+  resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
+}));
 
 describe("createOpenClawTools browser plugin integration", () => {
-  let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
-
-  beforeEach(() => {
-    bundledFixture = createBundledBrowserPluginFixture();
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledFixture.rootDir);
-    resetPluginState();
-  });
-
   afterEach(() => {
-    resetPluginState();
-    vi.unstubAllEnvs();
-    bundledFixture?.cleanup();
-    bundledFixture = null;
+    hoisted.resolvePluginTools.mockReset();
   });
 
-  it("loads the bundled browser plugin through normal plugin resolution", () => {
-    const tools = createOpenClawTools({
-      config: {
-        plugins: {
-          allow: ["browser"],
+  it("keeps the browser tool returned by plugin resolution", () => {
+    hoisted.resolvePluginTools.mockReturnValue([
+      {
+        name: "browser",
+        description: "browser fixture tool",
+        parameters: {
+          type: "object",
+          properties: {},
         },
-      } as OpenClawConfig,
+        async execute() {
+          return {
+            content: [{ type: "text", text: "ok" }],
+          };
+        },
+      },
+    ]);
+
+    const config = {
+      plugins: {
+        allow: ["browser"],
+      },
+    } as OpenClawConfig;
+
+    const tools = resolveOpenClawPluginToolsForOptions({
+      options: { config },
+      resolvedConfig: config,
     });
 
     expect(tools.map((tool) => tool.name)).toContain("browser");
   });
 
-  it("omits the browser tool when the bundled browser plugin is disabled", () => {
-    const tools = createOpenClawTools({
-      config: {
-        plugins: {
-          allow: ["browser"],
-          entries: {
-            browser: {
-              enabled: false,
-            },
+  it("omits the browser tool when plugin resolution returns no browser tool", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+
+    const config = {
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          browser: {
+            enabled: false,
           },
         },
-      } as OpenClawConfig,
+      },
+    } as OpenClawConfig;
+
+    const tools = resolveOpenClawPluginToolsForOptions({
+      options: { config },
+      resolvedConfig: config,
     });
 
     expect(tools.map((tool) => tool.name)).not.toContain("browser");

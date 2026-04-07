@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -15,7 +16,7 @@ function normalizeEnvironment(value: unknown): "sandbox" | "production" | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   if (normalized === "sandbox" || normalized === "production") {
     return normalized;
   }
@@ -68,12 +69,10 @@ export function registerNodesPushCommand(nodes: Command) {
           const ok = parsed.ok === true;
           const status = typeof parsed.status === "number" ? parsed.status : 0;
           const reason =
-            typeof parsed.reason === "string" && parsed.reason.trim().length > 0
-              ? parsed.reason.trim()
-              : undefined;
+            typeof parsed.reason === "string" ? normalizeOptionalString(parsed.reason) : undefined;
           const env =
-            typeof parsed.environment === "string" && parsed.environment.trim().length > 0
-              ? parsed.environment.trim()
+            typeof parsed.environment === "string"
+              ? (normalizeOptionalString(parsed.environment) ?? "unknown")
               : "unknown";
           const { ok: okLabel, error: errorLabel } = getNodesTheme();
           const label = ok ? okLabel : errorLabel;

@@ -1,31 +1,29 @@
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
-  createAllowlistSetupWizardProxy,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
+  createAllowlistSetupWizardProxy,
+  createEnvPatchedAccountSetupAdapter,
   createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
-  createEnvPatchedAccountSetupAdapter,
-  type OpenClawConfig,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup-runtime";
-import {
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type ChannelSetupWizardAllowFromEntry,
+  type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
-import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
+import { resolveSlackAccount } from "./accounts.js";
 import {
   buildSlackSetupLines,
+  SLACK_CHANNEL as channel,
   isSlackSetupAccountConfigured,
   setSlackChannelAllowlist,
-  SLACK_CHANNEL as channel,
 } from "./shared.js";
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
@@ -100,10 +98,10 @@ function createSlackTokenCredential(params: {
       return {
         accountConfigured: Boolean(resolvedValue) || hasConfiguredSecretInput(configuredValue),
         hasConfiguredValue: hasConfiguredSecretInput(configuredValue),
-        resolvedValue: resolvedValue?.trim() || undefined,
+        resolvedValue: normalizeOptionalString(resolvedValue),
         envValue:
           accountId === DEFAULT_ACCOUNT_ID
-            ? process.env[params.preferredEnvVar]?.trim()
+            ? normalizeOptionalString(process.env[params.preferredEnvVar])
             : undefined,
       };
     },

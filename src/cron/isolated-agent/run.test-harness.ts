@@ -2,6 +2,7 @@ import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -27,15 +28,14 @@ function createMock(): Mock {
 }
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+  const direct = normalizeOptionalString(value);
+  if (direct) {
+    return direct;
   }
   if (!value || typeof value !== "object") {
     return undefined;
   }
-  const primary = (value as { primary?: unknown }).primary;
-  return typeof primary === "string" && primary.trim() ? primary.trim() : undefined;
+  return normalizeOptionalString((value as { primary?: unknown }).primary);
 }
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
@@ -44,13 +44,16 @@ export const resolveEffectiveModelFallbacksMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
+export const isCliProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
+export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
+export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -60,6 +63,9 @@ export const pickLastNonEmptyTextFromPayloadsMock = createMock();
 export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
+export const dispatchCronDeliveryMock = createMock();
+export const isHeartbeatOnlyResponseMock = createMock();
+export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 
@@ -100,6 +106,7 @@ vi.mock("./run.runtime.js", () => ({
   DEFAULT_PROVIDER: "openai",
   loadModelCatalog: loadModelCatalogMock,
   getModelRefStatus: getModelRefStatusMock,
+  isCliProvider: isCliProviderMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -129,10 +136,13 @@ vi.mock("./run.runtime.js", () => ({
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
+  getCliSessionId: getCliSessionIdMock,
+  runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
   resolveNestedAgentLane: resolveNestedAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
+  isCliProvider: isCliProviderMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
@@ -140,6 +150,10 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+}));
+
+vi.mock("../../agents/cli-runner.runtime.js", () => ({
+  setCliSessionId: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => ({
@@ -154,14 +168,23 @@ vi.mock("./delivery-target.js", () => ({
   resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
 
+vi.mock("./delivery-dispatch.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js");
+  return {
+    ...actual,
+    dispatchCronDelivery: dispatchCronDeliveryMock,
+  };
+});
+
 vi.mock("./helpers.js", () => ({
-  isHeartbeatOnlyResponse: vi.fn().mockReturnValue(false),
+  isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
   pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
-  resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
+  resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -264,6 +287,7 @@ function resetRunConfigMocks(): void {
 }
 
 function resetRunExecutionMocks(): void {
+  isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveNestedAgentLaneMock.mockReturnValue(undefined);
@@ -274,6 +298,8 @@ function resetRunExecutionMocks(): void {
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
+  runCliAgentMock.mockReset();
+  getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
   listDescendantRunsForRequesterMock.mockReset();
@@ -314,6 +340,32 @@ function resetRunOutcomeMocks(): void {
     accountId: undefined,
     error: undefined,
   });
+  dispatchCronDeliveryMock.mockReset();
+  dispatchCronDeliveryMock.mockImplementation(
+    ({
+      deliveryPayloads,
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryRequested,
+      skipHeartbeatDelivery,
+      skipMessagingToolDelivery,
+    }) => ({
+      result: undefined,
+      delivered: Boolean(deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+      deliveryAttempted: Boolean(
+        deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery,
+      ),
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryPayloads,
+    }),
+  );
+  isHeartbeatOnlyResponseMock.mockReset();
+  isHeartbeatOnlyResponseMock.mockReturnValue(false);
+  resolveHeartbeatAckMaxCharsMock.mockReset();
+  resolveHeartbeatAckMaxCharsMock.mockReturnValue(100);
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 }

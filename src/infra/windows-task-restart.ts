@@ -5,6 +5,7 @@ import path from "node:path";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { resolveTaskScriptPath } from "../daemon/schtasks.js";
+import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -78,7 +79,7 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
     return {
       ok: false,
       method: "schtasks",
-      detail: err instanceof Error ? err.message : String(err),
+      detail: formatErrorMessage(err),
       tried: [`schtasks /Run /TN "${taskName}"`],
     };
   }

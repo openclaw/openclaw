@@ -6,6 +6,8 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -16,14 +18,17 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
+  type ModelRef,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  legacyModelKey,
+  modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-} from "./provider-id.js";
-import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
+  parseModelRef,
+} from "./model-selection-normalize.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
@@ -31,11 +36,6 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
   return log;
 }
-
-export type ModelRef = {
-  provider: string;
-  model: string;
-};
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
@@ -64,81 +64,55 @@ function sanitizeModelWarningValue(value: string): string {
   return sanitizeForLog(stripped.slice(0, controlBoundary));
 }
 
-export function modelKey(provider: string, model: string) {
-  return sharedModelKey(provider, model);
-}
-
-export function legacyModelKey(provider: string, model: string): string | null {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId || !modelId) {
-    return null;
-  }
-  const rawKey = `${providerId}/${modelId}`;
-  const canonicalKey = modelKey(providerId, modelId);
-  return rawKey === canonicalKey ? null : rawKey;
-}
-
 export {
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  legacyModelKey,
+  modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
+  parseModelRef,
 };
+export type { ModelRef };
 
-function normalizeProviderModelId(provider: string, model: string): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model);
+export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
+  const normalized = normalizeProviderId(provider);
+  const cliBackends = resolveRuntimeCliBackends();
+  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
+    return true;
+  }
+  if (resolvePluginSetupCliBackendRuntime({ backend: normalized })) {
+    return true;
+  }
+  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
+  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
+}
+
+export function resolvePersistedOverrideModelRef(params: {
+  defaultProvider: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const defaultProvider = params.defaultProvider.trim();
+  const overrideProvider = params.overrideProvider?.trim();
+  const overrideModel = params.overrideModel?.trim();
+  if (!overrideModel) {
+    return null;
+  }
+  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
   return (
-    normalizeProviderModelIdWithRuntime({
-      provider,
-      context: {
-        provider,
-        modelId: staticModelId,
-      },
-    }) ?? staticModelId
+    parseModelRef(encodedOverride, defaultProvider) ?? {
+      provider: overrideProvider || defaultProvider,
+      model: overrideModel,
+    }
   );
 }
 
-type ModelRefNormalizeOptions = {
-  allowPluginNormalization?: boolean;
-};
-
-export function normalizeModelRef(
-  provider: string,
-  model: string,
-  options?: ModelRefNormalizeOptions,
-): ModelRef {
-  const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModel =
-    options?.allowPluginNormalization === false
-      ? model.trim()
-      : normalizeProviderModelId(normalizedProvider, model.trim());
-  return { provider: normalizedProvider, model: normalizedModel };
-}
-
-type ParseModelRefOptions = ModelRefNormalizeOptions;
-
-export function parseModelRef(
-  raw: string,
-  defaultProvider: string,
-  options?: ParseModelRefOptions,
-): ModelRef | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed, options);
-  }
-  const providerRaw = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!providerRaw || !model) {
-    return null;
-  }
-  return normalizeModelRef(providerRaw, model, options);
-}
-
+/**
+ * Runtime-first resolver for persisted model metadata.
+ * Use this when callers intentionally want the last executed model identity.
+ */
 export function resolvePersistedModelRef(params: {
   defaultProvider: string;
   runtimeProvider?: string;
@@ -160,19 +134,38 @@ export function resolvePersistedModelRef(params: {
       }
     );
   }
+  return resolvePersistedOverrideModelRef({
+    defaultProvider,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
+  });
+}
 
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
-  if (!overrideModel) {
-    return null;
+/**
+ * Selected-model resolver for persisted model metadata.
+ * Use this for control/status/UI surfaces that should honor explicit session
+ * overrides before falling back to runtime identity.
+ */
+export function resolvePersistedSelectedModelRef(params: {
+  defaultProvider: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const override = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
+  });
+  if (override) {
+    return override;
   }
-  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
-  return (
-    parseModelRef(encodedOverride, defaultProvider) ?? {
-      provider: overrideProvider || defaultProvider,
-      model: overrideModel,
-    }
-  );
+  return resolvePersistedModelRef({
+    defaultProvider: params.defaultProvider,
+    runtimeProvider: params.runtimeProvider,
+    runtimeModel: params.runtimeModel,
+  });
 }
 
 export function inferUniqueProviderFromConfiguredModels(params: {

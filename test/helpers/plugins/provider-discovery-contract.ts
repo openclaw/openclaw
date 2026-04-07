@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
-import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
+import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
@@ -415,6 +415,42 @@ export function describeOllamaProviderDiscoveryContract() {
         }),
       ).resolves.toBeNull();
       expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
+    });
+
+    it("keeps empty default-ish provider stubs on the quiet ambient path", async () => {
+      buildOllamaProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        models: [],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.ollamaProvider!,
+          config: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://127.0.0.1:11434",
+                  api: "ollama",
+                  models: [],
+                },
+              },
+            },
+          },
+          env: {} as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({ apiKey: undefined }),
+          resolveProviderAuth: () => ({
+            apiKey: undefined,
+            discoveryApiKey: undefined,
+            mode: "none",
+            source: "none",
+          }),
+        }),
+      ).resolves.toBeNull();
+      expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://127.0.0.1:11434", {
+        quiet: true,
+      });
     });
   });
 }

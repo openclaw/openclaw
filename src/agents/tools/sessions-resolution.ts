@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -12,11 +14,6 @@ const defaultSessionsResolutionDeps = {
 let sessionsResolutionDeps: {
   callGateway: GatewayCaller;
 } = defaultSessionsResolutionDeps;
-
-function normalizeKey(value?: string) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export function resolveMainSessionAlias(cfg: OpenClawConfig) {
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -148,7 +145,7 @@ export async function isResolvedSessionVisibleToRequester(params: {
 export { looksLikeSessionId };
 
 export function looksLikeSessionKey(value: string): boolean {
-  const raw = value.trim();
+  const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {
     return false;
   }
@@ -274,7 +271,7 @@ async function resolveSessionKeyFromSessionId(params: {
         error: `Session not visible from this sandboxed agent session: ${params.sessionId}`,
       };
     }
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       status: "error",
@@ -459,7 +456,7 @@ export async function resolveVisibleSessionReference(params: {
 }
 
 export function normalizeOptionalKey(value?: string) {
-  return normalizeKey(value);
+  return normalizeOptionalString(value);
 }
 
 export const __testing = {

@@ -16,6 +16,7 @@ import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -146,11 +147,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       });
       respond(true, { results }, undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
     }
   },
   "skills.detail": async ({ params, respond }) => {
@@ -171,11 +168,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       });
       respond(true, detail, undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
     }
   },
   "skills.install": async ({ params, respond }) => {

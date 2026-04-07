@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { collectDiscordSecurityAuditFindings } from "../../extensions/discord/contract-api.js";
-import type { ResolvedDiscordAccount } from "../../extensions/discord/src/accounts.js";
-import type { DiscordAccountConfig } from "../../extensions/discord/src/runtime-api.js";
+import { collectDiscordSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
 import type { OpenClawConfig } from "../config/config.js";
+
+type DiscordAuditParams = Parameters<typeof collectDiscordSecurityAuditFindings>[0];
+type ResolvedDiscordAccount = DiscordAuditParams["account"];
+type DiscordAccountConfig = ResolvedDiscordAccount["config"];
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
   readChannelAllowFromStoreMock: vi.fn(async () => [] as string[]),

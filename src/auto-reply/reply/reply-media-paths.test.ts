@@ -18,6 +18,7 @@ describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
     ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(null);
     saveMediaSource.mockReset();
+    vi.unstubAllEnvs();
   });
 
   it("resolves workspace-relative media against the agent workspace", async () => {
@@ -61,7 +62,7 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
-  it("keeps host-local media paths flexible when sandbox exists and workspaceOnly is off", async () => {
+  it("drops arbitrary host-local media paths when sandbox exists", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -77,13 +78,13 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     expect(result).toMatchObject({
-      mediaUrl: "/Users/peter/.openclaw/media/inbound/photo.png",
-      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+      mediaUrl: undefined,
+      mediaUrls: undefined,
     });
     expect(saveMediaSource).not.toHaveBeenCalled();
   });
 
-  it("keeps sandbox media strict when workspaceOnly is enabled", async () => {
+  it("drops relative sandbox escapes when tools.fs.workspaceOnly is enabled", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -94,11 +95,59 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    await expect(
-      normalize({
-        mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
-      }),
-    ).rejects.toThrow(/sandbox root|outside|escapes/i);
+    const result = await normalize({
+      mediaUrls: ["../sandboxes/session-1/screens/final.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
+
+  it("keeps managed generated media under the shared media root", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
+      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
+
+  it("drops absolute file URLs outside managed reply media roots", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["file:///Users/peter/.openclaw/media/inbound/photo.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
   });
 
   it("persists volatile agent-state media from the workspace into host outbound media", async () => {

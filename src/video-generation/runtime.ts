@@ -2,21 +2,21 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
+  deriveAspectRatioFromSize,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
-import {
-  normalizeVideoGenerationDuration,
-  resolveVideoGenerationSupportedDurations,
-} from "./duration-support.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
+import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationIgnoredOverride,
+  VideoGenerationNormalization,
   VideoGenerationResolution,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
@@ -45,6 +45,7 @@ export type GenerateVideoRuntimeResult = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  normalization?: VideoGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: VideoGenerationIgnoredOverride[];
 };
@@ -61,57 +62,6 @@ export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClaw
   return listVideoGenerationProviders(params?.config);
 }
 
-function resolveProviderVideoGenerationOverrides(params: {
-  provider: NonNullable<ReturnType<typeof getVideoGenerationProvider>>;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  audio?: boolean;
-  watermark?: boolean;
-}) {
-  const caps = params.provider.capabilities;
-  const ignoredOverrides: VideoGenerationIgnoredOverride[] = [];
-  let size = params.size;
-  let aspectRatio = params.aspectRatio;
-  let resolution = params.resolution;
-  let audio = params.audio;
-  let watermark = params.watermark;
-
-  if (size && !caps.supportsSize) {
-    ignoredOverrides.push({ key: "size", value: size });
-    size = undefined;
-  }
-
-  if (aspectRatio && !caps.supportsAspectRatio) {
-    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    aspectRatio = undefined;
-  }
-
-  if (resolution && !caps.supportsResolution) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  if (typeof audio === "boolean" && !caps.supportsAudio) {
-    ignoredOverrides.push({ key: "audio", value: audio });
-    audio = undefined;
-  }
-
-  if (typeof watermark === "boolean" && !caps.supportsWatermark) {
-    ignoredOverrides.push({ key: "watermark", value: watermark });
-    watermark = undefined;
-  }
-
-  return {
-    size,
-    aspectRatio,
-    resolution,
-    audio,
-    watermark,
-    ignoredOverrides,
-  };
-}
-
 export async function generateVideo(
   params: GenerateVideoParams,
 ): Promise<GenerateVideoRuntimeResult> {
@@ -120,6 +70,8 @@ export async function generateVideo(
     modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: listVideoGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg));
@@ -142,26 +94,17 @@ export async function generateVideo(
     }
 
     try {
-      const sanitized = resolveProviderVideoGenerationOverrides({
+      const sanitized = resolveVideoGenerationOverrides({
         provider,
+        model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,
+        durationSeconds: params.durationSeconds,
         audio: params.audio,
         watermark: params.watermark,
-      });
-      const requestedDurationSeconds =
-        typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
-          ? Math.max(1, Math.round(params.durationSeconds))
-          : undefined;
-      const normalizedDurationSeconds = normalizeVideoGenerationDuration({
-        provider,
-        model: candidate.model,
-        durationSeconds: requestedDurationSeconds,
-      });
-      const supportedDurationSeconds = resolveVideoGenerationSupportedDurations({
-        provider,
-        model: candidate.model,
+        inputImageCount: params.inputImages?.length ?? 0,
+        inputVideoCount: params.inputVideos?.length ?? 0,
       });
       const result: VideoGenerationResult = await provider.generateVideo({
         provider: candidate.provider,
@@ -173,7 +116,7 @@ export async function generateVideo(
         size: sanitized.size,
         aspectRatio: sanitized.aspectRatio,
         resolution: sanitized.resolution,
-        durationSeconds: normalizedDurationSeconds,
+        durationSeconds: sanitized.durationSeconds,
         audio: sanitized.audio,
         watermark: sanitized.watermark,
         inputImages: params.inputImages,
@@ -187,18 +130,52 @@ export async function generateVideo(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        normalization: sanitized.normalization,
         ignoredOverrides: sanitized.ignoredOverrides,
-        metadata:
-          typeof requestedDurationSeconds === "number" &&
-          typeof normalizedDurationSeconds === "number" &&
-          requestedDurationSeconds !== normalizedDurationSeconds
+        metadata: {
+          ...result.metadata,
+          ...(sanitized.normalization?.size?.requested !== undefined &&
+          sanitized.normalization.size.applied !== undefined
             ? {
-                ...result.metadata,
-                requestedDurationSeconds,
-                normalizedDurationSeconds,
-                ...(supportedDurationSeconds ? { supportedDurationSeconds } : {}),
+                requestedSize: sanitized.normalization.size.requested,
+                normalizedSize: sanitized.normalization.size.applied,
               }
-            : result.metadata,
+            : {}),
+          ...(sanitized.normalization?.aspectRatio?.applied !== undefined
+            ? {
+                ...(sanitized.normalization.aspectRatio.requested !== undefined
+                  ? { requestedAspectRatio: sanitized.normalization.aspectRatio.requested }
+                  : {}),
+                normalizedAspectRatio: sanitized.normalization.aspectRatio.applied,
+                ...(sanitized.normalization.aspectRatio.derivedFrom === "size" && params.size
+                  ? {
+                      requestedSize: params.size,
+                      aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size),
+                    }
+                  : {}),
+              }
+            : {}),
+          ...(sanitized.normalization?.resolution?.requested !== undefined &&
+          sanitized.normalization.resolution.applied !== undefined
+            ? {
+                requestedResolution: sanitized.normalization.resolution.requested,
+                normalizedResolution: sanitized.normalization.resolution.applied,
+              }
+            : {}),
+          ...(sanitized.normalization?.durationSeconds?.requested !== undefined &&
+          sanitized.normalization.durationSeconds.applied !== undefined
+            ? {
+                requestedDurationSeconds: sanitized.normalization.durationSeconds.requested,
+                normalizedDurationSeconds: sanitized.normalization.durationSeconds.applied,
+                ...(sanitized.normalization.durationSeconds.supportedValues?.length
+                  ? {
+                      supportedDurationSeconds:
+                        sanitized.normalization.durationSeconds.supportedValues,
+                    }
+                  : {}),
+              }
+            : {}),
+        },
       };
     } catch (err) {
       lastError = err;
@@ -206,7 +183,7 @@ export async function generateVideo(
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? (err instanceof Error ? err.message : String(err)),
+        error: described?.message ?? formatErrorMessage(err),
         reason: described?.reason,
         status: described?.status,
         code: described?.code,

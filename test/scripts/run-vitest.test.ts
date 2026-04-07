@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/run-vitest.mjs";
+import { resolveVitestNodeArgs, resolveVitestSpawnParams } from "../../scripts/run-vitest.mjs";
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -13,5 +13,16 @@ describe("scripts/run-vitest", () => {
         PATH: "/usr/bin",
       }),
     ).toEqual([]);
+  });
+
+  it("spawns vitest in a detached process group on Unix hosts", () => {
+    expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
+      env: { PATH: "/usr/bin" },
+      detached: true,
+    });
+    expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
+      env: { PATH: "/usr/bin" },
+      detached: false,
+    });
   });
 });

@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRequestClient } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
@@ -166,7 +167,8 @@ export async function fetchDiscordBotIdentity(params: {
   try {
     const botUser = await params.client.fetchUser("@me");
     const botUserId = botUser?.id;
-    const botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+    const botUserName =
+      normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
     params.logStartupPhase(
       "fetch-bot-identity:done",
       `botUserId=${botUserId ?? "<missing>"} botUserName=${botUserName ?? "<missing>"}`,

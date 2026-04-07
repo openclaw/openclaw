@@ -25,7 +25,7 @@ if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
   done < <(openclaw_live_collect_auth_files)
-elif [[ -n "${OPENCLAW_LIVE_PROVIDERS:-}" && -n "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" ]]; then
+elif [[ -n "${OPENCLAW_LIVE_PROVIDERS:-}" || -n "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
@@ -111,9 +111,11 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
-source /app/scripts/lib/live-docker-stage.sh
+source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
+openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
+openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 pnpm test:live:models-profiles
 EOF

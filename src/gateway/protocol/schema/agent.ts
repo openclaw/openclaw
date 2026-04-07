@@ -102,6 +102,16 @@ export const AgentParamsSchema = Type.Object(
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
+    bootstrapContextMode: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
+    ),
+    bootstrapContextRunKind: Type.Optional(
+      Type.Union([
+        Type.Literal("default"),
+        Type.Literal("heartbeat"),
+        Type.Literal("cron"),
+      ]),
+    ),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,

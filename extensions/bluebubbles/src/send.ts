@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString, stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
@@ -137,8 +137,9 @@ function extractChatGuid(chat: BlueBubblesChatRecord): string | null {
     chat.chat_identifier,
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
+    const value = normalizeOptionalString(candidate);
+    if (value) {
+      return value;
     }
   }
   return null;
@@ -159,8 +160,7 @@ function extractChatIdentifierFromChatGuid(chatGuid: string): string | null {
   if (parts.length < 3) {
     return null;
   }
-  const identifier = parts[2]?.trim();
-  return identifier ? identifier : null;
+  return normalizeOptionalString(parts[2]) ?? null;
 }
 
 function extractParticipantAddresses(chat: BlueBubblesChatRecord): string[] {
@@ -479,7 +479,7 @@ export async function sendMessageBlueBubbles(
     );
   }
   const effectId = resolveEffectId(opts.effectId);
-  const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
+  const wantsReplyThread = normalizeOptionalString(opts.replyToMessageGuid) !== undefined;
   const wantsEffect = Boolean(effectId);
   const privateApiDecision = resolvePrivateApiDecision({
     privateApiStatus,

@@ -21,7 +21,6 @@ const cfg = {
       },
     },
   },
-  // oxlint-disable-next-line typescript/no-explicit-any
 } as any;
 
 describe("slack group policy", () => {
