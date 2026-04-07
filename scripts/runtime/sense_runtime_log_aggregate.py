@@ -205,6 +205,20 @@ def derive_digest_bucket_dominance_band(digest_bucket_share: object) -> str:
     return 'minor'
 
 
+def derive_digest_bucket_palette_key(digest_bucket_dominance_band: object) -> str:
+    band = (
+        digest_bucket_dominance_band
+        if isinstance(digest_bucket_dominance_band, str)
+        else 'minor'
+    )
+    return {
+        'dominant': 'danger',
+        'major': 'warning',
+        'split': 'accent',
+        'minor': 'muted',
+    }.get(band, 'muted')
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -545,6 +559,9 @@ def main() -> int:
             aggregate['count'],
             aggregate['digest_bucket_total'],
         )
+        digest_bucket_dominance_band = derive_digest_bucket_dominance_band(
+            digest_bucket_share,
+        )
         notification_digest_summary.append(
             {
                 'notification_group_key': aggregate['notification_group_key'],
@@ -564,7 +581,10 @@ def main() -> int:
                 'digest_bucket_total': aggregate['digest_bucket_total'],
                 'digest_bucket_share': digest_bucket_share,
                 'digest_bucket_percent': derive_digest_bucket_percent(digest_bucket_share),
-                'digest_bucket_dominance_band': derive_digest_bucket_dominance_band(digest_bucket_share),
+                'digest_bucket_dominance_band': digest_bucket_dominance_band,
+                'digest_bucket_palette_key': derive_digest_bucket_palette_key(
+                    digest_bucket_dominance_band
+                ),
                 'digest_bucket_rank': 0,
                 'digest_bucket_leader': False,
                 'digest_bucket_leader_count': 0,
