@@ -85,6 +85,22 @@ export async function monitorWebInbox(options: {
   // flushed to the agent). Used by the messages.update handler to silently
   // swap in the edited text before the agent ever sees the original.
   const pendingMessageIds = new Map<string, WebInboundMessage>();
+  // Track message IDs that have been fully processed (flushed + onMessage
+  // completed). Only edits to these messages trigger a notification — this
+  // prevents edits to ignored, historical, or access-denied messages from
+  // producing unexpected outbound replies.
+  const processedMessageIds = new Set<string>();
+  const MAX_PROCESSED_IDS = 512;
+  const rememberProcessedId = (id: string) => {
+    if (processedMessageIds.size >= MAX_PROCESSED_IDS) {
+      // Evict the oldest entry (Sets preserve insertion order).
+      const first = processedMessageIds.values().next().value;
+      if (first !== undefined) {
+        processedMessageIds.delete(first);
+      }
+    }
+    processedMessageIds.add(id);
+  };
 
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
@@ -106,37 +122,43 @@ export async function monitorWebInbox(options: {
     },
     shouldDebounce: options.shouldDebounce,
     onFlush: async (entries) => {
-      // Clear pending tracking for all flushed entries.
-      for (const entry of entries) {
-        if (entry.id) {
-          pendingMessageIds.delete(entry.id);
-        }
-      }
       const last = entries.at(-1);
       if (!last) {
         return;
       }
+      let messageToDeliver: WebInboundMessage;
       if (entries.length === 1) {
-        await options.onMessage(last);
-        return;
+        messageToDeliver = last;
+      } else {
+        const mentioned = new Set<string>();
+        for (const entry of entries) {
+          for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
+            mentioned.add(jid);
+          }
+        }
+        const combinedBody = entries
+          .map((entry) => entry.body)
+          .filter(Boolean)
+          .join("\n");
+        messageToDeliver = {
+          ...last,
+          body: combinedBody,
+          mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+          mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+        };
       }
-      const mentioned = new Set<string>();
+      // Deliver first, then update tracking. This closes the race where an
+      // edit event arrives after pendingMessageIds is cleared but before
+      // onMessage completes — without this ordering, Case 2 would fire
+      // a "already processed" notification while the agent is still handling
+      // the original body.
+      await options.onMessage(messageToDeliver);
       for (const entry of entries) {
-        for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
-          mentioned.add(jid);
+        if (entry.id) {
+          pendingMessageIds.delete(entry.id);
+          rememberProcessedId(entry.id);
         }
       }
-      const combinedBody = entries
-        .map((entry) => entry.body)
-        .filter(Boolean)
-        .join("\n");
-      const combinedMessage: WebInboundMessage = {
-        ...last,
-        body: combinedBody,
-        mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-        mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-      };
-      await options.onMessage(combinedMessage);
     },
     onError: (err) => {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
@@ -581,19 +603,24 @@ export async function monitorWebInbox(options: {
         if (shouldLogVerbose()) {
           logVerbose(`Swapped pending message ${msgId} body to edited version: "${editedBody}"`);
         }
-      } else {
-        // ⚠️ Case 2: Already flushed — notify the user that we've seen an edit
-        // after the fact so they can decide whether to resend.
+      } else if (processedMessageIds.has(msgId)) {
+        // ⚠️ Case 2: Already flushed and confirmed processed — notify the user
+        // that we've seen an edit after the fact so they can decide to resend.
+        // We only notify for messages that passed access-control and were
+        // actually delivered to the agent; edits to ignored or historical
+        // messages are silently dropped.
         if (shouldLogVerbose()) {
-          logVerbose(`Edit received for already-flushed message ${msgId} — notifying user`);
+          logVerbose(`Edit received for already-processed message ${msgId} — notifying user`);
         }
         try {
           await sendTrackedMessage(remoteJid, {
-            text: `✏️ (你刚才编辑了一条消息，但我已经处理了原版。如果想重新处理，请把新内容重新发一遍。)`,
+            text: `✏️ (You edited a message I already processed. If you'd like me to handle the updated version, please resend it.)`,
           });
         } catch (err) {
           logVerbose(`Failed to send edit-notification for ${msgId}: ${String(err)}`);
         }
+      } else {
+        logVerbose(`Edit received for unknown/ignored message ${msgId} — skipping notification`);
       }
     }
   };
