@@ -569,6 +569,10 @@ function unwrapDefaultModuleExport(
   moduleExport: unknown,
   options?: {
     shouldStop?: (value: Record<string, unknown>) => boolean;
+    shouldContinueOnDefault?: (
+      value: Record<string, unknown>,
+      next: unknown,
+    ) => boolean;
   },
 ): unknown {
   let resolved = moduleExport;
@@ -580,11 +584,12 @@ function unwrapDefaultModuleExport(
     !visited.has(resolved)
   ) {
     const record = resolved as Record<string, unknown>;
-    if (options?.shouldStop?.(record)) {
+    const next = record.default;
+    if (options?.shouldStop?.(record) && !options?.shouldContinueOnDefault?.(record, next)) {
       break;
     }
     visited.add(resolved);
-    resolved = record.default;
+    resolved = next;
   }
   return resolved;
 }
@@ -596,6 +601,15 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   const resolved = unwrapDefaultModuleExport(moduleExport, {
     shouldStop: (candidate) =>
       typeof candidate.register === "function" || typeof candidate.activate === "function",
+    shouldContinueOnDefault: (_candidate, next) => {
+      if (!next || typeof next !== "object") {
+        return false;
+      }
+      return (
+        typeof (next as { register?: unknown }).register === "function" ||
+        typeof (next as { activate?: unknown }).activate === "function"
+      );
+    },
   });
   if (typeof resolved === "function") {
     return {
