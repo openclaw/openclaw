@@ -869,6 +869,80 @@ describe("resolveModel", () => {
     });
   });
 
+  it("prefers runtime-resolved openai-codex gpt-5.4 metadata when it has a larger context window", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("prefers runtime-resolved openai-codex gpt-5.4 metadata during async resolution too", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+      },
+    });
+
+    const result = await resolveModelAsyncForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("keeps exact discovered metadata for other openai-codex models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+        name: "GPT-5.4 Mini",
+        contextWindow: 64_000,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 64_000,
+      input: ["text"],
+    });
+  });
+
   it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",

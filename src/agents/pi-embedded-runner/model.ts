@@ -526,6 +526,26 @@ function resolveConfiguredFallbackModel(params: {
   });
 }
 
+function shouldCompareOpenAICodexRuntimeResolvedModel(params: {
+  provider: string;
+  modelId: string;
+}): boolean {
+  return params.provider === "openai-codex" && params.modelId === "gpt-5.4";
+}
+
+function preferOpenAICodexRuntimeResolvedModel(params: {
+  explicitModel: Model<Api>;
+  runtimeResolvedModel?: Model<Api>;
+}): Model<Api> {
+  if (
+    params.runtimeResolvedModel &&
+    params.runtimeResolvedModel.contextWindow > params.explicitModel.contextWindow
+  ) {
+    return params.runtimeResolvedModel;
+  }
+  return params.explicitModel;
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -547,11 +567,16 @@ export function resolveModelWithRegistry(params: {
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
-  if (explicitModel?.kind === "resolved") {
-    return explicitModel.model;
-  }
-
   const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
+  if (explicitModel?.kind === "resolved") {
+    if (!shouldCompareOpenAICodexRuntimeResolvedModel(normalizedParams)) {
+      return explicitModel.model;
+    }
+    return preferOpenAICodexRuntimeResolvedModel({
+      explicitModel: explicitModel.model,
+      runtimeResolvedModel: pluginDynamicModel,
+    });
+  }
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
@@ -683,7 +708,13 @@ export async function resolveModelAsync(
     });
   };
   let model =
-    explicitModel?.kind === "resolved" ? explicitModel.model : await resolveDynamicAttempt();
+    explicitModel?.kind === "resolved" &&
+    !shouldCompareOpenAICodexRuntimeResolvedModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+    })
+      ? explicitModel.model
+      : await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once with a cleared hook cache before surfacing a
