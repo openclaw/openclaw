@@ -1,6 +1,7 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -128,7 +129,7 @@ export function resolveCronPayloadOutcome(params: {
   const firstText = params.payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(params.payloads);
-  const synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  const synthesizedText = normalizeOptionalString(outputText) ?? normalizeOptionalString(summary);
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
   const resolvedDeliveryPayloads =

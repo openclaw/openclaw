@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type {
@@ -480,7 +481,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private static normalizeNumber(numberOrSip: string): string {
     const trimmed = numberOrSip.trim();
-    if (trimmed.toLowerCase().startsWith("sip:")) {
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("sip:")) {
       return trimmed;
     }
     return trimmed.replace(/[^\d+]/g, "");

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -174,15 +177,21 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 describe("callGateway url resolution", () => {
   const envSnapshot = captureEnv([
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_GATEWAY_PORT",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_STATE_DIR",
   ]);
 
   beforeEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_STATE_DIR;
     resetGatewayCallMocks();
   });
 
@@ -272,6 +281,22 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("skips config loading when explicit url and token are provided", async () => {
+    loadConfig.mockImplementation(() => {
+      throw new Error("loadConfig should not run");
+    });
+
+    await callGatewayCli({
+      method: "health",
+      url: "ws://127.0.0.1:18800",
+      token: "test-token",
+    });
+
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+    expect(lastClientOptions?.token).toBe("test-token");
   });
 
   it("keeps device identity enabled for local loopback shared-token auth", async () => {
@@ -581,16 +606,24 @@ describe("buildGatewayConnectionDetails", () => {
   });
 
   it("falls back to the default config loader when test deps drift", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
-    resolveGatewayPort.mockReturnValue(18800);
-    __testing.setDepsForTests({
-      loadConfig: {} as never,
-    });
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+    try {
+      loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+      resolveGatewayPort.mockReturnValue(18800);
+      __testing.setDepsForTests({
+        loadConfig: {} as never,
+        resolveGatewayPort: () => 18789,
+      });
 
-    const details = buildGatewayConnectionDetails();
+      const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://127.0.0.1:18789");
-    expect(details.urlSource).toBe("local loopback");
+      expect(details.url).toBe("ws://127.0.0.1:18789");
+      expect(details.urlSource).toBe("local loopback");
+    } finally {
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
   });
 
   it("throws for insecure ws:// remote URLs (CWE-319)", () => {

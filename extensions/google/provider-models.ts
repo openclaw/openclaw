@@ -3,20 +3,25 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
+const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
 const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
 const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GEMMA_PREFIX = "gemma-";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+// Gemma uses the Gemini flash template as a forward-compat approximation
+// until a dedicated Gemma template is registered in the catalog.
+const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
 
 type GoogleForwardCompatFamily = {
   googleTemplateIds: readonly string[];
@@ -50,7 +55,7 @@ function cloneGoogleTemplateModel(params: {
 }
 
 function isGoogleGeminiCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === GOOGLE_GEMINI_CLI_PROVIDER_ID;
+  return normalizeOptionalLowercaseString(providerId) === GOOGLE_GEMINI_CLI_PROVIDER_ID;
 }
 
 function templateIdsForProvider(
@@ -101,7 +106,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = params.ctx.modelId.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
 
   let family: GoogleForwardCompatFamily;
   let patch: Partial<ProviderRuntimeModel> | undefined;
@@ -141,6 +146,14 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
     };
+  } else if (lower.startsWith(GEMMA_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMMA_TEMPLATE_IDS,
+      cliTemplateIds: GEMMA_TEMPLATE_IDS,
+    };
+    if (lower.startsWith("gemma-4")) {
+      patch = { reasoning: true };
+    }
   } else {
     return undefined;
   }
@@ -167,6 +180,8 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
 }
 
 export function isModernGoogleModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
-  return lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3");
+  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
+  return (
+    lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3") || lower.startsWith(GEMMA_PREFIX)
+  );
 }

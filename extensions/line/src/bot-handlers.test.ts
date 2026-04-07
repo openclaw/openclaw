@@ -1,39 +1,86 @@
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
+
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
   buildMentionRegexes: () => [],
   matchesMentionPatterns: () => false,
-  resolveMentionGatingWithBypass: ({
-    isGroup,
-    requireMention,
-    canDetectMention,
-    wasMentioned,
-    hasAnyMention,
-    allowTextCommands,
-    hasControlCommand,
-    commandAuthorized,
-  }: {
-    isGroup: boolean;
-    requireMention: boolean;
-    canDetectMention: boolean;
-    wasMentioned: boolean;
-    hasAnyMention: boolean;
-    allowTextCommands: boolean;
-    hasControlCommand: boolean;
-    commandAuthorized: boolean;
-  }) => ({
-    shouldSkip:
-      isGroup &&
-      requireMention &&
-      canDetectMention &&
-      !wasMentioned &&
-      !(allowTextCommands && hasControlCommand && commandAuthorized && !hasAnyMention),
-  }),
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      hasAnyMention?: boolean;
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    hasAnyMention?: boolean;
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
+  }) => {
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            hasAnyMention: params.hasAnyMention,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    return {
+      effectiveWasMentioned:
+        facts.wasMentioned ||
+        (policy.allowTextCommands &&
+          policy.hasControlCommand &&
+          policy.commandAuthorized &&
+          !facts.hasAnyMention),
+      shouldSkip:
+        policy.isGroup &&
+        policy.requireMention &&
+        facts.canDetectMention &&
+        !facts.wasMentioned &&
+        !(
+          policy.allowTextCommands &&
+          policy.hasControlCommand &&
+          policy.commandAuthorized &&
+          !facts.hasAnyMention
+        ),
+      shouldBypassMention:
+        policy.isGroup &&
+        policy.requireMention &&
+        !facts.wasMentioned &&
+        !facts.hasAnyMention &&
+        policy.allowTextCommands &&
+        policy.hasControlCommand &&
+        policy.commandAuthorized,
+      implicitMention: false,
+      matchedImplicitMentionKinds: [],
+    };
+  },
 }));
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
   createChannelPairingChallengeIssuer:
@@ -53,7 +100,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", () => ({
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   }) => ({
     commandAuthorized:
-      hasControlCommand && authorizers.some((entry) => entry.allowed || entry.configured === false),
+      hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
   }),
 }));
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
@@ -193,16 +240,6 @@ let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineW
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
-
-function buildDefaultLineMessageContext() {
-  return {
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  };
-}
 
 function createReplayMessageEvent(params: {
   messageId: string;

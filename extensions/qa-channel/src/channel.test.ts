@@ -1,9 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
 import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
-import { startQaBusServer } from "../../../src/qa-e2e/bus-server.js";
-import { createQaBusState } from "../../../src/qa-e2e/bus-state.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
+import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
 import { qaChannelPlugin } from "../api.js";
 import { setQaChannelRuntime } from "../api.js";
 

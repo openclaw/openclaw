@@ -6,6 +6,7 @@ import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registr
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import { resolveChannelExposure } from "./exposure.js";
 import type { ChannelMeta } from "./types.js";
@@ -189,7 +190,7 @@ function toChannelMeta(params: {
     selectionLabel,
     ...(detailLabel ? { detailLabel } : {}),
     docsPath,
-    docsLabel: params.channel.docsLabel?.trim() || undefined,
+    docsLabel: normalizeOptionalString(params.channel.docsLabel),
     blurb,
     ...(params.channel.aliases ? { aliases: params.channel.aliases } : {}),
     ...(params.channel.preferOver ? { preferOver: params.channel.preferOver } : {}),
@@ -230,7 +231,7 @@ function resolveInstallInfo(params: {
   if (!npmSpec) {
     return null;
   }
-  let localPath = params.install?.localPath?.trim() || undefined;
+  let localPath = normalizeOptionalString(params.install?.localPath);
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
@@ -240,10 +241,6 @@ function resolveInstallInfo(params: {
     ...(localPath ? { localPath } : {}),
     ...(defaultChoice ? { defaultChoice } : {}),
   };
-}
-
-function resolveCatalogPluginId(params: { pluginId?: string }): string | undefined {
-  return params.pluginId?.trim() || undefined;
 }
 
 function buildCatalogEntryFromManifest(params: {
@@ -275,9 +272,7 @@ function buildCatalogEntryFromManifest(params: {
   if (!install) {
     return null;
   }
-  const pluginId = resolveCatalogPluginId({
-    pluginId: params.pluginId,
-  });
+  const pluginId = normalizeOptionalString(params.pluginId);
   return {
     id,
     ...(pluginId ? { pluginId } : {}),

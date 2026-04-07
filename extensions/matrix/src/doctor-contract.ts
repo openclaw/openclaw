@@ -7,10 +7,7 @@ import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./record-shared.js";
 
 function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
   const room = isRecord(value) ? value : null;
@@ -204,7 +201,7 @@ export function normalizeCompatibilityConfig({
     config: {
       ...cfg,
       channels: {
-        ...(cfg.channels ?? {}),
+        ...cfg.channels,
         matrix: updatedMatrix as NonNullable<OpenClawConfig["channels"]>["matrix"],
       },
     },

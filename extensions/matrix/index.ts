@@ -1,5 +1,5 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
 
 export default defineBundledChannelEntry({
@@ -11,6 +11,10 @@ export default defineBundledChannelEntry({
     specifier: "./channel-plugin-api.js",
     exportName: "matrixPlugin",
   },
+  secrets: {
+    specifier: "./src/secret-contract.js",
+    exportName: "channelSecrets",
+  },
   runtime: {
     specifier: "./runtime-api.js",
     exportName: "setMatrixRuntime",
@@ -20,12 +24,12 @@ export default defineBundledChannelEntry({
     void import("./plugin-entry.handlers.runtime.js")
       .then(({ ensureMatrixCryptoRuntime }) =>
         ensureMatrixCryptoRuntime({ log: api.logger.info }).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           api.logger.warn?.(`matrix: crypto runtime bootstrap failed: ${message}`);
         }),
       )
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         api.logger.warn?.(`matrix: failed loading crypto bootstrap runtime: ${message}`);
       });
 

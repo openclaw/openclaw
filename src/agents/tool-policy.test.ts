@@ -20,24 +20,20 @@ function createOwnerPolicyTools() {
   return [
     {
       name: "read",
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
       name: "cron",
       ownerOnly: true,
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
       name: "gateway",
       ownerOnly: true,
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
       name: "whatsapp_login",
-      // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
     },
   ] as unknown as AnyAgentTool[];
@@ -126,7 +122,6 @@ describe("tool-policy", () => {
       {
         name: "custom_admin_tool",
         ownerOnly: true,
-        // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];
@@ -148,12 +143,10 @@ describe("tool-policy", () => {
     const tools = [
       {
         name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
       {
         name: "nodes",
-        // oxlint-disable-next-line typescript/no-explicit-any
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];

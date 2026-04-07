@@ -12,6 +12,7 @@ import {
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { matrixNativeApprovalAdapter } from "./approval-native.js";
 import {
   buildMatrixApprovalReactionHint,
@@ -95,11 +96,6 @@ function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string })
   return isMatrixExecApprovalClientEnabled(params);
 }
 
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  const trimmed = value == null ? "" : String(value).trim();
-  return trimmed || undefined;
-}
-
 function buildPendingApprovalContent(params: {
   request: ApprovalRequest;
   nowMs: number;
@@ -114,11 +110,10 @@ function buildPendingApprovalContent(params: {
     ask: params.request.request.ask ?? undefined,
     agentId: params.request.request.agentId ?? undefined,
     allowedDecisions,
-    command: resolveExecApprovalCommandDisplay((params.request as ExecApprovalRequest).request)
-      .commandText,
-    cwd: (params.request as ExecApprovalRequest).request.cwd ?? undefined,
-    host: (params.request as ExecApprovalRequest).request.host === "node" ? "node" : "gateway",
-    nodeId: (params.request as ExecApprovalRequest).request.nodeId ?? undefined,
+    command: resolveExecApprovalCommandDisplay(params.request.request).commandText,
+    cwd: params.request.request.cwd ?? undefined,
+    host: params.request.request.host === "node" ? "node" : "gateway",
+    nodeId: params.request.request.nodeId ?? undefined,
     sessionKey: params.request.request.sessionKey ?? undefined,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
@@ -149,7 +144,7 @@ function buildResolvedApprovalText(params: {
 }
 
 export class MatrixExecApprovalHandler {
-  private readonly runtime: ExecApprovalChannelRuntime<ApprovalRequest, ApprovalResolved>;
+  private readonly runtime: ExecApprovalChannelRuntime;
   private readonly trackedReactionTargets = new Map<string, ReactionTargetRef>();
   private readonly nowMs: () => number;
   private readonly sendMessage: typeof sendMessageMatrix;
@@ -291,7 +286,7 @@ export class MatrixExecApprovalHandler {
     if (!target) {
       return null;
     }
-    const threadId = normalizeThreadId(rawTarget.threadId);
+    const threadId = normalizeOptionalStringifiedId(rawTarget.threadId);
     if (target.kind === "user") {
       const account = resolveMatrixAccount({
         cfg: this.opts.cfg as CoreConfig,

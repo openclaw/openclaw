@@ -4,6 +4,7 @@ import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
@@ -434,10 +435,6 @@ export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
   });
 }
 
-function getString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -446,20 +443,20 @@ function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIde
   const userProfile =
     readRecord(payload.UserProfile) ?? readRecord(payload.userProfile) ?? readRecord(payload.User);
   const login =
-    getString(userProfile?.LoginName) ??
-    getString(userProfile?.Login) ??
-    getString(userProfile?.login) ??
-    getString(payload.LoginName) ??
-    getString(payload.login);
+    normalizeOptionalString(userProfile?.LoginName) ??
+    normalizeOptionalString(userProfile?.Login) ??
+    normalizeOptionalString(userProfile?.login) ??
+    normalizeOptionalString(payload.LoginName) ??
+    normalizeOptionalString(payload.login);
   if (!login) {
     return null;
   }
   const name =
-    getString(userProfile?.DisplayName) ??
-    getString(userProfile?.Name) ??
-    getString(userProfile?.displayName) ??
-    getString(payload.DisplayName) ??
-    getString(payload.name);
+    normalizeOptionalString(userProfile?.DisplayName) ??
+    normalizeOptionalString(userProfile?.Name) ??
+    normalizeOptionalString(userProfile?.displayName) ??
+    normalizeOptionalString(payload.DisplayName) ??
+    normalizeOptionalString(payload.name);
   return { login, name };
 }
 

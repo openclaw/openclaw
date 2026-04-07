@@ -44,6 +44,7 @@ See [Plugins](/tools/plugin) for plugin behavior and install rules.
    - `homeserver` + `userId` + `password`.
 4. Restart the gateway.
 5. Start a DM with the bot or invite it to a room.
+   - Fresh Matrix invites only work when `channels.matrix.autoJoin` allows them.
 
 Interactive setup paths:
 
@@ -60,15 +61,59 @@ What the Matrix wizard actually asks for:
 - optional device name
 - whether to enable E2EE
 - whether to configure Matrix room access now
+- whether to configure Matrix invite auto-join now
+- when invite auto-join is enabled, whether it should be `allowlist`, `always`, or `off`
 
 Wizard behavior that matters:
 
-- If Matrix auth env vars already exist for the selected account, and that account does not already have auth saved in config, the wizard offers an env shortcut and only writes `enabled: true` for that account.
+- If Matrix auth env vars already exist for the selected account, and that account does not already have auth saved in config, the wizard offers an env shortcut so setup can keep auth in env vars instead of copying secrets into config.
 - When you add another Matrix account interactively, the entered account name is normalized into the account ID used in config and env vars. For example, `Ops Bot` becomes `ops-bot`.
 - DM allowlist prompts accept full `@user:server` values immediately. Display names only work when live directory lookup finds one exact match; otherwise the wizard asks you to retry with a full Matrix ID.
 - Room allowlist prompts accept room IDs and aliases directly. They can also resolve joined-room names live, but unresolved names are only kept as typed during setup and are ignored later by runtime allowlist resolution. Prefer `!room:server` or `#alias:server`.
+- The wizard now shows an explicit warning before the invite auto-join step because `channels.matrix.autoJoin` defaults to `off`; agents will not join invited rooms or fresh DM-style invites unless you set it.
+- In invite auto-join allowlist mode, use only stable invite targets: `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected.
 - Runtime room/session identity uses the stable Matrix room ID. Room-declared aliases are only used as lookup inputs, not as the long-term session key or stable group identity.
 - To resolve room names before saving them, use `openclaw channels resolve --channel matrix "Project Room"`.
+
+<Warning>
+`channels.matrix.autoJoin` defaults to `off`.
+
+If you leave it unset, the bot will not join invited rooms or fresh DM-style invites, so it will not appear in new groups or invited DMs unless you join manually first.
+
+Set `autoJoin: "allowlist"` together with `autoJoinAllowlist` to restrict which invites it accepts, or set `autoJoin: "always"` if you want it to join every invite.
+
+In `allowlist` mode, `autoJoinAllowlist` only accepts `!roomId:server`, `#alias:server`, or `*`.
+</Warning>
+
+Allowlist example:
+
+```json5
+{
+  channels: {
+    matrix: {
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["!ops:example.org", "#support:example.org"],
+      groups: {
+        "!ops:example.org": {
+          requireMention: true,
+        },
+      },
+    },
+  },
+}
+```
+
+Join every invite:
+
+```json5
+{
+  channels: {
+    matrix: {
+      autoJoin: "always",
+    },
+  },
+}
+```
 
 Minimal token-based setup:
 
@@ -920,14 +965,16 @@ By default, OpenClaw blocks private/internal Matrix homeservers for SSRF protect
 explicitly opt in per account.
 
 If your homeserver runs on localhost, a LAN/Tailscale IP, or an internal hostname, enable
-`allowPrivateNetwork` for that Matrix account:
+`network.dangerouslyAllowPrivateNetwork` for that Matrix account:
 
 ```json5
 {
   channels: {
     matrix: {
       homeserver: "http://matrix-synapse:8008",
-      allowPrivateNetwork: true,
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
       accessToken: "syt_internal_xxx",
     },
   },
@@ -986,7 +1033,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `name`: optional label for the account.
 - `defaultAccount`: preferred account ID when multiple Matrix accounts are configured.
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
-- `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
+- `network.dangerouslyAllowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
 - `proxy`: optional HTTP(S) proxy URL for Matrix traffic. Named accounts can override the top-level default with their own `proxy`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
 - `accessToken`: access token for token-based auth. Plaintext values and SecretRef values are supported for `channels.matrix.accessToken` and `channels.matrix.accounts.<id>.accessToken` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
@@ -1003,7 +1050,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
-- `replyToMode`: `off`, `first`, or `all`.
+- `replyToMode`: `off`, `first`, `all`, or `batched`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
 - `streaming`: `off` (default), `partial`, `quiet`, `true`, or `false`. `partial` and `true` enable preview-first draft updates with normal Matrix text messages. `quiet` uses non-notifying preview notices for self-hosted push-rule setups.
 - `blockStreaming`: `true` enables separate progress messages for completed assistant blocks while draft preview streaming is active.

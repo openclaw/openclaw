@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import { limitHistoryTurns } from "../history.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -94,20 +97,41 @@ describe("runEmbeddedAttempt context injection", () => {
     );
   });
 
-  it("records full bootstrap completion after a successful non-heartbeat turn", async () => {
-    await createContextEngineAttemptRunner({
+  it("runs full bootstrap injection after a successful non-heartbeat turn", async () => {
+    hoisted.resolveBootstrapContextForRunMock.mockResolvedValue({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md",
+          path: "AGENTS.md",
+          content: "bootstrap context",
+          missing: false,
+        },
+      ],
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "bootstrap context",
+        },
+      ],
+    });
+
+    const result = await createContextEngineAttemptRunner({
       contextEngine: {
         assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      attemptOverrides: {
+        bootstrapContextMode: "full",
+        bootstrapContextRunKind: "default",
       },
       sessionKey: "agent:main",
       tempPaths,
     });
 
-    expect(hoisted.sessionManager.appendCustomEntry).toHaveBeenCalledWith(
-      "openclaw:bootstrap-context:full",
+    expect(result.promptError).toBeNull();
+    expect(hoisted.resolveBootstrapContextForRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run-context-engine-forwarding",
-        sessionId: "embedded-session",
+        contextMode: "full",
+        runKind: "default",
       }),
     );
   });
@@ -128,6 +152,47 @@ describe("runEmbeddedAttempt context injection", () => {
     expect(hoisted.sessionManager.appendCustomEntry).not.toHaveBeenCalledWith(
       "openclaw:bootstrap-context:full",
       expect.anything(),
+    );
+  });
+
+  it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
+    hoisted.getDmHistoryLimitFromSessionKeyMock.mockReturnValue(1);
+    hoisted.limitHistoryTurnsMock.mockImplementation(
+      (messages: unknown, limit: number | undefined) =>
+        limitHistoryTurns(messages as AgentMessage[], limit),
+    );
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "real question", timestamp: 1 } as unknown as AgentMessage,
+      { role: "assistant", content: "real answer", timestamp: 2 } as unknown as AgentMessage,
+      { role: "user", content: HEARTBEAT_PROMPT, timestamp: 3 } as unknown as AgentMessage,
+      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as unknown as AgentMessage,
+    ];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: { assemble },
+      attemptOverrides: {
+        config: {
+          agents: {
+            list: [{ id: "main", heartbeat: {} }],
+          },
+        },
+      },
+      sessionKey: "agent:main:discord:dm:test-user",
+      sessionMessages,
+      tempPaths,
+    });
+
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({ role: "user", content: "real question" }),
+          expect.objectContaining({ role: "assistant", content: "real answer" }),
+        ],
+      }),
     );
   });
 });

@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -144,12 +145,8 @@ export function registerCronAddCommand(cron: Command) {
             return {
               kind: "agentTurn" as const,
               message,
-              model:
-                typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined,
-              thinking:
-                typeof opts.thinking === "string" && opts.thinking.trim()
-                  ? opts.thinking.trim()
-                  : undefined,
+              model: normalizeOptionalString(opts.model),
+              thinking: normalizeOptionalString(opts.thinking),
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
               lightContext: opts.lightContext === true ? true : undefined,
@@ -250,7 +247,7 @@ export function registerCronAddCommand(cron: Command) {
                     typeof opts.channel === "string" && opts.channel.trim()
                       ? opts.channel.trim()
                       : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  to: normalizeOptionalString(opts.to),
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }

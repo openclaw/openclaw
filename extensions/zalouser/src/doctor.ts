@@ -3,8 +3,8 @@ import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
 import { isZalouserMutableGroupEntry } from "./security-audit.js";
 
 type ZalouserChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
@@ -13,10 +13,6 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
 }
 
 function hasLegacyZalouserGroupAllowAlias(value: unknown): boolean {
@@ -156,47 +152,37 @@ const ZALOUSER_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
-export function collectZalouserMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
-  const hits: Array<{ path: string; entry: string }> = [];
+export const legacyConfigRules = ZALOUSER_LEGACY_CONFIG_RULES;
 
-  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "zalouser")) {
-    if (scope.dangerousNameMatchingEnabled) {
-      continue;
-    }
-    const groups = asObjectRecord(scope.account.groups);
-    if (!groups) {
-      continue;
-    }
-    for (const entry of Object.keys(groups)) {
-      if (isZalouserMutableGroupEntry(entry)) {
-        hits.push({ path: `${scope.prefix}.groups`, entry });
-      }
-    }
-  }
-
-  if (hits.length === 0) {
-    return [];
-  }
-  const exampleLines = hits
-    .slice(0, 8)
-    .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
-  const remaining =
-    hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
-  return [
-    `- Found ${hits.length} mutable allowlist ${hits.length === 1 ? "entry" : "entries"} across zalouser while name matching is disabled by default.`,
-    ...exampleLines,
-    ...(remaining ? [remaining] : []),
-    "- Option A (break-glass): enable channels.zalouser.dangerousNameMatching=true for the affected scope.",
-    "- Option B (recommended): resolve mutable group names to stable IDs and rewrite the allowlist entries.",
-  ];
+export function normalizeCompatibilityConfig(params: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  return normalizeZalouserCompatibilityConfig(params.cfg);
 }
+
+export const collectZalouserMutableAllowlistWarnings =
+  createDangerousNameMatchingMutableAllowlistWarningCollector({
+    channel: "zalouser",
+    detector: isZalouserMutableGroupEntry,
+    collectLists: (scope) => {
+      const groups = asObjectRecord(scope.account.groups);
+      return groups
+        ? [
+            {
+              pathLabel: `${scope.prefix}.groups`,
+              list: Object.keys(groups),
+            },
+          ]
+        : [];
+    },
+  });
 
 export const zalouserDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOnly",
   groupModel: "hybrid",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
-  legacyConfigRules: ZALOUSER_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeZalouserCompatibilityConfig(cfg),
-  collectMutableAllowlistWarnings: ({ cfg }) => collectZalouserMutableAllowlistWarnings(cfg),
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  collectMutableAllowlistWarnings: collectZalouserMutableAllowlistWarnings,
 };

@@ -1,4 +1,6 @@
 import process from "node:process";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { restoreTerminalState } from "../terminal/restore.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -237,7 +239,7 @@ export function isTransientNetworkError(err: unknown): boolean {
       continue;
     }
     const rawMessage = (candidate as { message?: unknown }).message;
-    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    const message = normalizeLowercaseStringOrEmpty(rawMessage);
     if (!message) {
       continue;
     }
@@ -296,7 +298,7 @@ export function isTransientSqliteError(err: unknown): boolean {
       (candidate as { errstr?: unknown }).errstr,
     ];
     for (const rawMessage of messageParts) {
-      const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+      const message = normalizeLowercaseStringOrEmpty(rawMessage);
       if (!message) {
         continue;
       }
@@ -340,6 +342,11 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
+  const exitWithTerminalRestore = (reason: string) => {
+    restoreTerminalState(reason, { resumeStdinIfPaused: false });
+    process.exit(1);
+  };
+
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
@@ -354,13 +361,13 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
-      process.exit(1);
+      exitWithTerminalRestore("fatal unhandled rejection");
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      process.exit(1);
+      exitWithTerminalRestore("configuration error");
       return;
     }
 
@@ -373,6 +380,6 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    process.exit(1);
+    exitWithTerminalRestore("unhandled rejection");
   });
 }

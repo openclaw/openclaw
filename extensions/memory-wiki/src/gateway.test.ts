@@ -1,11 +1,60 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  applyMemoryWikiMutation,
+  normalizeMemoryWikiMutationInput,
+  type ApplyMemoryWikiMutation,
+} from "./apply.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { ingestMemoryWikiSource } from "./ingest.js";
+import { searchMemoryWiki } from "./query.js";
+import { syncMemoryWikiImportedSources } from "./source-sync.js";
+import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const { createPluginApi, createTempDir, createVault } = createMemoryWikiTestHarness();
+vi.mock("./apply.js", () => ({
+  applyMemoryWikiMutation: vi.fn(),
+  normalizeMemoryWikiMutationInput: vi.fn(),
+}));
+
+vi.mock("./compile.js", () => ({
+  compileMemoryWikiVault: vi.fn(),
+}));
+
+vi.mock("./ingest.js", () => ({
+  ingestMemoryWikiSource: vi.fn(),
+}));
+
+vi.mock("./lint.js", () => ({
+  lintMemoryWikiVault: vi.fn(),
+}));
+
+vi.mock("./obsidian.js", () => ({
+  probeObsidianCli: vi.fn(),
+  runObsidianCommand: vi.fn(),
+  runObsidianDaily: vi.fn(),
+  runObsidianOpen: vi.fn(),
+  runObsidianSearch: vi.fn(),
+}));
+
+vi.mock("./query.js", () => ({
+  getMemoryWikiPage: vi.fn(),
+  searchMemoryWiki: vi.fn(),
+}));
+
+vi.mock("./source-sync.js", () => ({
+  syncMemoryWikiImportedSources: vi.fn(),
+}));
+
+vi.mock("./status.js", () => ({
+  buildMemoryWikiDoctorReport: vi.fn(),
+  resolveMemoryWikiStatus: vi.fn(),
+}));
+
+vi.mock("./vault.js", () => ({
+  initializeMemoryWikiVault: vi.fn(),
+}));
+
+const { createPluginApi, createVault } = createMemoryWikiTestHarness();
 
 function findGatewayHandler(
   registerGatewayMethod: ReturnType<typeof vi.fn>,
@@ -20,11 +69,45 @@ function findGatewayHandler(
 }
 
 describe("memory-wiki gateway methods", () => {
-  it("returns wiki status over the gateway", async () => {
-    const { config } = await createVault({
-      prefix: "memory-wiki-gateway-",
-      initialize: true,
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(syncMemoryWikiImportedSources).mockResolvedValue({
+      importedCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      removedCount: 0,
+      artifactCount: 0,
+      workspaces: 0,
+      pagePaths: [],
+      indexesRefreshed: false,
+      indexUpdatedFiles: [],
+      indexRefreshReason: "no-import-changes",
     });
+    vi.mocked(resolveMemoryWikiStatus).mockResolvedValue({
+      vaultMode: "isolated",
+      vaultExists: true,
+    } as never);
+    vi.mocked(ingestMemoryWikiSource).mockResolvedValue({
+      pagePath: "sources/alpha-notes.md",
+    } as never);
+    vi.mocked(normalizeMemoryWikiMutationInput).mockReturnValue({
+      op: "create_synthesis",
+      title: "Gateway Alpha",
+      body: "Gateway summary.",
+      sourceIds: ["source.alpha"],
+    } satisfies ApplyMemoryWikiMutation);
+    vi.mocked(applyMemoryWikiMutation).mockResolvedValue({
+      operation: "create_synthesis",
+      pagePath: "syntheses/gateway-alpha.md",
+    } as never);
+    vi.mocked(searchMemoryWiki).mockResolvedValue({
+      items: [],
+      total: 0,
+    } as never);
+  });
+
+  it("returns wiki status over the gateway", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
 
     registerMemoryWikiGatewayMethods({ api, config });
@@ -39,6 +122,10 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
+      appConfig: undefined,
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -49,19 +136,8 @@ describe("memory-wiki gateway methods", () => {
   });
 
   it("validates required query params for wiki.search", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-gateway-",
-      initialize: true,
-    });
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
 
     registerMemoryWikiGatewayMethods({ api, config });
     const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
@@ -75,6 +151,7 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
+    expect(searchMemoryWiki).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -82,14 +159,9 @@ describe("memory-wiki gateway methods", () => {
     );
   });
 
-  it("ingests local files over the gateway and refreshes indexes", async () => {
-    const inputRootDir = await createTempDir("memory-wiki-gateway-");
-    const inputPath = path.join(inputRootDir, "alpha-notes.txt");
-    await fs.writeFile(inputPath, "alpha over gateway\n", "utf8");
+  it("forwards ingest requests over the gateway", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
-    const { config } = await createVault({
-      rootDir: path.join(inputRootDir, "vault"),
-    });
 
     registerMemoryWikiGatewayMethods({ api, config });
     const handler = findGatewayHandler(registerGatewayMethod, "wiki.ingest");
@@ -100,26 +172,27 @@ describe("memory-wiki gateway methods", () => {
 
     await handler({
       params: {
-        inputPath,
+        inputPath: "/tmp/alpha-notes.txt",
+        title: "Alpha",
       },
       respond,
     });
 
+    expect(ingestMemoryWikiSource).toHaveBeenCalledWith({
+      config,
+      inputPath: "/tmp/alpha-notes.txt",
+      title: "Alpha",
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         pagePath: "sources/alpha-notes.md",
       }),
     );
-    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
-      "[alpha notes](sources/alpha-notes.md)",
-    );
   });
 
   it("applies wiki mutations over the gateway", async () => {
-    const { config } = await createVault({
-      prefix: "memory-wiki-gateway-",
-    });
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
 
     registerMemoryWikiGatewayMethods({ api, config });
@@ -128,17 +201,26 @@ describe("memory-wiki gateway methods", () => {
       throw new Error("wiki.apply handler missing");
     }
     const respond = vi.fn();
+    const params = {
+      op: "create_synthesis",
+      title: "Gateway Alpha",
+      body: "Gateway summary.",
+      sourceIds: ["source.alpha"],
+    };
 
     await handler({
-      params: {
-        op: "create_synthesis",
-        title: "Gateway Alpha",
-        body: "Gateway summary.",
-        sourceIds: ["source.alpha"],
-      },
+      params,
       respond,
     });
 
+    expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
+    expect(applyMemoryWikiMutation).toHaveBeenCalledWith({
+      config,
+      mutation: expect.objectContaining({
+        op: "create_synthesis",
+        title: "Gateway Alpha",
+      }),
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

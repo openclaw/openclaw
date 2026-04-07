@@ -1,67 +1,22 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
+import type { TableColumn } from "../terminal/table.js";
 import type { HealthSummary } from "./health.js";
+import type { AgentLocalStatus } from "./status.agent-local.js";
+import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
+import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
   bootstrapPendingCount: number;
   totalSessions: number;
-  agents: Array<{
-    id: string;
-    lastActiveAgeMs?: number | null;
-  }>;
+  agents: AgentLocalStatus[];
 };
 
-type SummaryLike = {
-  tasks: {
-    total: number;
-    active: number;
-    failures: number;
-    byStatus: {
-      queued: number;
-      running: number;
-    };
-  };
-  taskAudit: {
-    errors: number;
-    warnings: number;
-  };
-  heartbeat: {
-    agents: Array<{
-      agentId: string;
-      enabled?: boolean | null;
-      everyMs?: number | null;
-      every: string;
-    }>;
-  };
-  sessions: {
-    recent: Array<{
-      key: string;
-      kind: string;
-      updatedAt?: number | null;
-      age: number;
-      model?: string | null;
-    }>;
-  };
-};
-
-type MemoryLike = {
-  files: number;
-  chunks: number;
-  dirty?: boolean;
-  sources?: string[];
-  vector?: unknown;
-  fts?: unknown;
-  cache?: unknown;
-} | null;
-
-type MemoryPluginLike = {
-  enabled: boolean;
-  reason?: string | null;
-  slot?: string | null;
-};
-
-type SessionsRecentLike = SummaryLike["sessions"]["recent"][number];
+type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
+type MemoryLike = MemoryStatusSnapshot | null;
+type MemoryPluginLike = MemoryPluginStatus;
+type SessionsRecentLike = SessionStatus;
 
 type PluginCompatibilityNoticeLike = {
   severity?: "warn" | "info" | null;
@@ -71,7 +26,7 @@ type PairingRecoveryLike = {
   requestId?: string | null;
 };
 
-export const statusHealthColumns = [
+export const statusHealthColumns: TableColumn[] = [
   { key: "Item", header: "Item", minWidth: 10 },
   { key: "Status", header: "Status", minWidth: 8 },
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
@@ -165,9 +120,18 @@ export function buildStatusMemoryValue(params: {
   ok: (value: string) => string;
   warn: (value: string) => string;
   muted: (value: string) => string;
-  resolveMemoryVectorState: (value: unknown) => { state: string; tone: Tone };
-  resolveMemoryFtsState: (value: unknown) => { state: string; tone: Tone };
-  resolveMemoryCacheSummary: (value: unknown) => { text: string; tone: Tone };
+  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
+    text: string;
+    tone: Tone;
+  };
 }) {
   if (!params.memoryPlugin.enabled) {
     const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
@@ -332,7 +296,7 @@ export function buildStatusSessionsRows(params: {
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),
     Kind: sess.kind,
-    Age: sess.updatedAt ? params.formatTimeAgo(sess.age) : "no activity",
+    Age: sess.updatedAt && sess.age != null ? params.formatTimeAgo(sess.age) : "no activity",
     Model: sess.model ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
     ...(params.verbose

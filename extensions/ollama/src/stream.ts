@@ -9,6 +9,7 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
@@ -25,6 +26,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
@@ -50,7 +52,7 @@ export function resolveOllamaBaseUrlForRun(params: {
   return OLLAMA_NATIVE_BASE_URL;
 }
 
-function resolveConfiguredOllamaProviderConfig(params: {
+export function resolveConfiguredOllamaProviderConfig(params: {
   config?: OpenClawConfig;
   providerId?: string;
 }) {
@@ -739,7 +741,7 @@ export function createOllamaStreamFn(
           reason: "error",
           error: buildStreamErrorAssistantMessage({
             model,
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorMessage: formatErrorMessage(err),
           }),
         });
       } finally {
@@ -758,7 +760,7 @@ export function createConfiguredOllamaStreamFn(params: {
 }): StreamFn {
   return createOllamaStreamFn(
     resolveOllamaBaseUrlForRun({
-      modelBaseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
+      modelBaseUrl: readStringValue(params.model.baseUrl),
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),

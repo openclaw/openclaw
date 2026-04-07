@@ -15,7 +15,7 @@ export const APPROVAL_NOT_FOUND_DETAILS = {
 type PendingApprovalLookupError =
   | "missing"
   | {
-      code: ErrorCodes.INVALID_REQUEST;
+      code: (typeof ErrorCodes)["INVALID_REQUEST"];
       message: string;
     };
 
