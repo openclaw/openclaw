@@ -81,6 +81,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleHttpRpcEndpoint } from "./http-rpc-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -803,6 +804,10 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(requestPath)
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
+        {
+          name: "http-rpc",
+          run: () => handleHttpRpcEndpoint(req, res, resolvedAuth, rateLimiter),
+        },
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
