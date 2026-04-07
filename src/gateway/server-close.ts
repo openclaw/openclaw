@@ -12,9 +12,11 @@ import {
   writeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import type { RestartOutboxTask, RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1500;
+const log = createSubsystemLogger("gateway/close");
 const GATEWAY_WSS_CLOSE_TIMEOUT_MS = 2000;
 
 type GatewayCloseOptions = {
@@ -308,7 +310,7 @@ export function createGatewayCloseHandler(params: {
         });
         const outcome = await Promise.race([hookPromise, timeoutPromise]);
         if (outcome === "timeout") {
-          params.logger?.warn?.(
+          (params.logger?.warn ?? log.warn)?.(
             `[gateway] ${hookLabel} hook timed out after ${GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS}ms, continuing shutdown`,
           );
         }

@@ -7,12 +7,13 @@ type TestGatewayHookEvent = {
   context?: Record<string, unknown>;
 };
 
-const { triggerInternalHook, readRestartSentinel, writeRestartSentinel } = vi.hoisted(() => ({
+const { triggerInternalHook, readRestartSentinel, writeRestartSentinel, subsystemLoggerWarn } = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(
     async (_event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => undefined,
   ),
   readRestartSentinel: vi.fn(async () => null),
   writeRestartSentinel: vi.fn(async () => "sentinel.json"),
+  subsystemLoggerWarn: vi.fn(),
 }));
 
 vi.mock("../hooks/internal-hooks.js", async () => {
@@ -44,10 +45,17 @@ vi.mock("../hooks/gmail-watcher.js", () => ({
   stopGmailWatcher: vi.fn(async () => undefined),
 }));
 
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({
+    warn: subsystemLoggerWarn,
+  })),
+}));
+
 function createCloseHarness(params?: {
   lifecycleUnsub?: () => void;
   broadcast?: (event: string, payload: unknown) => void;
   stallWssClose?: boolean;
+  omitLogger?: boolean;
 }) {
   const tickInterval = setInterval(() => undefined, 60_000);
   const healthInterval = setInterval(() => undefined, 60_000);
@@ -76,7 +84,7 @@ function createCloseHarness(params?: {
     transcriptUnsub: null,
     lifecycleUnsub: params?.lifecycleUnsub ?? null,
     stopTaskRegistryMaintenance,
-    logger: { warn: loggerWarn },
+    ...(params?.omitLogger ? {} : { logger: { warn: loggerWarn } }),
     chatRunState: { clear: vi.fn() },
     clients: new Set(),
     configReloader: { stop: vi.fn(async () => undefined) },
@@ -114,6 +122,7 @@ describe("createGatewayCloseHandler", () => {
     readRestartSentinel.mockResolvedValue(null);
     writeRestartSentinel.mockReset();
     writeRestartSentinel.mockResolvedValue("sentinel.json");
+    subsystemLoggerWarn.mockReset();
   });
 
   it("unsubscribes lifecycle listeners during shutdown", async () => {
@@ -212,6 +221,33 @@ describe("createGatewayCloseHandler", () => {
       expect(settled).toBe(true);
       expect(triggerInternalHook).toHaveBeenCalledTimes(2);
       expect(harness.loggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("shutdown hook timed out after 1500ms"),
+      );
+
+      await closePromise;
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  it("falls back to subsystem logging when shutdown hook stalls without params.logger", async () => {
+    vi.useFakeTimers();
+    triggerInternalHook
+      .mockImplementationOnce(async () => await new Promise<void>(() => {}))
+      .mockResolvedValue(undefined);
+
+    const harness = createCloseHarness({ omitLogger: true });
+    try {
+      let settled = false;
+      const closePromise = harness.close().then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_600);
+      await Promise.resolve();
+
+      expect(settled).toBe(true);
+      expect(subsystemLoggerWarn).toHaveBeenCalledWith(
         expect.stringContaining("shutdown hook timed out after 1500ms"),
       );
 
