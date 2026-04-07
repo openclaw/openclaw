@@ -39,7 +39,8 @@ async function extractVideoCover(videoBuffer: Buffer): Promise<Buffer | undefine
         "pipe:1", // write to stdout
       ]);
     } catch {
-      // ffmpeg binary not found
+      // spawn() threw synchronously (e.g. invalid args); binary-not-found
+      // ENOENT is handled via the error event listener below
       resolve(undefined);
       return;
     }
@@ -51,6 +52,10 @@ async function extractVideoCover(videoBuffer: Buffer): Promise<Buffer | undefine
 
     const chunks: Buffer[] = [];
     ffmpeg.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+    // Drain stderr to avoid hanging when ffmpeg emits error output
+    // (e.g., for malformed video inputs that fill the pipe buffer)
+    ffmpeg.stderr?.on("data", () => {});
 
     ffmpeg.on("error", () => resolve(undefined));
     ffmpeg.on("close", (code) => {
