@@ -23,7 +23,7 @@ export {
   normalizeExecSecurity,
   normalizeExecTarget,
 } from "../infra/exec-approvals.js";
-import { logWarn } from "../logger.js";
+import { logDebug, logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -602,11 +602,14 @@ export async function runExecProcess(opts: {
           tail: session.tail,
         },
       });
-    } catch {
+    } catch (err) {
       // The agent run may have ended while the exec process is still producing
       // output (e.g. late stdout arriving after tool-call abort or turn timeout).
       // Suppress further updates for this session to avoid repeated throws.
       updateSuppressed = true;
+      logDebug(
+        `[exec] onUpdate suppressed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   };
 
