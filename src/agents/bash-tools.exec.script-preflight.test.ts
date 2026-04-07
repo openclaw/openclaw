@@ -298,6 +298,7 @@ describeNonWin("exec script preflight", () => {
           workdir,
         });
         const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(swapped).toBe(true);
         expect(text).not.toMatch(/exec preflight:/);
       } finally {
         statSpy.mockRestore();
