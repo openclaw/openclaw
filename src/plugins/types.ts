@@ -141,6 +141,10 @@ export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
+  /** Effective filesystem policy for the active tool run. */
+  fsPolicy?: {
+    workspaceOnly: boolean;
+  };
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;

@@ -5,6 +5,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ResolveOpenClawPluginToolsOptions = {
@@ -16,6 +17,7 @@ type ResolveOpenClawPluginToolsOptions = {
   agentThreadId?: string | number;
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
+  fsPolicy?: ToolFsPolicy;
   allowGatewaySubagentBinding?: boolean;
   sandboxed?: boolean;
   agentSessionKey?: string;
