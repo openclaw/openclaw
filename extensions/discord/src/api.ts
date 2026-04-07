@@ -11,6 +11,7 @@ const DISCORD_API_RETRY_DEFAULTS = {
   minDelayMs: 500,
   maxDelayMs: 30_000,
   jitter: 0.1,
+  backoffFactor: 2,
 };
 
 type DiscordApiErrorPayload = {

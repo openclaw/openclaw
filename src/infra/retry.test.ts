@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveRetryConfig, retryAsync } from "./retry.js";
+import { buildStatusRetryPredicate, resolveRetryConfig, retryAsync } from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureFraction: vi.fn(),
@@ -234,12 +234,12 @@ describe("resolveRetryConfig", () => {
     {
       name: "rounds attempts and delays",
       overrides: { attempts: 2.6, minDelayMs: 10.4, maxDelayMs: 99.8, jitter: 0.4 },
-      expected: { attempts: 3, minDelayMs: 10, maxDelayMs: 100, jitter: 0.4 },
+      expected: { attempts: 3, minDelayMs: 10, maxDelayMs: 100, jitter: 0.4, backoffFactor: 2 },
     },
     {
       name: "clamps attempts to at least one and maxDelayMs to minDelayMs",
       overrides: { attempts: 0, minDelayMs: 250, maxDelayMs: 100, jitter: -1 },
-      expected: { attempts: 1, minDelayMs: 250, maxDelayMs: 250, jitter: 0 },
+      expected: { attempts: 1, minDelayMs: 250, maxDelayMs: 250, jitter: 0, backoffFactor: 2 },
     },
     {
       name: "falls back for non-finite overrides and caps jitter at one",
@@ -249,9 +249,81 @@ describe("resolveRetryConfig", () => {
         maxDelayMs: Number.NaN,
         jitter: 2,
       },
-      expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30000, jitter: 1 },
+      expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30000, jitter: 1, backoffFactor: 2 },
     },
   ])("$name", ({ overrides, expected }) => {
     expect(resolveRetryConfig(undefined, overrides)).toEqual(expected);
+  });
+
+  it("resolves custom backoffFactor", () => {
+    const result = resolveRetryConfig(undefined, { backoffFactor: 3 });
+    expect(result.backoffFactor).toBe(3);
+  });
+
+  it("clamps backoffFactor to at least 1", () => {
+    const result = resolveRetryConfig(undefined, { backoffFactor: 0.5 });
+    expect(result.backoffFactor).toBe(1);
+  });
+});
+
+describe("retryAsync with backoffFactor", () => {
+  it("uses custom backoffFactor for delay calculation", async () => {
+    vi.useFakeTimers();
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce("ok");
+    const delays: number[] = [];
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 3,
+        minDelayMs: 100,
+        maxDelayMs: 100_000,
+        jitter: 0,
+        backoffFactor: 3,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      // backoffFactor 3: attempt 1 = 100 * 3^0 = 100, attempt 2 = 100 * 3^1 = 300
+      expect(delays).toEqual([100, 300]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("buildStatusRetryPredicate", () => {
+  it("returns true for matching status codes on err.status", () => {
+    const predicate = buildStatusRetryPredicate([429, 503]);
+    expect(predicate({ status: 429 })).toBe(true);
+    expect(predicate({ status: 503 })).toBe(true);
+  });
+
+  it("returns false for non-matching status codes", () => {
+    const predicate = buildStatusRetryPredicate([429, 503]);
+    expect(predicate({ status: 400 })).toBe(false);
+    expect(predicate({ status: 500 })).toBe(false);
+  });
+
+  it("checks err.statusCode as fallback", () => {
+    const predicate = buildStatusRetryPredicate([429]);
+    expect(predicate({ statusCode: 429 })).toBe(true);
+    expect(predicate({ statusCode: 200 })).toBe(false);
+  });
+
+  it("returns false for non-object errors", () => {
+    const predicate = buildStatusRetryPredicate([429]);
+    expect(predicate(null)).toBe(false);
+    expect(predicate("string error")).toBe(false);
+    expect(predicate(undefined)).toBe(false);
+  });
+
+  it("returns false for errors without status fields", () => {
+    const predicate = buildStatusRetryPredicate([429]);
+    expect(predicate(new Error("no status"))).toBe(false);
+    expect(predicate({})).toBe(false);
   });
 });

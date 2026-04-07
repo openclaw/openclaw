@@ -710,3 +710,31 @@ export function getModelProviderRequestTransport(
 ): ProviderRequestTransportOverrides | undefined {
   return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }
+
+// ---------------------------------------------------------------------------
+// Model-level retry configuration (attached via Symbol, same pattern as above)
+// ---------------------------------------------------------------------------
+
+import type { ModelProviderRetryConfig } from "../config/types.models.js";
+
+const MODEL_PROVIDER_RETRY_SYMBOL = Symbol.for("openclaw.modelProviderRetryConfig");
+
+type ModelWithProviderRetryConfig = {
+  [MODEL_PROVIDER_RETRY_SYMBOL]?: ModelProviderRetryConfig;
+};
+
+export function attachModelProviderRetryConfig<TModel extends object>(
+  model: TModel,
+  retry: ModelProviderRetryConfig | undefined,
+): TModel {
+  if (!retry) {
+    return model;
+  }
+  const next = { ...model } as TModel & ModelWithProviderRetryConfig;
+  next[MODEL_PROVIDER_RETRY_SYMBOL] = retry;
+  return next;
+}
+
+export function getModelProviderRetryConfig(model: object): ModelProviderRetryConfig | undefined {
+  return (model as ModelWithProviderRetryConfig)[MODEL_PROVIDER_RETRY_SYMBOL];
+}

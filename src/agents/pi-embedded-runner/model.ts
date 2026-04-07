@@ -24,6 +24,7 @@ import {
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import {
   attachModelProviderRequestTransport,
+  attachModelProviderRetryConfig,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
@@ -318,7 +319,7 @@ function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
-  return attachModelProviderRequestTransport(
+  const modelWithTransport = attachModelProviderRequestTransport(
     {
       ...discoveredModel,
       api: requestConfig.api ?? "openai-responses",
@@ -334,6 +335,7 @@ function applyConfiguredProviderOverrides(params: {
     },
     providerRequest,
   );
+  return attachModelProviderRetryConfig(modelWithTransport, providerConfig.retry);
 }
 function resolveExplicitModelWithRegistry(params: {
   provider: string;
@@ -494,33 +496,37 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     cfg,
     agentDir,
-    model: attachModelProviderRequestTransport(
-      {
-        id: modelId,
-        name: modelId,
-        api: requestConfig.api ?? "openai-responses",
-        provider,
-        baseUrl: requestConfig.baseUrl,
-        reasoning: configuredModel?.reasoning ?? false,
-        input: resolveProviderModelInput({
+    model: attachModelProviderRetryConfig(
+      attachModelProviderRequestTransport(
+        {
+          id: modelId,
+          name: modelId,
+          api: requestConfig.api ?? "openai-responses",
           provider,
-          modelId,
-          modelName: configuredModel?.name ?? modelId,
-          input: configuredModel?.input,
-        }),
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow:
-          configuredModel?.contextWindow ??
-          providerConfig?.models?.[0]?.contextWindow ??
-          DEFAULT_CONTEXT_TOKENS,
-        contextTokens: configuredModel?.contextTokens ?? providerConfig?.models?.[0]?.contextTokens,
-        maxTokens:
-          configuredModel?.maxTokens ??
-          providerConfig?.models?.[0]?.maxTokens ??
-          DEFAULT_CONTEXT_TOKENS,
-        headers: requestConfig.headers,
-      } as Model<Api>,
-      providerRequest,
+          baseUrl: requestConfig.baseUrl,
+          reasoning: configuredModel?.reasoning ?? false,
+          input: resolveProviderModelInput({
+            provider,
+            modelId,
+            modelName: configuredModel?.name ?? modelId,
+            input: configuredModel?.input,
+          }),
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow:
+            configuredModel?.contextWindow ??
+            providerConfig?.models?.[0]?.contextWindow ??
+            DEFAULT_CONTEXT_TOKENS,
+          contextTokens:
+            configuredModel?.contextTokens ?? providerConfig?.models?.[0]?.contextTokens,
+          maxTokens:
+            configuredModel?.maxTokens ??
+            providerConfig?.models?.[0]?.maxTokens ??
+            DEFAULT_CONTEXT_TOKENS,
+          headers: requestConfig.headers,
+        } as Model<Api>,
+        providerRequest,
+      ),
+      providerConfig?.retry,
     ),
     runtimeHooks,
   });

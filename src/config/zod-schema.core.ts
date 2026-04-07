@@ -314,6 +314,17 @@ export const ModelDefinitionSchema = z
   })
   .strict();
 
+export const ModelProviderRetrySchema = z
+  .object({
+    attempts: z.number().int().min(1).optional(),
+    minDelayMs: z.number().int().min(0).optional(),
+    maxDelayMs: z.number().int().min(0).optional(),
+    backoffFactor: z.number().min(1).optional(),
+    retryOnStatus: z.array(z.number().int().min(100).max(599)).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
@@ -326,6 +337,7 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
+    retry: ModelProviderRetrySchema,
     models: z.array(ModelDefinitionSchema),
   })
   .strict();
@@ -614,6 +626,8 @@ export const RetryConfigSchema = z
     minDelayMs: z.number().int().min(0).optional(),
     maxDelayMs: z.number().int().min(0).optional(),
     jitter: z.number().min(0).max(1).optional(),
+    backoffFactor: z.number().min(1).optional(),
+    retryOnStatus: z.array(z.number().int().min(100).max(599)).optional(),
   })
   .strict()
   .optional();

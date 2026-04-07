@@ -7,6 +7,7 @@ export type RetryConfig = {
   minDelayMs?: number;
   maxDelayMs?: number;
   jitter?: number;
+  backoffFactor?: number;
 };
 
 export type RetryInfo = {
@@ -29,6 +30,7 @@ const DEFAULT_RETRY_CONFIG = {
   minDelayMs: 300,
   maxDelayMs: 30_000,
   jitter: 0,
+  backoffFactor: 2,
 };
 
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
@@ -55,7 +57,11 @@ export function resolveRetryConfig(
     Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
   );
   const jitter = clampNumber(overrides?.jitter, defaults.jitter, 0, 1);
-  return { attempts, minDelayMs, maxDelayMs, jitter };
+  const backoffFactor = Math.max(
+    1,
+    clampNumber(overrides?.backoffFactor, defaults.backoffFactor, 1),
+  );
+  return { attempts, minDelayMs, maxDelayMs, jitter, backoffFactor };
 }
 
 function applyJitter(delayMs: number, jitter: number): number {
@@ -64,6 +70,27 @@ function applyJitter(delayMs: number, jitter: number): number {
   }
   const offset = (generateSecureFraction() * 2 - 1) * jitter;
   return Math.max(0, Math.round(delayMs * (1 + offset)));
+}
+
+/**
+ * Build a shouldRetry predicate from an array of HTTP status codes.
+ * Checks `err.status` (Anthropic/OpenAI SDK errors) and
+ * `err.statusCode` (generic HTTP errors).
+ */
+export function buildStatusRetryPredicate(statusCodes: number[]): (err: unknown) => boolean {
+  const allowed = new Set(statusCodes);
+  return (err: unknown): boolean => {
+    if (!err || typeof err !== "object") {
+      return false;
+    }
+    const status =
+      "status" in err && typeof (err as { status?: unknown }).status === "number"
+        ? (err as { status: number }).status
+        : "statusCode" in err && typeof (err as { statusCode?: unknown }).statusCode === "number"
+          ? (err as { statusCode: number }).statusCode
+          : undefined;
+    return typeof status === "number" && allowed.has(status);
+  };
 }
 
 export async function retryAsync<T>(
@@ -113,9 +140,10 @@ export async function retryAsync<T>(
 
       const retryAfterMs = options.retryAfterMs?.(err);
       const hasRetryAfter = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs);
+      const backoffFactor = resolved.backoffFactor;
       const baseDelay = hasRetryAfter
         ? Math.max(retryAfterMs, minDelayMs)
-        : minDelayMs * 2 ** (attempt - 1);
+        : minDelayMs * backoffFactor ** (attempt - 1);
       let delay = Math.min(baseDelay, maxDelayMs);
       delay = applyJitter(delay, jitter);
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);

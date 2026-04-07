@@ -9,6 +9,7 @@ export const CHANNEL_API_RETRY_DEFAULTS = {
   minDelayMs: 400,
   maxDelayMs: 30_000,
   jitter: 0.1,
+  backoffFactor: 2,
 };
 
 const CHANNEL_API_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;

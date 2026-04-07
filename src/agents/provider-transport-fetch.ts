@@ -1,10 +1,16 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelProviderRetryConfig } from "../config/types.models.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { buildStatusRetryPredicate, resolveRetryConfig, retryAsync } from "../infra/retry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
+  getModelProviderRetryConfig,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
+
+const log = createSubsystemLogger("provider-transport-fetch");
 
 function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
   if (!response.body) {
@@ -65,10 +71,56 @@ function resolveModelRequestPolicy(model: Model<Api>) {
   });
 }
 
+function buildRetryAwareFetch(
+  baseFetch: typeof fetch,
+  retryConfig: ModelProviderRetryConfig,
+  provider: string,
+): typeof fetch {
+  const statusCodes = retryConfig.retryOnStatus;
+  if (!statusCodes || statusCodes.length === 0) {
+    return baseFetch;
+  }
+  const shouldRetry = buildStatusRetryPredicate(statusCodes);
+  const resolved = resolveRetryConfig(
+    { attempts: 3, minDelayMs: 1000, maxDelayMs: 60_000, jitter: 0.1, backoffFactor: 2 },
+    {
+      attempts: retryConfig.attempts,
+      minDelayMs: retryConfig.minDelayMs,
+      maxDelayMs: retryConfig.maxDelayMs,
+      backoffFactor: retryConfig.backoffFactor,
+    },
+  );
+  return async (input, init) =>
+    retryAsync(
+      async () => {
+        const response = await baseFetch(input, init);
+        if (!response.ok && statusCodes.includes(response.status)) {
+          const err = new Error(
+            `Provider ${provider} returned HTTP ${response.status}`,
+          ) as Error & { status: number };
+          err.status = response.status;
+          throw err;
+        }
+        return response;
+      },
+      {
+        ...resolved,
+        shouldRetry,
+        onRetry: (info) => {
+          const maxRetries = Math.max(1, info.maxAttempts - 1);
+          log.warn(
+            `provider ${provider} retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms (status-based)`,
+          );
+        },
+      },
+    );
+}
+
 export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
-  return async (input, init) => {
+  const retryConfig = getModelProviderRetryConfig(model);
+  const guardedFetch: typeof fetch = async (input, init) => {
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const url =
       request?.url ??
@@ -97,4 +149,8 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
     });
     return buildManagedResponse(result.response, result.release);
   };
+  if (retryConfig?.retryOnStatus && retryConfig.retryOnStatus.length > 0) {
+    return buildRetryAwareFetch(guardedFetch, retryConfig, model.provider);
+  }
+  return guardedFetch;
 }

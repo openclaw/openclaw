@@ -46,6 +46,7 @@ const DISCORD_DELIVERY_RETRY_DEFAULTS: ResolvedRetryConfig = {
   minDelayMs: 1000,
   maxDelayMs: 30_000,
   jitter: 0,
+  backoffFactor: 2,
 };
 
 function isRetryableDiscordError(err: unknown): boolean {
