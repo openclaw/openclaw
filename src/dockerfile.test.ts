@@ -50,12 +50,10 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("pins bundled plugin discovery to copied source extensions in runtime images", async () => {
+  it("does not override bundled plugin discovery in runtime images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(`ARG OPENCLAW_BUNDLED_PLUGIN_DIR=${BUNDLED_PLUGIN_ROOT_DIR}`);
-    expect(dockerfile).toContain(
-      "ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/${OPENCLAW_BUNDLED_PLUGIN_DIR}",
-    );
+    expect(dockerfile).not.toContain("ENV OPENCLAW_BUNDLED_PLUGINS_DIR=");
   });
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {
