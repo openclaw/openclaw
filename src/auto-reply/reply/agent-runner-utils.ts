@@ -3,6 +3,10 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -38,7 +42,7 @@ export function buildThreadingToolContext(params: {
       currentMessageId,
     };
   }
-  const rawProvider = originProvider?.trim().toLowerCase();
+  const rawProvider = normalizeOptionalLowercaseString(originProvider);
   if (!rawProvider) {
     return {
       currentMessageId,
@@ -49,7 +53,7 @@ export function buildThreadingToolContext(params: {
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
-      currentChannelId: originTo?.trim() || undefined,
+      currentChannelId: normalizeOptionalString(originTo),
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       hasRepliedRef,
@@ -98,12 +102,13 @@ export const resolveEnforceFinalTag = (
   model = run.model,
 ) =>
   Boolean(
-    run.enforceFinalTag ||
-    isReasoningTagProvider(provider, {
-      config: run.config,
-      workspaceDir: run.workspaceDir,
-      modelId: model,
-    }),
+    (run.skipProviderRuntimeHints ? false : undefined) ??
+    (run.enforceFinalTag ||
+      isReasoningTagProvider(provider, {
+        config: run.config,
+        workspaceDir: run.workspaceDir,
+        modelId: model,
+      })),
   );
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
@@ -183,10 +188,10 @@ export function buildEmbeddedContextFromTemplate(params: {
 
 export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
-    senderId: sessionCtx.SenderId?.trim() || undefined,
-    senderName: sessionCtx.SenderName?.trim() || undefined,
-    senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-    senderE164: sessionCtx.SenderE164?.trim() || undefined,
+    senderId: normalizeOptionalString(sessionCtx.SenderId),
+    senderName: normalizeOptionalString(sessionCtx.SenderName),
+    senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
+    senderE164: normalizeOptionalString(sessionCtx.SenderE164),
   };
 }
 

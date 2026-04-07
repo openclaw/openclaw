@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -214,7 +215,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       };
     }
 
-    const requested = args.trim().toLowerCase();
+    const requested = normalizeOptionalLowercaseString(args) ?? "";
     const resolvedProvider = getSpeechProvider(requested, params.cfg);
     if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
@@ -273,7 +274,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         },
       };
     }
-    const requested = args.trim().toLowerCase();
+    const requested = normalizeOptionalLowercaseString(args) ?? "";
     if (requested !== "on" && requested !== "off") {
       return { shouldContinue: false, reply: ttsUsage() };
     }

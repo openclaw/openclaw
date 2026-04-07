@@ -4,6 +4,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
@@ -129,7 +130,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   sessionKey?: string;
   toolName: string;
 }): string | undefined {
-  const tool = params.toolName.trim().toLowerCase();
+  const tool = normalizeOptionalLowercaseString(params.toolName);
   if (!tool) {
     return undefined;
   }

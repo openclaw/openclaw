@@ -1,4 +1,5 @@
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
 import { type SubagentsCommandContext, stopWithText } from "./shared.js";
@@ -26,9 +27,8 @@ export async function handleSubagentsUnfocusAction(
     return stopWithText("ℹ️ This conversation is not currently focused.");
   }
 
-  const senderId = params.command.senderId?.trim() || "";
-  const boundBy =
-    typeof binding.metadata?.boundBy === "string" ? binding.metadata.boundBy.trim() : "";
+  const senderId = normalizeOptionalString(params.command.senderId) ?? "";
+  const boundBy = normalizeOptionalString(binding.metadata?.boundBy) ?? "";
   if (boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
     return stopWithText(`⚠️ Only ${boundBy} can unfocus this conversation.`);
   }

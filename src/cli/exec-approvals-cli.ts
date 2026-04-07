@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
   type ExecPolicyScopeSnapshot,
@@ -17,7 +18,6 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { describeUnknownError } from "./gateway-cli/shared.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -157,7 +157,7 @@ async function saveSnapshotTargeted(params: {
 }
 
 function formatCliError(err: unknown): string {
-  const msg = describeUnknownError(err);
+  const msg = formatErrorMessage(err);
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 

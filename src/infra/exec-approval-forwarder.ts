@@ -13,6 +13,7 @@ import {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -312,8 +313,8 @@ function defaultResolveSessionTarget(params: {
       cfg: params.cfg,
       request: params.request,
       turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
-      turnSourceTo: params.request.request.turnSourceTo?.trim() || undefined,
-      turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
+      turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
+      turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
       turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
     });
     if (!resolvedTarget?.channel || !resolvedTarget.to) {

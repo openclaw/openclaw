@@ -22,6 +22,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -42,7 +43,12 @@ import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
-const USAGE_OAUTH_ONLY_PROVIDERS = new Set(["anthropic", "github-copilot", "openai-codex"]);
+const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
+  "anthropic",
+  "github-copilot",
+  "google-gemini-cli",
+  "openai-codex",
+]);
 
 function shouldLoadUsageSummary(params: {
   provider?: string;
@@ -54,7 +60,7 @@ function shouldLoadUsageSummary(params: {
   if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
     return true;
   }
-  const auth = params.selectedModelAuth?.trim().toLowerCase();
+  const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
 }
 

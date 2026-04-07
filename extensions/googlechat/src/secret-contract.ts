@@ -1,4 +1,3 @@
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import {
   getChannelSurface,
   hasOwnProperty,
@@ -9,7 +8,8 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 
 type GoogleChatAccountLike = {
   serviceAccount?: unknown;
@@ -154,3 +154,8 @@ export function collectRuntimeConfigAssignments(params: {
     });
   }
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

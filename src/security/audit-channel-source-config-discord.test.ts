@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { collectDiscordSecurityAuditFindings } from "../../extensions/discord/contract-api.js";
+import { collectDiscordSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";

@@ -68,6 +68,9 @@
     "videoGenerationProviders": ["minimax"],
     "webSearchProviders": ["minimax"]
   },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "MiniMax Coding Plan key",

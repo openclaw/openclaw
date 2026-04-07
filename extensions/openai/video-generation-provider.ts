@@ -4,7 +4,6 @@ import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
   postJsonRequest,
-  postTranscriptionRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import type {
@@ -12,6 +11,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_VIDEO_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_VIDEO_MODEL = "sora-2";
@@ -35,11 +35,6 @@ type OpenAIVideoResponse = {
     message?: string;
   } | null;
 };
-
-function resolveOpenAIVideoBaseUrl(req: VideoGenerationRequest): string {
-  const direct = req.cfg?.models?.providers?.openai?.baseUrl?.trim();
-  return direct || DEFAULT_OPENAI_VIDEO_BASE_URL;
-}
 
 function toBlobBytes(buffer: Buffer): ArrayBuffer {
   const arrayBuffer = new ArrayBuffer(buffer.byteLength);
@@ -190,12 +185,31 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 1,
-      maxDurationSeconds: 12,
-      supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
-      supportsSize: true,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: 12,
+        supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
+        supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: 12,
+        supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
+        supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputVideos: 1,
+        maxDurationSeconds: 12,
+        supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
+        supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
+      },
     },
     async generateVideo(req) {
       const auth = await resolveApiKeyForProvider({
@@ -211,7 +225,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveOpenAIVideoBaseUrl(req),
+          baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_VIDEO_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
@@ -229,36 +243,67 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         aspectRatio: req.aspectRatio,
         resolution: req.resolution,
       });
+      const inputImage = req.inputImages?.[0];
       const referenceAsset = resolveReferenceAsset(req);
+      const requestUrl = `${baseUrl}/videos`;
       const requestResult = referenceAsset
-        ? await (() => {
-            const form = new FormData();
-            form.set("prompt", req.prompt);
-            form.set("model", model);
-            if (seconds) {
-              form.set("seconds", seconds);
-            }
-            if (size) {
-              form.set("size", size);
-            }
-            form.set("input_reference", referenceAsset);
-            const multipartHeaders = new Headers(headers);
-            multipartHeaders.delete("Content-Type");
-            return postTranscriptionRequest({
-              url: `${baseUrl}/videos`,
-              headers: multipartHeaders,
-              body: form,
-              timeoutMs: req.timeoutMs,
-              fetchFn,
-              allowPrivateNetwork,
-              dispatcherPolicy,
-            });
-          })()
+        ? inputImage?.buffer
+          ? await (() => {
+              const jsonHeaders = new Headers(headers);
+              jsonHeaders.set("Content-Type", "application/json");
+              return postJsonRequest({
+                url: requestUrl,
+                headers: jsonHeaders,
+                body: {
+                  prompt: req.prompt,
+                  model,
+                  ...(seconds ? { seconds } : {}),
+                  ...(size ? { size } : {}),
+                  input_reference: {
+                    image_url: toOpenAIDataUrl(
+                      inputImage.buffer,
+                      inputImage.mimeType?.trim() || "image/png",
+                    ),
+                  },
+                },
+                timeoutMs: req.timeoutMs,
+                fetchFn,
+                allowPrivateNetwork,
+                dispatcherPolicy,
+              });
+            })()
+          : await (() => {
+              const form = new FormData();
+              form.set("prompt", req.prompt);
+              form.set("model", model);
+              if (seconds) {
+                form.set("seconds", seconds);
+              }
+              if (size) {
+                form.set("size", size);
+              }
+              form.set("input_reference", referenceAsset);
+              const multipartHeaders = new Headers(headers);
+              multipartHeaders.delete("Content-Type");
+              return fetchWithTimeout(
+                requestUrl,
+                {
+                  method: "POST",
+                  headers: multipartHeaders,
+                  body: form,
+                },
+                req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                fetchFn,
+              ).then((response) => ({
+                response,
+                release: async () => {},
+              }));
+            })()
         : await (() => {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/videos`,
+              url: requestUrl,
               headers: jsonHeaders,
               body: {
                 prompt: req.prompt,

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type {
   MSTeamsConversationStoreEntry,
   StoredConversationReference,
@@ -62,8 +63,8 @@ export function findPreferredDmConversationByUserId(
   }
 
   matches.sort((a, b) => {
-    const aType = a.reference.conversation?.conversationType?.toLowerCase() ?? "";
-    const bType = b.reference.conversation?.conversationType?.toLowerCase() ?? "";
+    const aType = normalizeLowercaseStringOrEmpty(a.reference.conversation?.conversationType ?? "");
+    const bType = normalizeLowercaseStringOrEmpty(b.reference.conversation?.conversationType ?? "");
     const aPersonal = aType === "personal" ? 1 : 0;
     const bPersonal = bType === "personal" ? 1 : 0;
     if (aPersonal !== bPersonal) {

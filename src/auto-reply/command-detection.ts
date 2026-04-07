@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   type CommandNormalizeOptions,
   listChatCommands,
@@ -32,7 +33,7 @@ export function hasControlCommand(
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
   for (const command of commands) {
     for (const alias of command.textAliases) {
-      const normalized = alias.trim().toLowerCase();
+      const normalized = normalizeOptionalLowercaseString(alias);
       if (!normalized) {
         continue;
       }
@@ -66,7 +67,8 @@ export function isControlCommandMessage(
     return true;
   }
   const stripped = stripInboundMetadata(trimmed);
-  const normalized = normalizeCommandBody(stripped, options).trim().toLowerCase();
+  const normalized =
+    normalizeOptionalLowercaseString(normalizeCommandBody(stripped, options)) ?? "";
   return isAbortTrigger(normalized);
 }
 

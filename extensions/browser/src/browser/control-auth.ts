@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -26,11 +27,11 @@ export function resolveBrowserControlAuth(
 }
 
 function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
-  const nodeEnv = (env.NODE_ENV ?? "").trim().toLowerCase();
+  const nodeEnv = normalizeLowercaseStringOrEmpty(env.NODE_ENV);
   if (nodeEnv === "test") {
     return false;
   }
-  const vitest = (env.VITEST ?? "").trim().toLowerCase();
+  const vitest = normalizeLowercaseStringOrEmpty(env.VITEST);
   if (vitest && vitest !== "0" && vitest !== "false" && vitest !== "off") {
     return false;
   }

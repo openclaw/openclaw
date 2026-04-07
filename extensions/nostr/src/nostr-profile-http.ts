@@ -8,6 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
@@ -228,7 +229,7 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   if (Array.isArray(value)) {
     return value[0];
   }
-  return typeof value === "string" ? value : undefined;
+  return readStringValue(value);
 }
 
 function normalizeIpCandidate(raw: string): string {

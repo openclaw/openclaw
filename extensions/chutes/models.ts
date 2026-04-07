@@ -475,6 +475,10 @@ interface CacheEntry {
 
 const modelCache = new Map<string, CacheEntry>();
 
+export function clearChutesModelCacheForTests(): void {
+  modelCache.clear();
+}
+
 function pruneExpiredCacheEntries(now: number = Date.now()): void {
   for (const [key, entry] of modelCache.entries()) {
     if (now - entry.time >= CACHE_TTL) {

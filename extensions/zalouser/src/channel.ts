@@ -13,21 +13,21 @@ import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
+  checkZcaAuthenticated,
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
-  checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
 import type {
-  ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelPlugin,
-  OpenClawConfig,
   GroupToolPolicyConfig,
+  OpenClawConfig,
 } from "./channel-api.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -368,8 +368,11 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
               } else {
                 const groups = await runtimeModule.listZaloGroupsMatching(account.profile, trimmed);
                 const best =
-                  groups.find((group) => group.name.toLowerCase() === trimmed.toLowerCase()) ??
-                  groups[0];
+                  groups.find(
+                    (group) =>
+                      normalizeLowercaseStringOrEmpty(group.name) ===
+                      normalizeLowercaseStringOrEmpty(trimmed),
+                  ) ?? groups[0];
                 results.push({
                   input,
                   resolved: Boolean(best?.groupId),

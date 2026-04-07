@@ -1,16 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveGatewayCredentialsWithSecretInputs } from "./call.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   type ExplicitGatewayAuth,
   isGatewaySecretRefUnavailableError,
   resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
-
-export type GatewayProbeTargetResolution = {
-  gatewayMode: "local" | "remote";
-  mode: "local" | "remote";
-  remoteUrlMissing: boolean;
-};
+export { resolveGatewayProbeTarget } from "./probe-target.js";
+export type { GatewayProbeTargetResolution } from "./probe-target.js";
 
 function buildGatewayProbeCredentialPolicy(params: {
   cfg: OpenClawConfig;
@@ -33,8 +29,8 @@ function resolveExplicitProbeAuth(explicitAuth?: ExplicitGatewayAuth): {
   token?: string;
   password?: string;
 } {
-  const token = explicitAuth?.token?.trim() || undefined;
-  const password = explicitAuth?.password?.trim() || undefined;
+  const token = normalizeOptionalString(explicitAuth?.token);
+  const password = normalizeOptionalString(explicitAuth?.password);
   return { token, password };
 }
 
@@ -53,18 +49,6 @@ function resolveGatewayProbeWarning(error: unknown): string | undefined {
   return buildUnresolvedProbeAuthWarning(error.path);
 }
 
-export function resolveGatewayProbeTarget(cfg: OpenClawConfig): GatewayProbeTargetResolution {
-  const gatewayMode = cfg.gateway?.mode === "remote" ? "remote" : "local";
-  const remoteUrlRaw =
-    typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
-  const remoteUrlMissing = gatewayMode === "remote" && !remoteUrlRaw;
-  return {
-    gatewayMode,
-    mode: gatewayMode === "remote" && !remoteUrlMissing ? "remote" : "local",
-    remoteUrlMissing,
-  };
-}
-
 export function resolveGatewayProbeAuth(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
@@ -81,13 +65,15 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   explicitAuth?: ExplicitGatewayAuth;
 }): Promise<{ token?: string; password?: string }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
-  return await resolveGatewayCredentialsWithSecretInputs({
-    config: policy.config,
-    env: policy.env,
-    explicitAuth: policy.explicitAuth,
-    modeOverride: policy.modeOverride,
-    remoteTokenFallback: policy.remoteTokenFallback,
-  });
+  return await import("./call.js").then(({ resolveGatewayCredentialsWithSecretInputs }) =>
+    resolveGatewayCredentialsWithSecretInputs({
+      config: policy.config,
+      env: policy.env,
+      explicitAuth: policy.explicitAuth,
+      modeOverride: policy.modeOverride,
+      remoteTokenFallback: policy.remoteTokenFallback,
+    }),
+  );
 }
 
 export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {

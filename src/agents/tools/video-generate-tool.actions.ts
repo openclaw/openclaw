@@ -1,19 +1,51 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
 import {
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
 } from "../video-generation-task-status.js";
+import {
+  createMediaGenerateDuplicateGuardResult,
+  createMediaGenerateStatusActionResult,
+  type MediaGenerateActionResult,
+} from "./media-generate-tool-actions-shared.js";
 
-type VideoGenerateActionResult = {
-  content: Array<{ type: "text"; text: string }>;
-  details: Record<string, unknown>;
-};
+type VideoGenerateActionResult = MediaGenerateActionResult;
 
-function getVideoGenerationProviderAuthEnvVars(providerId: string): string[] {
-  return getProviderEnvVars(providerId);
+function summarizeVideoGenerationCapabilities(
+  provider: ReturnType<typeof listRuntimeVideoGenerationProviders>[number],
+): string {
+  const supportedModes = listSupportedVideoGenerationModes(provider);
+  const generate = provider.capabilities.generate;
+  const imageToVideo = provider.capabilities.imageToVideo;
+  const videoToVideo = provider.capabilities.videoToVideo;
+  const capabilities = [
+    supportedModes.length > 0 ? `modes=${supportedModes.join("/")}` : null,
+    generate?.maxVideos ? `maxVideos=${generate.maxVideos}` : null,
+    imageToVideo?.maxInputImages ? `maxInputImages=${imageToVideo.maxInputImages}` : null,
+    videoToVideo?.maxInputVideos ? `maxInputVideos=${videoToVideo.maxInputVideos}` : null,
+    generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
+    generate?.supportedDurationSeconds?.length
+      ? `supportedDurationSeconds=${generate.supportedDurationSeconds.join("/")}`
+      : null,
+    generate?.supportedDurationSecondsByModel &&
+    Object.keys(generate.supportedDurationSecondsByModel).length > 0
+      ? `supportedDurationSecondsByModel=${Object.entries(generate.supportedDurationSecondsByModel)
+          .map(([modelId, durations]) => `${modelId}:${durations.join("/")}`)
+          .join("; ")}`
+      : null,
+    generate?.supportsResolution ? "resolution" : null,
+    generate?.supportsAspectRatio ? "aspectRatio" : null,
+    generate?.supportsSize ? "size" : null,
+    generate?.supportsAudio ? "audio" : null,
+    generate?.supportsWatermark ? "watermark" : null,
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(", ");
+  return capabilities;
 }
 
 export function createVideoGenerateListActionResult(
@@ -27,37 +59,8 @@ export function createVideoGenerateListActionResult(
     };
   }
   const lines = providers.map((provider) => {
-    const authHints = getVideoGenerationProviderAuthEnvVars(provider.id);
-    const capabilities = [
-      provider.capabilities.maxVideos ? `maxVideos=${provider.capabilities.maxVideos}` : null,
-      provider.capabilities.maxInputImages
-        ? `maxInputImages=${provider.capabilities.maxInputImages}`
-        : null,
-      provider.capabilities.maxInputVideos
-        ? `maxInputVideos=${provider.capabilities.maxInputVideos}`
-        : null,
-      provider.capabilities.maxDurationSeconds
-        ? `maxDurationSeconds=${provider.capabilities.maxDurationSeconds}`
-        : null,
-      provider.capabilities.supportedDurationSeconds?.length
-        ? `supportedDurationSeconds=${provider.capabilities.supportedDurationSeconds.join("/")}`
-        : null,
-      provider.capabilities.supportedDurationSecondsByModel &&
-      Object.keys(provider.capabilities.supportedDurationSecondsByModel).length > 0
-        ? `supportedDurationSecondsByModel=${Object.entries(
-            provider.capabilities.supportedDurationSecondsByModel,
-          )
-            .map(([modelId, durations]) => `${modelId}:${durations.join("/")}`)
-            .join("; ")}`
-        : null,
-      provider.capabilities.supportsResolution ? "resolution" : null,
-      provider.capabilities.supportsAspectRatio ? "aspectRatio" : null,
-      provider.capabilities.supportsSize ? "size" : null,
-      provider.capabilities.supportsAudio ? "audio" : null,
-      provider.capabilities.supportsWatermark ? "watermark" : null,
-    ]
-      .filter((entry): entry is string => Boolean(entry))
-      .join(", ");
+    const authHints = getProviderEnvVars(provider.id);
+    const capabilities = summarizeVideoGenerationCapabilities(provider);
     return [
       `${provider.id}: default=${provider.defaultModel ?? "none"}`,
       provider.models?.length ? `models=${provider.models.join(", ")}` : null,
@@ -74,7 +77,8 @@ export function createVideoGenerateListActionResult(
         id: provider.id,
         defaultModel: provider.defaultModel,
         models: provider.models ?? [],
-        authEnvVars: getVideoGenerationProviderAuthEnvVars(provider.id),
+        modes: listSupportedVideoGenerationModes(provider),
+        authEnvVars: getProviderEnvVars(provider.id),
         capabilities: provider.capabilities,
       })),
     },
@@ -84,53 +88,24 @@ export function createVideoGenerateListActionResult(
 export function createVideoGenerateStatusActionResult(
   sessionKey?: string,
 ): VideoGenerateActionResult {
-  const activeTask = findActiveVideoGenerationTaskForSession(sessionKey);
-  if (!activeTask) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: "No active video generation task is currently running for this session.",
-        },
-      ],
-      details: {
-        action: "status",
-        active: false,
-      },
-    };
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: buildVideoGenerationTaskStatusText(activeTask),
-      },
-    ],
-    details: {
-      action: "status",
-      ...buildVideoGenerationTaskStatusDetails(activeTask),
-    },
-  };
+  return createMediaGenerateStatusActionResult({
+    sessionKey,
+    inactiveText: "No active video generation task is currently running for this session.",
+    findActiveTask: (activeSessionKey) =>
+      findActiveVideoGenerationTaskForSession(activeSessionKey) ?? undefined,
+    buildStatusText: buildVideoGenerationTaskStatusText,
+    buildStatusDetails: buildVideoGenerationTaskStatusDetails,
+  });
 }
 
 export function createVideoGenerateDuplicateGuardResult(
   sessionKey?: string,
-): VideoGenerateActionResult | null {
-  const activeTask = findActiveVideoGenerationTaskForSession(sessionKey);
-  if (!activeTask) {
-    return null;
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
-      },
-    ],
-    details: {
-      action: "status",
-      duplicateGuard: true,
-      ...buildVideoGenerationTaskStatusDetails(activeTask),
-    },
-  };
+): VideoGenerateActionResult | undefined {
+  return createMediaGenerateDuplicateGuardResult({
+    sessionKey,
+    findActiveTask: (activeSessionKey) =>
+      findActiveVideoGenerationTaskForSession(activeSessionKey) ?? undefined,
+    buildStatusText: buildVideoGenerationTaskStatusText,
+    buildStatusDetails: buildVideoGenerationTaskStatusDetails,
+  });
 }

@@ -85,7 +85,7 @@ export function createMemoryWikiTestHarness() {
       registerMemoryCorpusSupplement,
       registerMemoryPromptSupplement,
       registerTool,
-    }) as OpenClawPluginApi;
+    });
 
     return {
       api,

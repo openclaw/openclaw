@@ -7,6 +7,8 @@ import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 afterEach(() => {
   vi.resetModules();
+  vi.doUnmock("../../plugins/bundled-channel-runtime.js");
+  vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
@@ -19,18 +21,14 @@ describe("bundled channel entry shape guards", () => {
     .map((plugin) => plugin.rootDir);
 
   it("treats missing bundled discovery results as empty", async () => {
-    vi.doMock("../../plugins/discovery.js", () => ({
-      discoverOpenClawPlugins: () => ({
-        candidates: [],
-        diagnostics: [],
-      }),
-    }));
-    vi.doMock("../../plugins/manifest-registry.js", () => ({
-      loadPluginManifestRegistry: () => ({
-        plugins: [],
-        diagnostics: [],
-      }),
-    }));
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
+      return {
+        ...actual,
+        listBundledChannelPluginMetadata: () => [],
+      };
+    });
 
     const bundled = await importFreshModule<typeof import("./bundled.js")>(
       import.meta.url,
@@ -40,6 +38,44 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelPlugins()).toEqual([]);
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
+
+  it("loads real bundled channel entries from the source tree", async () => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
+      return {
+        ...actual,
+        listBundledChannelPluginMetadata: (params: {
+          includeChannelConfigs: boolean;
+          includeSyntheticChannelConfigs: boolean;
+        }) =>
+          actual
+            .listBundledChannelPluginMetadata(params)
+            .filter(
+              (metadata) => metadata.manifest.id === "slack" || metadata.manifest.id === "line",
+            ),
+      };
+    });
+
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=real-bundled-source-tree",
+    );
+
+    expect(bundled.requireBundledChannelPlugin("slack").id).toBe("slack");
+    expect(() =>
+      bundled.setBundledChannelRuntime("line", {
+        channel: {
+          line: {
+            listLineAccountIds: () => [],
+            resolveDefaultLineAccountId: () => undefined,
+            resolveLineAccount: () => null,
+          },
+        },
+      } as never),
+    ).not.toThrow();
+  });
+
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const offenders: string[] = [];
 
@@ -181,38 +217,37 @@ describe("bundled channel entry shape guards", () => {
     const modulePath = path.join(pluginDir, "index.js");
     fs.writeFileSync(modulePath, "export {};\n", "utf8");
 
-    vi.doMock("../../plugins/discovery.js", () => ({
-      discoverOpenClawPlugins: () => ({
-        candidates: [
+    vi.doMock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+      return {
+        ...actual,
+        listBundledPluginMetadata: () => [
           {
-            rootDir: pluginDir,
-            source: modulePath,
-            packageManifest: { extensions: ["./index.js"] },
+            dirName: "alpha",
+            idHint: "alpha",
+            source: {
+              source: "./index.js",
+              built: "./index.js",
+            },
+            manifest: {
+              id: "alpha",
+              channels: ["alpha"],
+            },
           },
         ],
-        diagnostics: [],
-      }),
-    }));
-    vi.doMock("../../plugins/manifest-registry.js", () => ({
-      loadPluginManifestRegistry: () => ({
-        plugins: [
-          {
-            id: "alpha",
-            rootDir: pluginDir,
-            origin: "bundled",
-            channels: ["alpha"],
-            source: modulePath,
-          },
-        ],
-        diagnostics: [],
-      }),
-    }));
+        resolveBundledPluginGeneratedPath: () => modulePath,
+      };
+    });
     vi.doMock("../../infra/boundary-file-read.js", () => ({
       openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
         ok: true,
         path: absolutePath,
         fd: fs.openSync(absolutePath, "r"),
       }),
+    }));
+    vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
+      listChannelCatalogEntries: () => [],
     }));
 
     let reentered = false;

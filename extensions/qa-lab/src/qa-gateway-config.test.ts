@@ -38,7 +38,6 @@ describe("buildQaGatewayConfig", () => {
       qaBusBaseUrl: "http://127.0.0.1:43124",
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "live-openai",
-      fastMode: true,
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
     });

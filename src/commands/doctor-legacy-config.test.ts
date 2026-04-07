@@ -13,7 +13,7 @@ function getLegacyProperty(value: unknown, key: string): unknown {
   return (value as Record<string, unknown>)[key];
 }
 describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
-  it("normalizes telegram boolean streaming aliases into nested streaming.mode", () => {
+  it("preserves telegram boolean streaming aliases as-is", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -24,16 +24,14 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       }),
     );
 
-    expect(res.config.channels?.telegram?.streaming).toEqual({
-      mode: "off",
-    });
+    expect(res.config.channels?.telegram?.streaming).toEqual({ mode: "off" });
     expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.telegram.streaming (boolean) → channels.telegram.streaming.mode (off).",
     ]);
   });
 
-  it("normalizes discord boolean streaming aliases into nested streaming.mode", () => {
+  it("preserves discord boolean streaming aliases as-is", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -44,16 +42,14 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({
-      mode: "partial",
-    });
+    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "partial" });
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
     ]);
   });
 
-  it("does not label explicit discord streaming=false as a default-off case", () => {
+  it("preserves explicit discord streaming=false as-is", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -64,16 +60,14 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({
-      mode: "off",
-    });
+    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "off" });
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (off).",
     ]);
   });
 
-  it("explains why discord preview streaming stays off when legacy config resolves to off", () => {
+  it("preserves discord streamMode when legacy config resolves to off", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -84,9 +78,7 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({
-      mode: "off",
-    });
+    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "off" });
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming.mode (off).",
@@ -94,7 +86,7 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     ]);
   });
 
-  it("normalizes slack boolean streaming aliases into nested streaming config", () => {
+  it("preserves slack boolean streaming aliases as-is", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {

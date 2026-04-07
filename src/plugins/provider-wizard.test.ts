@@ -10,6 +10,7 @@ import type { ProviderPlugin } from "./types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("./providers.runtime.js", () => ({
+  isPluginProvidersLoadInFlight: () => false,
   resolvePluginProviders,
 }));
 
@@ -222,6 +223,39 @@ describe("provider wizard boundaries", () => {
         groupId: "fal",
         groupLabel: "fal",
         onboardingScopes: ["image-generation"],
+      },
+      resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
+    },
+    {
+      name: "returns method wizard metadata for canonical choices",
+      provider: makeProvider({
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "cli",
+            label: "Claude CLI",
+            kind: "custom",
+            wizard: {
+              choiceId: "anthropic-cli",
+              modelAllowlist: {
+                allowedKeys: ["claude-cli/claude-sonnet-4-6"],
+                initialSelections: ["claude-cli/claude-sonnet-4-6"],
+                message: "Claude CLI models",
+              },
+            },
+            run: vi.fn(),
+          },
+        ],
+      }),
+      choice: "anthropic-cli",
+      expectedOption: {
+        value: "anthropic-cli",
+        label: "Anthropic",
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+        groupHint: undefined,
+        hint: undefined,
       },
       resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
     },
