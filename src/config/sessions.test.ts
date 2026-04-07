@@ -125,7 +125,7 @@ describe("sessions", () => {
     {
       name: "keeps group chats distinct",
       scope: "per-sender" as const,
-      ctx: { From: "12345-678@g.us" },
+      ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
       expected: "whatsapp:group:12345-678@g.us",
     },
     {
@@ -200,7 +200,7 @@ describe("sessions", () => {
     {
       name: "leaves groups untouched even with main key",
       scope: "per-sender" as const,
-      ctx: { From: "12345-678@g.us" },
+      ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
       mainKey: "main",
       expected: "agent:main:whatsapp:group:12345-678@g.us",
     },
@@ -699,7 +699,7 @@ describe("sessions", () => {
       update: async () => {
         firstStarted.resolve();
         await releaseFirst.promise;
-        return { modelOverride: "anthropic/claude-opus-4-5" };
+        return { modelOverride: "anthropic/claude-opus-4-6" };
       },
     });
     const p2 = updateSessionStoreEntry({
@@ -716,7 +716,7 @@ describe("sessions", () => {
     await Promise.all([p1, p2]);
 
     const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
+    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-6");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });

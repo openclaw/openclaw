@@ -66,8 +66,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: vi.fn(),
@@ -233,7 +233,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
     });
@@ -303,7 +303,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: `qmd/${collectionName}/${actualRelative}`,
       text: "vault memory",
     });
@@ -360,7 +360,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
     });

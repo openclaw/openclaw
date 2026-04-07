@@ -4,10 +4,12 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { canExecRequestNode } from "../agents/exec-defaults.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {
   listReservedChatSlashCommandNames,
@@ -17,12 +19,21 @@ export {
 export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   skillFilter?: string[];
 }): SkillCommandSpec[] {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
+    agentId: params.agentId,
     skillFilter: params.skillFilter,
-    eligibility: { remote: getRemoteSkillEligibility() },
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: params.cfg,
+          agentId: params.agentId,
+        }),
+      }),
+    },
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -31,7 +42,7 @@ function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
   const out: SkillCommandSpec[] = [];
   for (const cmd of commands) {
-    const key = cmd.skillName.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(cmd.skillName);
     if (key && seen.has(key)) {
       continue;
     }
@@ -98,7 +109,13 @@ export function listSkillCommandsForAgents(params: {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
       skillFilter,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: {
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: canExecRequestNode({
+            cfg: params.cfg,
+          }),
+        }),
+      },
       reservedNames: used,
     });
     for (const command of commands) {

@@ -1,3 +1,4 @@
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -32,7 +33,10 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  if (!params.agentDir) {
+  const agentDir =
+    params.agentDir ?? (params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined);
+
+  if (!agentDir) {
     return {
       shouldContinue: false,
       reply: {
@@ -45,7 +49,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     await params.typing?.startTypingLoop();
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
-      agentDir: params.agentDir,
+      agentDir,
       provider: params.provider,
       model: params.model,
       question,

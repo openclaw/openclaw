@@ -1,6 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const ANTHROPIC_VERTEX_DEFAULT_REGION = "global";
 const ANTHROPIC_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
@@ -47,21 +49,8 @@ export function resolveAnthropicVertexProjectId(
 }
 
 export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  try {
-    const host = new URL(trimmed).hostname.toLowerCase();
-    if (host === "aiplatform.googleapis.com") {
-      return "global";
-    }
-    const match = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/.exec(host);
-    return match?.[1];
-  } catch {
-    return undefined;
-  }
+  const endpoint = resolveProviderEndpoint(baseUrl);
+  return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;
 }
 
 export function resolveAnthropicVertexClientRegion(params?: {
@@ -76,7 +65,10 @@ export function resolveAnthropicVertexClientRegion(params?: {
 
 function hasAnthropicVertexMetadataServerAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const explicitMetadataOptIn = normalizeOptionalSecretInput(env.ANTHROPIC_VERTEX_USE_GCP_METADATA);
-  return explicitMetadataOptIn === "1" || explicitMetadataOptIn?.toLowerCase() === "true";
+  return (
+    explicitMetadataOptIn === "1" ||
+    normalizeLowercaseStringOrEmpty(explicitMetadataOptIn) === "true"
+  );
 }
 
 function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -89,26 +81,39 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
     : GCLOUD_DEFAULT_ADC_PATH;
 }
 
-function resolveAnthropicVertexAdcCredentialsPath(
+function resolveAnthropicVertexAdcCredentialsPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const explicitCredentialsPath = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
-  if (explicitCredentialsPath) {
-    return existsSync(explicitCredentialsPath) ? explicitCredentialsPath : undefined;
+  const explicit = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (explicit) {
+    return explicit;
   }
+  if (env !== process.env) {
+    return undefined;
+  }
+  return resolveAnthropicVertexDefaultAdcPath(env);
+}
 
-  const defaultAdcPath = resolveAnthropicVertexDefaultAdcPath(env);
-  return existsSync(defaultAdcPath) ? defaultAdcPath : undefined;
+function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
+  const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  if (!credentialsPath) {
+    return false;
+  }
+  try {
+    readFileSync(credentialsPath, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveAnthropicVertexProjectIdFromAdc(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const credentialsPath = resolveAnthropicVertexAdcCredentialsPath(env);
+  const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
   if (!credentialsPath) {
     return undefined;
   }
-
   try {
     const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as AdcProjectFile;
     return (
@@ -121,10 +126,7 @@ function resolveAnthropicVertexProjectIdFromAdc(
 }
 
 export function hasAnthropicVertexCredentials(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (
-    hasAnthropicVertexMetadataServerAdc(env) ||
-    resolveAnthropicVertexAdcCredentialsPath(env) !== undefined
-  );
+  return hasAnthropicVertexMetadataServerAdc(env) || canReadAnthropicVertexAdc(env);
 }
 
 export function hasAnthropicVertexAvailableAuth(env: NodeJS.ProcessEnv = process.env): boolean {

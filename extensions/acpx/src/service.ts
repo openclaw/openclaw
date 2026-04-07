@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -6,9 +7,17 @@ import type {
   PluginLogger,
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
-import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
-import { ensureAcpx } from "./ensure.js";
-import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
+import {
+  resolveAcpxPluginConfig,
+  toAcpMcpServers,
+  type ResolvedAcpxPluginConfig,
+} from "./config.js";
+import {
+  ACPX_BACKEND_ID,
+  AcpxRuntime,
+  createAgentRegistry,
+  createFileSessionStore,
+} from "./runtime.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -22,37 +31,55 @@ type AcpxRuntimeLike = AcpRuntime & {
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
-  queueOwnerTtlSeconds: number;
   logger?: PluginLogger;
 };
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
-  healthProbeRetryDelaysMs?: number[];
 };
 
-const DEFAULT_HEALTH_PROBE_RETRY_DELAYS_MS = [250, 1_000, 2_500];
-
-function delay(ms: number): Promise<void> {
-  if (ms <= 0) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
+  return new AcpxRuntime({
+    cwd: params.pluginConfig.cwd,
+    sessionStore: createFileSessionStore({
+      stateDir: params.pluginConfig.stateDir,
+    }),
+    agentRegistry: createAgentRegistry({
+      overrides: params.pluginConfig.agents,
+    }),
+    mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+    permissionMode: params.pluginConfig.permissionMode,
+    nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
+    timeoutMs:
+      params.pluginConfig.timeoutSeconds != null
+        ? params.pluginConfig.timeoutSeconds * 1_000
+        : undefined,
   });
+}
+
+function warnOnIgnoredLegacyCompatibilityConfig(params: {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  logger?: PluginLogger;
+}): void {
+  const ignoredFields: string[] = [];
+  if (params.pluginConfig.legacyCompatibilityConfig.queueOwnerTtlSeconds != null) {
+    ignoredFields.push("queueOwnerTtlSeconds");
+  }
+  if (params.pluginConfig.legacyCompatibilityConfig.strictWindowsCmdWrapper === false) {
+    ignoredFields.push("strictWindowsCmdWrapper=false");
+  }
+  if (ignoredFields.length === 0) {
+    return;
+  }
+  params.logger?.warn(
+    `embedded acpx runtime ignores legacy compatibility config: ${ignoredFields.join(", ")}`,
+  );
 }
 
 function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
   const detailText = report.details?.filter(Boolean).join("; ").trim();
   return detailText ? `${report.message} (${detailText})` : report.message;
-}
-
-function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
-  return new AcpxRuntime(params.pluginConfig, {
-    logger: params.logger,
-    queueOwnerTtlSeconds: params.queueOwnerTtlSeconds,
-  });
 }
 
 export function createAcpxRuntimeService(
@@ -64,19 +91,24 @@ export function createAcpxRuntimeService(
   return {
     id: "acpx-runtime",
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
+      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME === "1") {
+        ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
+        return;
+      }
+
       const pluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
-      if (ctx.workspaceDir?.trim()) {
-        await fs.mkdir(ctx.workspaceDir, { recursive: true });
-      }
-      const healthProbeRetryDelaysMs =
-        params.healthProbeRetryDelaysMs ?? DEFAULT_HEALTH_PROBE_RETRY_DELAYS_MS;
+      await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+      warnOnIgnoredLegacyCompatibilityConfig({
+        pluginConfig,
+        logger: ctx.logger,
+      });
+
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,
-        queueOwnerTtlSeconds: pluginConfig.queueOwnerTtlSeconds,
         logger: ctx.logger,
       });
 
@@ -85,76 +117,36 @@ export function createAcpxRuntimeService(
         runtime,
         healthy: () => runtime?.isHealthy() ?? false,
       });
-      const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
-      const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
-      ctx.logger.info(
-        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
-      );
+      ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
+
+      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+        return;
+      }
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
       void (async () => {
         try {
-          await ensureAcpx({
-            command: pluginConfig.command,
-            logger: ctx.logger,
-            expectedVersion: pluginConfig.expectedVersion,
-            allowInstall: pluginConfig.allowPluginLocalInstall,
-            stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
-            spawnOptions: {
-              strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
-            },
-          });
+          await runtime?.probeAvailability();
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          let lastFailureMessage: string | undefined;
-          for (let attempt = 0; attempt <= healthProbeRetryDelaysMs.length; attempt += 1) {
-            await runtime?.probeAvailability();
-            if (currentRevision !== lifecycleRevision) {
-              return;
-            }
-            if (runtime?.isHealthy()) {
-              ctx.logger.info(
-                attempt === 0
-                  ? "acpx runtime backend ready"
-                  : `acpx runtime backend ready after ${attempt + 1} probe attempts`,
-              );
-              return;
-            }
-
-            const doctorReport = await runtime?.doctor?.();
-            if (currentRevision !== lifecycleRevision) {
-              return;
-            }
-            if (doctorReport) {
-              lastFailureMessage = formatDoctorFailureMessage(doctorReport);
-            } else {
-              lastFailureMessage = "acpx runtime backend remained unhealthy after probe";
-            }
-
-            const retryDelayMs = healthProbeRetryDelaysMs[attempt];
-            if (retryDelayMs == null) {
-              break;
-            }
-            ctx.logger.warn(
-              `acpx runtime backend probe attempt ${attempt + 1} failed: ${lastFailureMessage}; retrying in ${retryDelayMs}ms`,
-            );
-            await delay(retryDelayMs);
-            if (currentRevision !== lifecycleRevision) {
-              return;
-            }
+          if (runtime?.isHealthy()) {
+            ctx.logger.info("embedded acpx runtime backend ready");
+            return;
+          }
+          const doctorReport = await runtime?.doctor?.();
+          if (currentRevision !== lifecycleRevision) {
+            return;
           }
           ctx.logger.warn(
-            `acpx runtime backend probe failed: ${lastFailureMessage ?? "backend remained unhealthy after setup"}`,
+            `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
           );
         } catch (err) {
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          ctx.logger.warn(
-            `acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
         }
       })();
     },
