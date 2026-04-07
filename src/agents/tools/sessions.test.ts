@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -40,6 +41,16 @@ let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["res
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
+const resolveSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => ({
+  id: rawId,
+});
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
 type SessionsListResult = Awaited<
   ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
@@ -69,6 +80,10 @@ const installRegistry = async () => {
             blurb: "Discord test stub.",
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),
@@ -89,6 +104,10 @@ const installRegistry = async () => {
             preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),

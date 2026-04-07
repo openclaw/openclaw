@@ -18,7 +18,11 @@ const WEB_SEARCH_ARTIFACT_CANDIDATES = [
   "web-search-provider.js",
   "web-search.js",
 ] as const;
-const WEB_FETCH_ARTIFACT_CANDIDATES = ["web-fetch-provider.js", "web-fetch.js"] as const;
+const WEB_FETCH_ARTIFACT_CANDIDATES = [
+  "web-fetch-contract-api.js",
+  "web-fetch-provider.js",
+  "web-fetch.js",
+] as const;
 
 type BundledWebProviderPublicArtifactParams = {
   config?: PluginLoadOptions["config"];

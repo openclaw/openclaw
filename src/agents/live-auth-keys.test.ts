@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 
 const ORIGINAL_MODELSTUDIO_API_KEY = process.env.MODELSTUDIO_API_KEY;
 const ORIGINAL_XAI_API_KEY = process.env.XAI_API_KEY;
@@ -6,10 +7,13 @@ const ORIGINAL_XAI_API_KEY = process.env.XAI_API_KEY;
 describe("collectProviderApiKeys", () => {
   beforeEach(() => {
     vi.doUnmock("../plugins/manifest-registry.js");
+    vi.doUnmock("../secrets/provider-env-vars.js");
+    clearPluginManifestRegistryCache();
   });
 
   afterEach(() => {
     vi.resetModules();
+    clearPluginManifestRegistryCache();
     if (ORIGINAL_MODELSTUDIO_API_KEY === undefined) {
       delete process.env.MODELSTUDIO_API_KEY;
     } else {

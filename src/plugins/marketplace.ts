@@ -8,6 +8,7 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -129,7 +130,7 @@ function splitRef(value: string): { base: string; ref?: string } {
   }
   return {
     base: trimmed.slice(0, hashIndex),
-    ref: trimmed.slice(hashIndex + 1).trim() || undefined,
+    ref: normalizeOptionalString(trimmed.slice(hashIndex + 1)),
   };
 }
 

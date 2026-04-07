@@ -12,7 +12,7 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
-} from "acpx/dist/runtime.js";
+} from "acpx/runtime";
 import type { AcpRuntime } from "../runtime-api.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];

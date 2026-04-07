@@ -1,7 +1,9 @@
+import { normalizeCronJobIdentityFields } from "../cron/normalize-job-identity.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
-import { inferLegacyName, normalizeOptionalText } from "../cron/service/normalize.js";
+import { inferLegacyName } from "../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
 import { migrateLegacyCronPayload } from "./doctor-cron-payload-migration.js";
 
@@ -212,19 +214,11 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
-    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
-    if (!rawId && legacyJobId) {
-      raw.id = legacyJobId;
-      mutated = true;
-      trackIssue("jobId");
-    } else if (rawId && raw.id !== rawId) {
-      raw.id = rawId;
+    const idNorm = normalizeCronJobIdentityFields(raw);
+    if (idNorm.mutated) {
       mutated = true;
     }
-    if ("jobId" in raw) {
-      delete raw.jobId;
-      mutated = true;
+    if (idNorm.legacyJobIdIssue) {
       trackIssue("jobId");
     }
 
@@ -246,7 +240,7 @@ export function normalizeStoredCronJobs(
       raw.name = nameRaw.trim();
     }
 
-    const desc = normalizeOptionalText(raw.description);
+    const desc = normalizeOptionalString(raw.description);
     if (raw.description !== desc) {
       raw.description = desc;
       mutated = true;
@@ -254,7 +248,7 @@ export function normalizeStoredCronJobs(
 
     if ("sessionKey" in raw) {
       const sessionKey =
-        typeof raw.sessionKey === "string" ? normalizeOptionalText(raw.sessionKey) : undefined;
+        typeof raw.sessionKey === "string" ? normalizeOptionalString(raw.sessionKey) : undefined;
       if (raw.sessionKey !== sessionKey) {
         raw.sessionKey = sessionKey;
         mutated = true;

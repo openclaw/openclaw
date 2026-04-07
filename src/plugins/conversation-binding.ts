@@ -14,6 +14,7 @@ import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type {
   PluginConversationBinding,
@@ -162,11 +163,11 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
     channel: normalizeChannel(params.channel),
     accountId: params.accountId.trim() || "default",
     conversationId: params.conversationId.trim(),
-    parentConversationId: params.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(params.parentConversationId),
     threadId:
       typeof params.threadId === "number"
         ? Math.trunc(params.threadId)
-        : params.threadId?.toString().trim() || undefined,
+        : normalizeOptionalString(params.threadId?.toString()),
   };
 }
 
@@ -427,8 +428,8 @@ function buildBindingMetadata(params: {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
-    summary: params.summary?.trim() || undefined,
-    detachHint: params.detachHint?.trim() || undefined,
+    summary: normalizeOptionalString(params.summary),
+    detachHint: normalizeOptionalString(params.detachHint),
   };
 }
 
@@ -804,9 +805,9 @@ export async function requestPluginConversationBinding(params: {
     pluginRoot: params.pluginRoot,
     conversation,
     requestedAt: Date.now(),
-    requestedBySenderId: params.requestedBySenderId?.trim() || undefined,
-    summary: params.binding?.summary?.trim() || undefined,
-    detachHint: params.binding?.detachHint?.trim() || undefined,
+    requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
+    summary: normalizeOptionalString(params.binding?.summary),
+    detachHint: normalizeOptionalString(params.binding?.detachHint),
   };
   pendingRequests.set(request.id, request);
   logPluginBindingLifecycleEvent({

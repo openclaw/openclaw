@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
@@ -24,9 +25,9 @@ function resolveOpenAIRequestCapabilities(model: {
   compat?: { supportsStore?: boolean };
 }) {
   return resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: typeof model.api === "string" ? model.api : undefined,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    provider: readStringValue(model.provider),
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
     compat: model.compat,
     capability: "llm",
     transport: "stream",
@@ -57,7 +58,9 @@ function shouldApplyOpenAIReasoningCompatibility(model: {
   provider?: unknown;
   baseUrl?: unknown;
 }): boolean {
-  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+  const api = readStringValue(model.api);
+  const provider = readStringValue(model.provider);
+  if (!api || !provider) {
     return false;
   }
   return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
@@ -67,7 +70,7 @@ function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefin
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = readStringValue(value)?.toLowerCase();
   if (
     normalized === "auto" ||
     normalized === "default" ||
@@ -95,7 +98,7 @@ function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | und
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = readStringValue(value)?.toLowerCase();
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -297,8 +300,8 @@ export function createCodexNativeWebSearchWrapper(
   return (model, context, options) => {
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
-      modelProvider: typeof model.provider === "string" ? model.provider : undefined,
-      modelApi: typeof model.api === "string" ? model.api : undefined,
+      modelProvider: readStringValue(model.provider),
+      modelApi: readStringValue(model.api),
       agentDir: params.agentDir,
     });
 
@@ -378,8 +381,8 @@ export function createOpenAIAttributionHeadersWrapper(
       ...options,
       headers: resolveProviderRequestPolicyConfig({
         provider: attributionProvider,
-        api: typeof model.api === "string" ? model.api : undefined,
-        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        api: readStringValue(model.api),
+        baseUrl: readStringValue(model.baseUrl),
         capability: "llm",
         transport: "stream",
         callerHeaders: options?.headers,

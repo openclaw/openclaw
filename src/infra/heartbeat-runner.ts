@@ -49,6 +49,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -818,7 +819,7 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
@@ -1191,7 +1192,7 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;

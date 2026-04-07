@@ -32,12 +32,9 @@ describe("doctor open-policy allowFrom repair", () => {
     });
 
     expect(result.changes).toEqual([
-      '- channels.googlechat.dmPolicy: set to "open" (migrated from channels.googlechat.dm.policy)',
-      '- channels.googlechat.allowFrom: set to ["*"] (required by dmPolicy="open")',
+      '- channels.googlechat.dm.allowFrom: set to ["*"] (required by dmPolicy="open")',
     ]);
-    expect(
-      (result.config.channels?.googlechat as { allowFrom?: string[] } | undefined)?.allowFrom,
-    ).toEqual(["*"]);
+    expect(result.config.channels?.googlechat?.dm?.allowFrom).toEqual(["*"]);
   });
 
   it("repairs nested-only matrix dm allowFrom", () => {
@@ -52,10 +49,10 @@ describe("doctor open-policy allowFrom repair", () => {
     });
 
     expect(result.changes).toEqual([
-      '- channels.matrix.dmPolicy: set to "open" (migrated from channels.matrix.dm.policy)',
-      '- channels.matrix.allowFrom: set to ["*"] (required by dmPolicy="open")',
+      '- channels.matrix.dm.allowFrom: set to ["*"] (required by dmPolicy="open")',
     ]);
-    expect(result.config.channels?.matrix?.allowFrom).toEqual(["*"]);
+    expect(result.config.channels?.matrix?.allowFrom).toBeUndefined();
+    expect(result.config.channels?.matrix?.dm?.allowFrom).toEqual(["*"]);
   });
 
   it("appends wildcard to discord nested dm allowFrom when top-level is absent", () => {
@@ -72,9 +69,10 @@ describe("doctor open-policy allowFrom repair", () => {
 
     expect(result.changes).toEqual([
       '- channels.discord.dmPolicy: set to "open" (migrated from channels.discord.dm.policy)',
-      '- channels.discord.allowFrom: set to ["*"] (required by dmPolicy="open")',
+      '- channels.discord.dm.allowFrom: added "*" (required by dmPolicy="open")',
     ]);
-    expect(result.config.channels?.discord?.allowFrom).toEqual(["*"]);
+    expect(result.config.channels?.discord?.allowFrom).toBeUndefined();
+    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["123", "*"]);
   });
 
   it("formats open-policy wildcard warnings", () => {

@@ -8,6 +8,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -225,9 +226,9 @@ export async function handleToolsInvokeHttpRequest(
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
-  const agentTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
-  const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
+  const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
+  const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
+  const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
   const { agentId, tools } = resolveGatewayScopedTools({
     cfg,
     sessionKey,

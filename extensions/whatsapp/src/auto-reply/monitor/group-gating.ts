@@ -13,10 +13,11 @@ import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import {
   hasControlCommand,
+  implicitMentionKindWhen,
   normalizeE164,
   parseActivationCommand,
   recordPendingHistoryEntryIfEnabled,
-  resolveMentionGating,
+  resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
 
@@ -152,16 +153,28 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   // should not count as implicit bot mentions unless the message explicitly
   // mentioned the bot in text.
   const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
-  const implicitMention = !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender);
-  const mentionGate = resolveMentionGating({
-    requireMention,
-    canDetectMention: true,
-    wasMentioned,
-    implicitMention,
-    shouldBypassMention,
+  const implicitMentionKinds = implicitMentionKindWhen(
+    "quoted_bot",
+    !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender),
+  );
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned,
+      implicitMentionKinds,
+    },
+    policy: {
+      isGroup: true,
+      requireMention,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
   });
-  params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
-  if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
+  const effectiveWasMentioned =
+    mentionDecision.effectiveWasMentioned || Boolean(shouldBypassMention);
+  params.msg.wasMentioned = effectiveWasMentioned;
+  if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,

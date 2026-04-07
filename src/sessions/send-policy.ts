@@ -1,11 +1,12 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
-  const value = raw?.trim().toLowerCase();
+  const value = normalizeOptionalString(raw)?.toLowerCase();
   if (value === "allow") {
     return "allow";
   }
@@ -16,7 +17,7 @@ export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecis
 }
 
 function normalizeMatchValue(raw?: string | null) {
-  const value = raw?.trim().toLowerCase();
+  const value = normalizeOptionalString(raw)?.toLowerCase();
   return value ? value : undefined;
 }
 
@@ -45,7 +46,7 @@ function deriveChannelFromKey(key?: string) {
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
-  const normalizedKey = stripAgentSessionKeyPrefix(key)?.trim().toLowerCase();
+  const normalizedKey = normalizeOptionalString(stripAgentSessionKeyPrefix(key))?.toLowerCase();
   if (!normalizedKey) {
     return undefined;
   }

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -299,7 +300,7 @@ export async function handleIrcInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,

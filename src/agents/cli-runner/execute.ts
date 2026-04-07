@@ -11,17 +11,15 @@ import { createCliJsonlStreamingParser, parseCliOutput, type CliOutput } from ".
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
-  appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
-  loadPromptRefImages,
+  prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
-  writeCliImages,
 } from "./helpers.js";
 import {
   cliBackendLog,
@@ -111,25 +109,20 @@ export async function executePreparedCliRun(
     systemPrompt: context.systemPrompt,
   });
 
-  let imagePaths: string[] | undefined;
-  let cleanupImages: (() => Promise<void>) | undefined;
   let prompt = prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
     preserveExactPrompt: context.heartbeatPrompt,
   });
-  const resolvedImages =
-    params.images && params.images.length > 0
-      ? params.images
-      : await loadPromptRefImages({ prompt, workspaceDir: context.workspaceDir });
-  if (resolvedImages.length > 0) {
-    const imagePayload = await writeCliImages(resolvedImages);
-    imagePaths = imagePayload.paths;
-    cleanupImages = imagePayload.cleanup;
-    // Some stdin-driven CLIs still need the hydrated file paths mentioned in the
-    // prompt even when we also pass explicit image args.
-    if (!backend.imageArg || backend.input === "stdin") {
-      prompt = appendImagePathsToPrompt(prompt, imagePaths);
-    }
-  }
+  const {
+    prompt: promptWithImages,
+    imagePaths,
+    cleanupImages,
+  } = await prepareCliPromptImagePayload({
+    backend,
+    prompt,
+    workspaceDir: context.workspaceDir,
+    images: params.images,
+  });
+  prompt = promptWithImages;
 
   const { argsPrompt, stdin } = resolvePromptInput({
     backend,

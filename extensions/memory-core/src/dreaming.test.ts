@@ -493,7 +493,7 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(harness.jobs.map((entry) => entry.id)).toEqual(["job-other"]);
   });
 
-  it("prunes legacy light/rem dreaming cron jobs during reconciliation", async () => {
+  it("migrates legacy light/rem dreaming cron jobs during reconciliation", async () => {
     const deepManagedJob: CronJobLike = {
       id: "job-deep",
       name: constants.MANAGED_DREAMING_CRON_NAME,
@@ -548,6 +548,46 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(result.status).toBe("updated");
     expect(result.removed).toBe(2);
     expect(harness.removeCalls).toEqual(["job-light", "job-rem"]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: migrated 2 legacy phase dreaming cron job(s) to the unified dreaming controller.",
+    );
+  });
+
+  it("migrates legacy phase jobs even when unified dreaming is disabled", async () => {
+    const legacyLightJob: CronJobLike = {
+      id: "job-light",
+      name: "Memory Light Dreaming",
+      description: "[managed-by=memory-core.dreaming.light] legacy",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
+      createdAtMs: 8,
+    };
+    const harness = createCronHarness([legacyLightJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: false,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "disabled", removed: 1 });
+    expect(harness.removeCalls).toEqual(["job-light"]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: completed legacy phase dreaming cron migration while unified dreaming is disabled (1 job(s) removed).",
+    );
   });
 
   it("does not overcount removed jobs when cron remove result is unknown", async () => {

@@ -8,6 +8,7 @@ import {
   applyXaiModelCompat,
   resolveXaiModelCompatPatch,
 } from "@openclaw/plugin-sdk/provider-tools";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 export { buildXaiProvider } from "./provider-catalog.js";
 export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
@@ -75,6 +76,6 @@ export function resolveXaiTransport(params: {
   }
   return {
     api: "openai-responses",
-    baseUrl: typeof params.baseUrl === "string" ? params.baseUrl : undefined,
+    baseUrl: readStringValue(params.baseUrl),
   };
 }

@@ -5,6 +5,7 @@ import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
@@ -100,8 +101,8 @@ export function createSessionsSendTool(opts?: {
       });
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
-      const labelParam = readStringParam(params, "label")?.trim() || undefined;
-      const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
+      const labelParam = normalizeOptionalString(readStringParam(params, "label"));
+      const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
       if (sessionKeyParam && labelParam) {
         return jsonResult({
           runId: crypto.randomUUID(),

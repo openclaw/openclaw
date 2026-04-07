@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
 import {
@@ -11,10 +12,12 @@ import {
   resetHeartbeatWakeStateForTests,
 } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import {
+  cancelTaskById,
   createTaskRecord,
   findLatestTaskForOwnerKey,
   findLatestTaskForRelatedSessionKey,
@@ -41,8 +44,10 @@ import {
 import {
   getInspectableTaskAuditSummary,
   previewTaskRegistryMaintenance,
+  resetTaskRegistryMaintenanceRuntimeForTests,
   reconcileInspectableTasks,
   runTaskRegistryMaintenance,
+  setTaskRegistryMaintenanceRuntimeForTests,
   startTaskRegistryMaintenance,
   stopTaskRegistryMaintenanceForTests,
   sweepTaskRegistry,
@@ -71,39 +76,25 @@ vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
-async function loadFreshTaskRegistryModulesForControlTest() {
-  vi.resetModules();
-  vi.doMock("../acp/control-plane/manager.js", () => ({
-    getAcpSessionManager: () => ({
-      cancelSession: hoisted.cancelSessionMock,
-    }),
-  }));
-  vi.doMock("../agents/subagent-control.js", () => ({
-    killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
-  }));
-  const registry = await import("./task-registry.js");
-  registry.setTaskRegistryDeliveryRuntimeForTests({
-    sendMessage: hoisted.sendMessageMock,
-  });
-  return registry;
-}
-
-async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
+function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
-}) {
-  vi.resetModules();
-  vi.doMock("../acp/runtime/session-meta.js", () => ({
-    readAcpSessionEntry: () => ({ entry: undefined, storeReadFailed: false }),
-  }));
-  vi.doMock("../config/sessions.js", () => ({
+}): void {
+  const emptyAcpEntry = {
+    cfg: {} as never,
+    storePath: "",
+    sessionKey: "",
+    storeSessionKey: "",
+    entry: undefined,
+    storeReadFailed: false,
+  } satisfies AcpSessionStoreEntry;
+  setTaskRegistryMaintenanceRuntimeForTests({
+    readAcpSessionEntry: () => emptyAcpEntry,
     loadSessionStore: () => ({}),
     resolveStorePath: () => "",
-  }));
-  vi.doMock("../routing/session-key.js", () => ({
-    parseAgentSessionKey: () => undefined,
-  }));
-  vi.doMock("./runtime-internal.js", () => ({
+    parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
+    isCronJobActive: () => false,
+    getAgentRunContext: () => undefined,
     deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => params.currentTasks.get(taskId),
@@ -130,7 +121,7 @@ async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
-    maybeDeliverTaskTerminalUpdate: () => false,
+    maybeDeliverTaskTerminalUpdate: async () => null,
     resolveTaskForLookupToken: () => undefined,
     setTaskCleanupAfterById: (patch: { taskId: string; cleanupAfter: number }) => {
       const current = params.currentTasks.get(patch.taskId);
@@ -144,8 +135,7 @@ async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
-  }));
-  return await import("./task-registry.maintenance.js");
+  });
 }
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
@@ -229,6 +219,7 @@ describe("task-registry", () => {
     resetAgentRunContextForTest();
     resetCronActiveJobsForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryMaintenanceRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
@@ -1424,7 +1415,7 @@ describe("task-registry", () => {
       lastEventAt: now,
     };
     const currentTasks = new Map([[snapshotTask.taskId, currentTask]]);
-    const { runTaskRegistryMaintenance } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+    configureTaskRegistryMaintenanceRuntimeForTest({
       currentTasks,
       snapshotTasks: [staleTask],
     });
@@ -1464,7 +1455,7 @@ describe("task-registry", () => {
       cleanupAfter: now + 60_000,
     };
     const currentTasks = new Map([[snapshotTask.taskId, currentTask]]);
-    const { sweepTaskRegistry } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+    configureTaskRegistryMaintenanceRuntimeForTest({
       currentTasks,
       snapshotTasks: [staleTask],
     });
@@ -1775,122 +1766,110 @@ describe("task-registry", () => {
   });
 
   it("cancels ACP-backed tasks through the ACP session manager", async () => {
-    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
-      const registry = await loadFreshTaskRegistryModulesForControlTest();
+    await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      registry.resetTaskRegistryForTests();
-      try {
-        hoisted.cancelSessionMock.mockResolvedValue(undefined);
+      hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
-        const task = registry.createTaskRecord({
-          runtime: "acp",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          requesterOrigin: {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-cancel-acp",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.cancelSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          sessionKey: "agent:codex:acp:child",
+          reason: "task-cancel",
+        }),
+      );
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled by operator.",
+        }),
+      });
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
             channel: "telegram",
             to: "telegram:123",
-          },
-          childSessionKey: "agent:codex:acp:child",
-          runId: "run-cancel-acp",
-          task: "Investigate issue",
-          status: "running",
-          deliveryStatus: "pending",
-        });
-
-        const result = await registry.cancelTaskById({
-          cfg: {} as never,
-          taskId: task.taskId,
-        });
-
-        expect(hoisted.cancelSessionMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            cfg: {},
-            sessionKey: "agent:codex:acp:child",
-            reason: "task-cancel",
+            content: "Background task cancelled: ACP background task (run run-canc).",
           }),
-        );
-        expect(result).toMatchObject({
-          found: true,
-          cancelled: true,
-          task: expect.objectContaining({
-            taskId: task.taskId,
-            status: "cancelled",
-            error: "Cancelled by operator.",
-          }),
-        });
-        await waitForAssertion(() =>
-          expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-            expect.objectContaining({
-              channel: "telegram",
-              to: "telegram:123",
-              content: "Background task cancelled: ACP background task (run run-canc).",
-            }),
-          ),
-        );
-      } finally {
-        registry.resetTaskRegistryForTests();
-      }
+        ),
+      );
     });
   });
 
   it("cancels subagent-backed tasks through subagent control", async () => {
-    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
-      const registry = await loadFreshTaskRegistryModulesForControlTest();
+    await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      registry.resetTaskRegistryForTests();
-      try {
-        hoisted.killSubagentRunAdminMock.mockResolvedValue({
-          found: true,
-          killed: true,
-        });
+      hoisted.killSubagentRunAdminMock.mockResolvedValue({
+        found: true,
+        killed: true,
+      });
 
-        const task = registry.createTaskRecord({
-          runtime: "subagent",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          requesterOrigin: {
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:worker:subagent:child",
+        runId: "run-cancel-subagent",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          sessionKey: "agent:worker:subagent:child",
+        }),
+      );
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled by operator.",
+        }),
+      });
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
             channel: "telegram",
             to: "telegram:123",
-          },
-          childSessionKey: "agent:worker:subagent:child",
-          runId: "run-cancel-subagent",
-          task: "Investigate issue",
-          status: "running",
-          deliveryStatus: "pending",
-        });
-
-        const result = await registry.cancelTaskById({
-          cfg: {} as never,
-          taskId: task.taskId,
-        });
-
-        expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            cfg: {},
-            sessionKey: "agent:worker:subagent:child",
+            content: "Background task cancelled: Subagent task (run run-canc).",
           }),
-        );
-        expect(result).toMatchObject({
-          found: true,
-          cancelled: true,
-          task: expect.objectContaining({
-            taskId: task.taskId,
-            status: "cancelled",
-            error: "Cancelled by operator.",
-          }),
-        });
-        await waitForAssertion(() =>
-          expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-            expect.objectContaining({
-              channel: "telegram",
-              to: "telegram:123",
-              content: "Background task cancelled: Subagent task (run run-canc).",
-            }),
-          ),
-        );
-      } finally {
-        registry.resetTaskRegistryForTests();
-      }
+        ),
+      );
     });
   });
 });

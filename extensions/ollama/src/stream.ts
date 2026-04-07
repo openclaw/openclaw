@@ -26,6 +26,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
@@ -759,7 +760,7 @@ export function createConfiguredOllamaStreamFn(params: {
 }): StreamFn {
   return createOllamaStreamFn(
     resolveOllamaBaseUrlForRun({
-      modelBaseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
+      modelBaseUrl: readStringValue(params.model.baseUrl),
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),

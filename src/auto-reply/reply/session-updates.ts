@@ -22,6 +22,7 @@ import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
@@ -329,7 +330,7 @@ function rewriteSessionFileForNewSessionId(params: {
   previousSessionId: string;
   nextSessionId: string;
 }): string | undefined {
-  const trimmed = params.sessionFile?.trim();
+  const trimmed = normalizeOptionalString(params.sessionFile);
   if (!trimmed) {
     return undefined;
   }

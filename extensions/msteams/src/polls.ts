@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { isRecord } from "./attachments/shared.js";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
@@ -89,7 +90,7 @@ function readNestedValue(value: unknown, keys: Array<string | number>): unknown 
 
 function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
   const found = readNestedValue(value, keys);
-  return typeof found === "string" && found.trim() ? found.trim() : undefined;
+  return normalizeOptionalString(found);
 }
 
 export function extractMSTeamsPollVote(

@@ -5,6 +5,7 @@ import {
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
@@ -115,10 +116,10 @@ function normalizeSessionConversationResolution(
 
   return {
     id: resolved.id.trim(),
-    threadId: resolved.threadId?.trim() || undefined,
+    threadId: normalizeOptionalString(resolved.threadId),
     baseConversationId:
-      resolved.baseConversationId?.trim() ||
-      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ||
+      normalizeOptionalString(resolved.baseConversationId) ??
+      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ??
       resolved.id.trim(),
     parentConversationCandidates: dedupeConversationIds(
       resolved.parentConversationCandidates ?? [],
@@ -251,7 +252,9 @@ export function resolveSessionThreadInfo(
   }
 
   return {
-    baseSessionKey: resolved.threadId ? resolved.baseSessionKey : sessionKey?.trim() || undefined,
+    baseSessionKey: resolved.threadId
+      ? resolved.baseSessionKey
+      : normalizeOptionalString(sessionKey),
     threadId: resolved.threadId,
   };
 }

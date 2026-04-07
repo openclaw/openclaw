@@ -200,6 +200,6 @@ describe("shouldSuppressMessagingToolReplies", () => {
           { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
         ],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

@@ -19,9 +19,16 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: add persisted compaction checkpoints plus Sessions UI branch/restore actions so operators can inspect and recover pre-compaction session state. (#62146) Thanks @scoootscooob.
 - Providers/Ollama: detect vision capability from the `/api/show` response and set image input on models that support it so Ollama vision models accept image attachments. (#62193) Thanks @BruceMacD.
 - Memory/dreaming: ingest redacted session transcripts into the dreaming corpus with per-day session-corpus notes, cursor checkpointing, and promotion/doctor support. (#62227) Thanks @vignesh07.
+- Plugins/memory: add a public memory-artifact export seam to the unified memory capability so companion plugins like `memory-wiki` can bridge the active memory plugin without reaching into `memory-core` internals. Thanks @vincentkoc.
+- Memory/wiki: add structured claim/evidence fields plus compiled agent digest artifacts so `memory-wiki` behaves more like a persistent knowledge layer and less like markdown-only page storage. Thanks @vincentkoc.
+- Memory/wiki: add claim-health linting, contradiction clustering, staleness-aware dashboards, and freshness-weighted wiki search so `memory-wiki` can act more like a maintained belief layer than a passive markdown dump. Thanks @vincentkoc.
+- Memory/wiki: use compiled digest artifacts as the first-pass wiki index for search/get flows, and resolve claim ids back to owning pages so agents can retrieve knowledge by belief identity instead of only by file path. Thanks @vincentkoc.
+- Memory/wiki: add an opt-in `context.includeCompiledDigestPrompt` flag so memory prompt supplements can append a compact compiled wiki snapshot for legacy prompt assembly and context engines that explicitly consume memory prompt sections. Thanks @vincentkoc.
+- Plugin SDK/context engines: pass `availableTools` and `citationsMode` into `assemble()`, and expose `buildMemorySystemPromptAddition(...)` so non-legacy context engines can adopt the active memory prompt path without reimplementing it. Thanks @vincentkoc.
 
 ### Fixes
 
+- Plugins/media: when `plugins.allow` is set, capability fallback now merges bundled capability plugin ids into the allowlist (not only `plugins.entries`), so media understanding providers such as OpenAI-compatible STT load for voice transcription without requiring `openai` in `plugins.allow`. (#62205) Thanks @neeravmakwana.
 - Auth/OpenAI Codex OAuth: reload fresh on-disk credentials inside the locked refresh path and retry once after `refresh_token_reused` rotates only the stored refresh token, so relogin/restart recovery stops getting stuck on stale cached auth state. Thanks @owen-ever.
 - Agents/history and replies: buffer phaseless OpenAI WS text until a real assistant phase arrives, keep replay and SSE history sequence tracking aligned, hide commentary and leaked tool XML from user-visible history, and keep history-based follow-up replies on `final_answer` text only. (#61729, #61747, #61829, #61855, #61954) Thanks @100yenadmin, @afurm, and @openperf.
 - Plugins/channels: keep bundled channel artifact and secret-contract loading stable under lazy loading, preserve plugin-schema defaults during install, and fix Windows `file://` plus native-Jiti plugin loader paths so onboarding, doctor, `openclaw secret`, and bundled plugin installs work again. (#61832, #61836, #61853, #61856) Thanks @Zeesejo and @SuperMarioYL.
@@ -54,6 +61,14 @@ Docs: https://docs.openclaw.ai
 - Slack/thread mentions: add `channels.slack.thread.requireExplicitMention` so Slack channels that already require mentions can also require explicit `@bot` mentions inside bot-participated threads. (#58276) Thanks @praktika-engineer.
 - UI/light mode: target both root and nested WebKit scrollbar thumbs in the light theme so page-level and container scrollbars stay visible on light backgrounds. (#61753) Thanks @chziyue.
 - Matrix/onboarding: add an invite auto-join setup step with explicit off warnings and strict stable-target validation so new Matrix accounts stop silently ignoring invited rooms and fresh DM-style invites unless operators opt in. (#62168) Thanks @gumadeiras.
+- Telegram/doctor: keep top-level access-control fallback in place during multi-account normalization while still promoting legacy default auth into `accounts.default`, so existing named bots keep inherited allowlists without dropping the legacy default bot. (#62263) Thanks @obviyus.
+- Agents/subagents: honor `sessions_spawn(lightContext: true)` for spawned subagent runs by preserving lightweight bootstrap context through the gateway and embedded runner instead of silently falling back to full workspace bootstrap injection. (#62264) Thanks @theSamPadilla.
+- Slack/media: keep attachment downloads on the SSRF-guarded dispatcher path so Slack media fetching works on Node 22 without dropping pinned transport enforcement. (#62239) Thanks @openperf.
+- Docker/plugins: stop forcing bundled plugin discovery to `/app/extensions` in runtime images so packaged installs use compiled `dist/extensions` artifacts again and Node 24 containers do not boot through source-only plugin entry paths. Fixes #62044. (#62316) Thanks @gumadeiras.
+- Cron: load `jobId` into `id` when the on-disk store omits `id`, matching doctor migration and fixing `unknown cron job id` for hand-edited `jobs.json`. (#62246) Thanks @neeravmakwana.
+- Agents/model fallback: classify minimal HTTP 404 API errors (for example `404 status code (no body)`) as `model_not_found` so assistant failures throw into the fallback chain instead of stopping at the first fallback candidate. (#62119) Thanks @neeravmakwana.
+- Providers/Mistral: send `reasoning_effort` for `mistral/mistral-small-latest` (Mistral Small 4) with thinking-level mapping, and mark the catalog entry as reasoning-capable so adjustable reasoning matches Mistral’s Chat Completions API. (#62162) Thanks @neeravmakwana.
+- OpenAI TTS/Groq: send `wav` to Groq-compatible speech endpoints, honor explicit `responseFormat` overrides on OpenAI-compatible paths, and only mark voice-note output as voice-compatible when the actual format is `opus`. (#62233) Thanks @neeravmakwana.
 
 ## 2026.4.5
 

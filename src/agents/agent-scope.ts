@@ -11,6 +11,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
@@ -36,6 +37,7 @@ type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
+  systemPromptOverride?: AgentEntry["systemPromptOverride"];
   model?: AgentEntry["model"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
@@ -137,9 +139,10 @@ export function resolveAgentConfig(
   }
   const agentDefaults = cfg.agents?.defaults;
   return {
-    name: typeof entry.name === "string" ? entry.name : undefined,
-    workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
-    agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
+    name: readStringValue(entry.name),
+    workspace: readStringValue(entry.workspace),
+    agentDir: readStringValue(entry.agentDir),
+    systemPromptOverride: readStringValue(entry.systemPromptOverride),
     model:
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
@@ -169,18 +172,13 @@ export function resolveAgentSkillsFilter(
 
 function resolveModelPrimary(raw: unknown): string | undefined {
   if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
+    return normalizeOptionalString(raw);
   }
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
   const primary = (raw as { primary?: unknown }).primary;
-  if (typeof primary !== "string") {
-    return undefined;
-  }
-  const trimmed = primary.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(primary);
 }
 
 export function resolveAgentExplicitModelPrimary(

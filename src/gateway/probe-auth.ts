@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   type ExplicitGatewayAuth,
   isGatewaySecretRefUnavailableError,
@@ -28,8 +29,8 @@ function resolveExplicitProbeAuth(explicitAuth?: ExplicitGatewayAuth): {
   token?: string;
   password?: string;
 } {
-  const token = explicitAuth?.token?.trim() || undefined;
-  const password = explicitAuth?.password?.trim() || undefined;
+  const token = normalizeOptionalString(explicitAuth?.token);
+  const password = normalizeOptionalString(explicitAuth?.password);
   return { token, password };
 }
 

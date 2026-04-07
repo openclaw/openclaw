@@ -529,6 +529,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "acpx",
       configSchema: { type: "object" },
       configContracts: {
+        compatibilityMigrationPaths: ["models.bedrockDiscovery"],
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
@@ -544,6 +545,7 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins[0]?.configContracts).toEqual({
+      compatibilityMigrationPaths: ["models.bedrockDiscovery"],
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,

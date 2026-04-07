@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "./string-coerce.js";
+
 export type NodeMatchCandidate = {
   nodeId: string;
   displayName?: string;
@@ -30,19 +32,20 @@ function listKnownNodes(nodes: NodeMatchCandidate[]): string {
 function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   const label = node.displayName || node.remoteIp || node.nodeId;
   const details = [`node=${node.nodeId}`];
-  if (typeof node.clientId === "string" && node.clientId.trim()) {
-    details.push(`client=${node.clientId.trim()}`);
+  const clientId = normalizeOptionalString(node.clientId);
+  if (clientId) {
+    details.push(`client=${clientId}`);
   }
   return `${label} [${details.join(", ")}]`;
 }
 
 function isCurrentOpenClawClient(clientId: string | undefined): boolean {
-  const normalized = clientId?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalString(clientId)?.toLowerCase() ?? "";
   return normalized.startsWith("openclaw-");
 }
 
 function isLegacyClawdbotClient(clientId: string | undefined): boolean {
-  const normalized = clientId?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalString(clientId)?.toLowerCase() ?? "";
   return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
 }
 
@@ -95,7 +98,7 @@ function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): numbe
 }
 
 function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
-  const trimmed = query.trim();
+  const trimmed = normalizeOptionalString(query);
   if (!trimmed) {
     return [];
   }

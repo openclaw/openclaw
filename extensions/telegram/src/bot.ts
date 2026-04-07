@@ -20,6 +20,7 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
@@ -258,7 +259,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
-  const apiRoot = telegramCfg.apiRoot?.trim() || undefined;
+  const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
   const client: ApiClientOptions | undefined =
     finalFetch || timeoutSeconds || apiRoot
       ? {

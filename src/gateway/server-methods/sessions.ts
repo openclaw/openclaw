@@ -9,8 +9,8 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
-import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -33,6 +33,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -772,18 +773,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = loadConfig();
-    const requestedKey = typeof p.key === "string" && p.key.trim() ? p.key.trim() : undefined;
+    const requestedKey = normalizeOptionalString(p.key);
     const agentId = normalizeAgentId(
-      typeof p.agentId === "string" && p.agentId.trim() ? p.agentId : resolveDefaultAgentId(cfg),
+      normalizeOptionalString(p.agentId) ?? resolveDefaultAgentId(cfg),
     );
     if (requestedKey) {
       const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
-      if (
-        requestedAgentId &&
-        requestedAgentId !== agentId &&
-        typeof p.agentId === "string" &&
-        p.agentId.trim()
-      ) {
+      if (requestedAgentId && requestedAgentId !== agentId && normalizeOptionalString(p.agentId)) {
         respond(
           false,
           undefined,
@@ -795,10 +791,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const parentSessionKey =
-      typeof p.parentSessionKey === "string" && p.parentSessionKey.trim()
-        ? p.parentSessionKey.trim()
-        : undefined;
+    const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     let canonicalParentSessionKey: string | undefined;
     if (parentSessionKey) {
       const parent = loadSessionEntry(parentSessionKey);
@@ -1213,14 +1206,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       context,
       requestedKey: key,
       canonicalKey,
-      runId: typeof p.runId === "string" ? p.runId : undefined,
+      runId: readStringValue(p.runId),
     });
     let abortedRunId: string | null = null;
     await chatHandlers["chat.abort"]({
       req,
       params: {
         sessionKey: abortSessionKey,
-        runId: typeof p.runId === "string" ? p.runId : undefined,
+        runId: readStringValue(p.runId),
       },
       respond: (ok, payload, error, meta) => {
         if (!ok) {

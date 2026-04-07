@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -281,7 +282,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
   } catch (error) {
     return {
       handled: true,
-      warnings: [error instanceof Error ? error.message : String(error)],
+      warnings: [formatErrorMessage(error)],
     };
   }
 }
@@ -310,9 +311,9 @@ export async function listElevenLabsVoices(params: {
     ? json.voices
         .map((voice) => ({
           id: voice.voice_id?.trim() ?? "",
-          name: voice.name?.trim() || undefined,
-          category: voice.category?.trim() || undefined,
-          description: voice.description?.trim() || undefined,
+          name: trimToUndefined(voice.name),
+          category: trimToUndefined(voice.category),
+          description: trimToUndefined(voice.description),
         }))
         .filter((voice) => voice.id.length > 0)
     : [];

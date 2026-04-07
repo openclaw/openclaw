@@ -954,7 +954,7 @@ describe("model-selection", () => {
 
       expect(result).toEqual({
         provider: "google-vertex",
-        model: "gemini-3.1-flash-lite",
+        model: "gemini-3.1-flash-lite-preview",
       });
     });
 

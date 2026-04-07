@@ -19,6 +19,7 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -213,14 +214,6 @@ function pickTailnetIPv4(
   return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
-function resolveGatewayTokenFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
-}
-
-function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
-}
-
 function resolvePairingSetupAuthLabel(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -235,8 +228,8 @@ function resolvePairingSetupAuthLabel(
     value: cfg.gateway?.auth?.password,
     defaults,
   }).ref;
-  const envToken = resolveGatewayTokenFromEnv(env);
-  const envPassword = resolveGatewayPasswordFromEnv(env);
+  const envToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
   const token =
     envToken || (tokenRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.token));
   const password =
@@ -342,8 +335,8 @@ export async function resolvePairingSetupFromConfig(
     cfg,
     env,
     mode: cfg.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(resolveGatewayTokenFromEnv(env)),
-    hasPasswordCandidate: Boolean(resolveGatewayPasswordFromEnv(env)),
+    hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
   if (authLabel.error) {

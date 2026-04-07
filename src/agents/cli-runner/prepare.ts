@@ -16,11 +16,13 @@ import {
 import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -33,9 +35,6 @@ const prepareDeps = {
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
-  resolveHeartbeatPrompt: async (
-    prompt: Parameters<typeof import("../../auto-reply/heartbeat.js").resolveHeartbeatPrompt>[0],
-  ) => (await import("../../auto-reply/heartbeat.js")).resolveHeartbeatPrompt(prompt),
   resolveOpenClawDocsPath: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
@@ -148,29 +147,35 @@ export async function prepareCliRunContext(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
-  const heartbeatPrompt =
-    sessionAgentId === defaultAgentId
-      ? await prepareDeps.resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-      : undefined;
+  const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
   const docsPath = await prepareDeps.resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt = buildSystemPrompt({
-    workspaceDir,
-    config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: docsPath ?? undefined,
-    tools: [],
-    contextFiles,
-    modelDisplay,
-    agentId: sessionAgentId,
-  });
+  const systemPrompt =
+    resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    }) ??
+    buildSystemPrompt({
+      workspaceDir,
+      config: params.config,
+      defaultThinkLevel: params.thinkLevel,
+      extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      heartbeatPrompt,
+      docsPath: docsPath ?? undefined,
+      tools: [],
+      contextFiles,
+      modelDisplay,
+      agentId: sessionAgentId,
+    });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),

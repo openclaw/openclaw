@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { collectFeishuSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectFeishuSecurityAuditFindings } from "../plugin-sdk/feishu-security.js";
 
 describe("security audit Feishu doc risk findings", () => {
   it.each([

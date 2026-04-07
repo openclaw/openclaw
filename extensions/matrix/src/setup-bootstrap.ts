@@ -1,6 +1,7 @@
 import { hasExplicitMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { bootstrapMatrixVerification } from "./matrix/actions/verification.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
@@ -51,7 +52,7 @@ export async function maybeBootstrapNewEncryptedMatrixAccount(params: {
       success: false,
       recoveryKeyCreatedAt: null,
       backupVersion: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatMatrixErrorMessage(err),
     };
   }
 }

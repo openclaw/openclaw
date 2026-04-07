@@ -20,6 +20,7 @@ import {
   type ApnsRelayConfig,
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";
@@ -47,7 +48,7 @@ type ApprovalDeliveryState = {
 };
 
 function isIosPlatform(platform: string | undefined): boolean {
-  const normalized = platform?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalString(platform)?.toLowerCase() ?? "";
   return normalized.startsWith("ios") || normalized.startsWith("ipados");
 }
 
