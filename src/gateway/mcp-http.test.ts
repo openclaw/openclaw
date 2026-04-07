@@ -103,6 +103,7 @@ describe("mcp loopback server", () => {
         sessionKey: "agent:main:telegram:group:chat123",
         accountId: "work",
         messageProvider: "telegram",
+        applyDefaultGatewayHttpDeny: false,
       }),
     );
   });

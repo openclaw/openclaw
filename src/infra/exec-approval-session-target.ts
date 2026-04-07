@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { doesApprovalRequestMatchChannelAccount } from "./approval-request-account-binding.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
@@ -32,11 +33,6 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
-
-function normalizeOptionalString(value?: string | null): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
 
 function normalizeOptionalThreadId(value?: string | number | null): number | undefined {
   if (typeof value === "number") {

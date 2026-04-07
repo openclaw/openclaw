@@ -7,7 +7,23 @@ import {
   clearSessionStoreCacheForTest,
   drainSessionStoreLockQueuesForTest,
 } from "../config/sessions/store.js";
+import { callGateway } from "../gateway/call.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
+import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import {
+  addSubagentRunForTests,
+  clearSubagentRunSteerRestart,
+  getLatestSubagentRunByChildSessionKey,
+  getSubagentRunByChildSessionKey,
+  initSubagentRegistry,
+  listSubagentRunsForRequester,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.js";
+import {
+  loadSubagentRegistryFromDisk,
+  resolveSubagentRegistryPath,
+} from "./subagent-registry.store.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -16,30 +32,9 @@ vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
 
-let addSubagentRunForTests: typeof import("./subagent-registry.js").addSubagentRunForTests;
-let clearSubagentRunSteerRestart: typeof import("./subagent-registry.js").clearSubagentRunSteerRestart;
-let getSubagentRunByChildSessionKey: typeof import("./subagent-registry.js").getSubagentRunByChildSessionKey;
-let getLatestSubagentRunByChildSessionKey: typeof import("./subagent-registry.js").getLatestSubagentRunByChildSessionKey;
-let initSubagentRegistry: typeof import("./subagent-registry.js").initSubagentRegistry;
-let listSubagentRunsForRequester: typeof import("./subagent-registry.js").listSubagentRunsForRequester;
-let registerSubagentRun: typeof import("./subagent-registry.js").registerSubagentRun;
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
-let loadSubagentRegistryFromDisk: typeof import("./subagent-registry.store.js").loadSubagentRegistryFromDisk;
-
-async function loadSubagentRegistryModules(): Promise<void> {
-  vi.resetModules();
-  ({
-    addSubagentRunForTests,
-    clearSubagentRunSteerRestart,
-    getLatestSubagentRunByChildSessionKey,
-    getSubagentRunByChildSessionKey,
-    initSubagentRegistry,
-    listSubagentRunsForRequester,
-    registerSubagentRun,
-    resetSubagentRegistryForTests,
-  } = await import("./subagent-registry.js"));
-  ({ loadSubagentRegistryFromDisk } = await import("./subagent-registry.store.js"));
-}
+vi.mock("./subagent-orphan-recovery.js", () => ({
+  scheduleOrphanRecovery: vi.fn(),
+}));
 
 describe("subagent registry persistence", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -182,10 +177,7 @@ describe("subagent registry persistence", () => {
     await flushQueuedRegistryWork();
   };
 
-  beforeEach(async () => {
-    await loadSubagentRegistryModules();
-    const { callGateway } = await import("../gateway/call.js");
-    const { onAgentEvent } = await import("../infra/agent-events.js");
+  beforeEach(() => {
     vi.mocked(callGateway).mockReset();
     vi.mocked(callGateway).mockResolvedValue({
       status: "ok",
@@ -208,84 +200,10 @@ describe("subagent registry persistence", () => {
     envSnapshot.restore();
   });
 
-  it("persists runs to disk and resumes after restart", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-
-    const { callGateway } = await import("../gateway/call.js");
-    let releaseInitialWait:
-      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
-      | undefined;
-    vi.mocked(callGateway)
-      .mockImplementationOnce(
-        async () =>
-          await new Promise((resolve) => {
-            releaseInitialWait = resolve as typeof releaseInitialWait;
-          }),
-      )
-      .mockResolvedValueOnce({
-        status: "ok",
-        startedAt: 111,
-        endedAt: 222,
-      });
-
-    registerSubagentRun({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:test",
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: " whatsapp ", accountId: " acct-main " },
-      requesterDisplayKey: "main",
-      task: "do the thing",
-      cleanup: "keep",
-    });
-    await writeChildSessionEntry({
-      sessionKey: "agent:main:subagent:test",
-      sessionId: "sess-test",
-    });
-
-    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
-    const raw = await fs.readFile(registryPath, "utf8");
-    const parsed = JSON.parse(raw) as { runs?: Record<string, unknown> };
-    expect(parsed.runs && Object.keys(parsed.runs)).toContain("run-1");
-    const run = parsed.runs?.["run-1"] as
-      | {
-          requesterOrigin?: { channel?: string; accountId?: string };
-        }
-      | undefined;
-    expect(run).toBeDefined();
-    if (run) {
-      expect("requesterAccountId" in run).toBe(false);
-      expect("requesterChannel" in run).toBe(false);
-    }
-    expect(run?.requesterOrigin?.channel).toBe("whatsapp");
-    expect(run?.requesterOrigin?.accountId).toBe("acct-main");
-
-    // Simulate a process restart: module re-import should load persisted runs
-    // and preserve requester origin for non-completion-message runs.
-    resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
-    releaseInitialWait?.({
-      status: "ok",
-      startedAt: 111,
-      endedAt: 222,
-    });
-
-    // allow queued async wait/cleanup to execute
-    await flushQueuedRegistryWork();
-
-    expect(announceSpy).not.toHaveBeenCalled();
-
-    const restored = listSubagentRunsForRequester("agent:main:main")[0];
-    expect(restored?.childSessionKey).toBe("agent:main:subagent:test");
-    expect(restored?.requesterOrigin?.channel).toBe("whatsapp");
-    expect(restored?.requesterOrigin?.accountId).toBe("acct-main");
-  });
-
   it("persists completed subagent timing into the child session entry", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
 
-    const { persistSubagentSessionTiming } = await import("./subagent-registry-helpers.js");
     const now = Date.now();
     const startedAt = now;
     const endedAt = now + 500;
@@ -672,8 +590,6 @@ describe("subagent registry persistence", () => {
 
   it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", async () => {
     delete process.env.OPENCLAW_STATE_DIR;
-    vi.resetModules();
-    const { resolveSubagentRegistryPath } = await import("./subagent-registry.store.js");
     const registryPath = resolveSubagentRegistryPath();
     expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
   });

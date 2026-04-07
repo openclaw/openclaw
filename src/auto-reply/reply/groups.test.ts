@@ -34,6 +34,14 @@ describe("group runtime loading", () => {
         silentToken: "NO_REPLY",
       }),
     ).toContain("Activation: trigger-only");
+    expect(
+      groups.buildGroupIntro({
+        cfg: {} as OpenClawConfig,
+        sessionCtx: { Provider: "whatsapp" },
+        defaultActivation: "mention",
+        silentToken: "NO_REPLY",
+      }),
+    ).toContain("Minimize empty lines and use normal chat conventions");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
@@ -51,12 +59,12 @@ describe("group runtime loading", () => {
         cfg: {
           channels: {
             slack: {
-              channels: {
+              groups: {
                 C123: { requireMention: false },
               },
             },
           },
-        },
+        } as unknown as OpenClawConfig,
         ctx: {
           Provider: "slack",
           From: "slack:channel:C123",

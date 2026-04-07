@@ -1,6 +1,10 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { applySystemPromptOverrideToSession, createSystemPromptOverride } from "./system-prompt.js";
+import {
+  applySystemPromptOverrideToSession,
+  buildEmbeddedSystemPrompt,
+  createSystemPromptOverride,
+} from "./system-prompt.js";
 
 type MutableSession = {
   _baseSystemPrompt?: string;
@@ -59,5 +63,30 @@ describe("applySystemPromptOverrideToSession", () => {
   it("sets _rebuildSystemPrompt that returns the override", () => {
     const { mutable } = applyAndGetMutableSession("rebuild test");
     expect(mutable._rebuildSystemPrompt?.(["tool1"])).toBe("rebuild test");
+  });
+});
+
+describe("buildEmbeddedSystemPrompt", () => {
+  it("forwards provider prompt contributions into the embedded prompt", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      promptContribution: {
+        stablePrefix: "## Embedded Stable\n\nStable provider guidance.",
+      },
+    });
+
+    expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
   });
 });

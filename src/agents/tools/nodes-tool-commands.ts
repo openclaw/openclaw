@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { parseTimeoutMs } from "../../cli/parse-timeout.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonResult, readStringParam } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
@@ -138,7 +139,7 @@ export async function executeNodeCommandAction(params: {
         try {
           invokeParams = JSON.parse(invokeParamsJson);
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
             cause: err,
           });

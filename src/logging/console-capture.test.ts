@@ -1,7 +1,4 @@
-import crypto from "node:crypto";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enableConsoleCapture,
   resetLogger,
@@ -10,6 +7,7 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
+import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { loggingState } from "./state.js";
 import {
   captureConsoleSnapshot,
@@ -18,6 +16,11 @@ import {
 } from "./test-helpers/console-snapshot.js";
 
 let snapshot: ConsoleSnapshot;
+const logPathTracker = createSuiteLogPathTracker("openclaw-log-");
+
+beforeAll(async () => {
+  await logPathTracker.setup();
+});
 
 beforeEach(() => {
   snapshot = captureConsoleSnapshot();
@@ -37,6 +40,10 @@ afterEach(() => {
   resetLogger();
   setLoggerOverride(null);
   vi.restoreAllMocks();
+});
+
+afterAll(async () => {
+  await logPathTracker.cleanup();
 });
 
 describe("enableConsoleCapture", () => {
@@ -151,7 +158,7 @@ describe("enableConsoleCapture", () => {
 });
 
 function tempLogPath() {
-  return path.join(os.tmpdir(), `openclaw-log-${crypto.randomUUID()}.log`);
+  return logPathTracker.nextPath();
 }
 
 function eioError() {

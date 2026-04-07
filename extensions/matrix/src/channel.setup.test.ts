@@ -254,7 +254,9 @@ describe("matrix setup post-write bootstrap", () => {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
             proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {

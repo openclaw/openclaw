@@ -1,10 +1,24 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
+
+const mocks = vi.hoisted(() => ({
+  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
+  resolveStorePath: vi.fn(
+    (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
+  ),
+}));
+
+vi.mock("../../config/sessions/inbound.runtime.js", () => ({
+  recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
+  resolveStorePath: mocks.resolveStorePath,
+}));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
+    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.resolveStorePath.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
 
@@ -392,5 +406,41 @@ describe("resolveOutboundSessionRoute", () => {
         target: "123",
       }),
     ).rejects.toThrow(/Ambiguous Discord recipient/);
+  });
+});
+
+describe("ensureOutboundSessionEntry", () => {
+  beforeEach(() => {
+    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.resolveStorePath.mockClear();
+  });
+
+  it("persists metadata in the owning session store for the route session key", async () => {
+    await ensureOutboundSessionEntry({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } as OpenClawConfig,
+      channel: "slack",
+      route: {
+        sessionKey: "agent:main:slack:channel:c1",
+        baseSessionKey: "agent:work:slack:channel:resolved",
+        peer: { kind: "channel", id: "c1" },
+        chatType: "channel",
+        from: "slack:channel:C1",
+        to: "channel:C1",
+      },
+    });
+
+    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
+      agentId: "main",
+    });
+    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/main.json",
+        sessionKey: "agent:main:slack:channel:c1",
+      }),
+    );
   });
 });

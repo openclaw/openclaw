@@ -177,11 +177,11 @@ async function addMatrixAccount(params: {
     throw new Error("Matrix account setup is unavailable.");
   }
 
-  const input: ChannelSetupInput & { avatarUrl?: string } = {
+  const input: ChannelSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
-    allowPrivateNetwork: params.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
     proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,

@@ -43,11 +43,22 @@ function createApi() {
     registerGatewayMethod,
     registerService,
     registerTool,
-  }) as OpenClawPluginApi;
+  });
   return { api, registerCli, registerGatewayMethod, registerService, registerTool };
 }
 
 describe("browser plugin", () => {
+  it("exposes static browser metadata on the plugin definition", () => {
+    expect(browserPlugin.reload).toEqual({ restartPrefixes: ["browser"] });
+    expect(browserPlugin.nodeHostCommands).toEqual([
+      expect.objectContaining({
+        command: "browser.proxy",
+        cap: "browser",
+      }),
+    ]);
+    expect(browserPlugin.securityAuditCollectors).toHaveLength(1);
+  });
+
   it("forwards per-session browser options into the tool factory", async () => {
     const { api, registerTool } = createApi();
     await browserPlugin.register(api);

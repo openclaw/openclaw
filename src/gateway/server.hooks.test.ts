@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import {
+  drainSystemEvents,
+  peekSystemEventEntries,
+  peekSystemEvents,
+} from "../infra/system-events.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   cronIsolatedRun,
@@ -240,6 +244,44 @@ describe("gateway server hooks", () => {
       };
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("queues direct and mapped wake payloads as untrusted system events", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-wake" },
+          action: "wake",
+          textTemplate: "Mapped wake: {{payload.subject}}",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
+      expect(direct.status).toBe(200);
+      await waitForSystemEvent();
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
+        expect.objectContaining({
+          text: "Direct wake",
+          trusted: false,
+        }),
+      ]);
+      drainSystemEvents(resolveMainKey());
+
+      const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
+      expect(mapped.status).toBe(200);
+      await waitForSystemEvent();
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
+        expect.objectContaining({
+          text: "Mapped wake: Email",
+          trusted: false,
+        }),
+      ]);
       drainSystemEvents(resolveMainKey());
     });
   });

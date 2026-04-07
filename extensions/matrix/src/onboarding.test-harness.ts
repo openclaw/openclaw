@@ -64,7 +64,7 @@ export function createMatrixWizardPrompter(params: {
     fallback: PromptHandler<T | Promise<T>> | undefined,
   ): Promise<T> => {
     if (values && message in values) {
-      return values[message] as T;
+      return values[message];
     }
     if (fallback) {
       return await fallback(message);

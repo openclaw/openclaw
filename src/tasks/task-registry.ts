@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -651,6 +652,7 @@ function findExistingTaskForCreate(params: {
 function mergeExistingTaskForCreate(
   existing: TaskRecord,
   params: {
+    taskKind?: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
     parentFlowId?: string;
@@ -675,6 +677,9 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
+  }
+  if (params.taskKind?.trim() && !existing.taskKind?.trim()) {
+    patch.taskKind = params.taskKind.trim();
   }
   if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
     assertParentFlowLinkAllowed({
@@ -1357,6 +1362,7 @@ function ensureListener() {
 
 export function createTaskRecord(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
@@ -1431,6 +1437,7 @@ export function createTaskRecord(params: {
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
+    taskKind: params.taskKind?.trim() || undefined,
     sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey,
     ownerKey,
@@ -1777,7 +1784,7 @@ export async function cancelTaskById(params: {
     return {
       found: true,
       cancelled: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: formatErrorMessage(error),
       task: cloneTaskRecord(task),
     };
   }

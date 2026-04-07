@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
+  writeClaudeBundleManifest,
 } from "../../plugins/bundle-mcp.test-support.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -83,6 +85,60 @@ describe("prepareCliBundleMcpConfig", () => {
     } finally {
       env.restore();
     }
+  });
+
+  it("loads workspace bundle MCP plugins from the configured workspace root", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-root-");
+    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "workspace-probe");
+    const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
+    await fs.mkdir(path.dirname(serverPath), { recursive: true });
+    await fs.writeFile(serverPath, "export {};\n", "utf-8");
+    await writeClaudeBundleManifest({
+      homeDir: workspaceDir,
+      pluginId: "workspace-probe",
+      manifest: { name: "workspace-probe" },
+    });
+    await fs.writeFile(
+      path.join(pluginRoot, ".mcp.json"),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            workspaceProbe: {
+              command: "node",
+              args: ["./servers/probe.mjs"],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            "workspace-probe": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { args?: string[] }>;
+    };
+    expect(raw.mcpServers?.workspaceProbe?.args).toEqual([await fs.realpath(serverPath)]);
+
+    await prepared.cleanup?.();
   });
 
   it("merges loopback overlay config with bundle MCP servers", async () => {

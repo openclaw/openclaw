@@ -307,8 +307,8 @@ Doctor checks:
 
 Doctor inspects OAuth profiles in the auth store, warns when tokens are
 expiring/expired, and can refresh them when safe. If the Anthropic
-OAuth/token profile is stale, it suggests migrating to Claude CLI or an
-Anthropic API key.
+OAuth/token profile is stale, it suggests an Anthropic API key or the
+Anthropic setup-token path.
 Refresh prompts only appear when running interactively (TTY); `--non-interactive`
 skips refresh attempts.
 

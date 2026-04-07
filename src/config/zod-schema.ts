@@ -169,10 +169,6 @@ const PluginEntrySchema = z
 
 const TalkProviderEntrySchema = z
   .object({
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
   })
   .catchall(z.unknown());

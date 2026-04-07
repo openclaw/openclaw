@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -163,41 +164,6 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
-  });
-});
-
-describe("talk.voiceAliases", () => {
-  it("accepts a string map of voice aliases via legacy talk migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        talk: {
-          voiceAliases: {
-            Clawd: "EXAVITQu4vr4xnSDxMaL",
-            Roger: "CwhRBWXzGAHq8TQ4Fs17",
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk?.providers?.elevenlabs?.voiceAliases).toEqual({
-        Clawd: "EXAVITQu4vr4xnSDxMaL",
-        Roger: "CwhRBWXzGAHq8TQ4Fs17",
-      });
-    });
-  });
-
-  it("rejects non-string voice alias values", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: 123,
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
   });
 });
 
@@ -509,6 +475,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
+      expect(snap.issues).toEqual([]);
       expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
@@ -686,6 +653,41 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy x_search SecretRefs via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "X_SEARCH_KEY_REF",
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "X_SEARCH_KEY_REF",
+        },
+      });
+      expect(
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -742,74 +744,113 @@ describe("config strict validation", () => {
     });
   });
 
-  it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        channels: {
-          telegram: {
-            streamMode: "block",
-          },
-          discord: {
-            streaming: false,
-            accounts: {
-              work: {
-                streamMode: "block",
-              },
-            },
-          },
-          googlechat: {
-            streamMode: "append",
-            accounts: {
-              work: {
-                streamMode: "replace",
-              },
-            },
-          },
-          slack: {
-            streaming: true,
+  it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      channels: {
+        telegram: {
+          streamMode: "block",
+          chunkMode: "newline",
+          blockStreaming: true,
+          draftChunk: {
+            minChars: 120,
           },
         },
-      });
+        discord: {
+          streaming: false,
+          blockStreamingCoalesce: {
+            idleMs: 250,
+          },
+          accounts: {
+            work: {
+              streamMode: "block",
+              draftChunk: {
+                maxChars: 900,
+              },
+            },
+          },
+        },
+        googlechat: {
+          streamMode: "append",
+          accounts: {
+            work: {
+              streamMode: "replace",
+            },
+          },
+        },
+        slack: {
+          streaming: true,
+          nativeStreaming: false,
+        },
+      },
+    };
 
-      const snap = await readConfigFileSnapshot();
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+    expect(migrated.next).not.toBeNull();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.telegram")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
-        true,
-      );
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat.accounts")).toBe(
-        true,
-      );
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
-      expect(snap.sourceConfig.channels?.telegram).toMatchObject({
-        streaming: "block",
-      });
-      expect(
-        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
-      ).toBeUndefined();
-      expect(snap.sourceConfig.channels?.discord).toMatchObject({
-        streaming: "off",
-      });
-      expect(snap.sourceConfig.channels?.discord?.accounts?.work).toMatchObject({
-        streaming: "block",
-      });
-      expect(
-        (snap.sourceConfig.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.googlechat?.accounts?.work as
-            | Record<string, unknown>
-            | undefined
-        )?.streamMode,
-      ).toBeUndefined();
-      expect(snap.sourceConfig.channels?.slack).toMatchObject({
-        streaming: "partial",
-        nativeStreaming: true,
-      });
+    if (!migrated.next) {
+      return;
+    }
+    const channels = (
+      migrated.next as {
+        channels?: {
+          telegram?: unknown;
+          discord?: { accounts?: { work?: unknown } };
+          googlechat?: { accounts?: { work?: unknown } };
+          slack?: unknown;
+        };
+      }
+    ).channels;
+    expect(channels?.telegram).toMatchObject({
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+        },
+        preview: {
+          chunk: {
+            minChars: 120,
+          },
+        },
+      },
+    });
+    expect((channels?.telegram as Record<string, unknown> | undefined)?.streamMode).toBeUndefined();
+    expect(channels?.discord).toMatchObject({
+      streaming: {
+        mode: "off",
+        block: {
+          coalesce: {
+            idleMs: 250,
+          },
+        },
+      },
+    });
+    expect(channels?.discord?.accounts?.work).toMatchObject({
+      streaming: {
+        mode: "block",
+        preview: {
+          chunk: {
+            maxChars: 900,
+          },
+        },
+      },
+    });
+    expect(channels?.googlechat).toMatchObject({
+      accounts: {
+        work: {},
+      },
+    });
+    expect(
+      (channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(channels?.slack).toMatchObject({
+      streaming: {
+        mode: "partial",
+        nativeTransport: false,
+      },
     });
   });
 

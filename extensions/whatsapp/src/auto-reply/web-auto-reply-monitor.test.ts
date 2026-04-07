@@ -49,7 +49,6 @@ function runGroupGating(params: {
   const baseMentionConfig = buildMentionConfig(params.cfg, undefined);
   const result = applyGroupGating({
     cfg: params.cfg,
-    // oxlint-disable-next-line typescript/no-explicit-any
     msg: params.msg as any,
     conversationId,
     groupHistoryKey: `whatsapp:default:group:${conversationId}`,

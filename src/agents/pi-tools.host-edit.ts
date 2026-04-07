@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
-import { normalizeToolParams } from "./pi-tools.params.js";
+import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 type EditToolRecoveryOptions = {
@@ -61,12 +61,9 @@ function readEditReplacements(record: Record<string, unknown> | undefined): Edit
 }
 
 function readEditToolParams(params: unknown): EditToolParams {
-  const normalized = normalizeToolParams(params);
-  const record =
-    normalized ??
-    (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+  const record = getToolParamsRecord(params);
   return {
-    pathParam: readStringParam(record, "path", "file_path", "filePath", "file"),
+    pathParam: readStringParam(record, "path"),
     edits: readEditReplacements(record),
   };
 }

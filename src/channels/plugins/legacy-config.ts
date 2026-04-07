@@ -1,37 +1,28 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import { getBundledChannelContractSurfaces } from "./contract-surfaces.js";
+import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
+import type { ChannelId } from "./types.js";
 
-type ChannelLegacyConfigSurface = {
-  legacyConfigRules?: LegacyConfigRule[];
-  normalizeCompatibilityConfig?: (params: { cfg: OpenClawConfig }) => {
-    config: OpenClawConfig;
-    changes: string[];
-    warnings?: string[];
-  };
-};
-
-function getChannelLegacyConfigSurfaces(): ChannelLegacyConfigSurface[] {
-  return getBundledChannelContractSurfaces() as ChannelLegacyConfigSurface[];
+function collectConfiguredChannelIds(raw: unknown): ChannelId[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const channels = (raw as { channels?: unknown }).channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  return Object.keys(channels)
+    .filter((channelId) => channelId !== "defaults")
+    .map((channelId) => channelId as ChannelId);
 }
 
-export function collectChannelLegacyConfigRules(): LegacyConfigRule[] {
-  return getChannelLegacyConfigSurfaces().flatMap((surface) => surface.legacyConfigRules ?? []);
-}
-
-export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
-  next: Record<string, unknown>;
-  changes: string[];
-} {
-  let nextCfg = cfg as OpenClawConfig & Record<string, unknown>;
-  const changes: string[] = [];
-  for (const surface of getChannelLegacyConfigSurfaces()) {
-    const mutation = surface.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+export function collectChannelLegacyConfigRules(raw?: unknown): LegacyConfigRule[] {
+  const rules: LegacyConfigRule[] = [];
+  for (const channelId of collectConfiguredChannelIds(raw)) {
+    const plugin = getBootstrapChannelPlugin(channelId);
+    if (!plugin) {
       continue;
     }
-    nextCfg = mutation.config as OpenClawConfig & Record<string, unknown>;
-    changes.push(...mutation.changes);
+    rules.push(...(plugin.doctor?.legacyConfigRules ?? []));
   }
-  return { next: nextCfg, changes };
+  return rules;
 }

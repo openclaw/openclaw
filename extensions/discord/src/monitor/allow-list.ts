@@ -532,6 +532,26 @@ export function isDiscordGroupAllowedByPolicy(params: {
   }).allowed;
 }
 
+export function resolveDiscordChannelPolicyCommandAuthorizer(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  guildInfo?: DiscordGuildEntryResolved | null;
+  channelConfig?: DiscordChannelConfigResolved | null;
+}) {
+  const channelAllowlistConfigured =
+    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  return {
+    configured:
+      params.groupPolicy === "allowlist" &&
+      (Boolean(params.guildInfo) || channelAllowlistConfigured),
+    allowed: isDiscordGroupAllowedByPolicy({
+      groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(params.guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed: params.channelConfig?.allowed !== false,
+    }),
+  } as const;
+}
+
 export function resolveGroupDmAllow(params: {
   channels?: string[];
   channelId: string;
