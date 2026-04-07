@@ -1607,8 +1607,10 @@ export async function startGatewayServer(
                   resolveSharedGatewaySessionGenerationForConfig(prepared.config);
                 const restartQueued = requestGatewayRestart(plan, nextConfig);
                 if (!restartQueued) {
-                  requiredSharedGatewaySessionGeneration =
-                    previousRequiredSharedGatewaySessionGeneration;
+                  const runtimeSharedGatewaySessionGeneration =
+                    resolveSharedGatewaySessionGenerationForRuntimeSnapshot();
+                  requiredSharedGatewaySessionGeneration = runtimeSharedGatewaySessionGeneration;
+                  disconnectStaleSharedGatewayAuthClients(runtimeSharedGatewaySessionGeneration);
                   return;
                 }
                 if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
