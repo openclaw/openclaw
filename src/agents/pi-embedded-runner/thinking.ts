@@ -206,7 +206,13 @@ export function sanitizeThinkingForRecovery(messages: AgentMessage[]): {
     return { messages, prefill: false };
   }
   if (assessment === "incomplete-text") {
-    return { messages, prefill: true };
+    return {
+      messages: [
+        ...messages.slice(0, lastAssistantIndex),
+        ...messages.slice(lastAssistantIndex + 1),
+      ],
+      prefill: false,
+    };
   }
 
   return {
