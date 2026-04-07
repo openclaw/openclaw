@@ -3,11 +3,27 @@
   "compilerOptions": {
     "paths": {
       "openclaw/extension-api": ["../src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
-      "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
-      "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
+      "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
+      "openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
+      "openclaw/plugin-sdk/account-id": ["../dist/plugin-sdk/account-id.d.ts"],
+      "openclaw/plugin-sdk/channel-entry-contract": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-entry-contract.d.ts"
+      ],
+      "openclaw/plugin-sdk/browser-maintenance": [
+        "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-catalog-shared": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-entry": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts"
+      ],
+      "openclaw/plugin-sdk/secret-ref-runtime": [
+        "../dist/plugin-sdk/src/plugin-sdk/secret-ref-runtime.d.ts"
+      ],
+      "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
       "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
-      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"]
+      "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"]
     }
   }
 }

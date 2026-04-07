@@ -1,6 +1,16 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  collectExtensionsWithTsconfig,
+  collectOptInExtensionPackageBoundaries,
+  EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS,
+  EXTENSION_PACKAGE_BOUNDARY_EXCLUDE,
+  EXTENSION_PACKAGE_BOUNDARY_INCLUDE,
+  isOptInExtensionPackageBoundaryTsconfig,
+  readExtensionPackageBoundaryPackageJson,
+  readExtensionPackageBoundaryTsconfig,
+} from "../../../scripts/lib/extension-package-boundary.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
@@ -35,14 +45,7 @@ describe("opt-in extension package boundaries", () => {
   it("keeps path aliases in a dedicated shared config", () => {
     const pathsConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG);
     expect(pathsConfig.extends).toBe("../tsconfig.json");
-    expect(pathsConfig.compilerOptions?.paths).toEqual({
-      "openclaw/extension-api": ["../src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
-      "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
-      "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
-      "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
-      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
-    });
+    expect(pathsConfig.compilerOptions?.paths).toEqual(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS);
 
     const baseConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG);
     expect(baseConfig.extends).toBe("./tsconfig.package-boundary.paths.json");
@@ -52,29 +55,19 @@ describe("opt-in extension package boundaries", () => {
   });
 
   it("keeps every opt-in extension rooted inside its package and on the package sdk", () => {
-    const optInExtensions = readdirSync(resolve(REPO_ROOT, "extensions"), {
-      withFileTypes: true,
-    })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .filter((extensionName) => {
-        const tsconfigPath = `extensions/${extensionName}/tsconfig.json`;
-        if (!existsSync(resolve(REPO_ROOT, tsconfigPath))) {
-          return false;
-        }
-        const tsconfig = readJsonFile<TsConfigJson>(tsconfigPath);
-        return tsconfig.extends === "../tsconfig.package-boundary.base.json";
-      });
+    const extensionsWithTsconfig = collectExtensionsWithTsconfig(REPO_ROOT);
+    const optInExtensions = collectOptInExtensionPackageBoundaries(REPO_ROOT);
 
-    expect(optInExtensions).toEqual(["xai"]);
+    expect(extensionsWithTsconfig).toEqual(optInExtensions);
 
     for (const extensionName of optInExtensions) {
-      const tsconfig = readJsonFile<TsConfigJson>(`extensions/${extensionName}/tsconfig.json`);
+      const tsconfig = readExtensionPackageBoundaryTsconfig(extensionName, REPO_ROOT);
+      expect(isOptInExtensionPackageBoundaryTsconfig(tsconfig)).toBe(true);
       expect(tsconfig.compilerOptions?.rootDir).toBe(".");
-      expect(tsconfig.include).toEqual(["./*.ts", "./src/**/*.ts"]);
-      expect(tsconfig.exclude).toEqual(["./**/*.test.ts", "./dist/**", "./node_modules/**"]);
+      expect(tsconfig.include).toEqual([...EXTENSION_PACKAGE_BOUNDARY_INCLUDE]);
+      expect(tsconfig.exclude).toEqual([...EXTENSION_PACKAGE_BOUNDARY_EXCLUDE]);
 
-      const packageJson = readJsonFile<PackageJson>(`extensions/${extensionName}/package.json`);
+      const packageJson = readExtensionPackageBoundaryPackageJson(extensionName, REPO_ROOT);
       expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
     }
   });
@@ -88,9 +81,11 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
       "../../src/plugin-sdk/config-runtime.ts",
+      "../../src/plugin-sdk/index.ts",
       "../../src/plugin-sdk/lazy-value.ts",
       "../../src/plugin-sdk/oauth-utils.ts",
       "../../src/plugin-sdk/plugin-entry.ts",
+      "../../src/plugin-sdk/plugin-runtime.ts",
       "../../src/plugin-sdk/provider-auth-result.ts",
       "../../src/plugin-sdk/provider-auth-runtime.ts",
       "../../src/plugin-sdk/provider-auth.ts",
@@ -102,11 +97,14 @@ describe("opt-in extension package boundaries", () => {
       "../../src/plugin-sdk/provider-stream-shared.ts",
       "../../src/plugin-sdk/provider-tools.ts",
       "../../src/plugin-sdk/provider-web-search.ts",
+      "../../src/plugin-sdk/runtime-doctor.ts",
       "../../src/plugin-sdk/runtime-env.ts",
+      "../../src/plugin-sdk/security-runtime.ts",
       "../../src/plugin-sdk/secret-input-schema.ts",
       "../../src/plugin-sdk/secret-input.ts",
       "../../src/plugin-sdk/telegram-command-config.ts",
       "../../src/plugin-sdk/testing.ts",
+      "../../src/plugin-sdk/text-runtime.ts",
       "../../src/plugin-sdk/video-generation.ts",
       "../../src/video-generation/dashscope-compatible.ts",
       "../../src/video-generation/types.ts",
@@ -119,8 +117,20 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
       "./dist/src/plugin-sdk/plugin-entry.d.ts",
     );
+    expect(packageJson.exports?.["./plugin-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/plugin-runtime.d.ts",
+    );
     expect(packageJson.exports?.["./provider-http"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-http.d.ts",
+    );
+    expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
+      "./dist/src/plugin-sdk/runtime-doctor.d.ts",
+    );
+    expect(packageJson.exports?.["./security-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/security-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/text-runtime.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
       "./dist/src/plugin-sdk/video-generation.d.ts",

@@ -3,6 +3,7 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -400,9 +401,7 @@ export function normalizeProviderModelIdWithPlugin(params: {
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
-  const normalized = plugin?.normalizeModelId?.(params.context);
-  const trimmed = normalized?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(plugin?.normalizeModelId?.(params.context));
 }
 
 export function normalizeProviderTransportWithPlugin(params: {
@@ -482,9 +481,9 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveConfigApiKeyContext;
 }): string | undefined {
-  const resolved = resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context);
-  const trimmed = resolved?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(
+    resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context),
+  );
 }
 
 export function resolveProviderReplayPolicyWithPlugin(params: {

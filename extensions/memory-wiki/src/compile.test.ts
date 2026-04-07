@@ -35,7 +35,19 @@ describe("compileMemoryWikiVault", () => {
     await fs.writeFile(
       path.join(rootDir, "sources", "alpha.md"),
       renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha",
+          claims: [
+            {
+              id: "claim.alpha.doc",
+              text: "Alpha is the canonical source page.",
+              status: "supported",
+              evidence: [{ sourceId: "source.alpha", lines: "1-3" }],
+            },
+          ],
+        },
         body: "# Alpha\n",
       }),
       "utf8",
@@ -44,12 +56,33 @@ describe("compileMemoryWikiVault", () => {
     const result = await compileMemoryWikiVault(config);
 
     expect(result.pageCounts.source).toBe(1);
+    expect(result.claimCount).toBe(1);
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[Alpha](sources/alpha.md)",
+    );
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "- Claims: 1",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
       "[Alpha](sources/alpha.md)",
     );
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
+      claimCount: number;
+      pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
+    };
+    expect(agentDigest.claimCount).toBe(1);
+    expect(agentDigest.pages).toContainEqual(
+      expect.objectContaining({
+        path: "sources/alpha.md",
+        claimCount: 1,
+        topClaims: [expect.objectContaining({ text: "Alpha is the canonical source page." })],
+      }),
+    );
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+    ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
   it("renders obsidian-friendly links when configured", async () => {
@@ -154,8 +187,46 @@ describe("compileMemoryWikiVault", () => {
           questions: ["What changed after launch?"],
           contradictions: ["Conflicts with source.beta"],
           confidence: 0.3,
+          claims: [
+            {
+              id: "claim.alpha.db",
+              text: "Alpha uses PostgreSQL for production writes.",
+              status: "supported",
+              confidence: 0.4,
+              evidence: [],
+            },
+          ],
         },
         body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "alpha-db.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.alpha.db",
+          title: "Alpha DB",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-10-01T00:00:00.000Z",
+          claims: [
+            {
+              id: "claim.alpha.db",
+              text: "Alpha uses MySQL for production writes.",
+              status: "contested",
+              confidence: 0.62,
+              evidence: [
+                {
+                  sourceId: "source.alpha",
+                  lines: "9-11",
+                  updatedAt: "2025-10-01T00:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Alpha DB\n",
       }),
       "utf8",
     );
@@ -175,19 +246,42 @@ describe("compileMemoryWikiVault", () => {
 
     const result = await compileMemoryWikiVault(config);
 
-    expect(result.pageCounts.report).toBeGreaterThanOrEqual(4);
+    expect(result.pageCounts.report).toBeGreaterThanOrEqual(5);
     await expect(
       fs.readFile(path.join(rootDir, "reports", "open-questions.md"), "utf8"),
     ).resolves.toContain("[Alpha](entities/alpha.md): What changed after launch?");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "contradictions.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md): Conflicts with source.beta");
+    ).resolves.toContain("Conflicts with source.beta: [Alpha](entities/alpha.md)");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "contradictions.md"), "utf8"),
+    ).resolves.toContain("`claim.alpha.db`");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "low-confidence.md"), "utf8"),
     ).resolves.toContain("[Alpha](entities/alpha.md): confidence 0.30");
     await expect(
+      fs.readFile(path.join(rootDir, "reports", "low-confidence.md"), "utf8"),
+    ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "claim-health.md"), "utf8"),
+    ).resolves.toContain("Missing Evidence");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "claim-health.md"), "utf8"),
+    ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
+    await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
     ).resolves.toContain("[Alpha](entities/alpha.md): missing updatedAt");
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
+      claimHealth: { missingEvidence: number; freshness: { unknown: number } };
+      contradictionClusters: Array<{ key: string }>;
+    };
+    expect(agentDigest.claimHealth.missingEvidence).toBeGreaterThanOrEqual(1);
+    expect(agentDigest.claimHealth.freshness.unknown).toBeGreaterThanOrEqual(1);
+    expect(agentDigest.contradictionClusters).toContainEqual(
+      expect.objectContaining({ key: "claim.alpha.db" }),
+    );
   });
 
   it("skips dashboard report pages when createDashboards is disabled", async () => {

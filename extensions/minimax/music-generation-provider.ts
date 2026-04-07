@@ -12,6 +12,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.5+";
@@ -38,7 +39,7 @@ type MinimaxMusicCreateResponse = {
 function resolveMinimaxMusicBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
 ): string {
-  const direct = cfg?.models?.providers?.minimax?.baseUrl?.trim();
+  const direct = normalizeOptionalString(cfg?.models?.providers?.minimax?.baseUrl);
   if (!direct) {
     return DEFAULT_MINIMAX_MUSIC_BASE_URL;
   }
@@ -78,7 +79,7 @@ function decodePossibleText(data: string): string {
 }
 
 function isLikelyRemoteUrl(value: string | undefined): boolean {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   return Boolean(trimmed && /^https?:\/\//iu.test(trimmed));
 }
 
@@ -112,7 +113,7 @@ function buildPrompt(req: MusicGenerationRequest): string {
 }
 
 function resolveMinimaxMusicModel(model: string | undefined): string {
-  const trimmed = model?.trim();
+  const trimmed = normalizeOptionalString(model);
   if (!trimmed) {
     return DEFAULT_MINIMAX_MUSIC_MODEL;
   }

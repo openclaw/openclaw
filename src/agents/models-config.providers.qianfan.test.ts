@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  clearPluginManifestRegistryCache();
+  resetProviderRuntimeHookCacheForTest();
   vi.resetModules();
   return import("./models-config.providers.secrets.js");
 }
 
 beforeEach(() => {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  clearPluginManifestRegistryCache();
+  resetProviderRuntimeHookCacheForTest();
 });
 
 describe("Qianfan provider", () => {

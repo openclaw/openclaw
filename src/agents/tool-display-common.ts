@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
@@ -41,7 +42,7 @@ export function defaultTitle(name: string): string {
 }
 
 export function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -56,7 +57,7 @@ export function resolveActionArg(args: unknown): string | undefined {
   if (typeof actionRaw !== "string") {
     return undefined;
   }
-  const action = actionRaw.trim();
+  const action = normalizeOptionalString(actionRaw);
   return action || undefined;
 }
 

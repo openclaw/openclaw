@@ -23,6 +23,23 @@ vi.mock("../../channels/plugins/index.js", () => ({
           },
         }
       : undefined,
+  getLoadedChannelPlugin: (channelId: string) =>
+    channelId === "slack"
+      ? {
+          agentPrompt: {
+            inboundFormattingHints: () => ({
+              text_markup: "slack_mrkdwn",
+              rules: [
+                "Use Slack mrkdwn, not standard Markdown.",
+                "Bold uses *single asterisks*.",
+                "Links use <url|label>.",
+                "Code blocks use triple backticks without a language identifier.",
+                "Do not use markdown headings or pipe tables.",
+              ],
+            }),
+          },
+        }
+      : undefined,
   normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
 }));
 

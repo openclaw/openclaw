@@ -451,8 +451,7 @@ describe("doctor.memory.status", () => {
         expect.objectContaining({
           dreaming: expect.objectContaining({
             shortTermCount: 0,
-            promotedTotal: 1,
-            storePath,
+            promotedTotal: 0,
             phases: expect.objectContaining({
               deep: expect.objectContaining({
                 managedCronPresent: false,

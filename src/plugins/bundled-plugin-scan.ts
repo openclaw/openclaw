@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const RUNTIME_SIDECAR_ARTIFACTS = new Set([
@@ -10,7 +12,11 @@ const RUNTIME_SIDECAR_ARTIFACTS = new Set([
 ]);
 
 export function trimBundledPluginString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(value);
+}
+
+export function normalizeBundledPluginStringList(value: unknown): string[] {
+  return normalizeTrimmedStringList(value);
 }
 
 export function rewriteBundledPluginEntryToBuiltPath(
@@ -69,9 +75,9 @@ export function collectBundledPluginPublicSurfaceArtifacts(params: {
   setupEntry?: string;
 }): readonly string[] | undefined {
   const excluded = new Set(
-    [params.sourceEntry, params.setupEntry]
-      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      .map((entry) => path.basename(entry)),
+    normalizeTrimmedStringList([params.sourceEntry, params.setupEntry]).map((entry) =>
+      path.basename(entry),
+    ),
   );
   const artifacts = fs
     .readdirSync(params.pluginDir, { withFileTypes: true })

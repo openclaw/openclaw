@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -37,28 +38,20 @@ const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 
-function normalizeNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
   const eventId =
-    normalizeNonEmptyString(obj.eventId) ??
-    normalizeNonEmptyString(obj.providerEventId) ??
-    normalizeNonEmptyString(obj.transcriptId);
+    normalizeOptionalString(obj.eventId) ??
+    normalizeOptionalString(obj.providerEventId) ??
+    normalizeOptionalString(obj.transcriptId);
   if (eventId) {
     return `event:${eventId}`;
   }
 
-  const callId = normalizeNonEmptyString(obj.providerCallId) ?? normalizeNonEmptyString(obj.callId);
+  const callId = normalizeOptionalString(obj.providerCallId) ?? normalizeOptionalString(obj.callId);
   const sequence = normalizeFiniteInteger(obj.sequence) ?? normalizeFiniteInteger(obj.seq);
   if (callId && sequence !== null) {
     return `call-seq:${callId}:${sequence}`;
@@ -428,12 +421,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
       let channel = normalizeChannelId(channelRaw) ?? undefined;
-      let to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
+      let to = normalizeOptionalString(link?.to);
       const deliverRequested = Boolean(link?.deliver);
       const wantsReceipt = Boolean(link?.receipt);
-      const receiptTextRaw = typeof link?.receiptText === "string" ? link.receiptText.trim() : "";
       const receiptText =
-        receiptTextRaw || "Just received your iOS share + request, working on it.";
+        normalizeOptionalString(link?.receiptText) ||
+        "Just received your iOS share + request, working on it.";
 
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
@@ -508,24 +501,24 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const change = normalizeNonEmptyString(obj.change)?.toLowerCase();
+      const change = normalizeOptionalString(obj.change)?.toLowerCase();
       if (change !== "posted" && change !== "removed") {
         return;
       }
-      const keyRaw = normalizeNonEmptyString(obj.key);
+      const keyRaw = normalizeOptionalString(obj.key);
       if (!keyRaw) {
         return;
       }
       const key = sanitizeInboundSystemTags(keyRaw);
-      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
-      const packageNameRaw = normalizeNonEmptyString(obj.packageName);
+      const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeNonEmptyString(obj.title) ?? ""),
+        sanitizeInboundSystemTags(normalizeOptionalString(obj.title) ?? ""),
       );
       const text = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeNonEmptyString(obj.text) ?? ""),
+        sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
       );
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;

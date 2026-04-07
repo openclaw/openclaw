@@ -16,6 +16,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
 import {
@@ -97,10 +98,10 @@ function createSlackTokenCredential(params: {
       return {
         accountConfigured: Boolean(resolvedValue) || hasConfiguredSecretInput(configuredValue),
         hasConfiguredValue: hasConfiguredSecretInput(configuredValue),
-        resolvedValue: resolvedValue?.trim() || undefined,
+        resolvedValue: normalizeOptionalString(resolvedValue),
         envValue:
           accountId === DEFAULT_ACCOUNT_ID
-            ? process.env[params.preferredEnvVar]?.trim()
+            ? normalizeOptionalString(process.env[params.preferredEnvVar])
             : undefined,
       };
     },

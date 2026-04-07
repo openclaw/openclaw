@@ -263,6 +263,36 @@ export async function writeCliImages(
   return { paths, cleanup };
 }
 
+export async function prepareCliPromptImagePayload(params: {
+  backend: CliBackendConfig;
+  prompt: string;
+  workspaceDir: string;
+  images?: ImageContent[];
+}): Promise<{
+  prompt: string;
+  imagePaths?: string[];
+  cleanupImages?: () => Promise<void>;
+}> {
+  let prompt = params.prompt;
+  const resolvedImages =
+    params.images && params.images.length > 0
+      ? params.images
+      : await loadPromptRefImages({ prompt, workspaceDir: params.workspaceDir });
+  if (resolvedImages.length === 0) {
+    return { prompt };
+  }
+  const imagePayload = await writeCliImages(resolvedImages);
+  const imagePaths = imagePayload.paths;
+  if (!params.backend.imageArg || params.backend.input === "stdin") {
+    prompt = appendImagePathsToPrompt(prompt, imagePaths);
+  }
+  return {
+    prompt,
+    imagePaths,
+    cleanupImages: imagePayload.cleanup,
+  };
+}
+
 export function buildCliArgs(params: {
   backend: CliBackendConfig;
   baseArgs: string[];
@@ -303,6 +333,16 @@ export function buildCliArgs(params: {
     }
   }
   if (params.promptArg !== undefined) {
+    let replacedPromptPlaceholder = false;
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === "{prompt}") {
+        args[i] = params.promptArg;
+        replacedPromptPlaceholder = true;
+      }
+    }
+    if (replacedPromptPlaceholder) {
+      return args;
+    }
     args.push(params.promptArg);
   }
   return args;

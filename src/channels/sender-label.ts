@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type SenderLabelParams = {
   name?: string;
   username?: string;
@@ -7,8 +9,7 @@ export type SenderLabelParams = {
 };
 
 function normalize(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeSenderLabelParams(params: SenderLabelParams) {

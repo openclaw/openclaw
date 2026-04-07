@@ -28,12 +28,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
 }));
 
-import {
-  getPluginCliCommandDescriptors,
-  loadValidatedConfigForPluginRegistration,
-  registerPluginCliCommands,
-  registerPluginCliCommandsFromValidatedConfig,
-} from "./cli.js";
+let getPluginCliCommandDescriptors: typeof import("./cli.js").getPluginCliCommandDescriptors;
+let loadValidatedConfigForPluginRegistration: typeof import("./cli.js").loadValidatedConfigForPluginRegistration;
+let registerPluginCliCommands: typeof import("./cli.js").registerPluginCliCommands;
+let registerPluginCliCommandsFromValidatedConfig: typeof import("./cli.js").registerPluginCliCommandsFromValidatedConfig;
 
 function createProgram(existingCommandName?: string) {
   const program = new Command();
@@ -119,7 +117,8 @@ function expectAutoEnabledCliLoad(params: {
 }
 
 describe("registerPluginCliCommands", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mocks.memoryRegister.mockReset();
     mocks.memoryRegister.mockImplementation(({ program }: { program: Command }) => {
       const memory = program.command("memory").description("Memory commands");
@@ -150,6 +149,12 @@ describe("registerPluginCliCommands", () => {
       valid: true,
       config: {},
     });
+    ({
+      getPluginCliCommandDescriptors,
+      loadValidatedConfigForPluginRegistration,
+      registerPluginCliCommands,
+      registerPluginCliCommandsFromValidatedConfig,
+    } = await import("./cli.js"));
   });
 
   it("skips plugin CLI registrars when commands already exist", async () => {

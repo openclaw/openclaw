@@ -1,4 +1,5 @@
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
@@ -157,11 +158,11 @@ export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
   }
-  return params.replyToId?.trim() || undefined;
+  return normalizeOptionalString(params.replyToId);
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -170,14 +171,14 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
   if (params.kind === "direct") {
     return undefined;
   }
-  const postId = params.postId?.trim();
+  const postId = normalizeOptionalString(params.postId);
   if (!postId) {
     return undefined;
   }
@@ -216,7 +217,10 @@ export function resolveMattermostThreadSessionContext(params: {
 export function resolveMattermostReactionChannelId(
   payload: Pick<MattermostEventPayload, "broadcast" | "data">,
 ): string | undefined {
-  return payload.broadcast?.channel_id?.trim() || payload.data?.channel_id?.trim() || undefined;
+  return (
+    normalizeOptionalString(payload.broadcast?.channel_id) ??
+    normalizeOptionalString(payload.data?.channel_id)
+  );
 }
 
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
@@ -303,7 +307,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     return;
   }
   const botUserId = botUser.id;
-  const botUsername = botUser.username?.trim() || undefined;
+  const botUsername = normalizeOptionalString(botUser.username);
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
   await registerMattermostMonitorSlashCommands({
     client,
@@ -1181,7 +1185,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
+    const threadRootId = normalizeOptionalString(post.root_id);
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,

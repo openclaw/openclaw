@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChatType } from "../chat-type.js";
 import { normalizeChatChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, normalizeChannelId } from "./index.js";
@@ -24,8 +25,7 @@ function normalizeComparableThreadId(
   if (typeof threadId !== "string") {
     return undefined;
   }
-  const trimmed = threadId.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(threadId);
 }
 
 function parseWithPlugin(
@@ -59,7 +59,7 @@ export function resolveComparableTargetForChannel(params: {
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
 }): ComparableChannelTarget | null {
-  const rawTo = params.rawTarget?.trim();
+  const rawTo = normalizeOptionalString(params.rawTarget);
   if (!rawTo) {
     return null;
   }
@@ -78,7 +78,7 @@ export function resolveComparableTargetForLoadedChannel(params: {
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
 }): ComparableChannelTarget | null {
-  const rawTo = params.rawTarget?.trim();
+  const rawTo = normalizeOptionalString(params.rawTarget);
   if (!rawTo) {
     return null;
   }

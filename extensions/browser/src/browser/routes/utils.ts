@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { parseBooleanValue } from "../../utils/boolean.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
@@ -14,14 +15,14 @@ export function getProfileContext(
 
   // Check query string first (works for GET and POST)
   if (typeof req.query.profile === "string") {
-    profileName = req.query.profile.trim() || undefined;
+    profileName = normalizeOptionalString(req.query.profile);
   }
 
   // Fall back to body for POST requests
   if (!profileName && req.body && typeof req.body === "object") {
     const body = req.body as Record<string, unknown>;
     if (typeof body.profile === "string") {
-      profileName = body.profile.trim() || undefined;
+      profileName = normalizeOptionalString(body.profile);
     }
   }
 

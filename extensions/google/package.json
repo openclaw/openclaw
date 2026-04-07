@@ -7,6 +7,9 @@
   "dependencies": {
     "@google/genai": "^1.48.0"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

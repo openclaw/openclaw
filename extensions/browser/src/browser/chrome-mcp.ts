@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord } from "../record-shared.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
@@ -58,7 +59,7 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
     }
     out.push({
       id: record.id,
-      url: typeof record.url === "string" ? record.url : undefined,
+      url: readStringValue(record.url),
       selected: record.selected === true,
     });
   }
@@ -106,7 +107,7 @@ function extractTextPages(result: ChromeMcpToolResult): ChromeMcpStructuredPage[
       }
       pages.push({
         id: Number.parseInt(match[1] ?? "", 10),
-        url: match[2]?.trim() || undefined,
+        url: normalizeOptionalString(match[2]),
         selected: Boolean(match[3]),
       });
     }

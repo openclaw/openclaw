@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import type { PluginDiagnostic, ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
@@ -20,14 +22,11 @@ function pushProviderDiagnostic(params: {
 }
 
 function normalizeText(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeTextList(values: string[] | undefined): string[] | undefined {
-  const normalized = Array.from(
-    new Set((values ?? []).map((value) => value.trim()).filter(Boolean)),
-  );
+  const normalized = Array.from(new Set(normalizeTrimmedStringList(values)));
   return normalized.length > 0 ? normalized : undefined;
 }
 

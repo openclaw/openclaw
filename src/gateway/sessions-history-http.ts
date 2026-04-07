@@ -4,6 +4,7 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -36,7 +37,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
     return null;
   }
   try {
-    return decodeURIComponent(match[1] ?? "").trim() || null;
+    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? null;
   } catch {
     return "";
   }
@@ -65,12 +66,11 @@ function resolveLimit(req: IncomingMessage): number | undefined {
 
 function resolveCursor(req: IncomingMessage): string | undefined {
   const raw = getRequestUrl(req).searchParams.get("cursor");
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(raw);
 }
 
 function canonicalizePath(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

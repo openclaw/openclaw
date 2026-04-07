@@ -8,6 +8,7 @@ import {
   isPathWithinRoot,
   isSupportedLocalAvatarExtension,
 } from "../shared/avatar-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
@@ -20,8 +21,7 @@ export type AgentAvatarResolution =
   | { kind: "data"; url: string };
 
 function normalizeAvatarValue(value: string | undefined | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+  return normalizeOptionalString(value) ?? null;
 }
 
 function resolveAvatarSource(

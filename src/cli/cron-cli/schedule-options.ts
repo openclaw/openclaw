@@ -1,4 +1,5 @@
 import type { CronSchedule } from "../../cron/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {
@@ -126,8 +127,7 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
 }
 
 function readOptionalString(value: unknown): string | undefined {
-  const trimmed = readTrimmedString(value);
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function readTrimmedString(value: unknown): string {

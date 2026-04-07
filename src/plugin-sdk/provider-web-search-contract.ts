@@ -1,12 +1,24 @@
-// Narrow shared exports for web-search contract surfaces.
+// Public contract-safe web-search registration helpers for provider plugins.
 
-import type { WebSearchProviderPlugin } from "../plugins/types.js";
-
+import type {
+  WebSearchCredentialResolutionSource,
+  WebSearchProviderSetupContext,
+  WebSearchProviderPlugin,
+  WebSearchProviderToolDefinition,
+} from "../plugins/types.js";
 export {
   getScopedCredentialValue,
+  getTopLevelCredentialValue,
+  mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
+  setTopLevelCredentialValue,
 } from "../agents/tools/web-search-provider-config.js";
 export { enablePluginInConfig } from "../plugins/enable.js";
-export type { WebSearchProviderPlugin };
+export type {
+  WebSearchCredentialResolutionSource,
+  WebSearchProviderSetupContext,
+  WebSearchProviderPlugin,
+  WebSearchProviderToolDefinition,
+};

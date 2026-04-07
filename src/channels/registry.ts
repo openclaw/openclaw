@@ -1,4 +1,5 @@
 import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
 import {
   CHANNEL_IDS,
@@ -31,14 +32,12 @@ function findRegisteredChannelPluginEntry(
   normalizedKey: string,
 ): RegisteredChannelPluginEntry | undefined {
   return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = String(entry.plugin.id ?? "")
-      .trim()
-      .toLowerCase();
+    const id = normalizeOptionalString(String(entry.plugin.id ?? ""))?.toLowerCase() ?? "";
     if (id && id === normalizedKey) {
       return true;
     }
     return (entry.plugin.meta?.aliases ?? []).some(
-      (alias) => alias.trim().toLowerCase() === normalizedKey,
+      (alias) => normalizeOptionalString(alias)?.toLowerCase() === normalizedKey,
     );
   });
 }
@@ -56,8 +55,7 @@ function findRegisteredChannelPluginEntryById(
 }
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalString(raw)?.toLowerCase();
 };
 export {
   CHAT_CHANNEL_ALIASES,
@@ -87,7 +85,7 @@ export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
 
 export function listRegisteredChannelPluginIds(): ChannelId[] {
   return listRegisteredChannelPluginEntries().flatMap((entry) => {
-    const id = entry.plugin.id?.trim();
+    const id = normalizeOptionalString(entry.plugin.id);
     return id ? [id as ChannelId] : [];
   });
 }

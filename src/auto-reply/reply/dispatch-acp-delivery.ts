@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -53,7 +54,7 @@ type ToolMessageHandle = {
 };
 
 function normalizeDeliveryChannel(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized || undefined;
 }
 
@@ -62,7 +63,7 @@ function resolveDeliveryAccountId(params: {
   channel: string | undefined;
   accountId: string | undefined;
 }): string | undefined {
-  const explicit = params.accountId?.trim();
+  const explicit = normalizeOptionalString(params.accountId);
   if (explicit) {
     return explicit;
   }
@@ -74,9 +75,7 @@ function resolveDeliveryAccountId(params: {
     params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
   )?.[channelId];
   const configuredDefault = channelCfg?.defaultAccount;
-  return typeof configuredDefault === "string" && configuredDefault.trim()
-    ? configuredDefault.trim()
-    : undefined;
+  return normalizeOptionalString(configuredDefault);
 }
 
 async function shouldTreatDeliveredTextAsVisible(params: {
@@ -85,7 +84,7 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   text: string | undefined;
   routed: boolean;
 }): Promise<boolean> {
-  if (!params.text?.trim()) {
+  if (!normalizeOptionalString(params.text)) {
     return false;
   }
   if (params.kind === "final") {
@@ -249,7 +248,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (!handle?.messageId) {
       return false;
     }
-    const message = payload.text?.trim();
+    const message = normalizeOptionalString(payload.text);
     if (!message) {
       return false;
     }
@@ -284,7 +283,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && payload.text?.trim()) {
+    if (kind === "block" && normalizeOptionalString(payload.text)) {
       if (state.accumulatedBlockText.length > 0) {
         state.accumulatedBlockText += "\n";
       }
@@ -311,7 +310,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
-      const toolCallId = meta?.toolCallId?.trim();
+      const toolCallId = normalizeOptionalString(meta?.toolCallId);
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
         if (edited) {

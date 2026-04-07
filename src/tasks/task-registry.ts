@@ -6,6 +6,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
@@ -122,8 +123,7 @@ function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind })
 }
 
 function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(ownerKey);
 }
 
 function assertParentFlowLinkAllowed(params: {
@@ -403,8 +403,7 @@ function addRunIdIndex(taskId: string, runId?: string) {
 }
 
 function normalizeSessionIndexKey(sessionKey?: string): string | undefined {
-  const trimmed = sessionKey?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(sessionKey);
 }
 
 function addIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
@@ -593,7 +592,7 @@ function pickPreferredRunIdTask(matches: TaskRecord[]): TaskRecord | undefined {
 }
 
 function normalizeComparableText(value: string | undefined): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function compareTasksNewestFirst(
@@ -1437,17 +1436,17 @@ export function createTaskRecord(params: {
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
-    taskKind: params.taskKind?.trim() || undefined,
-    sourceId: params.sourceId?.trim() || undefined,
+    taskKind: normalizeOptionalString(params.taskKind),
+    sourceId: normalizeOptionalString(params.sourceId),
     requesterSessionKey,
     ownerKey,
     scopeKind,
     childSessionKey: params.childSessionKey,
-    parentFlowId: params.parentFlowId?.trim() || undefined,
-    parentTaskId: params.parentTaskId?.trim() || undefined,
-    agentId: params.agentId?.trim() || undefined,
-    runId: params.runId?.trim() || undefined,
-    label: params.label?.trim() || undefined,
+    parentFlowId: normalizeOptionalString(params.parentFlowId),
+    parentTaskId: normalizeOptionalString(params.parentTaskId),
+    agentId: normalizeOptionalString(params.agentId),
+    runId: normalizeOptionalString(params.runId),
+    label: normalizeOptionalString(params.label),
     task: params.task,
     status,
     deliveryStatus,

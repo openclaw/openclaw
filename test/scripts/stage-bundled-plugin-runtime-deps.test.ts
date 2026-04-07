@@ -31,7 +31,10 @@ describe("stageBundledPluginRuntimeDeps", () => {
         dependencies: { "left-pad": "1.3.0" },
         peerDependencies: { openclaw: "^1.0.0" },
         peerDependenciesMeta: { openclaw: { optional: true } },
-        devDependencies: { openclaw: "^1.0.0" },
+        devDependencies: {
+          openclaw: "^1.0.0",
+          "@openclaw/plugin-sdk": "workspace:*",
+        },
         openclaw: { bundle: { stageRuntimeDependencies: true } },
       },
     });

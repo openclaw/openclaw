@@ -8,6 +8,7 @@
     "google-auth-library": "^10.6.2"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

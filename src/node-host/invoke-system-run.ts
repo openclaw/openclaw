@@ -27,6 +27,7 @@ import {
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -252,9 +253,9 @@ async function parseSystemRunPhase(
     });
     return null;
   }
-  const agentId = opts.params.agentId?.trim() || undefined;
-  const sessionKey = opts.params.sessionKey?.trim() || "node";
-  const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const agentId = normalizeOptionalString(opts.params.agentId);
+  const sessionKey = normalizeOptionalString(opts.params.sessionKey) ?? "node";
+  const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -301,7 +302,7 @@ async function parseSystemRunPhase(
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
-    cwd: opts.params.cwd?.trim() || undefined,
+    cwd: normalizeOptionalString(opts.params.cwd),
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,

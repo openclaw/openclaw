@@ -12,6 +12,7 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -68,11 +69,9 @@ function clearRefreshTimer(): void {
 
 function listLikePrimary(value: ModelListLike): string | undefined {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+    return normalizeOptionalString(value);
   }
-  const trimmed = value?.primary?.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value?.primary);
 }
 
 function listLikeFallbacks(value: ModelListLike): string[] {
@@ -82,8 +81,8 @@ function listLikeFallbacks(value: ModelListLike): string[] {
   return Array.isArray(value.fallbacks)
     ? value.fallbacks
         .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+        .map((entry) => normalizeOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry))
     : [];
 }
 

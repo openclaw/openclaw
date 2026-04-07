@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getFileExtension, normalizeMimeType } from "./mime.js";
 
 export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
@@ -25,7 +26,7 @@ export function isTelegramVoiceCompatibleAudio(opts: {
   if (mime && TELEGRAM_VOICE_MIME_TYPES.has(mime)) {
     return true;
   }
-  const fileName = opts.fileName?.trim();
+  const fileName = normalizeOptionalString(opts.fileName);
   if (!fileName) {
     return false;
   }

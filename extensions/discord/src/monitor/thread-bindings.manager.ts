@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
 import {
   createThreadForBinding,
@@ -121,7 +122,7 @@ function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
 }
 
 function isDirectConversationBindingId(value?: string | null): boolean {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
 }
 
@@ -452,11 +453,13 @@ export function createThreadBindingManager(
         threadId,
         targetKind,
         targetSessionKey,
-        agentId: bindParams.agentId?.trim() || resolveAgentIdFromSessionKey(targetSessionKey),
-        label: bindParams.label?.trim() || undefined,
+        agentId:
+          normalizeOptionalString(bindParams.agentId) ??
+          resolveAgentIdFromSessionKey(targetSessionKey),
+        label: normalizeOptionalString(bindParams.label),
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
-        boundBy: bindParams.boundBy?.trim() || "system",
+        boundBy: normalizeOptionalString(bindParams.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs,
@@ -598,16 +601,22 @@ export function createThreadBindingManager(
         typeof metadata.label === "string" ? metadata.label.trim() || undefined : undefined;
       const threadName =
         typeof metadata.threadName === "string"
-          ? metadata.threadName.trim() || undefined
+          ? normalizeOptionalString(metadata.threadName)
           : undefined;
       const introText =
-        typeof metadata.introText === "string" ? metadata.introText.trim() || undefined : undefined;
+        typeof metadata.introText === "string"
+          ? normalizeOptionalString(metadata.introText)
+          : undefined;
       const boundBy =
-        typeof metadata.boundBy === "string" ? metadata.boundBy.trim() || undefined : undefined;
+        typeof metadata.boundBy === "string"
+          ? normalizeOptionalString(metadata.boundBy)
+          : undefined;
       const agentId =
-        typeof metadata.agentId === "string" ? metadata.agentId.trim() || undefined : undefined;
+        typeof metadata.agentId === "string"
+          ? normalizeOptionalString(metadata.agentId)
+          : undefined;
       let threadId: string | undefined;
-      let channelId = input.conversation.parentConversationId?.trim() || undefined;
+      let channelId = normalizeOptionalString(input.conversation.parentConversationId);
       let createThread = false;
 
       if (placement === "child") {

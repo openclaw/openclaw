@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
@@ -37,6 +36,30 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
+import {
+  appendConfigAuditRecord,
+  appendConfigAuditRecordSync,
+  createConfigWriteAuditRecordBase,
+  finalizeConfigWriteAuditRecord,
+  formatConfigOverwriteLogMessage,
+  type ConfigWriteAuditResult,
+} from "./io.audit.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+  formatInvalidConfigLogMessage,
+} from "./io.invalid-config.js";
+import { persistGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
+import {
+  collectChangedPaths,
+  createMergePatch,
+  formatConfigValidationFailure,
+  projectSourceOntoRuntimeShape,
+  restoreEnvRefsFromMap,
+  resolvePersistCandidateForWrite,
+  resolveWriteEnvSnapshotForPath,
+  unsetPathForWrite,
+} from "./io.write-prepare.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -45,7 +68,6 @@ import {
 } from "./materialize.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import {
   clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
@@ -78,55 +100,8 @@ export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
 export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 
-const OPEN_DM_POLICY_ALLOW_FROM_RE =
-  /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
-
-const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
 const loggedInvalidConfigs = new Set<string>();
-
-type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
-
-type ConfigWriteAuditRecord = {
-  ts: string;
-  source: "config-io";
-  event: "config.write";
-  result: ConfigWriteAuditResult;
-  configPath: string;
-  pid: number;
-  ppid: number;
-  cwd: string;
-  argv: string[];
-  execArgv: string[];
-  watchMode: boolean;
-  watchSession: string | null;
-  watchCommand: string | null;
-  existsBefore: boolean;
-  previousHash: string | null;
-  nextHash: string | null;
-  previousBytes: number | null;
-  nextBytes: number | null;
-  previousDev: string | null;
-  nextDev: string | null;
-  previousIno: string | null;
-  nextIno: string | null;
-  previousMode: number | null;
-  nextMode: number | null;
-  previousNlink: number | null;
-  nextNlink: number | null;
-  previousUid: number | null;
-  nextUid: number | null;
-  previousGid: number | null;
-  nextGid: number | null;
-  changedPathCount: number | null;
-  hasMetaBefore: boolean;
-  hasMetaAfter: boolean;
-  gatewayModeBefore: string | null;
-  gatewayModeAfter: string | null;
-  suspicious: string[];
-  errorCode?: string;
-  errorMessage?: string;
-};
 
 type ConfigHealthFingerprint = {
   hash: string;
@@ -152,61 +127,6 @@ type ConfigHealthEntry = {
 type ConfigHealthState = {
   entries?: Record<string, ConfigHealthEntry>;
 };
-
-type ConfigObserveAuditRecord = {
-  ts: string;
-  source: "config-io";
-  event: "config.observe";
-  phase: "read";
-  configPath: string;
-  pid: number;
-  ppid: number;
-  cwd: string;
-  argv: string[];
-  execArgv: string[];
-  exists: boolean;
-  valid: boolean;
-  hash: string | null;
-  bytes: number | null;
-  mtimeMs: number | null;
-  ctimeMs: number | null;
-  dev: string | null;
-  ino: string | null;
-  mode: number | null;
-  nlink: number | null;
-  uid: number | null;
-  gid: number | null;
-  hasMeta: boolean;
-  gatewayMode: string | null;
-  suspicious: string[];
-  lastKnownGoodHash: string | null;
-  lastKnownGoodBytes: number | null;
-  lastKnownGoodMtimeMs: number | null;
-  lastKnownGoodCtimeMs: number | null;
-  lastKnownGoodDev: string | null;
-  lastKnownGoodIno: string | null;
-  lastKnownGoodMode: number | null;
-  lastKnownGoodNlink: number | null;
-  lastKnownGoodUid: number | null;
-  lastKnownGoodGid: number | null;
-  lastKnownGoodGatewayMode: string | null;
-  backupHash: string | null;
-  backupBytes: number | null;
-  backupMtimeMs: number | null;
-  backupCtimeMs: number | null;
-  backupDev: string | null;
-  backupIno: string | null;
-  backupMode: number | null;
-  backupNlink: number | null;
-  backupUid: number | null;
-  backupGid: number | null;
-  backupGatewayMode: string | null;
-  clobberedPath: string | null;
-  restoredFromBackup: boolean;
-  restoredBackupPath: string | null;
-};
-
-type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 export type ConfigWriteOptions = {
@@ -280,135 +200,6 @@ async function tightenStateDirPermissionsIfNeeded(params: {
   }
 }
 
-function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
-  const match = issueMessage.match(OPEN_DM_POLICY_ALLOW_FROM_RE);
-  const policyPath = match?.groups?.policyPath?.trim();
-  const allowPath = match?.groups?.allowPath?.trim();
-  if (!policyPath || !allowPath) {
-    return `Config validation failed: ${pathLabel}: ${issueMessage}`;
-  }
-
-  return [
-    `Config validation failed: ${pathLabel}`,
-    "",
-    `Configuration mismatch: ${policyPath} is "open", but ${allowPath} does not include "*".`,
-    "",
-    "Fix with:",
-    `  openclaw config set ${allowPath} '["*"]'`,
-    "",
-    "Or switch policy:",
-    `  openclaw config set ${policyPath} "pairing"`,
-  ].join("\n");
-}
-
-function isNumericPathSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
-}
-
-function isWritePlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
-
-type UnsetPathWriteResult = {
-  changed: boolean;
-  value: unknown;
-};
-
-function unsetPathForWriteAt(
-  value: unknown,
-  pathSegments: string[],
-  depth: number,
-): UnsetPathWriteResult {
-  if (depth >= pathSegments.length) {
-    return { changed: false, value };
-  }
-  const segment = pathSegments[depth];
-  const isLeaf = depth === pathSegments.length - 1;
-
-  if (Array.isArray(value)) {
-    if (!isNumericPathSegment(segment)) {
-      return { changed: false, value };
-    }
-    const index = Number.parseInt(segment, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
-      return { changed: false, value };
-    }
-    if (isLeaf) {
-      const next = value.slice();
-      next.splice(index, 1);
-      return { changed: true, value: next };
-    }
-    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
-    if (!child.changed) {
-      return { changed: false, value };
-    }
-    const next = value.slice();
-    if (child.value === WRITE_PRUNED_OBJECT) {
-      next.splice(index, 1);
-    } else {
-      next[index] = child.value;
-    }
-    return { changed: true, value: next };
-  }
-
-  if (
-    isBlockedObjectKey(segment) ||
-    !isWritePlainObject(value) ||
-    !hasOwnObjectKey(value, segment)
-  ) {
-    return { changed: false, value };
-  }
-  if (isLeaf) {
-    const next: Record<string, unknown> = { ...value };
-    delete next[segment];
-    return {
-      changed: true,
-      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
-    };
-  }
-
-  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
-  if (!child.changed) {
-    return { changed: false, value };
-  }
-  const next: Record<string, unknown> = { ...value };
-  if (child.value === WRITE_PRUNED_OBJECT) {
-    delete next[segment];
-  } else {
-    next[segment] = child.value;
-  }
-  return {
-    changed: true,
-    value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
-  };
-}
-
-function unsetPathForWrite(
-  root: OpenClawConfig,
-  pathSegments: string[],
-): { changed: boolean; next: OpenClawConfig } {
-  if (pathSegments.length === 0) {
-    return { changed: false, next: root };
-  }
-  const result = unsetPathForWriteAt(root, pathSegments, 0);
-  if (!result.changed) {
-    return { changed: false, next: root };
-  }
-  if (result.value === WRITE_PRUNED_OBJECT) {
-    return { changed: true, next: {} };
-  }
-  if (isWritePlainObject(result.value)) {
-    return { changed: true, next: coerceConfig(result.value) };
-  }
-  return { changed: false, next: root };
-}
-
 export function resolveConfigSnapshotHash(snapshot: {
   hash?: string;
   raw?: string | null;
@@ -452,60 +243,6 @@ function resolveGatewayMode(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function cloneUnknown<T>(value: T): T {
-  return structuredClone(value);
-}
-
-function createMergePatch(base: unknown, target: unknown): unknown {
-  if (!isRecord(base) || !isRecord(target)) {
-    return cloneUnknown(target);
-  }
-
-  const patch: Record<string, unknown> = {};
-  const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
-  for (const key of keys) {
-    const hasBase = key in base;
-    const hasTarget = key in target;
-    if (!hasTarget) {
-      patch[key] = null;
-      continue;
-    }
-    const targetValue = target[key];
-    if (!hasBase) {
-      patch[key] = cloneUnknown(targetValue);
-      continue;
-    }
-    const baseValue = base[key];
-    if (isRecord(baseValue) && isRecord(targetValue)) {
-      const childPatch = createMergePatch(baseValue, targetValue);
-      if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
-        continue;
-      }
-      patch[key] = childPatch;
-      continue;
-    }
-    if (!isDeepStrictEqual(baseValue, targetValue)) {
-      patch[key] = cloneUnknown(targetValue);
-    }
-  }
-  return patch;
-}
-
-function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
-  if (!isRecord(source) || !isRecord(runtime)) {
-    return cloneUnknown(source);
-  }
-
-  const next: Record<string, unknown> = {};
-  for (const [key, sourceValue] of Object.entries(source)) {
-    if (!(key in runtime)) {
-      continue;
-    }
-    next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
-  }
-  return next;
-}
-
 function collectEnvRefPaths(value: unknown, path: string, output: Map<string, string>): void {
   if (typeof value === "string") {
     if (containsEnvVarReference(value)) {
@@ -525,115 +262,6 @@ function collectEnvRefPaths(value: unknown, path: string, output: Map<string, st
       collectEnvRefPaths(child, childPath, output);
     }
   }
-}
-
-function collectChangedPaths(
-  base: unknown,
-  target: unknown,
-  path: string,
-  output: Set<string>,
-): void {
-  if (Array.isArray(base) && Array.isArray(target)) {
-    const max = Math.max(base.length, target.length);
-    for (let index = 0; index < max; index += 1) {
-      const childPath = path ? `${path}[${index}]` : `[${index}]`;
-      if (index >= base.length || index >= target.length) {
-        output.add(childPath);
-        continue;
-      }
-      collectChangedPaths(base[index], target[index], childPath, output);
-    }
-    return;
-  }
-  if (isRecord(base) && isRecord(target)) {
-    const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
-    for (const key of keys) {
-      const childPath = path ? `${path}.${key}` : key;
-      const hasBase = key in base;
-      const hasTarget = key in target;
-      if (!hasTarget || !hasBase) {
-        output.add(childPath);
-        continue;
-      }
-      collectChangedPaths(base[key], target[key], childPath, output);
-    }
-    return;
-  }
-  if (!isDeepStrictEqual(base, target)) {
-    output.add(path);
-  }
-}
-
-function parentPath(value: string): string {
-  if (!value) {
-    return "";
-  }
-  if (value.endsWith("]")) {
-    const index = value.lastIndexOf("[");
-    return index > 0 ? value.slice(0, index) : "";
-  }
-  const index = value.lastIndexOf(".");
-  return index >= 0 ? value.slice(0, index) : "";
-}
-
-function isPathChanged(path: string, changedPaths: Set<string>): boolean {
-  if (changedPaths.has(path)) {
-    return true;
-  }
-  let current = parentPath(path);
-  while (current) {
-    if (changedPaths.has(current)) {
-      return true;
-    }
-    current = parentPath(current);
-  }
-  return changedPaths.has("");
-}
-
-function restoreEnvRefsFromMap(
-  value: unknown,
-  path: string,
-  envRefMap: Map<string, string>,
-  changedPaths: Set<string>,
-): unknown {
-  if (typeof value === "string") {
-    if (!isPathChanged(path, changedPaths)) {
-      const original = envRefMap.get(path);
-      if (original !== undefined) {
-        return original;
-      }
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((item, index) => {
-      const updated = restoreEnvRefsFromMap(item, `${path}[${index}]`, envRefMap, changedPaths);
-      if (updated !== item) {
-        changed = true;
-      }
-      return updated;
-    });
-    return changed ? next : value;
-  }
-  if (isRecord(value)) {
-    let changed = false;
-    const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      const childPath = path ? `${path}.${key}` : key;
-      const updated = restoreEnvRefsFromMap(child, childPath, envRefMap, changedPaths);
-      if (updated !== child) {
-        changed = true;
-      }
-      next[key] = updated;
-    }
-    return changed ? next : value;
-  }
-  return value;
-}
-
-function resolveConfigAuditLogPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
-  return path.join(resolveStateDir(env, homedir), "logs", CONFIG_AUDIT_LOG_FILENAME);
 }
 
 function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => string): string {
@@ -694,38 +322,6 @@ function resolveConfigWriteSuspiciousReasons(params: {
     reasons.push("gateway-mode-removed");
   }
   return reasons;
-}
-
-async function appendConfigAuditRecord(
-  deps: Required<ConfigIoDeps>,
-  record: ConfigAuditRecord,
-): Promise<void> {
-  try {
-    const auditPath = resolveConfigAuditLogPath(deps.env, deps.homedir);
-    await deps.fs.promises.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    await deps.fs.promises.appendFile(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-  } catch {
-    // best-effort
-  }
-}
-
-function appendConfigAuditRecordSync(
-  deps: Required<ConfigIoDeps>,
-  record: ConfigAuditRecord,
-): void {
-  try {
-    const auditPath = resolveConfigAuditLogPath(deps.env, deps.homedir);
-    deps.fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    deps.fs.appendFileSync(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-  } catch {
-    // best-effort
-  }
 }
 
 async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<ConfigHealthState> {
@@ -1009,57 +605,62 @@ async function maybeRecoverSuspiciousConfigRead(params: {
   params.deps.logger.warn(
     `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
   );
-  await appendConfigAuditRecord(params.deps, {
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: params.configPath,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: true,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup,
-    restoredBackupPath: backupPath,
+  await appendConfigAuditRecord({
+    fs: params.deps.fs,
+    env: params.deps.env,
+    homedir: params.deps.homedir,
+    record: {
+      ts: now,
+      source: "config-io",
+      event: "config.observe",
+      phase: "read",
+      configPath: params.configPath,
+      pid: process.pid,
+      ppid: process.ppid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(0, 8),
+      execArgv: process.execArgv.slice(0, 8),
+      exists: true,
+      valid: true,
+      hash: current.hash,
+      bytes: current.bytes,
+      mtimeMs: current.mtimeMs,
+      ctimeMs: current.ctimeMs,
+      dev: current.dev,
+      ino: current.ino,
+      mode: current.mode,
+      nlink: current.nlink,
+      uid: current.uid,
+      gid: current.gid,
+      hasMeta: current.hasMeta,
+      gatewayMode: current.gatewayMode,
+      suspicious,
+      lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
+      lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
+      lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
+      lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+      lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+      lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+      lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+      lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+      lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+      lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
+      lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
+      backupHash: backup?.hash ?? null,
+      backupBytes: backup?.bytes ?? null,
+      backupMtimeMs: backup?.mtimeMs ?? null,
+      backupCtimeMs: backup?.ctimeMs ?? null,
+      backupDev: backup?.dev ?? null,
+      backupIno: backup?.ino ?? null,
+      backupMode: backup?.mode ?? null,
+      backupNlink: backup?.nlink ?? null,
+      backupUid: backup?.uid ?? null,
+      backupGid: backup?.gid ?? null,
+      backupGatewayMode: backup?.gatewayMode ?? null,
+      clobberedPath,
+      restoredFromBackup,
+      restoredBackupPath: backupPath,
+    },
   });
 
   healthState = setConfigHealthEntry(healthState, params.configPath, {
@@ -1139,57 +740,62 @@ function maybeRecoverSuspiciousConfigReadSync(params: {
   params.deps.logger.warn(
     `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
   );
-  appendConfigAuditRecordSync(params.deps, {
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: params.configPath,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: true,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup,
-    restoredBackupPath: backupPath,
+  appendConfigAuditRecordSync({
+    fs: params.deps.fs,
+    env: params.deps.env,
+    homedir: params.deps.homedir,
+    record: {
+      ts: now,
+      source: "config-io",
+      event: "config.observe",
+      phase: "read",
+      configPath: params.configPath,
+      pid: process.pid,
+      ppid: process.ppid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(0, 8),
+      execArgv: process.execArgv.slice(0, 8),
+      exists: true,
+      valid: true,
+      hash: current.hash,
+      bytes: current.bytes,
+      mtimeMs: current.mtimeMs,
+      ctimeMs: current.ctimeMs,
+      dev: current.dev,
+      ino: current.ino,
+      mode: current.mode,
+      nlink: current.nlink,
+      uid: current.uid,
+      gid: current.gid,
+      hasMeta: current.hasMeta,
+      gatewayMode: current.gatewayMode,
+      suspicious,
+      lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
+      lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
+      lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
+      lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+      lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+      lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+      lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+      lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+      lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+      lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
+      lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
+      backupHash: backup?.hash ?? null,
+      backupBytes: backup?.bytes ?? null,
+      backupMtimeMs: backup?.mtimeMs ?? null,
+      backupCtimeMs: backup?.ctimeMs ?? null,
+      backupDev: backup?.dev ?? null,
+      backupIno: backup?.ino ?? null,
+      backupMode: backup?.mode ?? null,
+      backupNlink: backup?.nlink ?? null,
+      backupUid: backup?.uid ?? null,
+      backupGid: backup?.gid ?? null,
+      backupGatewayMode: backup?.gatewayMode ?? null,
+      clobberedPath,
+      restoredFromBackup,
+      restoredBackupPath: backupPath,
+    },
   });
 
   healthState = setConfigHealthEntry(healthState, params.configPath, {
@@ -1291,57 +897,62 @@ async function observeConfigSnapshot(
   });
 
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  await appendConfigAuditRecord(deps, {
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: snapshot.path,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: snapshot.valid,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup: false,
-    restoredBackupPath: null,
+  await appendConfigAuditRecord({
+    fs: deps.fs,
+    env: deps.env,
+    homedir: deps.homedir,
+    record: {
+      ts: now,
+      source: "config-io",
+      event: "config.observe",
+      phase: "read",
+      configPath: snapshot.path,
+      pid: process.pid,
+      ppid: process.ppid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(0, 8),
+      execArgv: process.execArgv.slice(0, 8),
+      exists: true,
+      valid: snapshot.valid,
+      hash: current.hash,
+      bytes: current.bytes,
+      mtimeMs: current.mtimeMs,
+      ctimeMs: current.ctimeMs,
+      dev: current.dev,
+      ino: current.ino,
+      mode: current.mode,
+      nlink: current.nlink,
+      uid: current.uid,
+      gid: current.gid,
+      hasMeta: current.hasMeta,
+      gatewayMode: current.gatewayMode,
+      suspicious,
+      lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
+      lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
+      lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
+      lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+      lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+      lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+      lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+      lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+      lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+      lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
+      lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
+      backupHash: backup?.hash ?? null,
+      backupBytes: backup?.bytes ?? null,
+      backupMtimeMs: backup?.mtimeMs ?? null,
+      backupCtimeMs: backup?.ctimeMs ?? null,
+      backupDev: backup?.dev ?? null,
+      backupIno: backup?.ino ?? null,
+      backupMode: backup?.mode ?? null,
+      backupNlink: backup?.nlink ?? null,
+      backupUid: backup?.uid ?? null,
+      backupGid: backup?.gid ?? null,
+      backupGatewayMode: backup?.gatewayMode ?? null,
+      clobberedPath,
+      restoredFromBackup: false,
+      restoredBackupPath: null,
+    },
   });
 
   healthState = setConfigHealthEntry(healthState, snapshot.path, {
@@ -1419,57 +1030,62 @@ function observeConfigSnapshotSync(
   });
 
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  appendConfigAuditRecordSync(deps, {
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: snapshot.path,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: snapshot.valid,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup: false,
-    restoredBackupPath: null,
+  appendConfigAuditRecordSync({
+    fs: deps.fs,
+    env: deps.env,
+    homedir: deps.homedir,
+    record: {
+      ts: now,
+      source: "config-io",
+      event: "config.observe",
+      phase: "read",
+      configPath: snapshot.path,
+      pid: process.pid,
+      ppid: process.ppid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(0, 8),
+      execArgv: process.execArgv.slice(0, 8),
+      exists: true,
+      valid: snapshot.valid,
+      hash: current.hash,
+      bytes: current.bytes,
+      mtimeMs: current.mtimeMs,
+      ctimeMs: current.ctimeMs,
+      dev: current.dev,
+      ino: current.ino,
+      mode: current.mode,
+      nlink: current.nlink,
+      uid: current.uid,
+      gid: current.gid,
+      hasMeta: current.hasMeta,
+      gatewayMode: current.gatewayMode,
+      suspicious,
+      lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
+      lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
+      lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
+      lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+      lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+      lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+      lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+      lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+      lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+      lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
+      lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
+      backupHash: backup?.hash ?? null,
+      backupBytes: backup?.bytes ?? null,
+      backupMtimeMs: backup?.mtimeMs ?? null,
+      backupCtimeMs: backup?.ctimeMs ?? null,
+      backupDev: backup?.dev ?? null,
+      backupIno: backup?.ino ?? null,
+      backupMode: backup?.mode ?? null,
+      backupNlink: backup?.nlink ?? null,
+      backupUid: backup?.uid ?? null,
+      backupGid: backup?.gid ?? null,
+      backupGatewayMode: backup?.gatewayMode ?? null,
+      clobberedPath,
+      restoredFromBackup: false,
+      restoredBackupPath: null,
+    },
   });
 
   healthState = setConfigHealthEntry(healthState, snapshot.path, {
@@ -1772,20 +1388,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             legacyIssues: legacyResolution.sourceLegacyIssues,
           }),
         });
-        const details = validated.issues
-          .map(
-            (iss) =>
-              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
-          )
-          .join("\n");
+        const details = formatInvalidConfigDetails(validated.issues);
         if (!loggedInvalidConfigs.has(configPath)) {
           loggedInvalidConfigs.add(configPath);
-          deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
+          deps.logger.error(formatInvalidConfigLogMessage(configPath, details));
         }
-        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
-        (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
-        (error as { code?: string; details?: string }).details = details;
-        throw error;
+        throw createInvalidConfigError(configPath, details);
       }
       if (validated.warnings.length > 0) {
         const details = validated.warnings
@@ -1840,35 +1448,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         cfg,
         () => pendingSecret ?? crypto.randomBytes(32).toString("hex"),
       );
-      const cfgWithOwnerDisplaySecret = ownerDisplaySecretResolution.config;
-      if (ownerDisplaySecretResolution.generatedSecret) {
-        AUTO_OWNER_DISPLAY_SECRET_BY_PATH.set(
-          configPath,
-          ownerDisplaySecretResolution.generatedSecret,
-        );
-        if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.has(configPath)) {
-          AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.add(configPath);
-          void writeConfigFile(cfgWithOwnerDisplaySecret, { expectedConfigPath: configPath })
-            .then(() => {
-              AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
-              AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
-            })
-            .catch((err) => {
-              if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.has(configPath)) {
-                AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.add(configPath);
-                deps.logger.warn(
-                  `Failed to persist auto-generated commands.ownerDisplaySecret at ${configPath}: ${String(err)}`,
-                );
-              }
-            })
-            .finally(() => {
-              AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.delete(configPath);
-            });
-        }
-      } else {
-        AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
-        AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
-      }
+      const cfgWithOwnerDisplaySecret = persistGeneratedOwnerDisplaySecret({
+        config: ownerDisplaySecretResolution.config,
+        configPath,
+        generatedSecret: ownerDisplaySecretResolution.generatedSecret,
+        logger: deps.logger,
+        state: {
+          pendingByPath: AUTO_OWNER_DISPLAY_SECRET_BY_PATH,
+          persistInFlight: AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT,
+          persistWarned: AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED,
+        },
+        persistConfig: (nextConfig, options) => writeConfigFile(nextConfig, options),
+      });
 
       return applyConfigOverrides(cfgWithOwnerDisplaySecret);
     } catch (err) {
@@ -2085,9 +1676,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
-      const patch = createMergePatch(snapshot.config, cfg);
-      const projectedSource = projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config);
-      persistCandidate = applyMergePatch(projectedSource, patch);
+      persistCandidate = resolvePersistCandidateForWrite({
+        runtimeConfig: snapshot.config,
+        sourceConfig: snapshot.resolved,
+        nextConfig: cfg,
+      });
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
@@ -2218,10 +1811,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (isVitest && !shouldLogInVitest) {
         return;
       }
-      const changeSummary =
-        typeof changedPathCount === "number" ? `, changedPaths=${changedPathCount}` : "";
       deps.logger.warn(
-        `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${configPath}.bak${changeSummary})`,
+        formatConfigOverwriteLogMessage({
+          configPath,
+          previousHash: previousHash ?? null,
+          nextHash,
+          changedPathCount,
+        }),
       );
     };
     const logConfigWriteAnomalies = () => {
@@ -2236,78 +1832,38 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
     };
-    const auditRecordBase = {
-      ts: new Date().toISOString(),
-      source: "config-io" as const,
-      event: "config.write" as const,
+    const previousMetadata = resolveConfigStatMetadata(previousStat);
+    const auditRecordBase = createConfigWriteAuditRecordBase({
       configPath,
-      pid: process.pid,
-      ppid: process.ppid,
-      cwd: process.cwd(),
-      argv: process.argv.slice(0, 8),
-      execArgv: process.execArgv.slice(0, 8),
-      watchMode: deps.env.OPENCLAW_WATCH_MODE === "1",
-      watchSession:
-        typeof deps.env.OPENCLAW_WATCH_SESSION === "string" &&
-        deps.env.OPENCLAW_WATCH_SESSION.trim().length > 0
-          ? deps.env.OPENCLAW_WATCH_SESSION.trim()
-          : null,
-      watchCommand:
-        typeof deps.env.OPENCLAW_WATCH_COMMAND === "string" &&
-        deps.env.OPENCLAW_WATCH_COMMAND.trim().length > 0
-          ? deps.env.OPENCLAW_WATCH_COMMAND.trim()
-          : null,
+      env: deps.env,
       existsBefore: snapshot.exists,
       previousHash: previousHash ?? null,
       nextHash,
       previousBytes,
       nextBytes,
-      previousDev: resolveConfigStatMetadata(previousStat).dev,
-      nextDev: null,
-      previousIno: resolveConfigStatMetadata(previousStat).ino,
-      nextIno: null,
-      previousMode: resolveConfigStatMetadata(previousStat).mode,
-      nextMode: null,
-      previousNlink: resolveConfigStatMetadata(previousStat).nlink,
-      nextNlink: null,
-      previousUid: resolveConfigStatMetadata(previousStat).uid,
-      nextUid: null,
-      previousGid: resolveConfigStatMetadata(previousStat).gid,
-      nextGid: null,
-      changedPathCount: typeof changedPathCount === "number" ? changedPathCount : null,
+      previousMetadata,
+      changedPathCount,
       hasMetaBefore,
       hasMetaAfter,
       gatewayModeBefore,
       gatewayModeAfter,
       suspicious: suspiciousReasons,
-    };
+    });
     const appendWriteAudit = async (
       result: ConfigWriteAuditResult,
       err?: unknown,
       nextStat?: fs.Stats | null,
     ) => {
-      const errorCode =
-        err && typeof err === "object" && "code" in err && typeof err.code === "string"
-          ? err.code
-          : undefined;
-      const errorMessage =
-        err && typeof err === "object" && "message" in err && typeof err.message === "string"
-          ? err.message
-          : undefined;
-      const nextMetadata = resolveConfigStatMetadata(nextStat ?? null);
-      await appendConfigAuditRecord(deps, {
-        ...auditRecordBase,
-        result,
-        nextHash: result === "failed" ? null : auditRecordBase.nextHash,
-        nextBytes: result === "failed" ? null : auditRecordBase.nextBytes,
-        nextDev: result === "failed" ? null : nextMetadata.dev,
-        nextIno: result === "failed" ? null : nextMetadata.ino,
-        nextMode: result === "failed" ? null : nextMetadata.mode,
-        nextNlink: result === "failed" ? null : nextMetadata.nlink,
-        nextUid: result === "failed" ? null : nextMetadata.uid,
-        nextGid: result === "failed" ? null : nextMetadata.gid,
-        errorCode,
-        errorMessage,
+      await appendConfigAuditRecord({
+        fs: deps.fs,
+        env: deps.env,
+        homedir: deps.homedir,
+        record: finalizeConfigWriteAuditRecord({
+          base: auditRecordBase,
+          result,
+          err,
+          nextMetadata: resolveConfigStatMetadata(nextStat ?? null),
+        }),
       });
     };
 
@@ -2516,10 +2072,12 @@ export async function writeConfigFile(
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
-  const sameConfigPath =
-    options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
   const writeResult = await io.writeConfigFile(nextCfg, {
-    envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
+    envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
+      actualConfigPath: io.configPath,
+      expectedConfigPath: options.expectedConfigPath,
+      envSnapshotForRestore: options.envSnapshotForRestore,
+    }),
     unsetPaths: options.unsetPaths,
   });
   const notifyCommittedWrite = () => {

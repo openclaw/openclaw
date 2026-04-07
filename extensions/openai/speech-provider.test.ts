@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
 describe("buildOpenAISpeechProvider", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
   it("normalizes provider-owned speech config from raw provider config", () => {
     const provider = buildOpenAISpeechProvider();
     const resolved = provider.resolveConfig?.({
@@ -16,6 +23,7 @@ describe("buildOpenAISpeechProvider", () => {
             voice: "alloy",
             speed: 1.25,
             instructions: " Speak warmly ",
+            responseFormat: " WAV ",
           },
         },
       },
@@ -28,6 +36,7 @@ describe("buildOpenAISpeechProvider", () => {
       voice: "alloy",
       speed: 1.25,
       instructions: "Speak warmly",
+      responseFormat: "wav",
     });
   });
 
@@ -66,5 +75,88 @@ describe("buildOpenAISpeechProvider", () => {
     ).toEqual({
       handled: false,
     });
+  });
+
+  it("preserves talk responseFormat overrides", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: {} as never,
+        timeoutMs: 30_000,
+        baseTtsConfig: {
+          providers: {
+            openai: {
+              apiKey: "sk-base",
+              responseFormat: "mp3",
+            },
+          },
+        },
+        talkProviderConfig: {
+          apiKey: "sk-talk",
+          responseFormat: " WAV ",
+        },
+      }),
+    ).toMatchObject({
+      apiKey: "sk-talk",
+      responseFormat: "wav",
+    });
+  });
+
+  it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.body).toBeTruthy();
+      const body = JSON.parse(String(init?.body)) as { response_format?: string };
+      expect(body.response_format).toBe("wav");
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.groq.com/openai/v1",
+        model: "canopylabs/orpheus-v1-english",
+        voice: "daniel",
+      },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.outputFormat).toBe("wav");
+    expect(result.fileExtension).toBe(".wav");
+    expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("honors explicit responseFormat overrides and clears voice-note compatibility when not opus", async () => {
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.body).toBeTruthy();
+      const body = JSON.parse(String(init?.body)) as { response_format?: string };
+      expect(body.response_format).toBe("wav");
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        baseUrl: "https://proxy.example.com/openai/v1",
+        model: "canopylabs/orpheus-v1-english",
+        voice: "daniel",
+        responseFormat: "wav",
+      },
+      target: "voice-note",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.outputFormat).toBe("wav");
+    expect(result.fileExtension).toBe(".wav");
+    expect(result.voiceCompatible).toBe(false);
   });
 });

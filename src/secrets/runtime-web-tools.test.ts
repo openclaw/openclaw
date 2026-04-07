@@ -300,6 +300,43 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
     expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps web fetch inactive when only web search is configured", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "XAI_API_KEY_REF" },
+                },
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "grok",
+            },
+          },
+        },
+      }),
+      env: {
+        XAI_API_KEY_REF: "xai-runtime-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("grok");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(metadata.fetch.selectedProvider).toBeUndefined();
+    expect(metadata.fetch.providerSource).toBe("none");
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
   it("auto-selects a keyless provider when no credentials are configured", async () => {
@@ -976,6 +1013,36 @@ describe("runtime web tools resolution", () => {
           | undefined
       )?.webFetch?.apiKey,
     ).toBe("firecrawl-runtime-key");
+  });
+
+  it("resolves legacy Firecrawl web fetch SecretRefs through the plugin-owned path", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-legacy-key",
+      },
+    });
+
+    expect(metadata.fetch.providerSource).toBe("auto-detect");
+    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
+    expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(
+      (
+        resolvedConfig.plugins?.entries?.firecrawl?.config as
+          | { webFetch?: { apiKey?: unknown } }
+          | undefined
+      )?.webFetch?.apiKey,
+    ).toBe("firecrawl-legacy-key");
   });
 
   it("fails fast when active web fetch provider SecretRef is unresolved with no fallback", async () => {

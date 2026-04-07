@@ -188,6 +188,12 @@ describe("scripts/test-projects full-suite sharding", () => {
         watchMode: false,
       },
       {
+        config: "vitest.full-core-support-boundary.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
         config: "vitest.full-core-contracts.config.ts",
         forwardedArgs: [],
         includePatterns: null,

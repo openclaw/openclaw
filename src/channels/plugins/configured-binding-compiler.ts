@@ -5,6 +5,7 @@ import {
   requireActivePluginChannelRegistry,
 } from "../../plugins/runtime.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
 import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
@@ -108,7 +109,7 @@ function compileConfiguredBindingRule(params: {
   }
   return {
     channel: params.channel,
-    accountPattern: params.binding.match.accountId?.trim() || undefined,
+    accountPattern: normalizeOptionalString(params.binding.match.accountId),
     binding: params.binding,
     bindingConversationId: params.bindingConversationId,
     target: params.target,

@@ -5,6 +5,7 @@ import {
   fetchWithTimeout,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
 export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
@@ -47,9 +48,7 @@ function addUrlValue(value: unknown, urls: Set<string>): void {
   }
 }
 
-export function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+export const trimToUndefined = normalizeOptionalString;
 
 export function normalizeVydraBaseUrl(value: string | undefined): string {
   const fallback = DEFAULT_VYDRA_BASE_URL;

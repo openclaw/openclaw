@@ -219,6 +219,8 @@ select {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text);
 }
 
 /* --- Header --- */
