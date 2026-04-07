@@ -1,5 +1,6 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelHealthRestartMode } from "../config/types.channels.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -42,6 +43,17 @@ export type ChannelHealthMonitorDeps = {
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
+  /**
+   * Default restart mode for unhealthy channels.
+   *
+   * `"stop-start"` (default): full stop → start cycle with restart-counter reset.
+   * `"graceful"`: stop → start that skips `resetRestartAttempts`, signalling
+   *   a soft recovery to the channel runtime. Useful for transient stale-socket
+   *   events where escalating backoff should not reset.
+   *
+   * Per-channel `healthMonitor.restartMode` overrides this value.
+   */
+  defaultRestartMode?: ChannelHealthRestartMode;
   abortSignal?: AbortSignal;
 };
 
@@ -80,6 +92,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     checkIntervalMs = DEFAULT_CHECK_INTERVAL_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
+    defaultRestartMode = "stop-start",
     abortSignal,
   } = deps;
   const timing = resolveTimingPolicy(deps);
@@ -157,13 +170,28 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           const reason = resolveChannelRestartReason(status, health);
 
-          log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
+          // Per-channel config overrides the global default.
+          const channelCfg = channelManager.getChannelHealthMonitorConfig(
+            channelId as ChannelId,
+            accountId,
+          );
+          const effectiveRestartMode: ChannelHealthRestartMode =
+            channelCfg?.restartMode ?? defaultRestartMode;
+
+          log.info?.(
+            `[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason}, mode: ${effectiveRestartMode})`,
+          );
 
           try {
             if (status.running) {
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
-            channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
+            if (effectiveRestartMode !== "graceful") {
+              // "stop-start": reset the counter so backoff restarts from scratch.
+              channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
+            }
+            // "graceful": skips counter reset — preserves backoff state,
+            // signalling a soft recovery to the channel runtime.
             await channelManager.startChannel(channelId as ChannelId, accountId);
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
