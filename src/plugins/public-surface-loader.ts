@@ -8,8 +8,8 @@ import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
+  resolvePluginLoaderJitiTryNative,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -70,8 +70,9 @@ function resolvePublicSurfaceLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+    preferBuiltDist: true,
+  });
   const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
   if (sharedLoader) {
     return sharedLoader;

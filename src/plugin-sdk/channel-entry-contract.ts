@@ -11,7 +11,7 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
+  resolvePluginLoaderJitiTryNative,
 } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
 
@@ -252,9 +252,9 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) ||
-    (process.platform !== "win32" && modulePath.includes(`${path.sep}dist${path.sep}`));
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+    preferBuiltDist: true,
+  });
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
   const cacheKey = JSON.stringify({
     tryNative,

@@ -6,7 +6,7 @@ import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
+  resolvePluginLoaderJitiTryNative,
 } from "../../plugins/sdk-alias.js";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -15,9 +15,9 @@ function createModuleLoader() {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
   return (modulePath: string) => {
-    const tryNative =
-      shouldPreferNativeJiti(modulePath) ||
-      (process.platform !== "win32" && modulePath.includes(`${path.sep}dist${path.sep}`));
+    const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+      preferBuiltDist: true,
+    });
     const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
     const cacheKey = JSON.stringify({
       tryNative,

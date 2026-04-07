@@ -8,8 +8,8 @@ import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
+  resolvePluginLoaderJitiTryNative,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
 } from "../plugins/sdk-alias.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
@@ -137,8 +137,9 @@ function resolveFacadeModuleLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+    preferBuiltDist: true,
+  });
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
   const cacheKey = JSON.stringify({
     tryNative,
@@ -305,4 +306,10 @@ export function resetFacadeLoaderStateForTest(): void {
   cachedFacadeModuleLocationsByKey.clear();
   facadeLoaderJitiFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
+}
+
+export function setFacadeLoaderJitiFactoryForTest(
+  factory: ((...args: Parameters<(typeof import("jiti"))["createJiti"]>) => JitiLoader) | undefined,
+): void {
+  facadeLoaderJitiFactory = factory;
 }

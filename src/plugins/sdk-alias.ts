@@ -441,12 +441,13 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   };
 }
 
-export function shouldPreferNativeJiti(modulePath: string): boolean {
+function isNativeJitiDisabledByRuntime(): boolean {
   const versions = process.versions as { bun?: string };
-  if (typeof versions.bun === "string") {
-    return false;
-  }
-  if (process.platform === "win32") {
+  return typeof versions.bun === "string" || process.platform === "win32";
+}
+
+export function shouldPreferNativeJiti(modulePath: string): boolean {
+  if (isNativeJitiDisabledByRuntime()) {
     return false;
   }
   switch (path.extname(modulePath).toLowerCase()) {
@@ -458,4 +459,19 @@ export function shouldPreferNativeJiti(modulePath: string): boolean {
     default:
       return false;
   }
+}
+
+export function resolvePluginLoaderJitiTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  if (isNativeJitiDisabledByRuntime()) {
+    return false;
+  }
+  return (
+    shouldPreferNativeJiti(modulePath) ||
+    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
 }
