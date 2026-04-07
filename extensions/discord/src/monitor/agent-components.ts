@@ -154,6 +154,14 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
+export function resolveDiscordComponentOriginatingTo(
+  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
+) {
+  return interactionCtx.isDirectMessage
+    ? `user:${interactionCtx.userId}`
+    : `channel:${interactionCtx.channelId}`;
+}
+
 async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -463,7 +471,7 @@ async function dispatchDiscordComponentEvent(params: {
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
-    OriginatingTo: `channel:${interactionCtx.channelId}`,
+    OriginatingTo: resolveDiscordComponentOriginatingTo(interactionCtx),
   });
 
   await recordInboundSession({

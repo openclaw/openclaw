@@ -443,6 +443,9 @@ export async function processDiscordMessage(
         }))
       : undefined;
 
+  const originatingTo =
+    autoThreadContext?.OriginatingTo ?? (isDirectMessage ? lastRouteTo : replyTarget);
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: baseText ?? text,
@@ -482,7 +485,7 @@ export async function processDiscordMessage(
     CommandSource: "text" as const,
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,
-    OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
+    OriginatingTo: originatingTo,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   observer?.onReplyPlanResolved?.({

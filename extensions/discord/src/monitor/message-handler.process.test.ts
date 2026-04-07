@@ -239,11 +239,18 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | { SessionKey?: string; MessageThreadId?: string | number; OriginatingTo?: string; To?: string }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          OriginatingTo?: string;
+          To?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -596,6 +603,10 @@ describe("processDiscordMessage session routing", () => {
       channel: "discord",
       to: "user:U1",
       accountId: "default",
+    });
+    expect(getLastDispatchCtx()).toMatchObject({
+      To: "channel:dm1",
+      OriginatingTo: "user:U1",
     });
   });
 
