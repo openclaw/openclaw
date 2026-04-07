@@ -1606,6 +1606,11 @@ export async function startGatewayServer(
                   clearSecretsRuntimeSnapshot();
                 }
                 currentSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
+                if (sharedGatewaySessionGenerationChanged) {
+                  // Rollback may have allowed reconnects on the transient new generation;
+                  // close them immediately so passive sockets cannot linger after revert.
+                  disconnectStaleSharedGatewayAuthClients(previousSharedGatewaySessionGeneration);
+                }
                 throw err;
               }
               setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
