@@ -1,18 +1,24 @@
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "./operator-scopes.js";
 
-export const ADMIN_SCOPE = "operator.admin" as const;
-export const READ_SCOPE = "operator.read" as const;
-export const WRITE_SCOPE = "operator.write" as const;
-export const APPROVALS_SCOPE = "operator.approvals" as const;
-export const PAIRING_SCOPE = "operator.pairing" as const;
-
-export type OperatorScope =
-  | typeof ADMIN_SCOPE
-  | typeof READ_SCOPE
-  | typeof WRITE_SCOPE
-  | typeof APPROVALS_SCOPE
-  | typeof PAIRING_SCOPE;
+export {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+};
 
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
@@ -20,6 +26,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   WRITE_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  TALK_SECRETS_SCOPE,
 ];
 
 const NODE_ROLE_METHODS = new Set([
@@ -34,6 +41,7 @@ const NODE_ROLE_METHODS = new Set([
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
+    "exec.approval.get",
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
@@ -58,6 +66,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [READ_SCOPE]: [
     "health",
     "doctor.memory.status",
+    "doctor.memory.dreamDiary",
     "logs.tail",
     "channels.status",
     "status",
@@ -78,6 +87,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.get",
     "sessions.preview",
     "sessions.resolve",
+    "sessions.compaction.list",
+    "sessions.compaction.get",
     "sessions.subscribe",
     "sessions.unsubscribe",
     "sessions.messages.subscribe",
@@ -120,6 +131,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.send",
     "sessions.steer",
     "sessions.abort",
+    "sessions.compaction.branch",
     "push.test",
     "node.pending.enqueue",
   ],
@@ -140,6 +152,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.reset",
     "sessions.delete",
     "sessions.compact",
+    "sessions.compaction.restore",
     "connect",
     "chat.inject",
     "web.login.start",
@@ -148,6 +161,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "system-event",
     "agents.files.set",
   ],
+  [TALK_SECRETS_SCOPE]: [],
 };
 
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(

@@ -51,7 +51,11 @@ describe("resolveAutoMediaKeyProviders", () => {
   });
 
   it("keeps the bundled video fallback order", () => {
-    expect(resolveAutoMediaKeyProviders({ capability: "video" })).toEqual(["google", "moonshot"]);
+    expect(resolveAutoMediaKeyProviders({ capability: "video" })).toEqual([
+      "google",
+      "qwen",
+      "moonshot",
+    ]);
   });
 });
 

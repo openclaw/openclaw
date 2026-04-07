@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { BaseProbeResult } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
@@ -23,7 +25,7 @@ const serverInfoCache = new Map<string, { info: BlueBubblesServerInfo; expires: 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 function buildCacheKey(accountId?: string): string {
-  return accountId?.trim() || "default";
+  return normalizeOptionalString(accountId) || "default";
 }
 
 /**
@@ -172,7 +174,7 @@ export async function probeBlueBubbles(params: {
     return {
       ok: false,
       status: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

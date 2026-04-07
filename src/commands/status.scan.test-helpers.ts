@@ -15,6 +15,7 @@ export type StatusScanSharedMocks = {
   getStatusSummary: UnknownMock;
   getMemorySearchManager: UnknownMock;
   buildGatewayConnectionDetails: UnknownMock;
+  resolveGatewayProbeTarget: UnknownMock;
   probeGateway: UnknownMock;
   resolveGatewayProbeAuthResolution: UnknownMock;
   ensurePluginRegistryLoaded: UnknownMock;
@@ -32,6 +33,11 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
     getStatusSummary: vi.fn(),
     getMemorySearchManager: vi.fn(),
     buildGatewayConnectionDetails: vi.fn(),
+    resolveGatewayProbeTarget: vi.fn(() => ({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    })),
     probeGateway: vi.fn(),
     resolveGatewayProbeAuthResolution: vi.fn(),
     ensurePluginRegistryLoaded: vi.fn(),
@@ -165,27 +171,33 @@ export async function loadStatusScanModuleForTest(
   } = {},
 ) {
   vi.resetModules();
+  const getStatusCommandSecretTargetIds = mocks.getStatusCommandSecretTargetIds ?? vi.fn(() => []);
+  const resolveMemorySearchConfig =
+    mocks.resolveMemorySearchConfig ?? vi.fn(() => ({ store: { path: "/tmp/main.sqlite" } }));
 
   vi.doMock("../channels/config-presence.js", () => ({
     hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   }));
 
-  if (options.fastJson) {
-    vi.doMock("../config/io.js", () => ({
-      readBestEffortConfig: mocks.readBestEffortConfig,
-    }));
-    vi.doMock("../cli/command-secret-targets.js", () => ({
-      getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
-    }));
-    vi.doMock("../agents/memory-search.js", () => ({
-      resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
-    }));
-  } else {
+  vi.doMock("../config/io.js", () => ({
+    readBestEffortConfig: mocks.readBestEffortConfig,
+  }));
+  vi.doMock("../config/config.js", () => ({
+    readBestEffortConfig: mocks.readBestEffortConfig,
+  }));
+  vi.doMock("../cli/command-secret-targets.js", () => ({
+    getStatusCommandSecretTargetIds,
+  }));
+  vi.doMock("../cli/command-config-resolution.js", () => ({
+    resolveCommandConfigWithSecrets: mocks.resolveCommandSecretRefsViaGateway,
+  }));
+  vi.doMock("../agents/memory-search.js", () => ({
+    resolveMemorySearchConfig,
+  }));
+
+  if (!options.fastJson) {
     vi.doMock("../cli/progress.js", () => ({
       withProgress: vi.fn(async (_opts, run) => await run({ setLabel: vi.fn(), tick: vi.fn() })),
-    }));
-    vi.doMock("../config/config.js", () => ({
-      readBestEffortConfig: mocks.readBestEffortConfig,
     }));
     vi.doMock("./status-all/channels.js", () => ({
       buildChannelsTable: mocks.buildChannelsTable,
@@ -217,6 +229,9 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
   vi.doMock("../gateway/probe.js", () => ({
     probeGateway: mocks.probeGateway,
+  }));
+  vi.doMock("../gateway/probe-target.js", () => ({
+    resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
   }));
   vi.doMock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
   vi.doMock("../gateway/connection-details.js", () => ({

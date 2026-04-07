@@ -21,8 +21,9 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   baseUrl: "https://chatgpt.com/backend-api",
   reasoning: true,
   input: ["text", "image"] as const,
-  cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-  contextWindow: 272000,
+  cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+  contextWindow: 1_050_000,
+  contextTokens: 272_000,
   maxTokens: 128000,
 };
 

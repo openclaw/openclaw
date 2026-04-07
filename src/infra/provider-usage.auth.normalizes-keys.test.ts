@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 vi.mock("../agents/auth-profiles.js", () => {
   const normalizeProvider = (provider?: string | null): string =>
@@ -191,10 +192,9 @@ let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProvi
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-provider-auth-suite-" });
 
 describe("resolveProviderAuths key normalization", () => {
-  let suiteRoot = "";
-  let suiteCase = 0;
   const EMPTY_PROVIDER_ENV = {
     ZAI_API_KEY: undefined,
     Z_AI_API_KEY: undefined,
@@ -205,16 +205,14 @@ describe("resolveProviderAuths key normalization", () => {
   } satisfies Record<string, string | undefined>;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    await suiteRootTracker.setup();
     ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   afterAll(async () => {
-    await fs.rm(suiteRoot, { recursive: true, force: true });
-    suiteRoot = "";
-    suiteCase = 0;
+    await suiteRootTracker.cleanup();
   });
 
   beforeEach(() => {
@@ -231,8 +229,7 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const base = path.join(suiteRoot, `case-${++suiteCase}`);
-    nodeFs.mkdirSync(base, { recursive: true });
+    const base = await suiteRootTracker.make("case");
     const stateDir = path.join(base, ".openclaw");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
@@ -478,8 +475,11 @@ describe("resolveProviderAuths key normalization", () => {
       expectedToken: "plain-google-token",
     },
   ])("$name", async ({ token, expectedToken }) => {
+    const googleGeminiCliUsageProvider = "google-gemini-cli" as unknown as Parameters<
+      typeof resolveProviderAuths
+    >[0]["providers"][number];
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["google-gemini-cli"],
+      providers: [googleGeminiCliUsageProvider],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "google-gemini-cli:default": {
@@ -489,7 +489,7 @@ describe("resolveProviderAuths key normalization", () => {
           },
         });
       },
-      expected: [{ provider: "google-gemini-cli", token: expectedToken }],
+      expected: [{ provider: googleGeminiCliUsageProvider, token: expectedToken }],
     });
   });
 

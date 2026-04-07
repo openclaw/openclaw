@@ -38,12 +38,11 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
+  getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
-  wrapToolParamNormalization,
+  wrapToolParamValidation,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -234,9 +233,8 @@ export function resolveToolLoopDetectionConfig(params: {
 
 export const __testing = {
   cleanToolSchemaForGemini,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
-  wrapToolParamNormalization,
+  getToolParamsRecord,
+  wrapToolParamValidation,
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
@@ -306,7 +304,7 @@ export function createOpenClawCodingTools(options?: {
   senderUsername?: string | null;
   senderE164?: string | null;
   /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
@@ -583,6 +581,7 @@ export function createOpenClawCodingTools(options?: {
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       currentMessageId: options?.currentMessageId,
+      modelProvider: options?.modelProvider,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,

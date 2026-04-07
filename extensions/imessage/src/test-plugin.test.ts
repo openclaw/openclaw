@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
 } from "../../../src/plugin-sdk/facade-runtime.js";
 import { createIMessageTestPlugin } from "./test-plugin.js";
+
+beforeEach(() => {
+  resetFacadeRuntimeStateForTest();
+});
 
 afterEach(() => {
   resetFacadeRuntimeStateForTest();

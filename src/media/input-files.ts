@@ -1,6 +1,7 @@
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
 import { convertHeicToJpeg } from "./image-ops.js";
 import { detectMime } from "./mime.js";
@@ -128,12 +129,8 @@ function rejectOversizedBase64Payload(params: {
 }
 
 export function normalizeMimeType(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const [raw] = value.split(";");
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
+  const [raw] = value?.split(";") ?? [];
+  return normalizeOptionalString(raw)?.toLowerCase();
 }
 
 export function parseContentType(value: string | undefined): {
@@ -146,7 +143,7 @@ export function parseContentType(value: string | undefined): {
   const parts = value.split(";").map((part) => part.trim());
   const mimeType = normalizeMimeType(parts[0]);
   const charset = parts
-    .map((part) => part.match(/^charset=(.+)$/i)?.[1]?.trim())
+    .map((part) => normalizeOptionalString(part.match(/^charset=(.+)$/i)?.[1]))
     .find((part) => part && part.length > 0);
   return { mimeType, charset };
 }
@@ -214,7 +211,7 @@ export async function fetchWithGuard(params: {
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
-  const encoding = charset?.trim().toLowerCase() || "utf-8";
+  const encoding = normalizeOptionalString(charset)?.toLowerCase() || "utf-8";
   try {
     return new TextDecoder(encoding).decode(buffer);
   } catch {

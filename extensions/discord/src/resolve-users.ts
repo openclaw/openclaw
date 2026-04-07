@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import {
@@ -156,7 +157,9 @@ export async function resolveDiscordUserAllowlist(params: {
     if (best) {
       const user = best.member.user;
       const name =
-        best.member.nick?.trim() || user.global_name?.trim() || user.username?.trim() || undefined;
+        normalizeOptionalString(best.member.nick) ??
+        normalizeOptionalString(user.global_name) ??
+        normalizeOptionalString(user.username);
       results.push({
         input,
         resolved: true,

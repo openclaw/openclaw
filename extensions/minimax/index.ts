@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -12,7 +13,7 @@ import {
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
@@ -23,11 +24,13 @@ import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
+import { buildMinimaxVideoGenerationProvider } from "./video-generation-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -80,7 +83,7 @@ function resolveApiCatalog(ctx: ProviderCatalogContext) {
   }
   return {
     provider: {
-      ...buildMinimaxProvider(),
+      ...buildMinimaxProvider(ctx.env),
       apiKey,
     },
   };
@@ -105,7 +108,7 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
 
   return {
     provider: buildPortalProviderCatalog({
-      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider().baseUrl,
+      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
       apiKey,
     }),
   };
@@ -167,7 +170,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         ],
       });
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = formatErrorMessage(err);
       progress.stop(`MiniMax OAuth failed: ${errorMsg}`);
       await ctx.prompter.note(
         "If OAuth fails, verify your MiniMax account has portal access and try again.",
@@ -313,6 +316,8 @@ export default definePluginEntry({
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildMinimaxMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildMinimaxVideoGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProvider());
     api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },

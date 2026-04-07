@@ -17,6 +17,7 @@ import type {
   ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
+  ChannelSecretsAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
@@ -78,6 +79,8 @@ export type ChannelConfigSchema = {
 /** Full capability contract for a native channel plugin. */
 type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
 
+// Omitted generic means "plugin with some account shape", not "plugin whose
+// account is literally Record<string, unknown>".
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -106,6 +109,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
+  secrets?: ChannelSecretsAdapter;
   approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
   doctor?: ChannelDoctorAdapter;

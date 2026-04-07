@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
@@ -161,10 +162,10 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         return {
           accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
           hasConfiguredValue,
-          resolvedValue: resolved.token?.trim() || undefined,
+          resolvedValue: normalizeOptionalString(resolved.token),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined
+              ? normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN)
               : undefined,
         };
       },

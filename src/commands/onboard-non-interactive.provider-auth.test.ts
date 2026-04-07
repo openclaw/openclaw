@@ -2,13 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
-import { OPENAI_DEFAULT_MODEL } from "../plugin-sdk/openai.js";
-import {
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/zai.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -23,6 +16,13 @@ type OnboardEnv = {
 };
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
+const MINIMAX_CN_API_BASE_URL = "https://api.minimax.chat/v1";
+const OPENAI_DEFAULT_MODEL = "openai/gpt-5.4";
+const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
+
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
 vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async () => {
@@ -35,7 +35,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     { providerApiKeyAuthRuntime },
     { configureOpenAICompatibleSelfHostedProviderNonInteractive },
     { detectZaiEndpoint },
-    { OPENAI_DEFAULT_MODEL },
   ] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/workspace.js"),
@@ -44,8 +43,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../plugins/provider-api-key-auth.js"),
     import("../plugins/provider-api-key-auth.runtime.js"),
     import("../plugins/provider-self-hosted-setup.js"),
-    import("./zai-endpoint-detect.js"),
-    import("../plugin-sdk/openai.js"),
+    import("../plugins/provider-zai-endpoint.js"),
   ]);
 
   const ZAI_FALLBACKS = {
@@ -332,6 +330,42 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
 
   const choiceMap = new Map<string, ChoiceHandler>([
     [
+      "setup-token",
+      {
+        providerId: "anthropic",
+        label: "Anthropic setup-token",
+        async runNonInteractive(ctx) {
+          const token = normalizeText(ctx.opts.token);
+          if (!token) {
+            ctx.runtime.error("Anthropic setup-token auth requires --token.");
+            ctx.runtime.exit(1);
+            return null;
+          }
+          upsertAuthProfile({
+            profileId: (ctx.opts.tokenProfileId as string | undefined) ?? "anthropic:default",
+            credential: {
+              type: "token",
+              provider: "anthropic",
+              token,
+            } as never,
+            agentDir: ctx.agentDir,
+          });
+          const withProfile = providerApiKeyAuthRuntime.applyAuthProfileConfig(
+            ctx.config as never,
+            {
+              profileId: (ctx.opts.tokenProfileId as string | undefined) ?? "anthropic:default",
+              provider: "anthropic",
+              mode: "token",
+            },
+          );
+          return providerApiKeyAuthRuntime.applyPrimaryModel(
+            withProfile,
+            "anthropic/claude-sonnet-4-6",
+          );
+        },
+      },
+    ],
+    [
       "apiKey",
       createApiKeyChoice({
         providerId: "anthropic",
@@ -537,17 +571,17 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
       }),
     ],
     [
-      "modelstudio-api-key",
+      "qwen-api-key",
       createApiKeyChoice({
-        providerId: "modelstudio",
-        label: "Model Studio",
-        choiceId: "modelstudio-api-key",
+        providerId: "qwen",
+        label: "Qwen Cloud",
+        choiceId: "qwen-api-key",
         optionKey: "modelstudioApiKey",
         flagName: "--modelstudio-api-key",
-        envVar: "MODELSTUDIO_API_KEY",
-        defaultModel: "modelstudio/qwen3.5-plus",
+        envVar: "QWEN_API_KEY",
+        defaultModel: "qwen/qwen3.5-plus",
         applyConfig: (cfg) =>
-          withProviderConfig(cfg, "modelstudio", {
+          withProviderConfig(cfg, "qwen", {
             baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
             api: "openai-completions",
             models: [buildTestProviderModel("qwen3.5-plus")],
@@ -1059,31 +1093,27 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("rejects legacy Anthropic token onboarding", async () => {
+  it("stores legacy Anthropic setup-token onboarding again when explicitly selected", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await expect(
-        runNonInteractiveSetupWithDefaults(runtime, {
-          authChoice: "token",
-          tokenProvider: "anthropic",
-          token,
-          tokenProfileId: "anthropic:default",
-        }),
-      ).rejects.toThrow("Process exited with code 1");
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        [
-          'Auth choice "token" is no longer supported for Anthropic onboarding.',
-          "Existing Anthropic token profiles still run if they are already configured.",
-          'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
-        ].join("\n"),
-      );
+      await runNonInteractiveSetupWithDefaults(runtime, {
+        authChoice: "token",
+        tokenProvider: "anthropic",
+        token,
+        tokenProfileId: "anthropic:default",
+      });
 
       const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-      expect(cfg.auth?.profiles?.["anthropic:default"]).toBeUndefined();
-      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toBeUndefined();
+      expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
+      expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-sonnet-4-6");
+      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toMatchObject({
+        provider: "anthropic",
+        type: "token",
+        token: cleanToken,
+      });
     });
   });
 
@@ -1365,21 +1395,21 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("infers Model Studio auth choice from --modelstudio-api-key and sets default model", async () => {
+  it("infers Qwen auth choice from --modelstudio-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-modelstudio-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["modelstudio:default"]?.provider).toBe("modelstudio");
-      expect(cfg.auth?.profiles?.["modelstudio:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.modelstudio?.baseUrl).toBe(
+      expect(cfg.auth?.profiles?.["qwen:default"]?.provider).toBe("qwen");
+      expect(cfg.auth?.profiles?.["qwen:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.qwen?.baseUrl).toBe(
         "https://coding-intl.dashscope.aliyuncs.com/v1",
       );
-      expect(cfg.agents?.defaults?.model?.primary).toBe("modelstudio/qwen3.5-plus");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("qwen/qwen3.5-plus");
       await expectApiKeyProfile({
-        profileId: "modelstudio:default",
-        provider: "modelstudio",
+        profileId: "qwen:default",
+        provider: "qwen",
         key: "modelstudio-test-key",
       });
     });

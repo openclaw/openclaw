@@ -1,11 +1,6 @@
-type UnknownRecord = Record<string, unknown>;
+import { readStringValue as readString } from "../shared/string-coerce.js";
 
-function readString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return value;
-}
+type UnknownRecord = Record<string, unknown>;
 
 function normalizeChannel(value: string): string {
   return value.trim().toLowerCase();

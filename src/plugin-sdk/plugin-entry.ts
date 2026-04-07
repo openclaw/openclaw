@@ -7,6 +7,10 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector,
+  OpenClawPluginSecurityAuditContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   OpenClawPluginToolContext,
@@ -71,6 +75,10 @@ export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector,
+  OpenClawPluginSecurityAuditContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginCommandContext,
@@ -143,6 +151,9 @@ type DefinePluginEntryOptions = {
   description: string;
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
+  reload?: OpenClawPluginDefinition["reload"];
+  nodeHostCommands?: OpenClawPluginDefinition["nodeHostCommands"];
+  securityAuditCollectors?: OpenClawPluginDefinition["securityAuditCollectors"];
   register: (api: OpenClawPluginApi) => void;
 };
 
@@ -153,7 +164,10 @@ type DefinedPluginEntry = {
   description: string;
   configSchema: OpenClawPluginConfigSchema;
   register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<OpenClawPluginDefinition, "kind">;
+} & Pick<
+  OpenClawPluginDefinition,
+  "kind" | "reload" | "nodeHostCommands" | "securityAuditCollectors"
+>;
 
 /**
  * Canonical entry helper for non-channel plugins.
@@ -168,6 +182,9 @@ export function definePluginEntry({
   description,
   kind,
   configSchema = emptyPluginConfigSchema,
+  reload,
+  nodeHostCommands,
+  securityAuditCollectors,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
   const getConfigSchema = createCachedLazyValueGetter(configSchema);
@@ -176,6 +193,9 @@ export function definePluginEntry({
     name,
     description,
     ...(kind ? { kind } : {}),
+    ...(reload ? { reload } : {}),
+    ...(nodeHostCommands ? { nodeHostCommands } : {}),
+    ...(securityAuditCollectors ? { securityAuditCollectors } : {}),
     get configSchema() {
       return getConfigSchema();
     },

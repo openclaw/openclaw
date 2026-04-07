@@ -1,26 +1,67 @@
+import { createRequire } from "node:module";
+import path from "node:path";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import {
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
-const forwardedArgs = process.argv.slice(2);
+const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
+const require = createRequire(import.meta.url);
 
-if (forwardedArgs.length === 0) {
-  console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
-  process.exit(1);
+function isTruthyEnvValue(value) {
+  return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
 }
 
-const child = spawnPnpmRunner({
-  pnpmArgs: ["exec", "vitest", ...forwardedArgs],
-  env: process.env,
-});
-
-child.on("exit", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+export function resolveVitestNodeArgs(env = process.env) {
+  if (isTruthyEnvValue(env.OPENCLAW_VITEST_ENABLE_MAGLEV)) {
+    return [];
   }
-  process.exit(code ?? 1);
-});
 
-child.on("error", (error) => {
-  console.error(error);
-  process.exit(1);
-});
+  return ["--no-maglev"];
+}
+
+export function resolveVitestCliEntry() {
+  const vitestPackageJson = require.resolve("vitest/package.json");
+  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+}
+
+export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
+  return {
+    env,
+    detached: shouldUseDetachedVitestProcessGroup(platform),
+  };
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  if (argv.length === 0) {
+    console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
+    process.exit(1);
+  }
+
+  const spawnParams = resolveVitestSpawnParams(env);
+  const child = spawnPnpmRunner({
+    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
+    ...spawnParams,
+  });
+  const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+
+  child.on("exit", (code, signal) => {
+    teardownChildCleanup();
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+
+  child.on("error", (error) => {
+    teardownChildCleanup();
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+if (import.meta.main) {
+  main();
+}

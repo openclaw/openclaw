@@ -92,7 +92,7 @@ Then commands such as these will run inside that container automatically:
 
 ```bash
 openclaw dashboard --no-open
-openclaw gateway status --deep
+openclaw gateway status --deep   # includes extra service scan
 openclaw doctor
 openclaw channels login
 ```
@@ -191,7 +191,8 @@ Quadlet note:
 - **Stop container:** `podman stop openclaw`
 - **Remove container:** `podman rm -f openclaw`
 - **Open dashboard URL from host CLI:** `openclaw dashboard --no-open`
-- **Health/status via host CLI:** `openclaw gateway status --deep`
+- **Health/status via host CLI:** `openclaw gateway status --deep` (RPC probe + extra
+  service scan)
 
 ## Troubleshooting
 

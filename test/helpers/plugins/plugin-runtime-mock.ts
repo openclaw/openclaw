@@ -4,6 +4,10 @@ import {
   removeAckReactionAfterReply,
   shouldAckReaction,
 } from "../../../src/channels/ack-reactions.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../../src/channels/mention-gating.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 
 type DeepPartial<T> = {
@@ -162,6 +166,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
       listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
     },
+    musicGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["musicGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["musicGeneration"]["listProviders"],
+    },
+    videoGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["videoGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["videoGeneration"]["listProviders"],
+    },
     webSearch: {
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
@@ -290,6 +302,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               ? true
               : params.mentionRegexes.some((regex) => regex.test(params.text)),
         ) as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
+        implicitMentionKindWhen,
+        resolveInboundMentionDecision,
       },
       reactions: {
         shouldAckReaction,

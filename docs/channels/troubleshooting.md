@@ -26,7 +26,7 @@ Healthy baseline:
 
 - `Runtime: running`
 - `RPC probe: ok`
-- Channel probe shows connected/ready
+- Channel probe shows transport connected and, where supported, `works` or `audit ok`
 
 ## WhatsApp
 
@@ -70,11 +70,11 @@ Full troubleshooting: [/channels/discord#troubleshooting](/channels/discord#trou
 
 ### Slack failure signatures
 
-| Symptom                                | Fastest check                             | Fix                                               |
-| -------------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| Socket mode connected but no responses | `openclaw channels status --probe`        | Verify app token + bot token and required scopes. |
-| DMs blocked                            | `openclaw pairing list slack`             | Approve pairing or relax DM policy.               |
-| Channel message ignored                | Check `groupPolicy` and channel allowlist | Allow the channel or switch policy to `open`.     |
+| Symptom                                | Fastest check                             | Fix                                                                                                                                                  |
+| -------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Socket mode connected but no responses | `openclaw channels status --probe`        | Verify app token + bot token and required scopes; watch for `botTokenStatus` / `appTokenStatus = configured_unavailable` on SecretRef-backed setups. |
+| DMs blocked                            | `openclaw pairing list slack`             | Approve pairing or relax DM policy.                                                                                                                  |
+| Channel message ignored                | Check `groupPolicy` and channel allowlist | Allow the channel or switch policy to `open`.                                                                                                        |
 
 Full troubleshooting: [/channels/slack#troubleshooting](/channels/slack#troubleshooting)
 

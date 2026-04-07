@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type SpawnedRunMetadata = {
@@ -26,11 +27,7 @@ export type NormalizedSpawnedRunMetadata = {
 };
 
 function normalizeOptionalText(value?: string | null): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 export function normalizeSpawnedRunMetadata(

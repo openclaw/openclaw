@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { SEARCH_PROVIDER_OPTIONS, setupSearch } from "./onboard-search.js";
+import { listSearchProviderOptions, setupSearch } from "./onboard-search.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -613,17 +613,20 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
-    const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
-    expect(values).toEqual([
-      "brave",
-      "firecrawl",
-      "gemini",
-      "grok",
-      "kimi",
-      "perplexity",
-      "tavily",
-    ]);
+  it("exports search providers in alphabetical order", () => {
+    const providers = listSearchProviderOptions();
+    const values = providers.map((e) => e.id);
+    expect(values).toEqual([...values].toSorted());
+    expect(values).toEqual(
+      expect.arrayContaining([
+        "brave",
+        "firecrawl",
+        "gemini",
+        "grok",
+        "kimi",
+        "perplexity",
+        "tavily",
+      ]),
+    );
   });
 });

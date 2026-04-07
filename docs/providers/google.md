@@ -54,6 +54,9 @@ restrictions. Use at your own risk.
 
 - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
 - Alias: `gemini-cli`
+- Install prerequisite: local Gemini CLI available as `gemini`
+  - Homebrew: `brew install gemini-cli`
+  - npm: `npm install -g @google/gemini-cli`
 - Login:
 
 ```bash
@@ -71,6 +74,10 @@ If Gemini CLI OAuth requests fail after login, set
 `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
 retry.
 
+If login fails before the browser flow starts, make sure the local `gemini`
+command is installed and on `PATH`. OpenClaw supports both Homebrew installs
+and global npm installs, including common Windows/npm layouts.
+
 Gemini CLI JSON usage notes:
 
 - Reply text comes from the CLI JSON `response` field.
@@ -85,6 +92,7 @@ Gemini CLI JSON usage notes:
 | ---------------------- | ----------------- |
 | Chat completions       | Yes               |
 | Image generation       | Yes               |
+| Music generation       | Yes               |
 | Image understanding    | Yes               |
 | Audio transcription    | Yes               |
 | Video understanding    | Yes               |
@@ -134,6 +142,79 @@ The bundled `google` image-generation provider defaults to
 The OAuth-only `google-gemini-cli` provider is a separate text-inference
 surface. Image generation, media understanding, and Gemini Grounding stay on
 the `google` provider id.
+
+To use Google as the default image provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "google/gemini-3.1-flash-image-preview",
+      },
+    },
+  },
+}
+```
+
+See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Video generation
+
+The bundled `google` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `google/veo-3.1-fast-generate-preview`
+- Modes: text-to-video, image-to-video, and single-video reference flows
+- Supports `aspectRatio`, `resolution`, and `audio`
+- Current duration clamp: **4 to 8 seconds**
+
+To use Google as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "google/veo-3.1-fast-generate-preview",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Music generation
+
+The bundled `google` plugin also registers music generation through the shared
+`music_generate` tool.
+
+- Default music model: `google/lyria-3-clip-preview`
+- Also supports `google/lyria-3-pro-preview`
+- Prompt controls: `lyrics` and `instrumental`
+- Output format: `mp3` by default, plus `wav` on `google/lyria-3-pro-preview`
+- Reference inputs: up to 10 images
+- Session-backed runs detach through the shared task/status flow, including `action: "status"`
+
+To use Google as the default music provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "google/lyria-3-clip-preview",
+      },
+    },
+  },
+}
+```
+
+See [Music Generation](/tools/music-generation) for the shared tool
+parameters, provider selection, and failover behavior.
 
 ## Environment note
 

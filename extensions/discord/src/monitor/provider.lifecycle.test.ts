@@ -383,7 +383,7 @@ describe("runDiscordGatewayLifecycle", () => {
     });
 
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
-      "Fatal Gateway error: 4000",
+      "discord gateway fatal: Error: Fatal Gateway error: 4000",
     );
 
     expectLifecycleCleanup({
@@ -406,7 +406,7 @@ describe("runDiscordGatewayLifecycle", () => {
     });
 
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
-      "Max reconnect attempts (50) reached after code 1005",
+      "discord gateway reconnect-exhausted: Error: Max reconnect attempts (50) reached after code 1005",
     );
 
     expectLifecycleCleanup({
@@ -438,9 +438,11 @@ describe("runDiscordGatewayLifecycle", () => {
       lifecyclePromise.catch(() => {});
       await vi.advanceTimersByTimeAsync(1_500);
 
-      await expect(lifecyclePromise).rejects.toThrow("Fatal Gateway error: 4001");
+      await expect(lifecyclePromise).rejects.toThrow(
+        "discord gateway fatal: Error: Fatal Gateway error: 4001",
+      );
       expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("discord gateway error: Error: Fatal Gateway error: 4001"),
+        expect.stringContaining("discord gateway fatal: Error: Fatal Gateway error: 4001"),
       );
       expect(gateway.disconnect).not.toHaveBeenCalled();
       expect(gateway.connect).not.toHaveBeenCalled();

@@ -3,18 +3,29 @@ import {
   type OpenClawPluginToolContext,
   type OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  collectBrowserSecurityAuditFindings,
+  createBrowserPluginService,
+  createBrowserTool,
+  handleBrowserGatewayRequest,
+  registerBrowserCli,
+  runBrowserProxyCommand,
+} from "./register.runtime.js";
 
 export default definePluginEntry({
   id: "browser",
   name: "Browser",
   description: "Default browser tool plugin",
-  async register(api) {
-    const {
-      createBrowserPluginService,
-      createBrowserTool,
-      handleBrowserGatewayRequest,
-      registerBrowserCli,
-    } = await import("./register.runtime.js");
+  reload: { restartPrefixes: ["browser"] },
+  nodeHostCommands: [
+    {
+      command: "browser.proxy",
+      cap: "browser",
+      handle: runBrowserProxyCommand,
+    },
+  ],
+  securityAuditCollectors: [collectBrowserSecurityAuditFindings],
+  register(api) {
     api.registerTool(((ctx: OpenClawPluginToolContext) =>
       createBrowserTool({
         sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,

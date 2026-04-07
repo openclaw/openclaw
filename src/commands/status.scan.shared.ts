@@ -2,15 +2,23 @@ import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { probeGateway } from "../gateway/probe.js";
+import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
+import type { probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import { pickGatewaySelfPresence } from "./gateway-presence.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
 let gatewayProbeModulePromise: Promise<typeof import("./status.gateway-probe.js")> | undefined;
+let probeGatewayModulePromise: Promise<typeof import("../gateway/probe.js")> | undefined;
 
 function loadGatewayProbeModule() {
   gatewayProbeModulePromise ??= import("./status.gateway-probe.js");
   return gatewayProbeModulePromise;
+}
+
+function loadProbeGatewayModule() {
+  probeGatewayModulePromise ??= import("../gateway/probe.js");
+  return probeGatewayModulePromise;
 }
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
@@ -32,7 +40,14 @@ export type GatewayProbeSnapshot = {
     password?: string;
   };
   gatewayProbeAuthWarning?: string;
-  gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
+  gatewayProbe: Awaited<ReturnType<typeof probeGatewayFn>> | null;
+  gatewayReachable: boolean;
+  gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
+  gatewayCallOverrides?: {
+    url: string;
+    token?: string;
+    password?: string;
+  };
 };
 
 export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
@@ -62,39 +77,56 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
 
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
-  opts: { timeoutMs?: number; all?: boolean; skipProbe?: boolean };
+  opts: {
+    timeoutMs?: number;
+    all?: boolean;
+    skipProbe?: boolean;
+    detailLevel?: "none" | "presence" | "full";
+    probeWhenRemoteUrlMissing?: boolean;
+    resolveAuthWhenRemoteUrlMissing?: boolean;
+    mergeAuthWarningIntoProbeError?: boolean;
+  };
 }): Promise<GatewayProbeSnapshot> {
   const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
-  const isRemoteMode = params.cfg.gateway?.mode === "remote";
-  const remoteUrlRaw =
-    typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
-  const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
-  const gatewayMode = isRemoteMode ? "remote" : "local";
-  if (remoteUrlMissing || params.opts.skipProbe) {
-    return {
-      gatewayConnection,
-      remoteUrlMissing,
-      gatewayMode,
-      gatewayProbeAuth: {},
-      gatewayProbeAuthWarning: undefined,
-      gatewayProbe: null,
-    };
-  }
-  const { resolveGatewayProbeAuthResolution } = await loadGatewayProbeModule();
-  const gatewayProbeAuthResolution = await resolveGatewayProbeAuthResolution(params.cfg);
+  const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
+  const shouldResolveAuth =
+    params.opts.skipProbe !== true &&
+    (!remoteUrlMissing || params.opts.resolveAuthWhenRemoteUrlMissing === true);
+  const shouldProbe =
+    params.opts.skipProbe !== true &&
+    (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
+  const gatewayProbeAuthResolution = shouldResolveAuth
+    ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
+        resolveGatewayProbeAuthResolution(params.cfg),
+      )
+    : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const gatewayProbe = await probeGateway({
-    url: gatewayConnection.url,
-    auth: gatewayProbeAuthResolution.auth,
-    timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
-    detailLevel: "presence",
-  }).catch(() => null);
-  if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
+  const gatewayProbe = shouldProbe
+    ? await loadProbeGatewayModule()
+        .then(({ probeGateway }) =>
+          probeGateway({
+            url: gatewayConnection.url,
+            auth: gatewayProbeAuthResolution.auth,
+            timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+            detailLevel: params.opts.detailLevel ?? "presence",
+          }),
+        )
+        .catch(() => null)
+    : null;
+  if (
+    (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
+    gatewayProbeAuthWarning &&
+    gatewayProbe?.ok === false
+  ) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
       : gatewayProbeAuthWarning;
     gatewayProbeAuthWarning = undefined;
   }
+  const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewaySelf = gatewayProbe?.presence
+    ? pickGatewaySelfPresence(gatewayProbe.presence)
+    : null;
   return {
     gatewayConnection,
     remoteUrlMissing,
@@ -102,6 +134,17 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuth: gatewayProbeAuthResolution.auth,
     gatewayProbeAuthWarning,
     gatewayProbe,
+    gatewayReachable,
+    gatewaySelf,
+    ...(remoteUrlMissing
+      ? {
+          gatewayCallOverrides: {
+            url: gatewayConnection.url,
+            token: gatewayProbeAuthResolution.auth.token,
+            password: gatewayProbeAuthResolution.auth.password,
+          },
+        }
+      : {}),
   };
 }
 

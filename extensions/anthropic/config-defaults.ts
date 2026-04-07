@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
 
@@ -9,14 +10,23 @@ function resolveAnthropicDefaultAuthMode(
 ): "api_key" | "oauth" | null {
   const profiles = config.auth?.profiles ?? {};
   const anthropicProfiles = Object.entries(profiles).filter(
-    ([, profile]) => profile?.provider === "anthropic",
+    ([, profile]) =>
+      profile?.provider === "anthropic" || profile?.provider === CLAUDE_CLI_BACKEND_ID,
   );
 
-  const order = config.auth?.order?.anthropic ?? [];
+  const order = [
+    ...(config.auth?.order?.anthropic ?? []),
+    ...((config.auth?.order as Record<string, string[] | undefined> | undefined)?.[
+      CLAUDE_CLI_BACKEND_ID
+    ] ?? []),
+  ];
   for (const profileId of order) {
     const entry = profiles[profileId];
-    if (!entry || entry.provider !== "anthropic") {
+    if (!entry || (entry.provider !== "anthropic" && entry.provider !== CLAUDE_CLI_BACKEND_ID)) {
       continue;
+    }
+    if (entry.provider === CLAUDE_CLI_BACKEND_ID) {
+      return "oauth";
     }
     if (entry.mode === "api_key") {
       return "api_key";
@@ -26,9 +36,14 @@ function resolveAnthropicDefaultAuthMode(
     }
   }
 
-  const hasApiKey = anthropicProfiles.some(([, profile]) => profile?.mode === "api_key");
+  const hasApiKey = anthropicProfiles.some(
+    ([, profile]) => profile?.provider === "anthropic" && profile?.mode === "api_key",
+  );
   const hasOauth = anthropicProfiles.some(
-    ([, profile]) => profile?.mode === "oauth" || profile?.mode === "token",
+    ([, profile]) =>
+      profile?.provider === CLAUDE_CLI_BACKEND_ID ||
+      profile?.mode === "oauth" ||
+      profile?.mode === "token",
   );
   if (hasApiKey && !hasOauth) {
     return "api_key";
@@ -111,6 +126,23 @@ function isAnthropicCacheRetentionTarget(
       (parsed.provider === "amazon-bedrock" &&
         parsed.model.toLowerCase().includes("anthropic.claude"))),
   );
+}
+
+function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
+  const primary = resolveModelPrimaryValue(
+    config.agents?.defaults?.model as
+      | string
+      | { primary?: string; fallbacks?: string[] }
+      | undefined,
+  );
+  const parsedPrimary = primary ? parseProviderModelRef(primary, "anthropic") : null;
+  if (parsedPrimary?.provider === CLAUDE_CLI_BACKEND_ID) {
+    return true;
+  }
+  return Object.keys(config.agents?.defaults?.models ?? {}).some((key) => {
+    const parsed = parseProviderModelRef(key, "anthropic");
+    return parsed?.provider === CLAUDE_CLI_BACKEND_ID;
+  });
 }
 
 export function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
@@ -205,6 +237,22 @@ export function applyAnthropicConfigDefaults(params: {
       }
     }
 
+    if (modelsMutated) {
+      nextDefaults.models = nextModels;
+      mutated = true;
+    }
+  }
+
+  if (authMode === "oauth" && usesClaudeCliModelSelection(params.config)) {
+    const nextModels = defaults.models ? { ...defaults.models } : {};
+    let modelsMutated = false;
+    for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+      if (ref in nextModels) {
+        continue;
+      }
+      nextModels[ref] = {};
+      modelsMutated = true;
+    }
     if (modelsMutated) {
       nextDefaults.models = nextModels;
       mutated = true;

@@ -83,6 +83,8 @@ export type PluginRuntimeChannel = {
     buildMentionRegexes: typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
     matchesMentionPatterns: typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
     matchesMentionWithExplicit: typeof import("../../auto-reply/reply/mentions.js").matchesMentionWithExplicit;
+    implicitMentionKindWhen: typeof import("../../channels/mention-gating.js").implicitMentionKindWhen;
+    resolveInboundMentionDecision: typeof import("../../channels/mention-gating.js").resolveInboundMentionDecision;
   };
   reactions: {
     shouldAckReaction: typeof import("../../channels/ack-reactions.js").shouldAckReaction;

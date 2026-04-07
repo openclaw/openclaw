@@ -1,4 +1,3 @@
-import { isClaudeCliProvider } from "../../extensions/anthropic/api.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { isRecord } from "../utils.js";
 
@@ -22,6 +21,10 @@ export type CliStreamingDelta = {
   sessionId?: string;
   usage?: CliUsage;
 };
+
+function isClaudeCliProvider(providerId: string): boolean {
+  return providerId.trim().toLowerCase() === "claude-cli";
+}
 
 function extractJsonObjectCandidates(raw: string): string[] {
   const candidates: string[] = [];
@@ -114,7 +117,8 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
     (Object.hasOwn(raw, "cached") && typeof totalInput === "number"
       ? Math.max(0, totalInput - (cacheRead ?? 0))
       : totalInput);
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
+  const cacheWrite =
+    pick("cache_creation_input_tokens") ?? pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;

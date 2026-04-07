@@ -66,6 +66,9 @@ OpenClaw currently seeds the bundled `zai` provider with:
 
 - GLM models are available as `zai/<model>` (example: `zai/glm-5`).
 - Default bundled model ref: `zai/glm-5`
+- Unknown `glm-5*` ids still forward-resolve on the bundled provider path by
+  synthesizing provider-owned metadata from the `glm-4.7` template when the id
+  matches the current GLM-5 family shape.
 - `tool_stream` is enabled by default for Z.AI tool-call streaming. Set
   `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 - See [/providers/glm](/providers/glm) for the model family overview.

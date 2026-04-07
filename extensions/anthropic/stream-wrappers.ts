@@ -6,8 +6,9 @@ import {
   composeProviderStreamWrappers,
   resolveAnthropicPayloadPolicy,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -82,7 +83,7 @@ function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | u
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   if (normalized === "auto" || normalized === "standard_only") {
     return normalized;
   }
@@ -152,10 +153,14 @@ export function createAnthropicFastModeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const serviceTier = resolveAnthropicFastServiceTier(enabled);
   return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+      return underlying(model, context, options);
+    }
+
     const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       serviceTier,
     });
     if (!payloadPolicy.allowsServiceTier) {
@@ -174,10 +179,14 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+      return underlying(model, context, options);
+    }
+
     const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       serviceTier,
     });
     if (!payloadPolicy.allowsServiceTier) {
@@ -210,7 +219,9 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
-export function wrapAnthropicProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapAnthropicProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);

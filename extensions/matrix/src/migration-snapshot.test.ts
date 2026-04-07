@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import {
@@ -11,13 +11,38 @@ import {
 } from "./migration-snapshot.js";
 import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 
+const createBackupArchiveMock = vi.hoisted(() => vi.fn());
+
 describe("matrix migration snapshots", () => {
+  beforeEach(() => {
+    createBackupArchiveMock.mockReset();
+    createBackupArchiveMock.mockImplementation(
+      async (params: { output?: string; includeWorkspace?: boolean }) => {
+        const outputDir = params.output;
+        if (!outputDir) {
+          throw new Error("expected migration snapshot output dir");
+        }
+        fs.mkdirSync(outputDir, { recursive: true });
+        const archivePath = path.join(outputDir, "matrix-migration-backup.tar.gz");
+        fs.writeFileSync(archivePath, "archive\n", "utf8");
+        return {
+          createdAt: "2026-04-05T00:00:00.000Z",
+          archivePath,
+          includeWorkspace: params.includeWorkspace ?? true,
+        };
+      },
+    );
+  });
+
   it("creates a backup marker after writing a pre-migration snapshot", async () => {
     await withTempHome(async (home) => {
       fs.writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n", "utf8");
       fs.writeFileSync(path.join(home, ".openclaw", "state.txt"), "state\n", "utf8");
 
-      const result = await maybeCreateMatrixMigrationSnapshot({ trigger: "unit-test" });
+      const result = await maybeCreateMatrixMigrationSnapshot({
+        trigger: "unit-test",
+        createBackupArchive: createBackupArchiveMock,
+      });
 
       expect(result.created).toBe(true);
       expect(result.markerPath).toBe(resolveMatrixMigrationSnapshotMarkerPath(process.env));
@@ -25,6 +50,10 @@ describe("matrix migration snapshots", () => {
         result.archivePath.startsWith(resolveMatrixMigrationSnapshotOutputDir(process.env)),
       ).toBe(true);
       expect(fs.existsSync(result.archivePath)).toBe(true);
+      expect(createBackupArchiveMock).toHaveBeenCalledWith({
+        output: resolveMatrixMigrationSnapshotOutputDir(process.env),
+        includeWorkspace: false,
+      });
     });
   });
 

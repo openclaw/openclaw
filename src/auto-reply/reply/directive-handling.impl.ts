@@ -1,14 +1,9 @@
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveSessionAgentId,
-} from "../../agents/agent-scope.js";
-import { renderExecTargetLabel, resolveExecTarget } from "../../agents/bash-tools.exec-runtime.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -32,49 +27,6 @@ import {
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-
-function resolveExecDefaults(params: {
-  cfg: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  agentId?: string;
-  sandboxAvailable: boolean;
-}): {
-  host: ExecTarget;
-  effectiveHost: ExecHost;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  node?: string;
-} {
-  const globalExec = params.cfg.tools?.exec;
-  const agentExec = params.agentId
-    ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
-    : undefined;
-  const host =
-    (params.sessionEntry?.execHost as ExecTarget | undefined) ??
-    (agentExec?.host as ExecTarget | undefined) ??
-    (globalExec?.host as ExecTarget | undefined) ??
-    "auto";
-  const resolved = resolveExecTarget({
-    configuredTarget: host,
-    elevatedRequested: false,
-    sandboxAvailable: params.sandboxAvailable,
-  });
-  return {
-    host,
-    effectiveHost: resolved.effectiveHost,
-    security:
-      (params.sessionEntry?.execSecurity as ExecSecurity | undefined) ??
-      (agentExec?.security as ExecSecurity | undefined) ??
-      (globalExec?.security as ExecSecurity | undefined) ??
-      "deny",
-    ask:
-      (params.sessionEntry?.execAsk as ExecAsk | undefined) ??
-      (agentExec?.ask as ExecAsk | undefined) ??
-      (globalExec?.ask as ExecAsk | undefined) ??
-      "on-miss",
-    node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
-  };
-}
 
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,

@@ -1,9 +1,7 @@
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+
 function normalizeConversationId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function resolveExplicitConversationTargetId(target: string): string | undefined {

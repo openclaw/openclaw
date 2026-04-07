@@ -6,17 +6,20 @@ const state = vi.hoisted(() => ({
   requestEmbeddedRunModelSwitchMock: vi.fn(),
   consumeEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
-  resolvePersistedModelRefMock: vi.fn(),
+  resolvePersistedSelectedModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
+  piEmbeddedModuleImported: false,
 }));
 
-vi.mock("./pi-embedded.js", () => ({
-  abortEmbeddedPiRun: (...args: unknown[]) => state.abortEmbeddedPiRunMock(...args),
-}));
+vi.mock("./pi-embedded.js", () => {
+  state.piEmbeddedModuleImported = true;
+  return {};
+});
 
 vi.mock("./pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (...args: unknown[]) => state.abortEmbeddedPiRunMock(...args),
   requestEmbeddedRunModelSwitch: (...args: unknown[]) =>
     state.requestEmbeddedRunModelSwitchMock(...args),
   consumeEmbeddedRunModelSwitch: (...args: unknown[]) =>
@@ -26,7 +29,8 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 vi.mock("./model-selection.js", () => ({
   resolveDefaultModelForAgent: (...args: unknown[]) =>
     state.resolveDefaultModelForAgentMock(...args),
-  resolvePersistedModelRef: (...args: unknown[]) => state.resolvePersistedModelRefMock(...args),
+  resolvePersistedSelectedModelRef: (...args: unknown[]) =>
+    state.resolvePersistedSelectedModelRefMock(...args),
 }));
 
 vi.mock("../config/sessions/store.js", () => ({
@@ -56,10 +60,11 @@ describe("live model switch", () => {
     state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.consumeEmbeddedRunModelSwitchMock.mockReset();
+    state.piEmbeddedModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()
       .mockReturnValue({ provider: "anthropic", model: "claude-opus-4-6" });
-    state.resolvePersistedModelRefMock
+    state.resolvePersistedSelectedModelRefMock
       .mockReset()
       .mockImplementation(
         (params: {
@@ -70,6 +75,21 @@ describe("live model switch", () => {
           overrideModel?: string;
         }) => {
           const defaultProvider = params.defaultProvider.trim();
+          const overrideProvider = params.overrideProvider?.trim();
+          const overrideModel = params.overrideModel?.trim();
+          if (overrideModel) {
+            if (overrideProvider) {
+              return { provider: overrideProvider, model: overrideModel };
+            }
+            const slash = overrideModel.indexOf("/");
+            if (slash <= 0 || slash === overrideModel.length - 1) {
+              return { provider: defaultProvider, model: overrideModel };
+            }
+            return {
+              provider: overrideModel.slice(0, slash),
+              model: overrideModel.slice(slash + 1),
+            };
+          }
           const runtimeProvider = params.runtimeProvider?.trim();
           const runtimeModel = params.runtimeModel?.trim();
           if (runtimeModel) {
@@ -85,22 +105,7 @@ describe("live model switch", () => {
               model: runtimeModel.slice(slash + 1),
             };
           }
-          const overrideProvider = params.overrideProvider?.trim();
-          const overrideModel = params.overrideModel?.trim();
-          if (!overrideModel) {
-            return null;
-          }
-          if (overrideProvider) {
-            return { provider: overrideProvider, model: overrideModel };
-          }
-          const slash = overrideModel.indexOf("/");
-          if (slash <= 0 || slash === overrideModel.length - 1) {
-            return { provider: defaultProvider, model: overrideModel };
-          }
-          return {
-            provider: overrideModel.slice(0, slash),
-            model: overrideModel.slice(slash + 1),
-          };
+          return null;
         },
       );
     state.loadSessionStoreMock.mockReset().mockReturnValue({});
@@ -245,6 +250,12 @@ describe("live model switch", () => {
       model: "gpt-5.4",
       authProfileId: "profile-gpt",
     });
+  });
+
+  it("does not import the broad pi-embedded barrel on module load", async () => {
+    await loadModule();
+
+    expect(state.piEmbeddedModuleImported).toBe(false);
   });
 
   it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {

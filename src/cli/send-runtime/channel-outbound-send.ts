@@ -1,6 +1,7 @@
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { loadConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type RuntimeSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
@@ -36,7 +37,7 @@ export function createChannelOutboundRuntimeSend(params: {
         replyToId:
           opts.replyToMessageId == null
             ? undefined
-            : String(opts.replyToMessageId).trim() || undefined,
+            : normalizeOptionalString(String(opts.replyToMessageId)),
         silent: opts.silent,
         forceDocument: opts.forceDocument,
         gifPlayback: opts.gifPlayback,

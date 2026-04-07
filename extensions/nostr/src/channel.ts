@@ -3,9 +3,9 @@ import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
@@ -43,7 +43,7 @@ const activeBuses = new Map<string, NostrBusHandle>();
 // Store metrics snapshots per account (for status reporting)
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 
-function normalizeNostrAllowEntry(entry: string): string | "*" | null {
+function normalizeNostrAllowEntry(entry: string): string | null {
   const trimmed = entry.trim();
   if (!trimmed) {
     return null;

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMatrixAuth } from "./matrix/client.js";
 import { MatrixAuthedHttpClient } from "./matrix/sdk/http-client.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
@@ -36,7 +37,7 @@ type MatrixResolvedAuth = Awaited<ReturnType<typeof resolveMatrixAuth>>;
 const MATRIX_DIRECTORY_TIMEOUT_MS = 10_000;
 
 function normalizeQuery(value?: string | null): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveMatrixDirectoryLimit(limit?: number | null): number {
@@ -132,15 +133,16 @@ export async function listMatrixDirectoryPeersLive(
   const results = res.results ?? [];
   return results
     .map((entry) => {
-      const userId = entry.user_id?.trim();
+      const userId = normalizeOptionalString(entry.user_id);
       if (!userId) {
         return null;
       }
+      const displayName = normalizeOptionalString(entry.display_name);
       return {
         kind: "user",
         id: userId,
-        name: entry.display_name?.trim() || undefined,
-        handle: entry.display_name ? `@${entry.display_name.trim()}` : undefined,
+        name: displayName,
+        handle: displayName ? `@${displayName}` : undefined,
         raw: entry,
       } satisfies ChannelDirectoryEntry;
     })
@@ -156,7 +158,7 @@ async function resolveMatrixRoomAlias(
       method: "GET",
       endpoint: `/_matrix/client/v3/directory/room/${encodeURIComponent(alias)}`,
     });
-    return res.room_id?.trim() || null;
+    return normalizeOptionalString(res.room_id) ?? null;
   } catch {
     return null;
   }
@@ -171,7 +173,7 @@ async function fetchMatrixRoomName(
       method: "GET",
       endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
     });
-    return res.name?.trim() || null;
+    return normalizeOptionalString(res.name) ?? null;
   } catch {
     return null;
   }
@@ -212,7 +214,9 @@ export async function listMatrixDirectoryGroupsLive(
     method: "GET",
     endpoint: "/_matrix/client/v3/joined_rooms",
   });
-  const rooms = (joined.joined_rooms ?? []).map((roomId) => roomId.trim()).filter(Boolean);
+  const rooms = (joined.joined_rooms ?? [])
+    .map((roomId) => normalizeOptionalString(roomId))
+    .filter((roomId): roomId is string => Boolean(roomId));
   const results: ChannelDirectoryEntry[] = [];
 
   for (const roomId of rooms) {

@@ -3,6 +3,7 @@ import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
 export function filterMessagingToolDuplicates(params: {
@@ -61,7 +62,7 @@ export function filterMessagingToolMediaDuplicates(params: {
 }
 
 function normalizeProviderForComparison(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -74,7 +75,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

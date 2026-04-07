@@ -1,4 +1,9 @@
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  legacyConfigRules as MATTERMOST_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig as normalizeMattermostCompatibilityConfig,
+} from "./doctor-contract.js";
 
 function isMattermostMutableAllowEntry(raw: string): boolean {
   const text = raw.trim();
@@ -34,3 +39,9 @@ export const collectMattermostMutableAllowlistWarnings =
       },
     ],
   });
+
+export const mattermostDoctor: ChannelDoctorAdapter = {
+  legacyConfigRules: MATTERMOST_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig: normalizeMattermostCompatibilityConfig,
+  collectMutableAllowlistWarnings: collectMattermostMutableAllowlistWarnings,
+};

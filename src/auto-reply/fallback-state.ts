@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
 
@@ -10,8 +11,7 @@ export type FallbackNoticeState = Pick<
 >;
 
 export function normalizeFallbackModelRef(value?: string): string | undefined {
-  const trimmed = String(value ?? "").trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {

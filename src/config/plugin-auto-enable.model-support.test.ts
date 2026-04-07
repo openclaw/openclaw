@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { makeIsolatedEnv } from "./plugin-auto-enable.test-helpers.js";
 
 function makeRegistry(
   plugins: Array<{
@@ -36,7 +37,7 @@ describe("applyPluginAutoEnable modelSupport", () => {
           },
         },
       },
-      env: {},
+      env: makeIsolatedEnv(),
       manifestRegistry: makeRegistry([
         {
           id: "openai",
@@ -60,7 +61,7 @@ describe("applyPluginAutoEnable modelSupport", () => {
           },
         },
       },
-      env: {},
+      env: makeIsolatedEnv(),
       manifestRegistry: makeRegistry([
         {
           id: "openai",

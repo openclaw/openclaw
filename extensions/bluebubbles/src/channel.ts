@@ -7,30 +7,26 @@ import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   buildProbeChannelStatusSummary,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  listBlueBubblesAccountIds,
-  type ResolvedBlueBubblesAccount,
-  resolveBlueBubblesAccount,
-  resolveDefaultBlueBubblesAccountId,
-} from "./accounts.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { type ResolvedBlueBubblesAccount } from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import {
   bluebubblesCapabilities,
   bluebubblesConfigAdapter,
   bluebubblesConfigSchema,
-  bluebubblesMeta as meta,
   bluebubblesReload,
   describeBlueBubblesAccount,
+  bluebubblesMeta as meta,
 } from "./channel-shared.js";
 import type { BlueBubblesProbe } from "./channel.runtime.js";
 import { createBlueBubblesConversationBindingManager } from "./conversation-bindings.js";
@@ -39,11 +35,13 @@ import {
   normalizeBlueBubblesAcpConversationId,
   resolveBlueBubblesConversationIdFromTarget,
 } from "./conversation-id.js";
+import { bluebubblesDoctor } from "./doctor.js";
 import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
@@ -100,6 +98,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         isConfigured: (account) => account.configured,
         describeAccount: (account): ChannelAccountSnapshot => describeBlueBubblesAccount(account),
       },
+      doctor: bluebubblesDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>
@@ -109,6 +108,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           }),
       },
       actions: bluebubblesMessageActions,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeBlueBubblesAcpConversationId(conversationId),
@@ -133,7 +136,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           looksLikeId: looksLikeBlueBubblesExplicitTargetId,
           hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
           resolveTarget: async ({ normalized }) => {
-            const to = normalized?.trim();
+            const to = normalizeOptionalString(normalized);
             if (!to) {
               return null;
             }
@@ -158,7 +161,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
 
           // Helper to extract a clean handle from any BlueBubbles target format
           const extractCleanDisplay = (value: string | undefined): string | null => {
-            const trimmed = value?.trim();
+            const trimmed = normalizeOptionalString(value);
             if (!trimmed) {
               return null;
             }
@@ -194,7 +197,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           };
 
           // Try to get a clean display from the display parameter first
-          const trimmedDisplay = display?.trim();
+          const trimmedDisplay = normalizeOptionalString(display);
           if (trimmedDisplay) {
             if (!shouldParseDisplay(trimmedDisplay)) {
               return trimmedDisplay;
@@ -212,7 +215,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           }
 
           // Last resort: return display or target as-is
-          return display?.trim() || target?.trim() || "";
+          return normalizeOptionalString(display) || normalizeOptionalString(target) || "";
         },
       },
       setup: blueBubblesSetupAdapter,
@@ -226,7 +229,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
-            allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+            allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;
@@ -284,7 +287,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
+        currentChannelId: normalizeOptionalString(context.To),
         currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
         hasRepliedRef,
       }),
@@ -312,7 +315,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         deliveryMode: "direct",
         textChunkLimit: 4000,
         resolveTarget: ({ to }) => {
-          const trimmed = to?.trim();
+          const trimmed = normalizeOptionalString(to);
           if (!trimmed) {
             return {
               ok: false,
@@ -326,7 +329,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         channel: "bluebubbles",
         sendText: async ({ cfg, to, text, accountId, replyToId }) => {
           const runtime = await loadBlueBubblesChannelRuntime();
-          const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
+          const rawReplyToId = normalizeOptionalString(replyToId) ?? "";
           const replyToMessageGuid = rawReplyToId
             ? runtime.resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
             : "";

@@ -39,7 +39,9 @@ Auth matrix:
 - `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
   - proves possession of the shared gateway operator secret
   - ignores narrower `x-openclaw-scopes`
-  - restores the full default operator scope set
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
   - treats chat turns on this endpoint as owner-sender turns
 - trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
   - honor `x-openclaw-scopes` when the header is present
@@ -160,8 +162,17 @@ Current behavior:
 
 - File content is decoded and added to the **system prompt**, not the user message,
   so it stays ephemeral (not persisted in session history).
-- PDFs are parsed for text. If little text is found, the first pages are rasterized
-  into images and passed to the model.
+- Decoded file text is wrapped as **untrusted external content** before it is added,
+  so file bytes are treated as data, not trusted instructions.
+- The injected block uses explicit boundary markers like
+  `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` /
+  `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a
+  `Source: External` metadata line.
+- This file-input path intentionally omits the long `SECURITY NOTICE:` banner to
+  preserve prompt budget; the boundary markers and metadata still stay in place.
+- PDFs are parsed for text first. If little text is found, the first pages are
+  rasterized into images and passed to the model, and the injected file block uses
+  the placeholder `[PDF content rendered to images]`.
 
 PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
 PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.

@@ -1,7 +1,7 @@
 import {
   normalizeGooglePreviewModelId,
   normalizeNativeXaiModelId,
-} from "../plugin-sdk/provider-model-shared.js";
+} from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type StaticModelRef = {
@@ -42,9 +42,21 @@ export function normalizeAnthropicModelId(model: string): string {
   }
 }
 
+function normalizeHuggingfaceModelId(model: string): string {
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const prefix = "huggingface/";
+  return trimmed.toLowerCase().startsWith(prefix) ? trimmed.slice(prefix.length) : trimmed;
+}
+
 export function normalizeStaticProviderModelId(provider: string, model: string): string {
   if (provider === "anthropic") {
     return normalizeAnthropicModelId(model);
+  }
+  if (provider === "huggingface") {
+    return normalizeHuggingfaceModelId(model);
   }
   if (provider === "google" || provider === "google-vertex") {
     return normalizeGooglePreviewModelId(model);
