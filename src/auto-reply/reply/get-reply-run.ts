@@ -307,11 +307,14 @@ export async function runPreparedReply(
     }
   }
   const prefixedBodyCore = prefixedBodyBase;
-  const threadStarterBody = ctx.ThreadStarterBody?.trim();
-  const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  const threadStarterBody =
+    typeof ctx.ThreadStarterBody === "string" ? ctx.ThreadStarterBody.trim() : undefined;
+  const threadHistoryBody =
+    typeof ctx.ThreadHistoryBody === "string" ? ctx.ThreadHistoryBody.trim() : undefined;
+  const replyToBody = typeof ctx.ReplyToBody === "string" ? ctx.ReplyToBody.trim() : undefined;
   const deicticResolutionNote = buildDeicticResolutionNote({
     userText: rawBodyTrimmed,
-    replyToBody: ctx.ReplyToBody?.trim(),
+    replyToBody,
     threadHistoryBody,
     threadStarterBody,
   });

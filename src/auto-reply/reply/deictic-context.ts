@@ -114,14 +114,6 @@ export function buildDeicticResolutionNote(params: {
   pushCandidate("thread history", params.threadHistoryBody);
   pushCandidate("thread starter", params.threadStarterBody);
 
-  if (candidates.length === 0) {
-    return [
-      "[Deictic reference resolver]",
-      "The user message appears to depend on nearby conversation structure, but no reply or thread context was available to resolve it mechanically.",
-      "Do not silently substitute broader memory as the referent. Ask a brief clarifying question if needed.",
-    ].join("\n");
-  }
-
   const lines = [
     "[Deictic reference resolver]",
     "The user message appears to depend on nearby conversation structure. Treat the nearby thread/reply context below as the primary candidate referents before using broader memory.",

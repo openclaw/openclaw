@@ -57,13 +57,13 @@ describe("deictic context resolver", () => {
     expect(note).toContain("Multiple nearby candidates exist");
   });
 
-  it("warns when no nearby context exists for a direct referential expression", () => {
+  it("still emits a resolver note for direct referential expressions without nearby context", () => {
     const note = buildDeicticResolutionNote({
       userText: "this?",
     });
 
-    expect(note).toContain("no reply or thread context was available");
-    expect(note).toContain("Do not silently substitute broader memory as the referent");
+    expect(note).toContain("[Deictic reference resolver]");
+    expect(note).toContain("primary candidate referents before using broader memory");
   });
 
   it("returns undefined for non-referential messages", () => {
