@@ -24,17 +24,6 @@ vi.mock("../agents/auth-profiles/session-override.js", () => ({
 }));
 
 const TELEGRAM_TARGET = { mode: "announce", channel: "telegram", to: "123" } as const;
-async function runExplicitTelegramAnnounceTurn(params: {
-  home: string;
-  storePath: string;
-  deps: CliDeps;
-  deliveryContract?: "cron-owned" | "shared";
-}): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
-  return runTelegramAnnounceTurn({
-    ...params,
-    delivery: TELEGRAM_TARGET,
-  });
-}
 
 async function withTelegramAnnounceFixture(
   run: (params: { home: string; storePath: string; deps: CliDeps }) => Promise<void>,
@@ -51,11 +40,6 @@ async function withTelegramAnnounceFixture(
     const deps = createCliDeps(params?.deps);
     await run({ home, storePath, deps });
   });
-}
-
-function expectDeliveredOk(result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>): void {
-  expect(result.status).toBe("ok");
-  expect(result.delivered).toBe(true);
 }
 
 async function expectBestEffortTelegramNotDelivered(
@@ -246,26 +230,6 @@ describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     setupIsolatedAgentTurnMocks({ fast: true });
-  });
-
-  it("skips announce when messaging tool already sent to target", async () => {
-    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
-      mockAgentPayloads([{ text: "sent" }], {
-        didSendViaMessagingTool: true,
-        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
-      });
-
-      const res = await runExplicitTelegramAnnounceTurn({
-        home,
-        storePath,
-        deps,
-        deliveryContract: "shared",
-      });
-
-      expectDeliveredOk(res);
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
-    });
   });
 
   it("reports not-delivered when best-effort structured outbound sends all fail", async () => {

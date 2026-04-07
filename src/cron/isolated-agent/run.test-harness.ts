@@ -63,6 +63,7 @@ export const pickLastNonEmptyTextFromPayloadsMock = createMock();
 export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
+export const dispatchCronDeliveryMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 
@@ -164,6 +165,15 @@ vi.mock("../delivery-plan.js", () => ({
 vi.mock("./delivery-target.js", () => ({
   resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
+
+vi.mock("./delivery-dispatch.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js");
+  return {
+    ...actual,
+    dispatchCronDelivery: dispatchCronDeliveryMock,
+  };
+});
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: vi.fn().mockReturnValue(false),
@@ -328,6 +338,28 @@ function resetRunOutcomeMocks(): void {
     accountId: undefined,
     error: undefined,
   });
+  dispatchCronDeliveryMock.mockReset();
+  dispatchCronDeliveryMock.mockImplementation(
+    ({
+      deliveryPayloads,
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryRequested,
+      skipHeartbeatDelivery,
+      skipMessagingToolDelivery,
+    }) => ({
+      result: undefined,
+      delivered: Boolean(deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+      deliveryAttempted: Boolean(
+        deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery,
+      ),
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryPayloads,
+    }),
+  );
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 }

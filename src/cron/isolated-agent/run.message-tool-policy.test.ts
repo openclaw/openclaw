@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,
+  dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
@@ -91,5 +92,44 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+  });
+
+  it("skips cron delivery when a shared caller already sent to the same target", async () => {
+    mockRunCronFallbackPassthrough();
+    const params = makeParams();
+    const job = {
+      id: "message-tool-policy",
+      name: "Message Tool Policy",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "send a message" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    } as const;
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...params,
+      deliveryContract: "shared",
+      job: job as never,
+    });
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        deliveryRequested: true,
+        skipMessagingToolDelivery: true,
+      }),
+    );
   });
 });
