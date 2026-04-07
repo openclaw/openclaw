@@ -1,0 +1,100 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "openclaw gateway --dev",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.22.0/bin/node",
+      "runtimeArgs": [
+        "--import",
+        "tsx"
+      ],
+      "program": "${workspaceFolder}/src/entry.ts",
+      "args": ["gateway", "--dev"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_LOG_LEVEL": "debug",
+        "OPENCLAW_NO_RESPAWN": "1"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "sourceMaps": true
+    },
+    {
+      "name": "openclaw onboard",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.22.0/bin/node",
+      "runtimeArgs": [
+        "--import",
+        "tsx"
+      ],
+      "program": "${workspaceFolder}/src/entry.ts",
+      "args": ["onboard"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_LOG_LEVEL": "debug",
+        "OPENCLAW_NO_RESPAWN": "1"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "sourceMaps": true
+    },
+    {
+      "name": "openclaw status",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.22.0/bin/node",
+      "runtimeArgs": [
+        "--import",
+        "tsx"
+      ],
+      "program": "${workspaceFolder}/src/entry.ts",
+      "args": ["status"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_LOG_LEVEL": "debug",
+        "OPENCLAW_NO_RESPAWN": "1"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "sourceMaps": true
+    },
+    {
+      "name": "openclaw (custom args)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.nvm/versions/node/v22.22.0/bin/node",
+      "runtimeArgs": [
+        "--import",
+        "tsx"
+      ],
+      "program": "${workspaceFolder}/src/entry.ts",
+      "args": ["${input:openclawArgs}"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_LOG_LEVEL": "debug",
+        "OPENCLAW_NO_RESPAWN": "1"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "sourceMaps": true
+    }
+  ],
+  "inputs": [
+    {
+      "id": "openclawArgs",
+      "type": "promptString",
+      "description": "Enter openclaw command arguments (e.g. 'gateway --dev', 'onboard', 'status')"
+    }
+  ]
+}
