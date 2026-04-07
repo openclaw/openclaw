@@ -59,8 +59,8 @@ describe("plugin-registry-loader", () => {
   });
 
   it("maps command paths to plugin registry scopes", () => {
-    expect(resolvePluginRegistryScopeForCommandPath(["status"])).toBe("channels");
-    expect(resolvePluginRegistryScopeForCommandPath(["health"])).toBe("channels");
+    expect(resolvePluginRegistryScopeForCommandPath(["status"])).toBe("configured-channels");
+    expect(resolvePluginRegistryScopeForCommandPath(["health"])).toBe("configured-channels");
     expect(resolvePluginRegistryScopeForCommandPath(["agents"])).toBe("all");
   });
 });

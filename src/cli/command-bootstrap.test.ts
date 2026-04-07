@@ -10,7 +10,7 @@ vi.mock("./program/config-guard.js", () => ({
 vi.mock("./plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
   resolvePluginRegistryScopeForCommandPath: vi.fn((commandPath: string[]) =>
-    commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all",
+    commandPath[0] === "status" || commandPath[0] === "health" ? "configured-channels" : "all",
   ),
 }));
 
@@ -57,7 +57,7 @@ describe("ensureCliCommandBootstrap", () => {
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "channels",
+      scope: "configured-channels",
       routeLogsToStderr: true,
     });
   });

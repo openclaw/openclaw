@@ -10,8 +10,8 @@ function loadPluginRegistryModule() {
 
 export function resolvePluginRegistryScopeForCommandPath(
   commandPath: string[],
-): Exclude<PluginRegistryScope, "configured-channels"> {
-  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+): PluginRegistryScope {
+  return commandPath[0] === "status" || commandPath[0] === "health" ? "configured-channels" : "all";
 }
 
 export async function ensureCliPluginRegistryLoaded(params: {
