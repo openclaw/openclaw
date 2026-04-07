@@ -13,13 +13,11 @@ export type {
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
-  AcpSessionStoreEntry,
   AcpRuntimeStatus,
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
   AcpSessionUpdateTag,
 } from "openclaw/plugin-sdk/acp-runtime";
-export type { AcpSessionStore } from "acpx/runtime";
 export type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,

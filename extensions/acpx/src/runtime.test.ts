@@ -1,5 +1,6 @@
+import type { AcpSessionStore } from "acpx/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpRuntime, AcpSessionStore } from "../runtime-api.js";
+import type { AcpRuntime } from "../runtime-api.js";
 import { AcpxRuntime } from "./runtime.js";
 
 function makeRuntime(baseStore: AcpSessionStore): {
