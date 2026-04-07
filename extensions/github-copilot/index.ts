@@ -4,6 +4,7 @@ import {
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
@@ -181,6 +182,7 @@ export default definePluginEntry({
           apiKey: token.token,
           baseUrl: token.baseUrl,
           expiresAt: token.expiresAt,
+          request: { headers: buildCopilotIdeHeaders() },
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

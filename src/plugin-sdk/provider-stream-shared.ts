@@ -22,6 +22,7 @@ export {
 } from "../agents/anthropic-payload-policy.js";
 export {
   buildCopilotDynamicHeaders,
+  buildCopilotIdeHeaders,
   hasCopilotVisionInput,
 } from "../agents/copilot-dynamic-headers.js";
 export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
