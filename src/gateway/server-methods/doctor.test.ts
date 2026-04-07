@@ -466,6 +466,61 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("reads dreaming config from the selected memory slot plugin", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        slots: {
+          memory: "memos-local-openclaw-plugin",
+        },
+        entries: {
+          "memos-local-openclaw-plugin": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 */4 * * *",
+              },
+            },
+          },
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        dreaming: expect.objectContaining({
+          enabled: true,
+          phases: expect.objectContaining({
+            deep: expect.objectContaining({
+              cron: "0 */4 * * *",
+            }),
+          }),
+        }),
+      }),
+      undefined,
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("merges workspace store errors when multiple workspace stores are unreadable", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-error-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");

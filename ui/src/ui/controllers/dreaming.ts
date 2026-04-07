@@ -3,6 +3,7 @@ import type { ConfigSnapshot } from "../types.ts";
 
 export type DreamingPhaseId = "light" | "deep" | "rem";
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
+const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
 
 type DreamingPhaseStatusBase = {
   enabled: boolean;
@@ -136,6 +137,32 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
     ...(normalizeNextRun(record?.nextRunAtMs) !== undefined
       ? { nextRunAtMs: normalizeNextRun(record?.nextRunAtMs) }
       : {}),
+  };
+}
+
+function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
+  const plugins = asRecord(configValue?.plugins);
+  const slots = asRecord(plugins?.slots);
+  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
+    return configuredSlot;
+  }
+  return DEFAULT_DREAMING_PLUGIN_ID;
+}
+
+export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
+  pluginId: string;
+  enabled: boolean;
+} {
+  const pluginId = resolveDreamingPluginId(configValue);
+  const plugins = asRecord(configValue?.plugins);
+  const entries = asRecord(plugins?.entries);
+  const pluginEntry = asRecord(entries?.[pluginId]);
+  const config = asRecord(pluginEntry?.config);
+  const dreaming = asRecord(config?.dreaming);
+  return {
+    pluginId,
+    enabled: normalizeBoolean(dreaming?.enabled, false),
   };
 }
 
@@ -286,10 +313,11 @@ export async function updateDreamingEnabled(
   state: DreamingState,
   enabled: boolean,
 ): Promise<boolean> {
+  const { pluginId } = resolveConfiguredDreaming(asRecord(state.configSnapshot?.config) ?? null);
   const ok = await writeDreamingPatch(state, {
     plugins: {
       entries: {
-        "memory-core": {
+        [pluginId]: {
           config: {
             dreaming: {
               enabled,

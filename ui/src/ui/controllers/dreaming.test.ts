@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadDreamDiary,
   loadDreamingStatus,
+  resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
 } from "./dreaming.ts";
@@ -105,6 +106,25 @@ describe("dreaming controller", () => {
 
   it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
     request.mockResolvedValue({ ok: true });
 
     const ok = await updateDreamingEnabled(state, false);
@@ -117,8 +137,53 @@ describe("dreaming controller", () => {
         sessionKey: "main",
       }),
     );
+    const requestPayload = request.mock.calls[0]?.[1] as { raw?: string };
+    expect(JSON.parse(String(requestPayload.raw))).toEqual({
+      plugins: {
+        entries: {
+          "memos-local-openclaw-plugin": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    });
     expect(state.dreamingModeSaving).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("reads dreaming enabled state from the selected memory slot plugin", () => {
+    expect(
+      resolveConfiguredDreaming({
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      pluginId: "memos-local-openclaw-plugin",
+      enabled: true,
+    });
   });
 
   it("fails gracefully when config hash is missing", async () => {
