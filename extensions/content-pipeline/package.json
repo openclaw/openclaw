@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/content-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automated content pipeline: scrape tech news → generate script → create slides → produce video → upload to social media",
+  "type": "module",
+  "scripts": {
+    "pipeline": "bun run src/cli.ts",
+    "preview": "bun run src/cli.ts preview",
+    "run:news": "bun run src/cli.ts run news",
+    "run:tutorial": "bun run src/cli.ts run tutorial"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "discord.js": "^14.26.2",
+    "fluent-ffmpeg": "^2.1.3",
+    "googleapis": "^144.0.0",
+    "nunjucks": "^3.2.4",
+    "playwright": "^1.50.0",
+    "rss-parser": "^3.13.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/nunjucks": "^3.2.6"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.40.0"
+  }
+}

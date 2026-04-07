@@ -1,0 +1,148 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #1a1a2e;
+  --text: #eaeaea;
+  --accent: #e94560;
+  --secondary: #0f3460;
+  --code-bg: #16213e;
+  --muted: #8892b0;
+  --font-heading: 'Inter', sans-serif;
+  --font-code: 'JetBrains Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  width: 1920px;
+  height: 1080px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-heading);
+  overflow: hidden;
+}
+
+.slide {
+  width: 1920px;
+  height: 1080px;
+  padding: 80px 100px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+}
+
+.slide-title {
+  font-size: 64px;
+  font-weight: 900;
+  color: var(--accent);
+  margin-bottom: 40px;
+  line-height: 1.1;
+}
+
+.slide-subtitle {
+  font-size: 32px;
+  color: var(--muted);
+  margin-bottom: 30px;
+}
+
+.slide-body {
+  font-size: 36px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.bullet-list {
+  list-style: none;
+  padding: 0;
+}
+
+.bullet-list li {
+  font-size: 34px;
+  padding: 12px 0;
+  padding-left: 40px;
+  position: relative;
+  line-height: 1.5;
+}
+
+.bullet-list li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-size: 28px;
+}
+
+.source-badge {
+  position: absolute;
+  bottom: 50px;
+  left: 100px;
+  background: var(--secondary);
+  color: var(--muted);
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-size: 22px;
+}
+
+.slide-number {
+  position: absolute;
+  bottom: 50px;
+  right: 100px;
+  color: var(--muted);
+  font-size: 24px;
+}
+
+.date-badge {
+  font-size: 28px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+
+.code-block {
+  background: var(--code-bg);
+  border-radius: 16px;
+  padding: 40px;
+  font-family: var(--font-code);
+  font-size: 26px;
+  line-height: 1.6;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+  white-space: pre;
+}
+
+.code-lang-badge {
+  position: absolute;
+  top: 80px;
+  right: 100px;
+  background: var(--accent);
+  color: white;
+  padding: 6px 16px;
+  border-radius: 12px;
+  font-size: 20px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.step-badge {
+  display: inline-block;
+  background: var(--accent);
+  color: white;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  text-align: center;
+  line-height: 60px;
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 24px;
+}
+
+.gradient-bg {
+  background: linear-gradient(135deg, var(--bg) 0%, var(--secondary) 100%);
+}
+
+.cta-text {
+  font-size: 28px;
+  color: var(--accent);
+  margin-top: 20px;
+}

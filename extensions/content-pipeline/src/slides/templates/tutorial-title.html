@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="base.css"></head>
+<body>
+  <div class="slide gradient-bg" style="align-items: center; text-align: center;">
+    <h1 class="slide-title" style="font-size: 72px;">{{ title }}</h1>
+    <div class="slide-subtitle">What you'll learn</div>
+    <ul class="bullet-list" style="text-align: left; max-width: 900px;">
+      {% for line in body_lines %}
+      <li>{{ line }}</li>
+      {% endfor %}
+    </ul>
+    <div class="slide-number">1 / {{ totalSlides }}</div>
+  </div>
+</body>
+</html>

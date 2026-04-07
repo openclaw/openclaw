@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="base.css"></head>
+<body>
+  <div class="slide gradient-bg">
+    <div class="date-badge">{{ date }}</div>
+    <h1 class="slide-title">{{ title }}</h1>
+    <ul class="bullet-list">
+      {% for line in body_lines %}
+      <li>{{ line }}</li>
+      {% endfor %}
+    </ul>
+    <div class="slide-number">1 / {{ totalSlides }}</div>
+  </div>
+</body>
+</html>

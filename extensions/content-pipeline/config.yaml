@@ -1,0 +1,98 @@
+# ── News Sources ──
+sources:
+  - name: "Hacker News"
+    type: rss
+    url: "https://hnrss.org/frontpage"
+    maxItems: 10
+
+  - name: "Dev.to"
+    type: rss
+    url: "https://dev.to/feed"
+    maxItems: 10
+
+  - name: "TechCrunch"
+    type: rss
+    url: "https://techcrunch.com/feed/"
+    maxItems: 10
+
+  - name: "The Verge"
+    type: rss
+    url: "https://www.theverge.com/rss/index.xml"
+    maxItems: 10
+
+  - name: "Lobsters"
+    type: rss
+    url: "https://lobste.rs/rss"
+    maxItems: 10
+
+  - name: "daily.dev"
+    type: scrape
+    url: "https://app.daily.dev"
+    maxItems: 20
+
+# ── Content Generation ──
+# Model format: "provider/model-name"
+#   Google (free):    "google/gemma-4-27b-it"  (default)
+#   Google (free):    "google/gemini-2.0-flash"
+#   Anthropic (paid): "anthropic/claude-sonnet-4-6-20250514"
+content:
+  model: "google/gemma-4-27b-it"
+  topStories: 5
+  language: "en"
+  tone: "energetic"
+
+# ── Slides ──
+slides:
+  width: 1920
+  height: 1080
+  theme:
+    bg: "#1a1a2e"
+    text: "#eaeaea"
+    accent: "#e94560"
+    secondary: "#0f3460"
+    codeBg: "#16213e"
+  fonts:
+    heading: "Inter"
+    code: "JetBrains Mono"
+
+# ── Video ──
+video:
+  durationPerSlide: 8
+  ttsVoice: "en-US-AndrewNeural"
+  width: 1920
+  height: 1080
+  fps: 30
+
+# ── Upload ──
+upload:
+  youtube:
+    enabled: true
+    privacy: "unlisted"
+    categoryId: "28"
+    tags:
+      - "tech news"
+      - "programming"
+      - "software development"
+      - "AI"
+
+  tiktok:
+    enabled: false
+    cookiesPath: "~/.openclaw/tiktok-cookies.txt"
+
+  facebook:
+    enabled: false
+    pageId: ""
+
+# ── Zalo Bot ──
+bot:
+  enabled: false
+  port: 5000
+  allowedUserIds: []
+
+# ── Scheduling ──
+scheduling:
+  news:
+    enabled: false
+    cron: "0 8 * * *"
+  tutorial:
+    enabled: false

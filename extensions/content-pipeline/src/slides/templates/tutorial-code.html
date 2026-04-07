@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+  <div class="slide">
+    <h1 class="slide-title" style="font-size: 48px;">{{ title }}</h1>
+    {% if language %}
+    <div class="code-lang-badge">{{ language }}</div>
+    {% endif %}
+    <pre class="code-block"><code class="language-{{ language | default('plaintext') }}">{{ code }}</code></pre>
+    <div class="slide-body" style="font-size: 28px; margin-top: 24px; color: var(--muted);">{{ body }}</div>
+    <div class="slide-number">{{ slideIndex }} / {{ totalSlides }}</div>
+  </div>
+  <script>hljs.highlightAll();</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "id": "content-pipeline",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
