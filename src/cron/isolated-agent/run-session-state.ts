@@ -30,12 +30,21 @@ export function createPersistCronSessionEntry(params: {
     if (params.isFastTestEnv) {
       return;
     }
-    params.cronSession.store[params.agentSessionKey] = params.cronSession.sessionEntry;
+    // When sessionTarget is "isolated", runSessionKey differs from agentSessionKey
+    // (e.g. "agent:main:main:run:<id>" vs "agent:main:main"). Writing the
+    // cron-mutated entry (with model override) back to agentSessionKey would
+    // bleed the cron model into the parent session visible to sessions_list.
+    // Only write to agentSessionKey when the run IS the agent session. (#62344)
+    if (params.runSessionKey === params.agentSessionKey) {
+      params.cronSession.store[params.agentSessionKey] = params.cronSession.sessionEntry;
+    }
     if (params.runSessionKey !== params.agentSessionKey) {
       params.cronSession.store[params.runSessionKey] = params.cronSession.sessionEntry;
     }
     await params.updateSessionStore(params.cronSession.storePath, (store) => {
-      store[params.agentSessionKey] = params.cronSession.sessionEntry;
+      if (params.runSessionKey === params.agentSessionKey) {
+        store[params.agentSessionKey] = params.cronSession.sessionEntry;
+      }
       if (params.runSessionKey !== params.agentSessionKey) {
         store[params.runSessionKey] = params.cronSession.sessionEntry;
       }

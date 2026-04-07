@@ -250,4 +250,49 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("does not bleed cron model override into parent session when sessionTarget is isolated (#62344)", async () => {
+    // sessionKey "cron:digest" → agentSessionKey "agent:default:cron:digest"
+    //                          → runSessionKey   "agent:default:cron:digest:run:test-session-id"
+    // These differ, so createPersistCronSessionEntry must NOT write the
+    // cron-mutated entry (model=Sonnet) to agentSessionKey. Before the fix,
+    // both keys were always written, bleeding the cron model into the parent
+    // session visible to sessions_list. (commit 870cc22, issue #62344)
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    // The agent-scoped key (parent session) must not carry the cron model.
+    // With the bug, cronSession.store["agent:default:cron:digest"] would be set.
+    const agentSessionKey = "agent:default:cron:digest";
+    const runSessionKey = `${agentSessionKey}:run:test-session-id`;
+
+    expect(cronSession.store[agentSessionKey]).toBeUndefined();
+    // The isolated run key SHOULD be written with the model.
+    const runEntry = cronSession.store[runSessionKey] as
+      | { model?: string; modelProvider?: string }
+      | undefined;
+    expect(runEntry).toBeDefined();
+    expect(runEntry?.model).toBe("claude-sonnet-4-6");
+    expect(runEntry?.modelProvider).toBe("anthropic");
+  });
+
+  it("still writes to agentSessionKey when sessionTarget is not isolated (keys equal)", async () => {
+    // When the job sessionKey is NOT a "cron:"-prefixed key, runSessionKey
+    // equals agentSessionKey and the parent session SHOULD be updated.
+    const jobWithNonCronKey = makeJob();
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams({ sessionKey: "main", job: jobWithNonCronKey }));
+
+    // "main" → agentSessionKey = "agent:default:main" (doesn't start with
+    // "cron:" so runSessionKey === agentSessionKey). The entry must be written.
+    const agentSessionKey = "agent:default:main";
+    const entry = cronSession.store[agentSessionKey] as
+      | { model?: string; modelProvider?: string }
+      | undefined;
+    expect(entry).toBeDefined();
+    expect(entry?.model).toBe("claude-sonnet-4-6");
+    expect(entry?.modelProvider).toBe("anthropic");
+  });
 });
