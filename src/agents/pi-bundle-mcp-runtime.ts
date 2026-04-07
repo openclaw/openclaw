@@ -269,10 +269,21 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      return (await session.client.callTool(
+        {
+          name: toolName,
+          arguments: isMcpConfigRecord(input) ? input : {},
+        },
+        undefined,
+        {
+          // MCP SDK defaults to 60s which is too short for long-running tools
+          // (code execution, web scraping, complex analysis). Use 5 minutes and
+          // reset the timer on progress notifications so tools that report
+          // progress can run indefinitely.
+          timeout: 300_000,
+          resetTimeoutOnProgress: true,
+        },
+      )) as CallToolResult;
     },
     async dispose() {
       if (disposed) {
