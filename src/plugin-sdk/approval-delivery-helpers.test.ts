@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
 
@@ -367,5 +368,65 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
     expect(split.nativeRuntime).toBe(nativeRuntime);
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+  });
+});
+
+describe("createChannelApprovalCapability", () => {
+  it("accepts canonical top-level capability surfaces", () => {
+    const delivery = { hasConfiguredDmRoute: vi.fn() };
+    const nativeRuntime = {
+      availability: {
+        isConfigured: vi.fn(),
+        shouldHandle: vi.fn(),
+      },
+      presentation: {
+        buildPendingPayload: vi.fn(),
+        buildResolvedResult: vi.fn(),
+        buildExpiredResult: vi.fn(),
+      },
+      transport: {
+        prepareTarget: vi.fn(),
+        deliverPending: vi.fn(),
+      },
+    };
+    const render = { buildPendingReplyPayload: vi.fn() };
+    const native = { describeDeliveryCapabilities: vi.fn() };
+
+    expect(
+      createChannelApprovalCapability({
+        delivery,
+        nativeRuntime,
+        render,
+        native,
+      }),
+    ).toEqual({
+      authorizeActorAction: undefined,
+      getActionAvailabilityState: undefined,
+      resolveApproveCommandBehavior: undefined,
+      describeExecApprovalSetup: undefined,
+      delivery,
+      nativeRuntime,
+      render,
+      native,
+    });
+  });
+
+  it("keeps the deprecated approvals alias as a compatibility shim", () => {
+    const delivery = { hasConfiguredDmRoute: vi.fn() };
+
+    expect(
+      createChannelApprovalCapability({
+        approvals: { delivery },
+      }),
+    ).toEqual({
+      authorizeActorAction: undefined,
+      getActionAvailabilityState: undefined,
+      resolveApproveCommandBehavior: undefined,
+      describeExecApprovalSetup: undefined,
+      delivery,
+      nativeRuntime: undefined,
+      render: undefined,
+      native: undefined,
+    });
   });
 });

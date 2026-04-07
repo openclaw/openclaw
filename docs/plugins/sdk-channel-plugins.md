@@ -60,6 +60,8 @@ Most channel plugins do not need approval-specific code.
 
 - Core owns same-chat `/approve`, shared approval button payloads, and generic fallback delivery.
 - Prefer one `approvalCapability` object on the channel plugin when the channel needs approval-specific behavior.
+- `ChannelPlugin.approvals` is removed. Put approval delivery/native/render/auth facts on `approvalCapability`.
+- `plugin.auth` is login/logout only; core no longer reads approval auth hooks from that object.
 - `approvalCapability.authorizeActorAction` and `approvalCapability.getActionAvailabilityState` are the canonical approval-auth seam.
 - If your channel exposes native exec approvals, implement `approvalCapability.getActionAvailabilityState` even when the native transport lives entirely under `approvalCapability.native`. Core uses that availability hook to distinguish `enabled` vs `disabled`, decide whether the initiating channel supports native approvals, and include the channel in native-client fallback guidance.
 - Use `outbound.shouldSuppressLocalPayloadPrompt` or `outbound.beforeDeliverPayload` for channel-specific payload lifecycle behavior such as hiding duplicate local approval prompts or sending typing indicators before delivery.

@@ -77,6 +77,10 @@ Current bundled provider examples:
       `approvalCapability.nativeRuntime`
     - Move approval-specific auth/delivery off legacy `plugin.auth` /
       `plugin.approvals` wiring and onto `approvalCapability`
+    - `ChannelPlugin.approvals` has been removed from the public channel-plugin
+      contract; move delivery/native/render fields onto `approvalCapability`
+    - `plugin.auth` remains for channel login/logout flows only; approval auth
+      hooks there are no longer read by core
     - Register channel-owned runtime objects such as clients, tokens, or Bolt
       apps through `openclaw/plugin-sdk/channel-runtime-context`
     - Do not send plugin-owned reroute notices from native approval handlers;

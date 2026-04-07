@@ -293,12 +293,10 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
       : (matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
         ({ kind: "disabled" } as const)),
   describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
-  approvals: {
-    delivery: matrixDeliveryAdapter,
-    nativeRuntime: matrixNativeApprovalCapability.nativeRuntime,
-    native: matrixNativeAdapter,
-    render: matrixNativeApprovalCapability.render,
-  },
+  delivery: matrixDeliveryAdapter,
+  nativeRuntime: matrixNativeApprovalCapability.nativeRuntime,
+  native: matrixNativeAdapter,
+  render: matrixNativeApprovalCapability.render,
 });
 
 export const matrixNativeApprovalAdapter = {
