@@ -81,6 +81,11 @@ export async function monitorWebInbox(options: {
     options.authDir,
     sock.user as { id?: string | null; lid?: string | null } | undefined,
   );
+  // Track message IDs that are currently buffered in the debouncer (not yet
+  // flushed to the agent). Used by the messages.update handler to silently
+  // swap in the edited text before the agent ever sees the original.
+  const pendingMessageIds = new Map<string, WebInboundMessage>();
+
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
@@ -101,6 +106,12 @@ export async function monitorWebInbox(options: {
     },
     shouldDebounce: options.shouldDebounce,
     onFlush: async (entries) => {
+      // Clear pending tracking for all flushed entries.
+      for (const entry of entries) {
+        if (entry.id) {
+          pendingMessageIds.delete(entry.id);
+        }
+      }
       const last = entries.at(-1);
       if (!last) {
         return;
@@ -447,6 +458,11 @@ export async function monitorWebInbox(options: {
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
     };
+    // Register this message as pending so the edit handler can swap its body
+    // before the debouncer flushes it to the agent.
+    if (inboundMessage.id) {
+      pendingMessageIds.set(inboundMessage.id, inboundMessage);
+    }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
       void task.catch((err) => {
@@ -495,6 +511,93 @@ export async function monitorWebInbox(options: {
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
+  // Handle message edits and revocations from WhatsApp.
+  //
+  // Two cases:
+  //   1. Message is still pending in the debouncer → silently swap the body,
+  //      the agent never sees the original typo.
+  //   2. Message already flushed (agent already replied) → send a notification
+  //      so the user knows their edit was seen after the fact.
+  const handleMessagesUpdate = async (
+    updates: Array<{
+      update: Partial<WAMessage>;
+      key: { id?: string; remoteJid?: string; fromMe?: boolean };
+    }>,
+  ) => {
+    for (const { update, key } of updates) {
+      const msgId = key.id;
+      const remoteJid = key.remoteJid;
+
+      // Only handle edits/revocations originating from the user (not fromMe = bot's own messages).
+      if (!msgId || !remoteJid || key.fromMe) {
+        continue;
+      }
+
+      // Detect revocation: protocolMessage with type REVOKE (0).
+      const protocolMsg = update.message?.protocolMessage;
+      const isRevoke =
+        protocolMsg != null &&
+        (protocolMsg.type === 0 || (protocolMsg as { type?: number }).type === 0);
+
+      if (isRevoke) {
+        logVerbose(`Message ${msgId} revoked by user — ignoring`);
+        continue;
+      }
+
+      // Detect edit: editedMessage present in the protocol message (type 14).
+      const isEdit =
+        protocolMsg != null &&
+        ((protocolMsg as { type?: number }).type === 14 || protocolMsg.editedMessage != null);
+
+      if (!isEdit) {
+        continue;
+      }
+
+      // Extract new text from the edited message.
+      // protocolMsg.editedMessage is proto.IMessage, which has .conversation
+      // and .extendedTextMessage directly (no intermediate .message wrapper).
+      const editedMsg = protocolMsg?.editedMessage as
+        | { conversation?: string | null; extendedTextMessage?: { text?: string | null } | null }
+        | null
+        | undefined;
+      const editedBody = editedMsg?.conversation ?? editedMsg?.extendedTextMessage?.text ?? null;
+
+      if (!editedBody) {
+        logVerbose(`Edit event for ${msgId} had no extractable text — skipping`);
+        continue;
+      }
+
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
+
+      const pending = pendingMessageIds.get(msgId);
+      if (pending) {
+        // ✅ Case 1: Still buffered — swap the body in place. The debouncer
+        // will flush the updated version; the agent sees only the corrected text.
+        pending.body = editedBody;
+        if (shouldLogVerbose()) {
+          logVerbose(`Swapped pending message ${msgId} body to edited version: "${editedBody}"`);
+        }
+      } else {
+        // ⚠️ Case 2: Already flushed — notify the user that we've seen an edit
+        // after the fact so they can decide whether to resend.
+        if (shouldLogVerbose()) {
+          logVerbose(`Edit received for already-flushed message ${msgId} — notifying user`);
+        }
+        try {
+          await sendTrackedMessage(remoteJid, {
+            text: `✏️ (你刚才编辑了一条消息，但我已经处理了原版。如果想重新处理，请把新内容重新发一遍。)`,
+          });
+        } catch (err) {
+          logVerbose(`Failed to send edit-notification for ${msgId}: ${String(err)}`);
+        }
+      }
+    }
+  };
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -521,6 +624,15 @@ export async function monitorWebInbox(options: {
     "messages.upsert",
     handleMessagesUpsert as unknown as (...args: unknown[]) => void,
   );
+  const detachMessagesUpdate = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "messages.update",
+    handleMessagesUpdate as unknown as (...args: unknown[]) => void,
+  );
   const detachConnectionUpdate = attachEmitterListener(
     sock.ev as unknown as {
       on: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -543,6 +655,7 @@ export async function monitorWebInbox(options: {
     close: async () => {
       try {
         detachMessagesUpsert();
+        detachMessagesUpdate();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
       } catch (err) {
