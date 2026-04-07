@@ -72,19 +72,21 @@ export function formatConversationTarget(params: {
   if (!channel || !conversationId) {
     return undefined;
   }
+  const parentConversationId =
+    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
+      ? String(Math.trunc(params.parentConversationId))
+      : typeof params.parentConversationId === "string"
+        ? params.parentConversationId.trim()
+        : undefined;
   if (channel === "matrix") {
-    const parentConversationId =
-      typeof params.parentConversationId === "number" &&
-      Number.isFinite(params.parentConversationId)
-        ? String(Math.trunc(params.parentConversationId))
-        : typeof params.parentConversationId === "string"
-          ? params.parentConversationId.trim()
-          : undefined;
     const roomId =
       parentConversationId && parentConversationId !== conversationId
         ? parentConversationId
         : conversationId;
     return `room:${roomId}`;
+  }
+  if (channel === "slack" && parentConversationId && parentConversationId !== conversationId) {
+    return `channel:${parentConversationId}`;
   }
   return `channel:${conversationId}`;
 }
@@ -112,7 +114,7 @@ export function resolveConversationDeliveryTarget(params: {
         ? params.parentConversationId.trim()
         : undefined;
   if (
-    channel === "matrix" &&
+    (channel === "matrix" || channel === "slack") &&
     to &&
     conversationId &&
     parentConversationId &&

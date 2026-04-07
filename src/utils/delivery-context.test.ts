@@ -114,6 +114,49 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("formats Slack thread target using parent channel", () => {
+    expect(
+      formatConversationTarget({
+        channel: "slack",
+        conversationId: "1700000000.000001",
+        parentConversationId: "C0EXAMPLE01",
+      }),
+    ).toBe("channel:C0EXAMPLE01");
+  });
+
+  it("formats Slack top-level target unchanged", () => {
+    expect(
+      formatConversationTarget({
+        channel: "slack",
+        conversationId: "C0EXAMPLE01",
+      }),
+    ).toBe("channel:C0EXAMPLE01");
+  });
+
+  it("resolves Slack thread delivery target with threadId", () => {
+    expect(
+      resolveConversationDeliveryTarget({
+        channel: "slack",
+        conversationId: "1700000000.000001",
+        parentConversationId: "C0EXAMPLE01",
+      }),
+    ).toEqual({
+      to: "channel:C0EXAMPLE01",
+      threadId: "1700000000.000001",
+    });
+  });
+
+  it("resolves Slack top-level delivery target without threadId", () => {
+    expect(
+      resolveConversationDeliveryTarget({
+        channel: "slack",
+        conversationId: "C0EXAMPLE01",
+      }),
+    ).toEqual({
+      to: "channel:C0EXAMPLE01",
+    });
+  });
+
   it("derives delivery context from a session entry", () => {
     expect(
       deliveryContextFromSession({
