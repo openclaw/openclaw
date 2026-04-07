@@ -103,10 +103,15 @@ describe("pw-ai", () => {
     });
 
     expect(res.refs).toMatchObject({
-      e1: { role: "button", name: "OK" },
-      e2: { role: "link", name: "Docs" },
+      1: { role: "button", name: "OK" },
+      2: { role: "link", name: "Docs" },
     });
+    // Snapshot text should use numeric refs instead of [ref=e1]
+    expect(res.snapshot).toContain("[1]");
+    expect(res.snapshot).toContain("[2]");
+    expect(res.snapshot).not.toContain("[ref=e1]");
 
+    // Internal aria-ref resolution still works with e-prefixed refs
     await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
