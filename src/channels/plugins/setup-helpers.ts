@@ -469,7 +469,6 @@ export function resolveSingleAccountKeysToMove(params: {
       if (
         hasNamedAccounts &&
         namedAccountPromotionKeys &&
-        namedAccountPromotionKeys.length > 0 &&
         !namedAccountPromotionKeys.includes(key)
       ) {
         return false;
