@@ -456,9 +456,11 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
-      persistedAuthProfileOverride = entry.authProfileOverride;
-      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      if (entry.authProfileOverrideSource === "user") {
+        persistedAuthProfileOverride = entry.authProfileOverride;
+        persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+        persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      }
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
