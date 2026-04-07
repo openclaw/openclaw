@@ -7,7 +7,7 @@ function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown
 
 describe("slackApprovalNativeRuntime", () => {
   it("renders only the allowed pending actions", async () => {
-    const payload = await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
       accountId: "default",
       context: {
@@ -44,7 +44,7 @@ describe("slackApprovalNativeRuntime", () => {
           },
         ],
       } as never,
-    });
+    })) as { text: string; blocks: unknown[] };
 
     expect(payload.text).toContain("*Exec approval required*");
     const actionsBlock = findSlackActionsBlock(
@@ -63,7 +63,7 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders resolved updates without interactive blocks", async () => {
-    const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
+    const result = (await slackApprovalNativeRuntime.presentation.buildResolvedResult({
       cfg: {} as never,
       accountId: "default",
       context: {
@@ -95,7 +95,7 @@ describe("slackApprovalNativeRuntime", () => {
         channelId: "D123APPROVER",
         messageTs: "1712345678.999999",
       },
-    });
+    })) as { kind: string; payload: { text: string; blocks: unknown[] } };
 
     expect(result.kind).toBe("update");
     if (result.kind !== "update") {
