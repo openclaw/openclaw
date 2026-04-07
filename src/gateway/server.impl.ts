@@ -84,7 +84,7 @@ import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
+import { resolveGatewayReloadSettings, startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -826,6 +826,21 @@ export async function startGatewayServer(
       }
     }
   };
+  const setCurrentSharedGatewaySessionGeneration = (nextGeneration: string | undefined) => {
+    currentSharedGatewaySessionGeneration = nextGeneration;
+    if (requiredSharedGatewaySessionGeneration === nextGeneration) {
+      requiredSharedGatewaySessionGeneration = null;
+    }
+  };
+  const enforceSharedGatewaySessionGenerationForConfigWrite = (nextConfig: OpenClawConfig) => {
+    if (resolveGatewayReloadSettings(nextConfig).mode !== "off") {
+      return;
+    }
+    const nextSharedGatewaySessionGeneration =
+      resolveSharedGatewaySessionGenerationForConfig(nextConfig);
+    requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+    disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+  };
   let bonjourStop: (() => Promise<void>) | null = null;
   const noopInterval = () => setInterval(() => {}, 1 << 30);
   let tickInterval = noopInterval();
@@ -1274,7 +1289,7 @@ export async function startGatewayServer(
         const nextSharedGatewaySessionGeneration = resolveSharedGatewaySessionGenerationForConfig(
           prepared.config,
         );
-        currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+        setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
         if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
           disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
         }
@@ -1358,6 +1373,9 @@ export async function startGatewayServer(
             /* ignore */
           }
         }
+      },
+      enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => {
+        enforceSharedGatewaySessionGenerationForConfigWrite(nextConfig);
       },
       nodeRegistry,
       agentRunSeq,
@@ -1560,7 +1578,7 @@ export async function startGatewayServer(
               }
               const nextSharedGatewaySessionGeneration =
                 resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-              currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+              setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
               if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
                 disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
               }
