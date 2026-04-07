@@ -1,0 +1,363 @@
+"channel: bluebubbles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bluebubbles/**"
+          - "docs/channels/bluebubbles.md"
+"channel: discord":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/discord/**"
+          - "docs/channels/discord.md"
+"channel: irc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/irc/**"
+          - "docs/channels/irc.md"
+"channel: feishu":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/feishu/**"
+          - "extensions/feishu/**"
+          - "docs/channels/feishu.md"
+"channel: googlechat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/googlechat/**"
+          - "docs/channels/googlechat.md"
+"channel: imessage":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/imessage/**"
+          - "docs/channels/imessage.md"
+"channel: line":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/line/**"
+          - "docs/channels/line.md"
+"channel: matrix":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/matrix/**"
+          - "docs/channels/matrix.md"
+"channel: mattermost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mattermost/**"
+          - "docs/channels/mattermost.md"
+"channel: msteams":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/msteams/**"
+          - "docs/channels/msteams.md"
+"channel: nextcloud-talk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nextcloud-talk/**"
+          - "docs/channels/nextcloud-talk.md"
+"channel: nostr":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nostr/**"
+          - "docs/channels/nostr.md"
+"channel: qqbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qqbot/**"
+          - "docs/channels/qqbot.md"
+"channel: qa-channel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qa-channel/**"
+          - "docs/channels/qa-channel.md"
+"extensions: qa-lab":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qa-lab/**"
+          - "docs/concepts/qa-e2e-automation.md"
+          - "docs/channels/qa-channel.md"
+"channel: signal":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/signal/**"
+          - "docs/channels/signal.md"
+"channel: slack":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/slack/**"
+          - "docs/channels/slack.md"
+"channel: telegram":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/telegram/**"
+          - "docs/channels/telegram.md"
+"channel: tlon":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tlon/**"
+          - "docs/channels/tlon.md"
+"channel: twitch":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/twitch/**"
+          - "docs/channels/twitch.md"
+"channel: voice-call":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/voice-call/**"
+"channel: whatsapp-web":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/whatsapp/**"
+          - "docs/channels/whatsapp.md"
+"channel: zalo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zalo/**"
+          - "docs/channels/zalo.md"
+"channel: zalouser":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zalouser/**"
+          - "docs/channels/zalouser.md"
+
+"app: android":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/**"
+          - "docs/platforms/android.md"
+"app: ios":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/ios/**"
+          - "docs/platforms/ios.md"
+"app: macos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/macos/**"
+          - "docs/platforms/macos.md"
+          - "docs/platforms/mac/**"
+"app: web-ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ui/**"
+          - "src/gateway/control-ui.ts"
+          - "src/gateway/control-ui-shared.ts"
+          - "src/gateway/protocol/**"
+          - "src/gateway/server-methods/chat.ts"
+          - "src/infra/control-ui-assets.ts"
+
+"gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/gateway/**"
+          - "src/daemon/**"
+          - "docs/gateway/**"
+
+"docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "docs.acp.md"
+
+"cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cli/**"
+
+"commands":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/commands/**"
+
+"scripts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "scripts/**"
+
+"docker":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Dockerfile"
+          - "Dockerfile.*"
+          - "docker-compose.yml"
+          - "docker-setup.sh"
+          - "setup-podman.sh"
+          - ".dockerignore"
+          - "scripts/docker/setup.sh"
+          - "scripts/podman/setup.sh"
+          - "scripts/**/*docker*"
+          - "scripts/**/Dockerfile*"
+          - "scripts/sandbox-*.sh"
+          - "src/agents/sandbox*.ts"
+          - "src/commands/sandbox*.ts"
+          - "src/cli/sandbox-cli.ts"
+          - "src/docker-setup.test.ts"
+          - "src/config/**/*sandbox*"
+          - "docs/cli/sandbox.md"
+          - "docs/gateway/sandbox*.md"
+          - "docs/install/docker.md"
+          - "docs/multi-agent-sandbox-tools.md"
+
+"agents":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/agents/**"
+
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/cli/security.md"
+          - "docs/gateway/security.md"
+
+"extensions: copilot-proxy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot-proxy/**"
+"extensions: diagnostics-otel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-otel/**"
+"extensions: llm-task":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llm-task/**"
+"extensions: lobster":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lobster/**"
+"extensions: memory-core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-core/**"
+"extensions: memory-lancedb":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-lancedb/**"
+"extensions: memory-wiki":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-wiki/**"
+"extensions: open-prose":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/open-prose/**"
+"extensions: webhooks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/webhooks/**"
+"extensions: device-pair":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/device-pair/**"
+"extensions: duckduckgo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/duckduckgo/**"
+"extensions: acpx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/acpx/**"
+"extensions: arcee":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/arcee/**"
+"extensions: byteplus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/byteplus/**"
+"extensions: deepseek":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepseek/**"
+"extensions: stepfun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/stepfun/**"
+"extensions: anthropic":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/anthropic/**"
+"extensions: cloudflare-ai-gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cloudflare-ai-gateway/**"
+"extensions: minimax-portal-auth":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/minimax-portal-auth/**"
+"extensions: huggingface":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/huggingface/**"
+"extensions: kilocode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kilocode/**"
+"extensions: openai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openai/**"
+"extensions: kimi-coding":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kimi-coding/**"
+"extensions: minimax":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/minimax/**"
+"extensions: modelstudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/modelstudio/**"
+"extensions: moonshot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/moonshot/**"
+"extensions: nvidia":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nvidia/**"
+"extensions: phone-control":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/phone-control/**"
+"extensions: qianfan":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qianfan/**"
+"extensions: synthetic":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synthetic/**"
+"extensions: tavily":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tavily/**"
+"extensions: talk-voice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/talk-voice/**"
+"extensions: together":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/together/**"
+"extensions: venice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/venice/**"
+"extensions: vercel-ai-gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vercel-ai-gateway/**"
+"extensions: volcengine":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/volcengine/**"
+"extensions: xiaomi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/xiaomi/**"
+"extensions: fal":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fal/**"
