@@ -22,7 +22,7 @@ export async function resolveSlackChannelType(params: {
     return cached;
   }
   const groupChannels = normalizeAllowListLower(account.dm?.groupChannels);
-  const channelIdLower = channelId.toLowerCase();
+  const channelIdLower = normalizeLowercaseStringOrEmpty(channelId);
   if (
     groupChannels.includes(channelIdLower) ||
     groupChannels.includes(`slack:${channelIdLower}`) ||

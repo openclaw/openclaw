@@ -21,7 +21,6 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
-import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeOutboundThreadId,
@@ -57,6 +56,7 @@ import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
 import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
+import { telegramOutboundBaseAdapter } from "./outbound-base.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
@@ -899,6 +899,7 @@ export const telegramPlugin = createChatChannelPlugin({
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,
+          channelRuntime: ctx.channelRuntime,
           abortSignal: ctx.abortSignal,
           useWebhook: Boolean(account.config.webhookUrl),
           webhookUrl: account.config.webhookUrl,
@@ -996,11 +997,7 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   outbound: {
     base: {
-      deliveryMode: "direct",
-      chunker: chunkMarkdownText,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      pollMaxOptions: 10,
+      ...telegramOutboundBaseAdapter,
       shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
         shouldSuppressLocalTelegramExecApprovalPrompt({
           cfg,

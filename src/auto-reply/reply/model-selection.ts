@@ -215,8 +215,8 @@ function scoreFuzzyMatch(params: {
   const provider = normalizeProviderId(params.provider);
   const model = params.model;
   const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
-  const providerLower = provider.toLowerCase();
-  const modelLower = model.toLowerCase();
+  const providerLower = normalizeLowercaseStringOrEmpty(provider);
+  const modelLower = normalizeLowercaseStringOrEmpty(model);
   const haystack = `${providerLower}/${modelLower}`;
   const key = modelKey(provider, model);
 
@@ -262,7 +262,7 @@ function scoreFuzzyMatch(params: {
 
   const aliases = params.aliasIndex.byKey.get(key) ?? [];
   for (const alias of aliases) {
-    score += scoreFragment(alias.toLowerCase(), {
+    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), {
       exact: 140,
       starts: 90,
       includes: 60,
@@ -525,7 +525,7 @@ export function resolveModelDirectiveSelection(params: {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
 
   const rawTrimmed = raw.trim();
-  const rawLower = rawTrimmed.toLowerCase();
+  const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
 
   const pickAliasForKey = (provider: string, model: string): string | undefined =>
     aliasIndex.byKey.get(modelKey(provider, model))?.[0];

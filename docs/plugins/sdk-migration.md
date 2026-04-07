@@ -67,6 +67,32 @@ Current bundled provider examples:
 ## How to migrate
 
 <Steps>
+  <Step title="Migrate approval-native handlers to capability facts">
+    Approval-capable channel plugins now expose native approval behavior through
+    `approvalCapability.nativeRuntime` plus the shared runtime-context registry.
+
+    Key changes:
+
+    - Replace `approvalCapability.handler.loadRuntime(...)` with
+      `approvalCapability.nativeRuntime`
+    - Move approval-specific auth/delivery off legacy `plugin.auth` /
+      `plugin.approvals` wiring and onto `approvalCapability`
+    - `ChannelPlugin.approvals` has been removed from the public channel-plugin
+      contract; move delivery/native/render fields onto `approvalCapability`
+    - `plugin.auth` remains for channel login/logout flows only; approval auth
+      hooks there are no longer read by core
+    - Register channel-owned runtime objects such as clients, tokens, or Bolt
+      apps through `openclaw/plugin-sdk/channel-runtime-context`
+    - Do not send plugin-owned reroute notices from native approval handlers;
+      core now owns routed-elsewhere notices from actual delivery results
+    - When passing `channelRuntime` into `createChannelManager(...)`, provide a
+      real `createPluginRuntime().channel` surface. Partial stubs are rejected.
+
+    See `/plugins/sdk-channel-plugins` for the current approval capability
+    layout.
+
+  </Step>
+
   <Step title="Audit Windows wrapper fallback behavior">
     If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
     `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
@@ -201,8 +227,10 @@ Current bundled provider examples:
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
   | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
   | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
+  | `plugin-sdk/approval-handler-runtime` | Approval handler helpers | Shared approval handler runtime helpers, including capability-driven native approval loading |
   | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
   | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
+  | `plugin-sdk/channel-runtime-context` | Channel runtime-context helpers | Generic channel runtime-context register/get/watch helpers |
   | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |

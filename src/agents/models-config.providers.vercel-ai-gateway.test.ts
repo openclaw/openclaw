@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function loadModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   return Promise.all([
     import("./model-auth-markers.js"),
@@ -11,6 +13,8 @@ async function loadModules() {
 
 beforeEach(() => {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
 });
 
 describe("vercel-ai-gateway provider resolution", () => {

@@ -21,6 +21,7 @@ import {
 import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -624,7 +625,12 @@ export async function preflightDiscordMessage(
     }),
     parentConversationId: earlyThreadParentId,
   });
-  const bindingConversationId = isDirectMessage ? `user:${author.id}` : messageChannelId;
+  const bindingConversationId = isDirectMessage
+    ? (resolveDiscordConversationIdentity({
+        isDirectMessage,
+        userId: author.id,
+      }) ?? `user:${author.id}`)
+    : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
     conversationRuntime.getSessionBindingService().resolveByConversation({

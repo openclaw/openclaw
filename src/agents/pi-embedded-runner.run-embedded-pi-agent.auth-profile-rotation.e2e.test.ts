@@ -186,6 +186,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
     timedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "session:test",
     systemPromptReport: undefined,
     messagesSnapshot: [],
@@ -975,6 +976,44 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       expect(result.meta.aborted).toBe(true);
 
+      await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
+  it("does not rotate when failover-looking prompt errors came from compaction wait", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          promptError: new Error("rate limit exceeded"),
+          promptErrorSource: "compaction",
+          assistantTexts: ["partial"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "partial" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgentInline({
+        sessionId: "session:test",
+        sessionKey: "agent:test:compaction-wait-abort",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:compaction-wait-abort",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text).toContain("partial");
       await expectProfileP2UsageUnchanged(agentDir);
     });
   });

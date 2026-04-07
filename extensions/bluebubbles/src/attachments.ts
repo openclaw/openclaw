@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -101,7 +102,8 @@ export async function downloadBlueBubblesAttachment(
   if (!guid) {
     throw new Error("BlueBubbles attachment guid is required");
   }
-  const { baseUrl, password, allowPrivateNetwork } = resolveAccount(opts);
+  const { baseUrl, password, allowPrivateNetwork, allowPrivateNetworkConfig } =
+    resolveAccount(opts);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
@@ -109,6 +111,7 @@ export async function downloadBlueBubblesAttachment(
   });
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
   const trustedHostname = safeExtractHostname(baseUrl);
+  const trustedHostnameIsPrivate = trustedHostname ? isBlockedHostnameOrIp(trustedHostname) : false;
   try {
     const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
       url,
@@ -116,7 +119,7 @@ export async function downloadBlueBubblesAttachment(
       maxBytes,
       ssrfPolicy: allowPrivateNetwork
         ? { allowPrivateNetwork: true }
-        : trustedHostname
+        : trustedHostname && (allowPrivateNetworkConfig !== false || !trustedHostnameIsPrivate)
           ? { allowedHostnames: [trustedHostname] }
           : undefined,
       fetchImpl: async (input, init) =>

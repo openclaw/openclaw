@@ -8,6 +8,7 @@ import {
 } from "../config/mcp-config.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 function fail(message: string): never {
@@ -83,9 +84,9 @@ export function registerMcpCli(program: Command) {
         if (opts.password) {
           warnSecretCliFlag("--password");
         }
-        const claudeChannelMode = String(opts.claudeChannelMode ?? "auto")
-          .trim()
-          .toLowerCase();
+        const claudeChannelMode = normalizeLowercaseStringOrEmpty(
+          String(opts.claudeChannelMode ?? "auto").trim(),
+        );
         if (
           claudeChannelMode !== "auto" &&
           claudeChannelMode !== "on" &&

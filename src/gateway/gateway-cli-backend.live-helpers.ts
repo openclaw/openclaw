@@ -97,6 +97,29 @@ export function shouldRunCliMcpProbe(providerId: string): boolean {
   return resolveCliBackendLiveTest(providerId)?.defaultMcpProbe === true;
 }
 
+export function resolveCliModelSwitchProbeTarget(
+  providerId: string,
+  modelRef: string,
+): string | undefined {
+  const normalizedProvider = providerId.trim().toLowerCase();
+  const normalizedModelRef = modelRef.trim().toLowerCase();
+  if (normalizedProvider !== "claude-cli") {
+    return undefined;
+  }
+  if (normalizedModelRef !== "claude-cli/claude-sonnet-4-6") {
+    return undefined;
+  }
+  return "claude-cli/claude-opus-4-6";
+}
+
+export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: string): boolean {
+  const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE?.trim();
+  if (raw) {
+    return isTruthyEnvValue(raw);
+  }
+  return typeof resolveCliModelSwitchProbeTarget(providerId, modelRef) === "string";
+}
+
 export function matchesCliBackendReply(text: string, expected: string): boolean {
   const normalized = text.trim();
   const target = expected.trim();

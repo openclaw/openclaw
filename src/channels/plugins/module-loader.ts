@@ -7,6 +7,7 @@ import {
   buildPluginLoaderJitiOptions,
   resolvePluginLoaderJitiConfig,
 } from "../../plugins/sdk-alias.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
@@ -36,7 +37,9 @@ function createModuleLoader() {
 let loadModule = createModuleLoader();
 
 export function isJavaScriptModulePath(modulePath: string): boolean {
-  return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
+  return [".js", ".mjs", ".cjs"].includes(
+    normalizeLowercaseStringOrEmpty(path.extname(modulePath)),
+  );
 }
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {

@@ -504,7 +504,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const change = normalizeOptionalString(obj.change)?.toLowerCase();
+      const change = normalizeOptionalString(obj.change)
+        ? normalizeLowercaseStringOrEmpty(obj.change)
+        : undefined;
       if (change !== "posted" && change !== "removed") {
         return;
       }

@@ -403,7 +403,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     ? normalized.match(/^\/([^\s@]+)@([^\s]+)(.*)$/)
     : null;
   const commandBody =
-    mentionMatch && mentionMatch[2].toLowerCase() === normalizedBotUsername
+    mentionMatch && normalizeLowercaseStringOrEmpty(mentionMatch[2]) === normalizedBotUsername
       ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
       : normalized;
 
@@ -419,7 +419,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return commandBody;
   }
   const [, token, rest] = tokenMatch;
-  const tokenKey = `/${token.toLowerCase()}`;
+  const tokenKey = `/${normalizeLowercaseStringOrEmpty(token)}`;
   const tokenSpec = textAliasMap.get(tokenKey);
   if (!tokenSpec) {
     return commandBody;

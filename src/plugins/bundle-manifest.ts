@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
 import type { PluginBundleFormat } from "./types.js";
@@ -77,7 +80,7 @@ function hasInlineCapabilityValue(value: unknown): boolean {
 
 function slugifyPluginId(raw: string | undefined, rootDir: string): string {
   const fallback = path.basename(rootDir);
-  const source = (raw?.trim() || fallback).toLowerCase();
+  const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
   const slug = source
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")

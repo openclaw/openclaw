@@ -989,6 +989,26 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("rejects explicit approval ids with the reserved plugin prefix", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "plugin:approval-123", host: "gateway" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "approval ids starting with plugin: are reserved",
+      }),
+    );
+  });
+
   it("accepts unique short approval id prefixes", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);

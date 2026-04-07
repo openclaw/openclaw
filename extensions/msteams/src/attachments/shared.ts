@@ -323,7 +323,7 @@ export function extractInlineImageCandidates(
 
 export function safeHostForUrl(url: string): string {
   try {
-    return new URL(url).hostname.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
   } catch {
     return "invalid-url";
   }

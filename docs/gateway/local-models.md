@@ -155,9 +155,30 @@ Behavior note for local/proxied `/v1` backends:
 - hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
   are not injected on these custom proxy URLs
 
+Compatibility notes for stricter OpenAI-compatible backends:
+
+- Some servers accept only string `messages[].content` on Chat Completions, not
+  structured content-part arrays. Set
+  `models.providers.<provider>.models[].compat.requiresStringContent: true` for
+  those endpoints.
+- Some smaller or stricter local backends are unstable with OpenClaw's full
+  agent-runtime prompt shape, especially when tool schemas are included. If the
+  backend works for tiny direct `/v1/chat/completions` calls but fails on normal
+  OpenClaw agent turns, try
+  `models.providers.<provider>.models[].compat.supportsTools: false` first.
+- If the backend still fails only on larger OpenClaw runs, the remaining issue
+  is usually upstream model/server capacity or a backend bug, not OpenClaw's
+  transport layer.
+
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.
 - LM Studio model unloaded? Reload; cold start is a common “hanging” cause.
 - Context errors? Lower `contextWindow` or raise your server limit.
+- OpenAI-compatible server returns `messages[].content ... expected a string`?
+  Add `compat.requiresStringContent: true` on that model entry.
+- Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run`
+  fails on Gemma or another local model? Disable tool schemas first with
+  `compat.supportsTools: false`, then retest. If the server still crashes only
+  on larger OpenClaw prompts, treat it as an upstream server/model limitation.
 - Safety: local models skip provider-side filters; keep agents narrow and compaction on to limit prompt injection blast radius.

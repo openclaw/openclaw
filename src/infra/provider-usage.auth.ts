@@ -92,15 +92,16 @@ async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
 }): Promise<ProviderAuth | null> {
+  const store = resolveUsageAuthStore(params.state);
   const order = resolveAuthProfileOrder({
     cfg: params.state.cfg,
-    store: resolveUsageAuthStore(params.state),
+    store,
     provider: params.provider,
   });
   const deduped = dedupeProfileIds(order);
 
   for (const profileId of deduped) {
-    const cred = params.state.store.profiles[profileId];
+    const cred = store.profiles[profileId];
     if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
       continue;
     }

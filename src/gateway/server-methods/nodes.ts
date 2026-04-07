@@ -98,6 +98,39 @@ type PendingNodeAction = {
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
+function normalizeBrowserProxyPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (withLeadingSlash.length <= 1) {
+    return withLeadingSlash;
+  }
+  return withLeadingSlash.replace(/\/+$/, "");
+}
+
+function isPersistentBrowserProxyMutation(method: string, path: string): boolean {
+  const normalizedPath = normalizeBrowserProxyPath(path);
+  if (
+    method === "POST" &&
+    (normalizedPath === "/profiles/create" || normalizedPath === "/reset-profile")
+  ) {
+    return true;
+  }
+  return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
+function isForbiddenBrowserProxyMutation(params: unknown): boolean {
+  if (!params || typeof params !== "object") {
+    return false;
+  }
+  const candidate = params as { method?: unknown; path?: unknown };
+  const method = typeof candidate.method === "string" ? candidate.method.trim().toUpperCase() : "";
+  const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+  return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
+}
+
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
   return auth.ok
@@ -843,6 +876,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+          { details: { command } },
+        ),
+      );
+      return;
+    }
+    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(p.params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke cannot mutate persistent browser profiles via browser.proxy",
           { details: { command } },
         ),
       );

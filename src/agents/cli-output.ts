@@ -398,7 +398,7 @@ export function parseCliJsonl(
 
       const item = isRecord(parsed.item) ? parsed.item : null;
       if (item && typeof item.text === "string") {
-        const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+        const type = normalizeLowercaseStringOrEmpty(item.type);
         if (!type || type.includes("message")) {
           texts.push(item.text);
         }

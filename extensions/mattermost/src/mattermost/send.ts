@@ -1,6 +1,9 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import {
+  convertMarkdownTables,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -94,7 +97,7 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
   if (!trimmed) {
     throw new Error("Recipient is required for Mattermost sends");
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
     if (!id) {
@@ -169,7 +172,7 @@ async function resolveUserIdByUsername(params: {
   allowPrivateNetwork?: boolean;
 }): Promise<string> {
   const { baseUrl, token, username } = params;
-  const key = `${cacheKey(baseUrl, token)}::${username.toLowerCase()}`;
+  const key = `${cacheKey(baseUrl, token)}::${normalizeLowercaseStringOrEmpty(username)}`;
   const cached = userByNameCache.get(key);
   if (cached?.id) {
     return cached.id;
@@ -191,7 +194,7 @@ async function resolveChannelIdByName(params: {
   allowPrivateNetwork?: boolean;
 }): Promise<string> {
   const { baseUrl, token, name } = params;
-  const key = `${cacheKey(baseUrl, token)}::channel::${name.toLowerCase()}`;
+  const key = `${cacheKey(baseUrl, token)}::channel::${normalizeLowercaseStringOrEmpty(name)}`;
   const cached = channelByNameCache.get(key);
   if (cached) {
     return cached;

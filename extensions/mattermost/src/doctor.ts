@@ -1,5 +1,6 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   legacyConfigRules as MATTERMOST_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMattermostCompatibilityConfig,
@@ -14,10 +15,10 @@ function isMattermostMutableAllowEntry(raw: string): boolean {
   const normalized = text
     .replace(/^(mattermost|user):/i, "")
     .replace(/^@/, "")
-    .trim()
-    .toLowerCase();
+    .trim();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
 
-  if (/^[a-z0-9]{26}$/.test(normalized)) {
+  if (/^[a-z0-9]{26}$/.test(lowered)) {
     return false;
   }
 

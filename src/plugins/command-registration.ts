@@ -1,5 +1,8 @@
 import { logVerbose } from "../globals.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -166,7 +169,7 @@ export function registerPluginCommand(
     description,
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${name.toLowerCase()}`;
+  const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {
