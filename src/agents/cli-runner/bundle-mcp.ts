@@ -10,6 +10,7 @@ import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
 } from "../../plugins/bundle-mcp.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -34,12 +35,10 @@ function findMcpConfigPath(args?: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
     if (arg === "--mcp-config") {
-      const next = args[i + 1];
-      return typeof next === "string" && next.trim() ? next.trim() : undefined;
+      return normalizeOptionalString(args[i + 1]);
     }
     if (arg.startsWith("--mcp-config=")) {
-      const inline = arg.slice("--mcp-config=".length).trim();
-      return inline || undefined;
+      return normalizeOptionalString(arg.slice("--mcp-config=".length));
     }
   }
   return undefined;

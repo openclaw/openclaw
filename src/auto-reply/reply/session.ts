@@ -33,6 +33,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -70,23 +71,21 @@ function resolveSessionDefaultAccountId(params: {
   accountIdRaw?: string;
   persistedLastAccountId?: string;
 }): string | undefined {
-  const explicit = params.accountIdRaw?.trim();
+  const explicit = normalizeOptionalString(params.accountIdRaw);
   if (explicit) {
     return explicit;
   }
-  const persisted = params.persistedLastAccountId?.trim();
+  const persisted = normalizeOptionalString(params.persistedLastAccountId);
   if (persisted) {
     return persisted;
   }
-  const channel = params.channelRaw?.trim().toLowerCase();
+  const channel = normalizeOptionalString(params.channelRaw)?.toLowerCase();
   if (!channel) {
     return undefined;
   }
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefault = channels?.[channel]?.defaultAccount;
-  return typeof configuredDefault === "string" && configuredDefault.trim()
-    ? configuredDefault.trim()
-    : undefined;
+  return normalizeOptionalString(configuredDefault);
 }
 
 function resolveStaleSessionEndReason(params: {
@@ -218,7 +217,9 @@ export async function initSessionState(params: {
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const commandTargetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined;
   const targetSessionKey =
     resolveBoundConversationSessionKey({
       cfg,
@@ -563,11 +564,11 @@ export async function initSessionState(params: {
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
   }
-  const threadLabel = ctx.ThreadLabel?.trim();
+  const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
   }
-  const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
     parentSessionKey &&

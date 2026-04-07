@@ -37,6 +37,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -95,7 +96,8 @@ async function maybeApplyTtsToReplyPayload(
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
-const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+const normalizeMediaType = (value: string): string =>
+  normalizeOptionalString(value.split(";")[0])?.toLowerCase() ?? "";
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -136,8 +138,10 @@ const resolveSessionStoreLookup = (
   entry?: SessionEntry;
 } => {
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
-  const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
+    ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined;
+  const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
     return {};
   }
@@ -742,25 +746,29 @@ export async function dispatchReplyFromConfig(params: {
       message?: string;
     }) => {
       if (payload.status === "pending") {
-        if (payload.command?.trim()) {
-          return normalizeWorkingLabel(`awaiting approval: ${payload.command}`);
+        const command = normalizeOptionalString(payload.command);
+        if (command) {
+          return normalizeWorkingLabel(`awaiting approval: ${command}`);
         }
         return "awaiting approval";
       }
       if (payload.status === "unavailable") {
-        if (payload.message?.trim()) {
-          return normalizeWorkingLabel(payload.message);
+        const message = normalizeOptionalString(payload.message);
+        if (message) {
+          return normalizeWorkingLabel(message);
         }
         return "approval unavailable";
       }
       return "";
     };
     const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
-      if (payload.summary?.trim()) {
-        return normalizeWorkingLabel(payload.summary);
+      const summary = normalizeOptionalString(payload.summary);
+      if (summary) {
+        return normalizeWorkingLabel(summary);
       }
-      if (payload.title?.trim()) {
-        return normalizeWorkingLabel(payload.title);
+      const title = normalizeOptionalString(payload.title);
+      if (title) {
+        return normalizeWorkingLabel(title);
       }
       return "";
     };

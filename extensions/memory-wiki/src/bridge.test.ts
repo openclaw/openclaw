@@ -1,18 +1,43 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const { createTempDir, createVault } = createMemoryWikiTestHarness();
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiBridgeSources", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-suite-"));
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  function nextCaseRoot(name: string): string {
+    return path.join(fixtureRoot, `case-${caseId++}-${name}`);
+  }
+
+  async function createBridgeWorkspace(name: string): Promise<string> {
+    const workspaceDir = nextCaseRoot(name);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    return workspaceDir;
+  }
+
   it("imports public memory-core artifacts and stays idempotent across reruns", async () => {
-    const workspaceDir = await createTempDir("memory-wiki-bridge-ws-");
+    const workspaceDir = await createBridgeWorkspace("workspace");
     const { rootDir: vaultDir, config } = await createVault({
-      prefix: "memory-wiki-bridge-vault-",
+      rootDir: nextCaseRoot("vault"),
       config: {
         vaultMode: "bridge",
         bridge: {
@@ -83,7 +108,7 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   it("returns a no-op result outside bridge mode", async () => {
-    const { config } = await createVault({ prefix: "memory-wiki-isolated-" });
+    const { config } = await createVault({ rootDir: nextCaseRoot("isolated") });
 
     const result = await syncMemoryWikiBridgeSources({ config });
 
@@ -99,9 +124,9 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
-    const workspaceDir = await createTempDir("memory-wiki-bridge-events-ws-");
+    const workspaceDir = await createBridgeWorkspace("events-workspace");
     const { rootDir: vaultDir, config } = await createVault({
-      prefix: "memory-wiki-bridge-events-vault-",
+      rootDir: nextCaseRoot("events-vault"),
       config: {
         vaultMode: "bridge",
         bridge: {
@@ -151,9 +176,9 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   it("prunes stale bridge pages when the source artifact disappears", async () => {
-    const workspaceDir = await createTempDir("memory-wiki-bridge-prune-ws-");
+    const workspaceDir = await createBridgeWorkspace("prune-workspace");
     const { rootDir: vaultDir, config } = await createVault({
-      prefix: "memory-wiki-bridge-prune-vault-",
+      rootDir: nextCaseRoot("prune-vault"),
       config: {
         vaultMode: "bridge",
         bridge: {

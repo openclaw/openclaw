@@ -321,6 +321,12 @@ export const EXISTING_CODEX_CONFIG = {
 } satisfies OpenClawConfig;
 
 export async function setupCliRunnerTestModule() {
+  setupCliRunnerTestRegistry();
+  cliRunnerModulePromise ??= import("./cli-runner.js");
+  return (await cliRunnerModulePromise).runCliAgent;
+}
+
+export function setupCliRunnerTestRegistry() {
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     {
@@ -347,8 +353,6 @@ export async function setupCliRunnerTestModule() {
     bootstrapFiles: [],
     contextFiles: [],
   });
-  cliRunnerModulePromise ??= import("./cli-runner.js");
-  return (await cliRunnerModulePromise).runCliAgent;
 }
 
 export async function setupClaudeCliRunnerTestModule() {

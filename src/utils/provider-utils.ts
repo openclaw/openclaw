@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const BUILTIN_REASONING_OUTPUT_MODES = {
   "google-generative-ai": "tagged",
@@ -19,7 +20,7 @@ export function resolveReasoningOutputMode(params: {
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
 }): "native" | "tagged" {
-  const provider = params.provider?.trim();
+  const provider = normalizeOptionalString(params.provider);
   if (!provider) {
     return "native";
   }

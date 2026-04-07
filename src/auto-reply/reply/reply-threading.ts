@@ -2,6 +2,7 @@ import { normalizeChannelId as normalizePluginChannelId } from "../../channels/p
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { isSingleUseReplyToMode } from "./reply-reference.js";
@@ -27,7 +28,7 @@ function resolveReplyToModeChannelKey(channel?: OriginatingChannelType): string 
   if (normalized) {
     return normalized;
   }
-  return typeof channel === "string" ? channel.trim().toLowerCase() || undefined : undefined;
+  return normalizeOptionalString(channel)?.toLowerCase();
 }
 
 export function resolveConfiguredReplyToMode(
@@ -159,7 +160,7 @@ export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
 ) {
-  const normalized = typeof channel === "string" ? channel.trim().toLowerCase() : undefined;
+  const normalized = normalizeOptionalString(channel)?.toLowerCase();
   const isWebchat = normalized === "webchat";
   // Default: allow explicit reply tags/directives even when replyToMode is "off".
   // Unknown channels fail closed; internal webchat stays allowed.

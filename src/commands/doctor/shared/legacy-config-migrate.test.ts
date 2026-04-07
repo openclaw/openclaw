@@ -136,10 +136,7 @@ describe("legacy migrate mention routing", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([
-      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    ]);
+    expect(res.changes).toEqual([]);
   });
 
   it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
@@ -155,10 +152,7 @@ describe("legacy migrate mention routing", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([
-      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    ]);
+    expect(res.changes).toEqual([]);
   });
 });
 

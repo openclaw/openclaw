@@ -122,7 +122,7 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
     /\b(?:write failed:\s*)?permission denied(?: for (?<path>\S+))?\.?/i,
   );
   if (permissionDeniedMatch) {
-    const path = permissionDeniedMatch.groups?.path?.trim().replace(/[.,;:!?]+$/, "");
+    const path = normalizeText(permissionDeniedMatch.groups?.path)?.replace(/[.,;:!?]+$/, "");
     return {
       terminalOutcome: "blocked",
       terminalSummary: path ? `Permission denied for ${path}.` : "Permission denied.",
@@ -793,7 +793,7 @@ export class AcpSessionManager {
                 if (event.type === "error") {
                   streamError = new AcpRuntimeError(
                     normalizeAcpErrorCode(event.code),
-                    event.message?.trim() || "ACP turn failed before completion.",
+                    normalizeText(event.message) || "ACP turn failed before completion.",
                   );
                 } else if (event.type === "text_delta" || event.type === "tool_call") {
                   sawTurnOutput = true;
@@ -1335,7 +1335,7 @@ export class AcpSessionManager {
     meta: SessionAcpMeta;
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
     const agent =
-      params.meta.agent?.trim() || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
+      normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
     const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
@@ -1538,7 +1538,7 @@ export class AcpSessionManager {
       return true;
     }
     const summaryMatch = status.summary?.match(/\bstatus=([^\s]+)/i);
-    const summaryStatus = summaryMatch?.[1]?.trim().toLowerCase() ?? "";
+    const summaryStatus = normalizeText(summaryMatch?.[1])?.toLowerCase() ?? "";
     return summaryStatus === "dead" || summaryStatus === "no-session";
   }
 
@@ -1832,8 +1832,9 @@ export class AcpSessionManager {
           lastActivityAt: Date.now(),
           ...(base.lastError ? { lastError: base.lastError } : {}),
         };
-        if (params.lastError?.trim()) {
-          next.lastError = params.lastError.trim();
+        const lastError = normalizeText(params.lastError);
+        if (lastError) {
+          next.lastError = lastError;
         } else if (params.clearLastError) {
           delete next.lastError;
         }

@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
@@ -31,18 +32,18 @@ export type ProviderModelPickerEntry = {
 };
 
 function normalizeChoiceId(choiceId: string): string {
-  return choiceId.trim();
+  return normalizeOptionalString(choiceId) ?? "";
 }
 
 function resolveWizardSetupChoiceId(
   provider: ProviderPlugin,
   wizard: ProviderPluginWizardSetup,
 ): string {
-  const explicit = wizard.choiceId?.trim();
+  const explicit = normalizeOptionalString(wizard.choiceId);
   if (explicit) {
     return explicit;
   }
-  const explicitMethodId = wizard.methodId?.trim();
+  const explicitMethodId = normalizeOptionalString(wizard.methodId);
   if (explicitMethodId) {
     return buildProviderPluginMethodChoice(provider.id, explicitMethodId);
   }
@@ -56,11 +57,13 @@ function resolveMethodById(
   provider: ProviderPlugin,
   methodId?: string,
 ): ProviderAuthMethod | undefined {
-  const normalizedMethodId = methodId?.trim().toLowerCase();
+  const normalizedMethodId = normalizeOptionalString(methodId)?.toLowerCase();
   if (!normalizedMethodId) {
     return provider.auth[0];
   }
-  return provider.auth.find((method) => method.id.trim().toLowerCase() === normalizedMethodId);
+  return provider.auth.find(
+    (method) => normalizeOptionalString(method.id)?.toLowerCase() === normalizedMethodId,
+  );
 }
 
 function listMethodWizardSetups(provider: ProviderPlugin): Array<{
@@ -80,16 +83,16 @@ function buildSetupOptionForMethod(params: {
   method: ProviderAuthMethod;
   value: string;
 }): ProviderWizardOption {
-  const normalizedGroupId = params.wizard.groupId?.trim() || params.provider.id;
+  const normalizedGroupId = normalizeOptionalString(params.wizard.groupId) || params.provider.id;
   return {
     value: normalizeChoiceId(params.value),
     label:
-      params.wizard.choiceLabel?.trim() ||
+      normalizeOptionalString(params.wizard.choiceLabel) ||
       (params.provider.auth.length === 1 ? params.provider.label : params.method.label),
-    hint: params.wizard.choiceHint?.trim() || params.method.hint,
+    hint: normalizeOptionalString(params.wizard.choiceHint) || params.method.hint,
     groupId: normalizedGroupId,
-    groupLabel: params.wizard.groupLabel?.trim() || params.provider.label,
-    groupHint: params.wizard.groupHint?.trim(),
+    groupLabel: normalizeOptionalString(params.wizard.groupLabel) || params.provider.label,
+    groupHint: normalizeOptionalString(params.wizard.groupHint),
     ...(params.wizard.onboardingScopes ? { onboardingScopes: params.wizard.onboardingScopes } : {}),
     ...(typeof params.wizard.assistantPriority === "number" &&
     Number.isFinite(params.wizard.assistantPriority)
@@ -102,7 +105,7 @@ function buildSetupOptionForMethod(params: {
 }
 
 export function buildProviderPluginMethodChoice(providerId: string, methodId: string): string {
-  return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${providerId.trim()}:${methodId.trim()}`;
+  return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${normalizeChoiceId(providerId)}:${normalizeChoiceId(methodId)}`;
 }
 
 function resolveProviderWizardProviders(params: {
@@ -134,7 +137,9 @@ export function resolveProviderWizardOptions(params: {
           provider,
           wizard,
           method,
-          value: wizard.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, method.id),
+          value:
+            normalizeOptionalString(wizard.choiceId) ||
+            buildProviderPluginMethodChoice(provider.id, method.id),
         }),
       );
     }
@@ -177,7 +182,7 @@ function resolveModelPickerChoiceValue(
   provider: ProviderPlugin,
   modelPicker: ProviderPluginWizardModelPicker,
 ): string {
-  const explicitMethodId = modelPicker.methodId?.trim();
+  const explicitMethodId = normalizeOptionalString(modelPicker.methodId);
   if (explicitMethodId) {
     return buildProviderPluginMethodChoice(provider.id, explicitMethodId);
   }
@@ -202,8 +207,8 @@ export function resolveProviderModelPickerEntries(params: {
     }
     entries.push({
       value: resolveModelPickerChoiceValue(provider, modelPicker),
-      label: modelPicker.label?.trim() || `${provider.label} (custom)`,
-      hint: modelPicker.hint?.trim(),
+      label: normalizeOptionalString(modelPicker.label) || `${provider.label} (custom)`,
+      hint: normalizeOptionalString(modelPicker.hint),
     });
   }
 
@@ -218,7 +223,7 @@ export function resolveProviderPluginChoice(params: {
   method: ProviderAuthMethod;
   wizard?: ProviderPluginWizardSetup;
 } | null {
-  const choice = params.choice.trim();
+  const choice = normalizeChoiceId(params.choice);
   if (!choice) {
     return null;
   }
@@ -241,7 +246,8 @@ export function resolveProviderPluginChoice(params: {
   for (const provider of params.providers) {
     for (const { method, wizard } of listMethodWizardSetups(provider)) {
       const choiceId =
-        wizard.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, method.id);
+        normalizeOptionalString(wizard.choiceId) ||
+        buildProviderPluginMethodChoice(provider.id, method.id);
       if (normalizeChoiceId(choiceId) === choice) {
         return { provider, method, wizard };
       }

@@ -5,7 +5,7 @@ import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -31,8 +31,15 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it("loads the bundled browser plugin through normal plugin resolution", () => {
-    const tools = createOpenClawTools({
-      config: {
+    const tools = resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: {
+          plugins: {
+            allow: ["browser"],
+          },
+        } as OpenClawConfig,
+      },
+      resolvedConfig: {
         plugins: {
           allow: ["browser"],
         },
@@ -43,8 +50,20 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it("omits the browser tool when the bundled browser plugin is disabled", () => {
-    const tools = createOpenClawTools({
-      config: {
+    const tools = resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: {
+          plugins: {
+            allow: ["browser"],
+            entries: {
+              browser: {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+      },
+      resolvedConfig: {
         plugins: {
           allow: ["browser"],
           entries: {

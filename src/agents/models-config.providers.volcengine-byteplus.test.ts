@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   return import("./models-config.providers.secrets.js");
 }
 
 beforeEach(() => {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
 });
 
 describe("Volcengine and BytePlus providers", () => {

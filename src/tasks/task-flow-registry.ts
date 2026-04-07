@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   getTaskFlowRegistryObservers,
   getTaskFlowRegistryStore,
@@ -166,7 +167,7 @@ function assertControllerId(controllerId?: string | null): string {
 }
 
 function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
-  return task.label?.trim() || task.task.trim() || "Background task";
+  return normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task");
 }
 
 function resolveFlowBlockedSummary(
@@ -175,7 +176,9 @@ function resolveFlowBlockedSummary(
   if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
     return undefined;
   }
-  return task.terminalSummary?.trim() || task.progressSummary?.trim() || undefined;
+  return (
+    normalizeOptionalString(task.terminalSummary) ?? normalizeOptionalString(task.progressSummary)
+  );
 }
 
 export function deriveTaskFlowStatusFromTask(
@@ -432,7 +435,7 @@ export function createTaskFlowForTask(params: {
     notifyPolicy: params.task.notifyPolicy,
     goal: resolveFlowGoal(params.task),
     blockedTaskId:
-      terminalFlowStatus === "blocked" ? params.task.taskId.trim() || undefined : undefined,
+      terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
     updatedAt: params.task.lastEventAt ?? params.task.createdAt,

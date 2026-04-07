@@ -2,6 +2,7 @@ import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
@@ -32,7 +33,8 @@ function resolveAbortTarget(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
 }): AbortTarget {
-  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const targetSessionKey =
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
   const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
   if (entry && key) {
     return {

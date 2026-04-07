@@ -88,6 +88,7 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
       "../../src/plugin-sdk/config-runtime.ts",
+      "../../src/plugin-sdk/index.ts",
       "../../src/plugin-sdk/lazy-value.ts",
       "../../src/plugin-sdk/oauth-utils.ts",
       "../../src/plugin-sdk/plugin-entry.ts",
@@ -102,11 +103,13 @@ describe("opt-in extension package boundaries", () => {
       "../../src/plugin-sdk/provider-stream-shared.ts",
       "../../src/plugin-sdk/provider-tools.ts",
       "../../src/plugin-sdk/provider-web-search.ts",
+      "../../src/plugin-sdk/runtime-doctor.ts",
       "../../src/plugin-sdk/runtime-env.ts",
       "../../src/plugin-sdk/secret-input-schema.ts",
       "../../src/plugin-sdk/secret-input.ts",
       "../../src/plugin-sdk/telegram-command-config.ts",
       "../../src/plugin-sdk/testing.ts",
+      "../../src/plugin-sdk/text-runtime.ts",
       "../../src/plugin-sdk/video-generation.ts",
       "../../src/video-generation/dashscope-compatible.ts",
       "../../src/video-generation/types.ts",
@@ -121,6 +124,12 @@ describe("opt-in extension package boundaries", () => {
     );
     expect(packageJson.exports?.["./provider-http"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-http.d.ts",
+    );
+    expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
+      "./dist/src/plugin-sdk/runtime-doctor.d.ts",
+    );
+    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/text-runtime.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
       "./dist/src/plugin-sdk/video-generation.d.ts",

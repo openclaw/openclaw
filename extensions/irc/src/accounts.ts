@@ -6,6 +6,7 @@ import {
   tryReadSecretFileSync,
 } from "openclaw/plugin-sdk/channel-core";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -186,7 +187,7 @@ export function resolveIrcAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       configured: Boolean(host && nick),
       host,
       port,

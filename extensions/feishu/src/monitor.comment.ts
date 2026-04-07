@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -126,7 +127,7 @@ function safeJsonStringify(value: unknown): string {
     return JSON.stringify(value);
   } catch (error) {
     return JSON.stringify({
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
   }
 }

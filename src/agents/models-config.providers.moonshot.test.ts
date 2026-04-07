@@ -4,12 +4,14 @@ import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-
 
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   return import("./models-config.providers.secrets.js");
 }
 
 beforeEach(() => {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
 });
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";

@@ -6,6 +6,7 @@ import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -82,8 +83,8 @@ function parseBashRequest(raw: string): BashRequest | null {
     return { action: "help" };
   }
   const tokenMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  const token = tokenMatch?.[1]?.trim() ?? "";
-  const remainder = tokenMatch?.[2]?.trim() ?? "";
+  const token = normalizeOptionalString(tokenMatch?.[1]) ?? "";
+  const remainder = normalizeOptionalString(tokenMatch?.[2]) ?? "";
   const lowered = token.toLowerCase();
   if (lowered === "poll") {
     return { action: "poll", sessionId: remainder || undefined };
@@ -236,7 +237,8 @@ export async function handleBashChatCommand(params: {
 
   if (request.action === "poll") {
     const sessionId =
-      request.sessionId?.trim() || (liveJob?.state === "running" ? liveJob.sessionId : "");
+      normalizeOptionalString(request.sessionId) ||
+      (liveJob?.state === "running" ? liveJob.sessionId : "");
     if (!sessionId) {
       return { text: "⚙️ No active bash job." };
     }
@@ -279,7 +281,8 @@ export async function handleBashChatCommand(params: {
 
   if (request.action === "stop") {
     const sessionId =
-      request.sessionId?.trim() || (liveJob?.state === "running" ? liveJob.sessionId : "");
+      normalizeOptionalString(request.sessionId) ||
+      (liveJob?.state === "running" ? liveJob.sessionId : "");
     if (!sessionId) {
       return { text: "⚙️ No active bash job." };
     }

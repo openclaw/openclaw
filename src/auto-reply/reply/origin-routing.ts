@@ -1,7 +1,8 @@
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 
 function normalizeProviderValue(value?: string): string | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized || undefined;
 }
 

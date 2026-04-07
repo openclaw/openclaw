@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
@@ -13,7 +14,6 @@ import { collectConfigAssignments } from "../secrets/runtime-config-collectors.j
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { resolveRuntimeWebTools } from "../secrets/runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "../secrets/secret-value.js";
-import { describeUnknownError } from "../secrets/shared.js";
 import {
   discoverConfigSecretTargetsByIds,
   type DiscoveredConfigSecretTarget,
@@ -398,7 +398,7 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
 }
 
 function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = describeUnknownError(err).toLowerCase();
+  const message = formatErrorMessage(err).toLowerCase();
   if (!message.includes("secrets.resolve")) {
     return false;
   }
@@ -460,7 +460,7 @@ async function resolveCommandSecretRefsLocally(params: {
         throw error;
       }
       localResolutionDiagnostics.push(
-        `${params.commandName}: failed to resolve web tool secrets locally (${describeUnknownError(error)}).`,
+        `${params.commandName}: failed to resolve web tool secrets locally (${formatErrorMessage(error)}).`,
       );
     }
   }
@@ -650,7 +650,7 @@ async function resolveTargetSecretLocally(params: {
   } catch (error) {
     if (!enforcesResolvedSecrets(params.mode)) {
       params.localResolutionDiagnostics.push(
-        `${params.commandName}: failed to resolve ${params.target.path} locally (${describeUnknownError(error)}).`,
+        `${params.commandName}: failed to resolve ${params.target.path} locally (${formatErrorMessage(error)}).`,
       );
     }
   }
@@ -725,7 +725,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         resolvedConfig: fallback.resolvedConfig,
         diagnostics: dedupeDiagnostics([
           ...fallback.diagnostics,
-          `${params.commandName}: gateway secrets.resolve unavailable (${describeUnknownError(err)}); ${fallbackMessage}`,
+          `${params.commandName}: gateway secrets.resolve unavailable (${formatErrorMessage(err)}); ${fallbackMessage}`,
         ]),
         targetStatesByPath: fallback.targetStatesByPath,
         hadUnresolvedTargets: fallback.hadUnresolvedTargets,
@@ -735,12 +735,12 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     }
     if (isUnsupportedSecretsResolveError(err)) {
       throw new Error(
-        `${params.commandName}: active gateway does not support secrets.resolve (${describeUnknownError(err)}). Update the gateway or run without SecretRefs.`,
+        `${params.commandName}: active gateway does not support secrets.resolve (${formatErrorMessage(err)}). Update the gateway or run without SecretRefs.`,
         { cause: err },
       );
     }
     throw new Error(
-      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${describeUnknownError(err)}). Start the gateway and retry.`,
+      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). Start the gateway and retry.`,
       { cause: err },
     );
   }
@@ -757,7 +757,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     } catch (err) {
       const path = pathSegments.join(".");
       throw new Error(
-        `${params.commandName}: failed to apply resolved secret assignment at ${path} (${describeUnknownError(err)}).`,
+        `${params.commandName}: failed to apply resolved secret assignment at ${path} (${formatErrorMessage(err)}).`,
         { cause: err },
       );
     }
@@ -837,7 +837,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       scrubUnresolvedAssignments(resolvedConfig, analyzed.unresolved);
       diagnostics = dedupeDiagnostics([
         ...diagnostics,
-        `${params.commandName}: local fallback after incomplete gateway snapshot failed (${describeUnknownError(error)}).`,
+        `${params.commandName}: local fallback after incomplete gateway snapshot failed (${formatErrorMessage(error)}).`,
         ...buildUnresolvedDiagnostics(params.commandName, analyzed.unresolved, mode),
       ]);
     }

@@ -18,6 +18,7 @@ import type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -569,7 +570,7 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
 }
 
 function sanitizeTtsErrorForLog(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = formatErrorMessage(err);
   return redactSensitiveText(raw).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 

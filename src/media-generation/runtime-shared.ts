@@ -10,6 +10,7 @@ import {
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
@@ -60,7 +61,7 @@ type ParsedSize = {
 
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
   const configured = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
-  const trimmed = configured?.trim();
+  const trimmed = normalizeOptionalString(configured);
   if (!trimmed) {
     return DEFAULT_PROVIDER;
   }
@@ -68,7 +69,7 @@ function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
   if (slash <= 0) {
     return DEFAULT_PROVIDER;
   }
-  const provider = trimmed.slice(0, slash).trim();
+  const provider = normalizeOptionalString(trimmed.slice(0, slash));
   return provider || DEFAULT_PROVIDER;
 }
 
@@ -86,7 +87,7 @@ function isCapabilityProviderConfigured(params: {
   if (resolveEnvApiKey(params.provider.id)?.apiKey) {
     return true;
   }
-  const agentDir = params.agentDir?.trim();
+  const agentDir = normalizeOptionalString(params.agentDir);
   if (!agentDir) {
     return false;
   }
@@ -103,8 +104,8 @@ function resolveAutoCapabilityFallbackRefs(params: {
 }): string[] {
   const providerDefaults = new Map<string, string>();
   for (const provider of params.listProviders(params.cfg)) {
-    const providerId = provider.id.trim();
-    const modelId = provider.defaultModel?.trim();
+    const providerId = normalizeOptionalString(provider.id);
+    const modelId = normalizeOptionalString(provider.defaultModel);
     if (
       !providerId ||
       !modelId ||
@@ -177,6 +178,13 @@ export function resolveCapabilityModelCandidates(params: {
   return candidates;
 }
 
+function normalizeSupportedValues<TValue extends string>(values?: readonly TValue[]): TValue[] {
+  return (values ?? []).flatMap((entry) => {
+    const normalized = normalizeOptionalString(entry);
+    return normalized ? [entry] : [];
+  });
+}
+
 function compareScores(
   next: { primary: number; secondary: number; tertiary: string },
   best: { primary: number; secondary: number; tertiary: string } | null,
@@ -194,7 +202,7 @@ function compareScores(
 }
 
 function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
-  const trimmed = raw?.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -215,7 +223,7 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
 }
 
 function parseSizeValue(raw?: string | null): ParsedSize | null {
-  const trimmed = raw?.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -261,7 +269,7 @@ export function resolveClosestAspectRatio(params: {
   requestedSize?: string;
   supportedAspectRatios?: readonly string[];
 }): string | undefined {
-  const supported = params.supportedAspectRatios?.filter((entry) => entry.trim().length > 0) ?? [];
+  const supported = normalizeSupportedValues(params.supportedAspectRatios);
   if (supported.length === 0) {
     return params.requestedAspectRatio ?? deriveAspectRatioFromSize(params.requestedSize);
   }
@@ -300,7 +308,7 @@ export function resolveClosestSize(params: {
   requestedAspectRatio?: string;
   supportedSizes?: readonly string[];
 }): string | undefined {
-  const supported = params.supportedSizes?.filter((entry) => entry.trim().length > 0) ?? [];
+  const supported = normalizeSupportedValues(params.supportedSizes);
   if (supported.length === 0) {
     return params.requestedSize;
   }
@@ -340,7 +348,7 @@ export function resolveClosestResolution<TResolution extends string>(params: {
   supportedResolutions?: readonly TResolution[];
   order?: readonly TResolution[];
 }): TResolution | undefined {
-  const supported = params.supportedResolutions?.filter((entry) => entry.trim().length > 0) ?? [];
+  const supported = normalizeSupportedValues(params.supportedResolutions);
   if (supported.length === 0) {
     return params.requestedResolution;
   }
@@ -422,7 +430,8 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
   fallbackSampleRef?: string;
 }): string {
   const sampleModel = params.providers.find(
-    (provider) => provider.id.trim().length > 0 && provider.defaultModel?.trim(),
+    (provider) =>
+      normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),
   );
   const sampleRef = sampleModel
     ? `${sampleModel.id}/${sampleModel.defaultModel}`

@@ -48,6 +48,10 @@
       "types": "./dist/src/plugin-sdk/provider-web-search.d.ts",
       "default": "./src/provider-web-search.ts"
     },
+    "./runtime-doctor": {
+      "types": "./dist/src/plugin-sdk/runtime-doctor.d.ts",
+      "default": "./src/runtime-doctor.ts"
+    },
     "./runtime-env": {
       "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
       "default": "./src/runtime-env.ts"
@@ -59,6 +63,10 @@
     "./testing": {
       "types": "./dist/src/plugin-sdk/testing.d.ts",
       "default": "./src/testing.ts"
+    },
+    "./text-runtime": {
+      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
+      "default": "./src/text-runtime.ts"
     },
     "./video-generation": {
       "types": "./dist/src/plugin-sdk/video-generation.d.ts",

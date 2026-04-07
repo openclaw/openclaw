@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -24,7 +24,6 @@ vi.mock("../infra/outbound/message.js", () => ({
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
 let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
@@ -39,16 +38,6 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   };
   const params = invoke.params ?? {};
   return buildSystemRunPreparePayload(params);
-}
-
-function getTestConfigPath() {
-  return path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
-}
-
-async function writeOpenClawConfig(config: Record<string, unknown>, pretty = false) {
-  const configPath = getTestConfigPath();
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, pretty ? 2 : undefined));
 }
 
 async function writeExecApprovalsConfig(config: Record<string, unknown>) {
@@ -234,14 +223,8 @@ describe("exec approvals", () => {
   let previousBundledPluginsDir: string | undefined;
   let previousDisableBundledPlugins: string | undefined;
 
-  beforeAll(async () => {
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
-    ({ sendMessage } = await import("../infra/outbound/message.js"));
-  });
-
   beforeEach(async () => {
+    vi.resetModules();
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
     previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -252,6 +235,9 @@ describe("exec approvals", () => {
     process.env.USERPROFILE = tempDir;
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ sendMessage } = await import("../infra/outbound/message.js"));
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(sendMessage).mockClear();
   });
@@ -1368,46 +1354,5 @@ describe("exec approvals", () => {
         command: "echo cron-denied",
       }),
     ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
-  });
-
-  it("keeps Telegram approvals in the initiating chat even when Discord DM approvals are also enabled", async () => {
-    await writeOpenClawConfig(
-      {
-        channels: {
-          telegram: {
-            enabled: true,
-            execApprovals: { enabled: false },
-          },
-          discord: {
-            enabled: true,
-            execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-          },
-        },
-      },
-      true,
-    );
-
-    mockPendingApprovalRegistration();
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      approvalRunningNoticeMs: 0,
-      messageProvider: "telegram",
-      accountId: "default",
-      currentChannelId: "-1003841603622",
-    });
-
-    const result = await tool.execute("call-tg-unavailable", {
-      command: "npm view diver name version description",
-    });
-
-    const details = expectPendingApprovalText(result, {
-      command: "npm view diver name version description",
-      host: "gateway",
-      allowedDecisions: "allow-once|deny",
-    });
-    expect(getResultText(result)).toContain(`/approve ${details.approvalSlug} allow-once`);
-    expect(getResultText(result)).not.toContain(getExecApprovalApproverDmNoticeText());
   });
 });

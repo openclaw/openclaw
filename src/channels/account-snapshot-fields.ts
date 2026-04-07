@@ -1,4 +1,5 @@
 import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
@@ -17,12 +18,7 @@ const CREDENTIAL_STATUS_KEYS = [
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
 
 function readTrimmedString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(record[key]);
 }
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
@@ -111,8 +107,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
   }
   return (
     ["token", "botToken", "appToken", "signingSecret", "userToken"].some((key) => {
-      const value = record[key];
-      return typeof value === "string" && value.trim().length > 0;
+      return normalizeOptionalString(record[key]) !== undefined;
     }) || CREDENTIAL_STATUS_KEYS.some((key) => readCredentialStatus(record, key) === "available")
   );
 }

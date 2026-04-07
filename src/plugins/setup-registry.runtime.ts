@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./contracts/inventory/bundled-capability-metadata.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -18,16 +18,25 @@ const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | undefined;
+let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
-const BUNDLED_SETUP_CLI_BACKENDS = BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
-  entry.cliBackendIds.map(
-    (backendId) =>
-      ({
-        pluginId: entry.pluginId,
-        backend: { id: backendId },
-      }) satisfies SetupCliBackendRuntimeEntry,
-  ),
-);
+function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
+  if (bundledSetupCliBackendsCache) {
+    return bundledSetupCliBackendsCache;
+  }
+  bundledSetupCliBackendsCache = loadPluginManifestRegistry({})
+    .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.cliBackends.length > 0)
+    .flatMap((plugin) =>
+      plugin.cliBackends.map(
+        (backendId) =>
+          ({
+            pluginId: plugin.id,
+            backend: { id: backendId },
+          }) satisfies SetupCliBackendRuntimeEntry,
+      ),
+    );
+  return bundledSetupCliBackendsCache;
+}
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
   if (setupRegistryRuntimeModule) {
@@ -50,7 +59,7 @@ export function resolvePluginSetupCliBackendRuntime(params: { backend: string })
     return runtime.resolvePluginSetupCliBackend(params);
   }
   const normalized = normalizeProviderId(params.backend);
-  return BUNDLED_SETUP_CLI_BACKENDS.find(
+  return resolveBundledSetupCliBackends().find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
 }

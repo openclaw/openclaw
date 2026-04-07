@@ -1,5 +1,7 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
-  const trimmed = providerId?.trim().toLowerCase();
+  const trimmed = normalizeOptionalString(providerId)?.toLowerCase();
   return trimmed ? trimmed : undefined;
 }
 

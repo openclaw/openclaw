@@ -15,5 +15,5 @@ export function normalizeOptionalString(value: unknown): string | undefined {
 }
 
 export function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return normalizeOptionalString(value) !== undefined;
 }

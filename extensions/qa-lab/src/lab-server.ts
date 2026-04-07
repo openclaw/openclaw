@@ -11,6 +11,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
@@ -670,7 +671,7 @@ export async function startQaLabServer(params?: {
               startedAt,
               finishedAt: new Date().toISOString(),
               artifacts: null,
-              error: error instanceof Error ? error.message : String(error),
+              error: formatErrorMessage(error),
             };
           } finally {
             activeSuiteRun = null;
