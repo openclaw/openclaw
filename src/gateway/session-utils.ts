@@ -1191,6 +1191,12 @@ export function buildGatewaySessionRow(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  /**
+   * When true, run the expensive per-session transcript scan to resolve
+   * totalTokens / contextTokens / estimatedCostUsd that are absent from the
+   * store.  Default false so the hot listing path stays cheap.
+   */
+  includeTranscriptUsage?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1249,7 +1255,8 @@ export function buildGatewaySessionRow(params: {
       entry,
     }) === undefined;
   const transcriptUsage =
-    needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd
+    params.includeTranscriptUsage === true &&
+    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -1378,7 +1385,12 @@ export function buildGatewaySessionRow(params: {
 
 export function loadGatewaySessionRow(
   sessionKey: string,
-  options?: { includeDerivedTitles?: boolean; includeLastMessage?: boolean; now?: number },
+  options?: {
+    includeDerivedTitles?: boolean;
+    includeLastMessage?: boolean;
+    includeTranscriptUsage?: boolean;
+    now?: number;
+  },
 ): GatewaySessionRow | null {
   const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
   if (!entry) {
@@ -1393,6 +1405,7 @@ export function loadGatewaySessionRow(
     now: options?.now,
     includeDerivedTitles: options?.includeDerivedTitles,
     includeLastMessage: options?.includeLastMessage,
+    includeTranscriptUsage: options?.includeTranscriptUsage,
   });
 }
 
@@ -1409,6 +1422,7 @@ export function listSessionsFromStore(params: {
   const includeUnknown = opts.includeUnknown === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
+  const includeTranscriptUsage = opts.includeTranscriptUsage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = typeof opts.label === "string" ? opts.label.trim() : "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
@@ -1472,6 +1486,7 @@ export function listSessionsFromStore(params: {
         now,
         includeDerivedTitles,
         includeLastMessage,
+        includeTranscriptUsage,
       }),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

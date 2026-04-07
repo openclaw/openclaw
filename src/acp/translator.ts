@@ -1237,6 +1237,7 @@ export class AcpGatewayAgent implements Agent {
       limit: 200,
       search: sessionKey,
       includeDerivedTitles: true,
+      includeTranscriptUsage: true,
     });
     const session = result.sessions.find((entry) => entry.key === sessionKey);
     if (!session) {

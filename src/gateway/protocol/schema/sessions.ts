@@ -51,6 +51,14 @@ export const SessionsListParamsSchema = Type.Object(
      * Performs a file read per session - use `limit` to bound result set on large stores.
      */
     includeLastMessage: Type.Optional(Type.Boolean()),
+    /**
+     * Run the per-session transcript fallback to resolve usage/cost/context data that is
+     * missing from the session store (totalTokens, contextTokens, estimatedCostUsd).
+     * Performs a synchronous full-transcript read per session when the store values are
+     * absent — expensive on large stores.  Default false (opt-in).
+     * Use this flag only when the caller needs token/cost/context enrichment.
+     */
+    includeTranscriptUsage: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
