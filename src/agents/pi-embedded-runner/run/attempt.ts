@@ -473,12 +473,6 @@ export async function runEmbeddedAttempt(
             exec: {
               ...params.execOverrides,
               elevated: params.bashElevated,
-              // Suppress exec-exit notifications during heartbeat runs to prevent
-              // the heartbeat from re-triggering itself via requestHeartbeatNow.
-              // Synchronous execs (systemctl, node scripts) in heartbeat checks
-              // fire maybeNotifyOnExit on completion, which is not suppressed by
-              // the pollWaiting guard (that only covers `process poll` scenarios).
-              ...(params.trigger === "heartbeat" ? { notifyOnExit: false } : {}),
             },
             sandbox,
             messageProvider: params.messageChannel ?? params.messageProvider,
