@@ -17,7 +17,7 @@ describe("gateway handshake timeouts", () => {
   test("clamps connect challenge timeouts into the supported range", () => {
     expect(clampConnectChallengeTimeoutMs(0)).toBe(MIN_CONNECT_CHALLENGE_TIMEOUT_MS);
     expect(clampConnectChallengeTimeoutMs(2_000)).toBe(2_000);
-    expect(clampConnectChallengeTimeoutMs(20_000)).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
+    expect(clampConnectChallengeTimeoutMs(500_000)).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
   });
 
   test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on the test-only env", () => {
