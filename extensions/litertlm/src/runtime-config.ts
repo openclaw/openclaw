@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { LiteRtLmModelPreference } from "./provider-models.js";
 
 export type LiteRtLmRuntimeConfig = {
@@ -81,6 +83,13 @@ export type LiteRtLmConfigResolutionInput = {
   providerConfig?: LiteRtLmProviderConfig;
 };
 
+export function getDefaultLiteRtLmBundledShimPath() {
+  return path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../scripts/litertlm_provider_shim.py",
+  );
+}
+
 export function resolveLiteRtLmRuntimeConfig(
   input: LiteRtLmConfigResolutionInput,
 ): LiteRtLmRuntimeConfig {
@@ -93,15 +102,17 @@ export function resolveLiteRtLmRuntimeConfig(
   const shimPath =
     providerConfig.shimPath?.trim() ||
     env.OPENCLAW_LITERTLM_SHIM?.trim() ||
-    "extensions/litertlm/scripts/litertlm_provider_shim.py";
+    getDefaultLiteRtLmBundledShimPath();
 
   const modelFile =
     providerConfig.modelFile?.trim() || env.OPENCLAW_LITERTLM_MODEL_FILE?.trim() || "";
 
-  const timeoutMs =
+  const timeoutMsRaw =
     providerConfig.timeoutMs && providerConfig.timeoutMs > 0
       ? providerConfig.timeoutMs
       : Number(env.OPENCLAW_LITERTLM_TIMEOUT_MS || 120000);
+
+  const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 120000;
 
   const backend = providerConfig.backend?.trim() || env.OPENCLAW_LITERTLM_BACKEND?.trim() || "CPU";
 

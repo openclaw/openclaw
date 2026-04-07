@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
@@ -79,22 +78,15 @@ function buildStreamErrorAssistantMessage(params: {
   };
 }
 
-function getBundledShimPath() {
-  return path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../scripts/litertlm_provider_shim.py",
-  );
-}
-
 function resolveShimPath(runtimeConfig: LiteRtLmRuntimeConfig) {
   const configuredPath = runtimeConfig.shimPath.trim();
   if (!configuredPath) {
-    return getBundledShimPath();
+    return runtimeConfig.shimPath;
   }
   if (path.isAbsolute(configuredPath)) {
     return configuredPath;
   }
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", configuredPath);
+  return path.resolve(process.cwd(), configuredPath);
 }
 
 function buildModelDescriptor(modelId: string): StreamModelDescriptor {
@@ -135,26 +127,58 @@ function buildUsageFromShimResponse(payload: LiteRtLmShimResponse): Usage {
   });
 }
 
+function buildLiteRtLmErrorMessage(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/ENOENT|not found/i.test(message)) {
+    return `litertlm environment error: ${message}`;
+  }
+  if (/timed out|timeout/i.test(message)) {
+    return `litertlm runtime timeout: ${message}`;
+  }
+  if (/Unexpected token|JSON|parse/i.test(message)) {
+    return `litertlm runtime returned invalid JSON: ${message}`;
+  }
+  return message;
+}
+
 async function invokeLiteRtLmShim(params: {
   runtimeConfig: LiteRtLmRuntimeConfig;
   request: ReturnType<typeof buildLiteRtLmShimRequest>;
 }): Promise<LiteRtLmShimResponse> {
   const shimPath = resolveShimPath(params.runtimeConfig);
-  const { stdout } = await execFileAsync(
-    params.runtimeConfig.pythonPath,
-    [shimPath, "--input", JSON.stringify(params.request)],
-    {
-      timeout: params.runtimeConfig.timeoutMs,
-      maxBuffer: 1024 * 1024,
-    },
-  );
+  try {
+    const { stdout } = await execFileAsync(
+      params.runtimeConfig.pythonPath,
+      [shimPath, "--input", JSON.stringify(params.request)],
+      {
+        timeout: params.runtimeConfig.timeoutMs,
+        maxBuffer: 1024 * 1024,
+      },
+    );
 
-  const parsed = JSON.parse(stdout) as LiteRtLmShimResponse;
-  return parsed;
-}
-
-function buildLiteRtLmErrorMessage(err: unknown) {
-  return err instanceof Error ? err.message : String(err);
+    return JSON.parse(stdout) as LiteRtLmShimResponse;
+  } catch (error) {
+    if (error instanceof Error) {
+      return {
+        ok: false,
+        version: 1,
+        error: {
+          type: /ENOENT|not found/i.test(error.message) ? "environment" : "runtime",
+          code: /timed out|timeout/i.test(error.message) ? "PROCESS_TIMEOUT" : "PROCESS_ERROR",
+          message: buildLiteRtLmErrorMessage(error),
+        },
+      };
+    }
+    return {
+      ok: false,
+      version: 1,
+      error: {
+        type: "runtime",
+        code: "UNKNOWN_RUNTIME_ERROR",
+        message: String(error),
+      },
+    };
+  }
 }
 
 export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): StreamFn {
@@ -169,7 +193,7 @@ export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): S
         });
 
         if (!runtimeConfig.modelFile) {
-          throw new Error("litertlm provider requires a configured model file path");
+          throw new Error("litertlm configuration error: missing configured modelFile");
         }
 
         const request = buildLiteRtLmShimRequest({
@@ -185,7 +209,9 @@ export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): S
         const payload = await invokeLiteRtLmShim({ runtimeConfig, request });
 
         if (!payload.ok) {
-          throw new Error(payload.error.message || "LiteRT-LM shim failed");
+          throw new Error(
+            `litertlm ${payload.error.type} error (${payload.error.code}): ${payload.error.message}`,
+          );
         }
 
         const text = payload.output.text || "";
