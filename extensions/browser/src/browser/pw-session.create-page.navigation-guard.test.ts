@@ -191,7 +191,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         {
           isNavigationRequest: () => true,
           frame: () => mainFrame,
-          resourceType: () => "document",
           url: () => "https://93.184.216.34/start",
         },
       );
