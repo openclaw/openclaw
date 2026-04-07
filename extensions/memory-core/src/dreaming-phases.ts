@@ -637,10 +637,12 @@ type SessionIngestionFileState = {
   mtimeMs: number;
   size: number;
   contentHash: string;
+  lineCount: number;
+  lastContentLine: number;
 };
 
 type SessionIngestionState = {
-  version: 2;
+  version: 3;
   files: Record<string, SessionIngestionFileState>;
   seenMessages: Record<string, string[]>;
 };
@@ -681,10 +683,20 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
       if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
         continue;
       }
+      const lineCountRaw = Number(file.lineCount);
+      const lastContentLineRaw = Number(file.lastContentLine);
+      const lineCount =
+        Number.isFinite(lineCountRaw) && lineCountRaw >= 0 ? Math.floor(lineCountRaw) : 0;
+      const lastContentLine =
+        Number.isFinite(lastContentLineRaw) && lastContentLineRaw >= 0
+          ? Math.floor(lastContentLineRaw)
+          : 0;
       files[key] = {
         mtimeMs: Math.floor(mtimeMs),
         size: Math.floor(size),
         contentHash: typeof file.contentHash === "string" ? file.contentHash.trim() : "",
+        lineCount,
+        lastContentLine: Math.min(lineCount, lastContentLine),
       };
     }
   }
@@ -706,7 +718,7 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
       }
     }
   }
-  return { version: 2, files, seenMessages };
+  return { version: 3, files, seenMessages };
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
@@ -717,7 +729,7 @@ async function readSessionIngestionState(workspaceDir: string): Promise<SessionI
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT" || err instanceof SyntaxError) {
-      return { version: 2, files: {}, seenMessages: {} };
+      return { version: 3, files: {}, seenMessages: {} };
     }
     throw err;
   }
@@ -883,7 +895,7 @@ async function collectSessionIngestionBatches(params: {
   if (!params.cfg) {
     return {
       batches: [],
-      nextState: { version: 2, files: {}, seenMessages: {} },
+      nextState: { version: 3, files: {}, seenMessages: {} },
       changed:
         Object.keys(params.state.files).length > 0 ||
         Object.keys(params.state.seenMessages).length > 0,
@@ -947,11 +959,16 @@ async function collectSessionIngestionBatches(params: {
       mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
       size: Math.floor(Math.max(0, stat.size)),
     };
+    const cursorAtEnd =
+      previous !== undefined &&
+      previous.lineCount > 0 &&
+      previous.lastContentLine >= previous.lineCount;
     const unchanged =
       Boolean(previous) &&
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size &&
-      previous.contentHash.length > 0;
+      previous.contentHash.length > 0 &&
+      cursorAtEnd;
     if (unchanged) {
       nextFiles[stateKey] = previous!;
       continue;
@@ -966,7 +983,9 @@ async function collectSessionIngestionBatches(params: {
       previous &&
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size &&
-      previous.contentHash === contentHash
+      previous.contentHash === contentHash &&
+      previous.lineCount === entry.lineMap.length &&
+      previous.lastContentLine >= previous.lineCount
     ) {
       nextFiles[stateKey] = previous;
       continue;
@@ -978,31 +997,41 @@ async function collectSessionIngestionBatches(params: {
     const newSeenHashes: string[] = [];
 
     const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
-    const day = formatMemoryDreamingDay(fingerprint.mtimeMs, params.timezone);
-    if (!isDayWithinLookback(day, cutoffMs)) {
-      nextFiles[stateKey] = {
-        mtimeMs: fingerprint.mtimeMs,
-        size: fingerprint.size,
-        contentHash,
-      };
-      continue;
-    }
+    const lineCount = lines.length;
+    let cursor =
+      previous &&
+      previous.mtimeMs === fingerprint.mtimeMs &&
+      previous.size === fingerprint.size &&
+      previous.contentHash === contentHash &&
+      previous.lineCount === lineCount
+        ? Math.max(0, Math.min(previous.lastContentLine, lineCount))
+        : 0;
 
     const fileCap = Math.max(1, Math.min(perFileCap, remaining));
     let fileCount = 0;
-    for (let index = 0; index < lines.length; index += 1) {
+    let lastScannedContentLine = cursor;
+    for (let index = cursor; index < lines.length; index += 1) {
       if (fileCount >= fileCap || remaining <= 0) {
         break;
       }
+      lastScannedContentLine = index + 1;
       const rawSnippet = lines[index] ?? "";
       const snippet = normalizeSessionCorpusSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
         continue;
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;
-      const messageHash = hashSessionMessageId(
-        `${file.agentId}\n${sessionScope}\n${lineNumber}\n${snippet}`,
+      const messageTimestampMs = entry.messageTimestampsMs[index] ?? 0;
+      const day = formatMemoryDreamingDay(
+        messageTimestampMs > 0 ? messageTimestampMs : fingerprint.mtimeMs,
+        params.timezone,
       );
+      if (!isDayWithinLookback(day, cutoffMs)) {
+        continue;
+      }
+      const dedupeBasis =
+        messageTimestampMs > 0 ? `ts:${Math.floor(messageTimestampMs)}` : `line:${lineNumber}`;
+      const messageHash = hashSessionMessageId(`${sessionScope}\n${dedupeBasis}\n${snippet}`);
       if (seenSet.has(messageHash)) {
         continue;
       }
@@ -1021,10 +1050,17 @@ async function collectSessionIngestionBatches(params: {
       remaining -= 1;
     }
 
+    if (lastScannedContentLine < cursor) {
+      lastScannedContentLine = cursor;
+    }
+    cursor = Math.max(0, Math.min(lastScannedContentLine, lineCount));
+
     nextFiles[stateKey] = {
       mtimeMs: fingerprint.mtimeMs,
       size: fingerprint.size,
       contentHash,
+      lineCount,
+      lastContentLine: cursor,
     };
     const mergedSeen = mergeTrackedMessageHashes(previousSeen, newSeenHashes);
     nextSeenMessages[sessionScope] = mergedSeen;
@@ -1035,7 +1071,9 @@ async function collectSessionIngestionBatches(params: {
       !previous ||
       previous.mtimeMs !== fingerprint.mtimeMs ||
       previous.size !== fingerprint.size ||
-      previous.contentHash !== contentHash
+      previous.contentHash !== contentHash ||
+      previous.lineCount !== lineCount ||
+      previous.lastContentLine !== cursor
     ) {
       changed = true;
     }
@@ -1055,6 +1093,13 @@ async function collectSessionIngestionBatches(params: {
       typeof state.contentHash === "string" &&
       state.contentHash.trim().length > 0 &&
       next.contentHash !== state.contentHash
+    ) {
+      changed = true;
+    }
+    if (
+      !next ||
+      next.lineCount !== state.lineCount ||
+      next.lastContentLine !== state.lastContentLine
     ) {
       changed = true;
     }
@@ -1091,7 +1136,7 @@ async function collectSessionIngestionBatches(params: {
 
   return {
     batches,
-    nextState: { version: 2, files: nextFiles, seenMessages: trimmedSeenMessages },
+    nextState: { version: 3, files: nextFiles, seenMessages: trimmedSeenMessages },
     changed,
   };
 }

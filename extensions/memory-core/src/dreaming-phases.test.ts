@@ -580,7 +580,7 @@ describe("memory-core dreaming phases", () => {
             type: "message",
             message: {
               role: "user",
-              timestamp: "2026-04-06T01:01:00.000Z",
+              timestamp: "2026-04-05T18:01:00.000Z",
               content: [{ type: "text", text: oldMessage }],
             },
           }),
@@ -618,6 +618,190 @@ describe("memory-core dreaming phases", () => {
     const newCandidate = ranked.find((candidate) => candidate.snippet.includes("retention at 365"));
     expect(oldCandidate?.dailyCount).toBe(1);
     expect(newCandidate?.dailyCount).toBe(1);
+
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
+      name.endsWith(".txt"),
+    );
+    let combinedCorpus = "";
+    for (const fileName of corpusFiles) {
+      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
+    }
+    const oldOccurrences = combinedCorpus.match(/Move backups to S3 Glacier\./g)?.length ?? 0;
+    const newOccurrences = combinedCorpus.match(/Keep retention at 365 days\./g)?.length ?? 0;
+    expect(oldOccurrences).toBe(1);
+    expect(newOccurrences).toBe(1);
+  });
+
+  it("buckets session snippets by per-message day rather than file mtime", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-01T12:00:00.000Z",
+            content: [
+              { type: "text", text: "Old planning note that should stay out of lookback." },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-05T18:02:00.000Z",
+            content: [{ type: "text", text: "Current reminder that should be in today corpus." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const freshMtime = new Date("2026-04-06T01:05:00.000Z");
+    await fs.utimes(transcriptPath, freshMtime, freshMtime);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    const corpusFiles = (await fs.readdir(corpusDir))
+      .filter((name) => name.endsWith(".txt"))
+      .toSorted();
+    expect(corpusFiles).toEqual(["2026-04-05.txt"]);
+    const dayCorpus = await fs.readFile(path.join(corpusDir, "2026-04-05.txt"), "utf-8");
+    expect(dayCorpus).toContain("Current reminder that should be in today corpus.");
+    expect(dayCorpus).not.toContain("Old planning note that should stay out of lookback.");
+  });
+
+  it("drains >80 unseen transcript messages across multiple unchanged sweeps", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const lines: string[] = [];
+    for (let index = 0; index < 160; index += 1) {
+      lines.push(
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: index % 2 === 0 ? "user" : "assistant",
+            timestamp: "2026-04-05T18:00:00.000Z",
+            content: [{ type: "text", text: `bulk-line-${index}` }],
+          },
+        }),
+      );
+    }
+    await fs.writeFile(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const mtime = new Date("2026-04-05T18:05:00.000Z");
+    await fs.utimes(transcriptPath, mtime, mtime);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-05.txt",
+    );
+    const corpus = await fs.readFile(corpusPath, "utf-8");
+    const persistedLines = corpus
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    expect(persistedLines).toHaveLength(160);
+    expect(corpus).toContain("bulk-line-0");
+    expect(corpus).toContain("bulk-line-159");
   });
 
   it("re-ingests rewritten session transcripts after truncate/reset", async () => {
