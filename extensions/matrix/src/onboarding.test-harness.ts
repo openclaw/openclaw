@@ -138,7 +138,7 @@ export async function runMatrixAddAccountAllowlistConfigure(params: {
       "Matrix allowFrom (full @user:server; display name only if unique)": params.allowFromInput,
       "Matrix rooms allowlist (comma-separated)": params.roomsAllowlistInput,
       "Matrix invite auto-join allowlist (comma-separated)":
-        params.autoJoinAllowlistInput ?? "!ops-room:example.org",
+        params.autoJoinAllowlistInput ?? "#ops-invites:example.org",
     },
     confirm: {
       "Enable end-to-end encryption (E2EE)?": false,

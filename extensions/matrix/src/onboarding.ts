@@ -35,10 +35,10 @@ import {
   type WizardPrompter,
 } from "./runtime-api.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, MatrixConfig } from "./types.js";
 
 const channel = "matrix" as const;
-type MatrixInviteAutoJoinPolicy = "allowlist" | "always" | "off";
+type MatrixInviteAutoJoinPolicy = NonNullable<MatrixConfig["autoJoin"]>;
 
 const matrixInviteAutoJoinOptions: Array<{
   value: MatrixInviteAutoJoinPolicy;
