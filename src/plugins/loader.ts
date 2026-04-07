@@ -594,12 +594,29 @@ function unwrapDefaultModuleExport(
   return resolved;
 }
 
-function defaultChainContainsPluginExport(next: unknown): boolean {
+function looksLikePluginDefinitionRecord(candidate: Record<string, unknown>): boolean {
+  return (
+    typeof candidate.id === "string" ||
+    typeof candidate.version === "string" ||
+    typeof candidate.description === "string" ||
+    candidate.kind !== undefined ||
+    candidate.configSchema !== undefined ||
+    candidate.capabilities !== undefined
+  );
+}
+
+function defaultChainContainsPluginExport(
+  candidate: Record<string, unknown>,
+  next: unknown,
+): boolean {
   let current = next;
   const visited = new Set<unknown>();
   while (true) {
     if (typeof current === "function") {
-      return true;
+      // Wrapper layers can re-export the real default function while also exposing
+      // named register/activate exports. But if the current object already looks
+      // like a concrete plugin definition, prefer its own register/activate.
+      return !looksLikePluginDefinitionRecord(candidate);
     }
     if (!current || typeof current !== "object" || visited.has(current)) {
       return false;
@@ -623,7 +640,8 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   const resolved = unwrapDefaultModuleExport(moduleExport, {
     shouldStop: (candidate) =>
       typeof candidate.register === "function" || typeof candidate.activate === "function",
-    shouldContinueOnDefault: (_candidate, next) => defaultChainContainsPluginExport(next),
+    shouldContinueOnDefault: (candidate, next) =>
+      defaultChainContainsPluginExport(candidate, next),
   });
   if (typeof resolved === "function") {
     return {
