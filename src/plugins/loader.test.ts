@@ -2359,11 +2359,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
       pluginConfig: { allow: ["mcp-server-demo"] },
     });
 
+    const expectedPluginDir = fs.realpathSync(plugin.dir);
     expect(registry.mcpServers).toEqual([
       expect.objectContaining({
         pluginId: "mcp-server-demo",
         name: "helloWorld",
-        server: { command: "node", args: ["server.mjs"], cwd: plugin.dir },
+        server: { command: "node", args: ["server.mjs"], cwd: expectedPluginDir },
       }),
     ]);
   });
