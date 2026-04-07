@@ -57,6 +57,7 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
+import { createSubsystemLogger } from "../../logging.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -81,6 +82,8 @@ type StoredRuntimeContext = {
     capability: string;
   };
 };
+
+const log = createSubsystemLogger("plugins/runtime-channel");
 
 function normalizeRuntimeContextString(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -148,7 +151,17 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       if (!doesRuntimeContextWatcherMatch({ watcher: watcher.filter, event })) {
         continue;
       }
-      watcher.onEvent(event);
+      try {
+        watcher.onEvent(event);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.error(
+          `runtime context watcher failed during ${event.type} ` +
+            `channel=${event.key.channelId} capability=${event.key.capability}` +
+            (event.key.accountId ? ` account=${event.key.accountId}` : "") +
+            `: ${message}`,
+        );
+      }
     }
   };
   const channelRuntime = {

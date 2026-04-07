@@ -110,4 +110,70 @@ describe("runtimeContexts", () => {
     expect(onEvent).not.toHaveBeenCalled();
     lease.dispose();
   });
+
+  it("isolates watcher exceptions so registration and disposal still complete", () => {
+    const channel = createRuntimeChannel();
+    const badWatcher = vi.fn((event) => {
+      throw new Error(`boom:${event.type}`);
+    });
+    const goodWatcher = vi.fn();
+
+    channel.runtimeContexts.watch({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      onEvent: badWatcher,
+    });
+    channel.runtimeContexts.watch({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      onEvent: goodWatcher,
+    });
+
+    const lease = channel.runtimeContexts.register({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      context: { client: "ok" },
+    });
+
+    expect(
+      channel.runtimeContexts.get({
+        channelId: "matrix",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toEqual({ client: "ok" });
+    expect(badWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "registered",
+      }),
+    );
+    expect(goodWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "registered",
+      }),
+    );
+
+    lease.dispose();
+
+    expect(
+      channel.runtimeContexts.get({
+        channelId: "matrix",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toBeUndefined();
+    expect(badWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "unregistered",
+      }),
+    );
+    expect(goodWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "unregistered",
+      }),
+    );
+  });
 });
