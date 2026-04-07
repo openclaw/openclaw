@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
@@ -231,7 +232,7 @@ export async function pressKeyViaPlaywright(opts: {
   delayMs?: number;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const key = String(opts.key ?? "").trim();
+  const key = normalizeOptionalString(opts.key) ?? "";
   if (!key) {
     throw new Error("key is required");
   }
@@ -336,7 +337,7 @@ export async function evaluateViaPlaywright(opts: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<unknown> {
-  const fnText = String(opts.fn ?? "").trim();
+  const fnText = normalizeOptionalString(opts.fn) ?? "";
   if (!fnText) {
     throw new Error("function is required");
   }
@@ -512,13 +513,13 @@ export async function waitForViaPlaywright(opts: {
     });
   }
   if (opts.selector) {
-    const selector = String(opts.selector).trim();
+    const selector = normalizeOptionalString(opts.selector) ?? "";
     if (selector) {
       await page.locator(selector).first().waitFor({ state: "visible", timeout });
     }
   }
   if (opts.url) {
-    const url = String(opts.url).trim();
+    const url = normalizeOptionalString(opts.url) ?? "";
     if (url) {
       await page.waitForURL(url, { timeout });
     }
@@ -527,7 +528,7 @@ export async function waitForViaPlaywright(opts: {
     await page.waitForLoadState(opts.loadState, { timeout });
   }
   if (opts.fn) {
-    const fn = String(opts.fn).trim();
+    const fn = normalizeOptionalString(opts.fn) ?? "";
     if (fn) {
       await page.waitForFunction(fn, { timeout });
     }
@@ -709,8 +710,8 @@ export async function setInputFilesViaPlaywright(opts: {
   if (!opts.paths.length) {
     throw new Error("paths are required");
   }
-  const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
-  const element = typeof opts.element === "string" ? opts.element.trim() : "";
+  const inputRef = normalizeOptionalString(opts.inputRef) ?? "";
+  const element = normalizeOptionalString(opts.element) ?? "";
   if (inputRef && element) {
     throw new Error("inputRef and element are mutually exclusive");
   }

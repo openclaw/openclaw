@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
@@ -141,8 +142,9 @@ function resolveBrowserFetchOperatorHint(url: string): string {
 }
 
 function normalizeErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message.trim();
+  const message = err instanceof Error ? normalizeOptionalString(err.message) : undefined;
+  if (message) {
+    return message;
   }
   return String(err);
 }

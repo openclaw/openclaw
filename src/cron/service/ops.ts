@@ -236,7 +236,9 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (!query) {
         return true;
       }
-      const haystack = [job.name, job.description ?? "", job.agentId ?? ""].join(" ").toLowerCase();
+      const haystack = normalizeLowercaseStringOrEmpty(
+        [job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+      );
       return haystack.includes(query);
     });
     const sorted = sortJobs(filtered, sortBy, sortDir);

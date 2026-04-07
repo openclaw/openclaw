@@ -19,13 +19,12 @@ import type {
   PluginApprovalResolvedView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalActionDescriptor,
   ExecApprovalDecision,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+import { logDebug, logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { shouldHandleDiscordApprovalRequest } from "./approval-native.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "./send.shared.js";
@@ -53,7 +52,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   context: DiscordApprovalHandlerContext;
 } | null {
   const context = params.context as DiscordApprovalHandlerContext | undefined;
-  const accountId = params.accountId?.trim() || "";
+  const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!context?.token || !accountId) {
     return null;
   }
@@ -512,7 +511,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
             ? plannedTarget.target.threadId.trim()
             : plannedTarget.target.to;
         return {
-          dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
+          dedupeKey: destinationId,
           target: {
             discordChannelId: destinationId,
           },

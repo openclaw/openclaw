@@ -3,7 +3,10 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/ap
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   createChannelApproverDmTargetResolver,
@@ -131,9 +134,11 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
         request,
         channel: "discord",
       });
-      const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
+      const sessionKind = extractDiscordSessionKind(
+        normalizeOptionalString(request.request.sessionKey) ?? null,
+      );
       const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-      const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
+      const rawTurnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
       const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
       const threadId =
         normalizeDiscordThreadId(request.request.turnSourceThreadId) ??

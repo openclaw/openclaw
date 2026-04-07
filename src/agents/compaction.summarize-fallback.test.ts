@@ -32,9 +32,7 @@ const testModel = {
 describe("summarizeWithFallback", () => {
   beforeEach(() => {
     piCodingAgentMocks.generateSummary.mockReset();
-    piCodingAgentMocks.generateSummary.mockRejectedValue(
-      new Error("Summarization failed: fetch failed"),
-    );
+    piCodingAgentMocks.generateSummary.mockRejectedValue(new Error("Summarization failed"));
     piCodingAgentMocks.estimateTokens.mockReset();
     piCodingAgentMocks.estimateTokens.mockImplementation(() => 100);
   });
@@ -60,8 +58,8 @@ describe("summarizeWithFallback", () => {
 
     expect(result).toContain("Context contained 1 messages");
     expect(result).toContain("0 oversized");
-    // Full path: retryAsync attempts (3) for a single chunk; partial path must not run.
-    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(3);
+    // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
+    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
   it("still attempts partial summarization when oversized messages were excluded", async () => {
@@ -97,7 +95,7 @@ describe("summarizeWithFallback", () => {
     });
 
     expect(result).toContain("2 messages (1 oversized)");
-    // Full attempt (3 retries) plus distinct partial transcript (3 retries).
-    expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(6);
+    // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
+    expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(2);
   });
 });

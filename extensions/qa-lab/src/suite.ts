@@ -1252,7 +1252,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:discovery",
                 message:
-                  "Read the seeded docs and source plan. The full repo is mounted under ./repo/. Explicitly inspect repo/qa/seed-scenarios.json, repo/qa/QA_KICKOFF_TASK.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then report grouped into Worked, Failed, Blocked, and Follow-up. Mention at least two extra QA scenarios beyond the seed list.",
+                  "Read the seeded docs and source plan. The full repo is mounted under ./repo/. Explicitly inspect repo/qa/scenarios.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then report grouped into Worked, Failed, Blocked, and Follow-up. Mention at least two extra QA scenarios beyond the seed list.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForCondition(
@@ -2372,7 +2372,7 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.toLowerCase().includes("lighthouse"),
+                        normalizeLowercaseStringOrEmpty(candidate.text).includes("lighthouse"),
                     )
                     .at(-1),
                 liveTurnTimeoutMs(env, 45_000),
@@ -2860,7 +2860,7 @@ export async function runQaSuite(params?: {
     });
 
     for (const [index, scenario] of selectedCatalogScenarios.entries()) {
-      const run = scenarioMap.get(scenario.id);
+      const run = scenarioMap.get(scenario.execution?.handler || scenario.id);
       if (!run) {
         const missingResult = {
           name: scenario.title,

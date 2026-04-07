@@ -4,9 +4,8 @@ Seed QA assets for the private `qa-lab` extension.
 
 Files:
 
-- `QA_KICKOFF_TASK.md` - operator prompt for the QA agent.
+- `scenarios.md` - canonical QA scenario pack, kickoff mission, and operator identity.
 - `frontier-harness-plan.md` - big-model bakeoff and tuning loop for harness work.
-- `seed-scenarios.json` - repo-backed baseline QA scenarios.
 
 Key workflow:
 

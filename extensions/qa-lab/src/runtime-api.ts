@@ -20,6 +20,7 @@ export {
   setQaChannelRuntime,
 } from "openclaw/plugin-sdk/qa-channel";
 export type {
+  QaBusAttachment,
   QaBusConversation,
   QaBusCreateThreadInput,
   QaBusDeleteMessageInput,

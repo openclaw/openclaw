@@ -18,7 +18,10 @@ import {
   type MemoryLightDreamingConfig,
   type MemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/text-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import {
@@ -425,7 +428,7 @@ type SessionIngestionCollectionResult = {
 
 function normalizeWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(resolved) : resolved;
 }
 
 function resolveSessionIngestionStatePath(workspaceDir: string): string {

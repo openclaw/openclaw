@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import {
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
@@ -302,7 +303,7 @@ function resolveExecutionConfig(
 
 function normalizePathForComparison(input: string): string {
   const normalized = path.resolve(input);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {

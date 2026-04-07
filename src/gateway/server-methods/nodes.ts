@@ -19,7 +19,10 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   buildCanvasScopedHostUrl,
   CANVAS_CAPABILITY_TTL_MS,
@@ -126,8 +129,8 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
     return false;
   }
   const candidate = params as { method?: unknown; path?: unknown };
-  const method = typeof candidate.method === "string" ? candidate.method.trim().toUpperCase() : "";
-  const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+  const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
+  const path = normalizeOptionalString(candidate.path) ?? "";
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
 }
 
@@ -715,7 +718,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const { nodeId } = params as { nodeId: string };
-    const id = String(nodeId ?? "").trim();
+    const id = normalizeOptionalString(String(nodeId ?? "")) ?? "";
     if (!id) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -747,7 +750,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const baseCanvasHostUrl = client?.canvasHostUrl?.trim() ?? "";
+    const baseCanvasHostUrl = normalizeOptionalString(client?.canvasHostUrl) ?? "";
     if (!baseCanvasHostUrl) {
       respond(
         false,
@@ -793,7 +796,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = String(nodeId ?? "").trim();
+    const trimmedNodeId = normalizeOptionalString(String(nodeId ?? "")) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -824,13 +827,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = String(nodeId ?? "").trim();
+    const trimmedNodeId = normalizeOptionalString(String(nodeId ?? "")) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     const ackIds = Array.from(
-      new Set((params.ids ?? []).map((value) => String(value ?? "").trim()).filter(Boolean)),
+      new Set(
+        (params.ids ?? [])
+          .map((value) => normalizeOptionalString(String(value ?? "")) ?? "")
+          .filter(Boolean),
+      ),
     );
     const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
     respond(
@@ -859,8 +866,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    const nodeId = String(p.nodeId ?? "").trim();
-    const command = String(p.command ?? "").trim();
+    const nodeId = normalizeOptionalString(String(p.nodeId ?? "")) ?? "";
+    const command = normalizeOptionalString(String(p.command ?? "")) ?? "";
     if (!nodeId || !command) {
       respond(
         false,

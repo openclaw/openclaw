@@ -31,6 +31,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   chunkItems,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -171,7 +172,8 @@ export function shouldOpenDiscordModelPickerFromCommand(params: {
     return null;
   }
 
-  const serializedArgs = serializeCommandArgs(params.command, params.commandArgs)?.trim() ?? "";
+  const serializedArgs =
+    normalizeOptionalString(serializeCommandArgs(params.command, params.commandArgs)) ?? "";
   if (context === "model") {
     const modelValue = resolveCommandArgStringValue(params.commandArgs, "model");
     return !modelValue && !serializedArgs ? context : null;

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
@@ -115,7 +116,7 @@ function sanitizeBootstrapFiles(
 ): WorkspaceBootstrapFile[] {
   const sanitized: WorkspaceBootstrapFile[] = [];
   for (const file of files) {
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       warn?.(
         `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,

@@ -8,6 +8,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
 export function createAccountListHelpers(
@@ -188,10 +189,7 @@ export function describeAccountSnapshot<
 }): ChannelAccountSnapshot {
   return {
     accountId: String(params.account.accountId ?? DEFAULT_ACCOUNT_ID),
-    name:
-      typeof params.account.name === "string" && params.account.name.trim()
-        ? params.account.name
-        : undefined,
+    name: normalizeOptionalString(params.account.name),
     enabled: params.account.enabled !== false,
     configured: params.configured,
     ...params.extra,

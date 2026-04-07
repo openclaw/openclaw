@@ -47,7 +47,10 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
@@ -160,10 +163,10 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
     return { configured: false, allowed: false } as const;
   }
   // Check guild-level entries (e.g. "guild:123456") before user matching.
-  const guildId = params.guildId?.trim();
+  const guildId = normalizeOptionalString(params.guildId);
   if (guildId) {
     for (const entry of rawAllowList) {
-      const text = String(entry).trim();
+      const text = normalizeOptionalString(String(entry)) ?? "";
       if (text.startsWith("guild:") && text.slice("guild:".length) === guildId) {
         return { configured: true, allowed: true } as const;
       }

@@ -1,5 +1,5 @@
 {
-  "blockedKeys": [
+  "blockedEverywhereKeys": [
     "NODE_OPTIONS",
     "NODE_PATH",
     "PYTHONHOME",
@@ -55,7 +55,7 @@
     "ANT_OPTS",
     "HGRCPATH"
   ],
-  "blockedOverrideKeys": [
+  "blockedOverrideOnlyKeys": [
     "HOME",
     "GRADLE_USER_HOME",
     "ZDOTDIR",
@@ -128,9 +128,6 @@
     "UV_PYTHON",
     "UV_EXTRA_INDEX_URL",
     "UV_DEFAULT_INDEX",
-    "DOCKER_HOST",
-    "DOCKER_TLS_VERIFY",
-    "DOCKER_CERT_PATH",
     "DOCKER_CONTEXT",
     "LIBRARY_PATH",
     "CPATH",
@@ -163,7 +160,14 @@
     "COMPOSER_HOME",
     "CARGO_BUILD_RUSTC_WRAPPER",
     "XDG_CONFIG_HOME",
-    "AWS_CONFIG_FILE"
+    "AWS_CONFIG_FILE",
+    "KUBECONFIG",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AZURE_AUTH_LOCATION",
+    "CARGO_HOME",
+    "HELM_HOME"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]

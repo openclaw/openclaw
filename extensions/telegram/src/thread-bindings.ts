@@ -253,8 +253,7 @@ function loadBindingsFromDisk(accountId: string): TelegramThreadBindingRecord[] 
     const bindings: TelegramThreadBindingRecord[] = [];
     for (const entry of parsed.bindings) {
       const conversationId = normalizeOptionalString(entry?.conversationId);
-      const targetSessionKey =
-        typeof entry?.targetSessionKey === "string" ? entry.targetSessionKey.trim() : "";
+      const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
       const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
       if (!conversationId || !targetSessionKey) {
         continue;
@@ -591,8 +590,8 @@ export function createTelegramThreadBindingManager(
           return null;
         }
         const threadName =
-          (typeof metadata.threadName === "string" ? metadata.threadName.trim() : "") ||
-          (typeof metadata.label === "string" ? metadata.label.trim() : "") ||
+          (normalizeOptionalString(metadata.threadName) ?? "") ||
+          (normalizeOptionalString(metadata.label) ?? "") ||
           `Agent: ${targetSessionKey.split(":").pop()}`;
         try {
           const tokenResolution = resolveTelegramToken(cfg, { accountId });

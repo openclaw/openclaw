@@ -224,12 +224,16 @@ export async function initSessionState(params: {
     ctx.CommandSource === "native"
       ? normalizeOptionalString(ctx.CommandTargetSessionKey)
       : undefined;
+  // Native slash/menu commands can arrive on a transport-specific "slash session"
+  // while explicitly targeting an existing chat session. Honor that explicit target
+  // before any binding lookup so command-side mutations land on the intended session.
   const targetSessionKey =
+    commandTargetSessionKey ??
     resolveBoundConversationSessionKey({
       cfg,
       ctx,
       bindingContext: conversationBindingContext,
-    }) ?? commandTargetSessionKey;
+    });
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
@@ -695,16 +699,16 @@ export async function initSessionState(params: {
   }
 
   const sessionCtx: TemplateContext = {
-    ...ctx,
+    ...sessionCtxForState,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: normalizeInboundTextNewlines(
       bodyStripped ??
-        ctx.BodyForAgent ??
-        ctx.Body ??
-        ctx.CommandBody ??
-        ctx.RawBody ??
-        ctx.BodyForCommands ??
+        sessionCtxForState.BodyForAgent ??
+        sessionCtxForState.Body ??
+        sessionCtxForState.CommandBody ??
+        sessionCtxForState.RawBody ??
+        sessionCtxForState.BodyForCommands ??
         "",
     ),
     SessionId: sessionId,

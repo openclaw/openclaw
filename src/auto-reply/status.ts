@@ -34,6 +34,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
@@ -457,9 +458,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
-  const runtimeModelRaw = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const runtimeProviderRaw =
-    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
+  const runtimeProviderRaw = normalizeOptionalString(entry?.modelProvider) ?? "";
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
@@ -468,7 +468,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(String(entry?.fallbackNoticeActiveModel ?? "").trim());
+        normalizeLowercaseStringOrEmpty(
+          normalizeOptionalString(String(entry?.fallbackNoticeActiveModel ?? "")) ?? "",
+        );
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");

@@ -9,7 +9,7 @@ describe("qa discovery evaluation", () => {
   it("accepts rich discovery reports that explicitly confirm all required files were read", () => {
     const report = `
 Worked
-- Read all four requested files: repo/qa/seed-scenarios.json, repo/qa/QA_KICKOFF_TASK.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.
+- Read all three requested files: repo/qa/scenarios.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.
 Failed
 - None.
 Blocked
@@ -28,8 +28,8 @@ The helper text mentions banned phrases like "not present", "missing files", "bl
   it("accepts numeric 'all 4 required files read' confirmations", () => {
     const report = `
 Worked
-- Source: repo/qa/seed-scenarios.json, repo/qa/QA_KICKOFF_TASK.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md
-- all 4 required files read.
+- Source: repo/qa/scenarios.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md
+- all 3 required files read.
 Failed
 - None.
 Blocked
@@ -48,8 +48,8 @@ The report may quote phrases like "not present" while describing the evaluator, 
   it("accepts claude-style 'all four files retrieved' discovery summaries", () => {
     const report = `
 Worked
-- All four files retrieved. Now let me compile the protocol report.
-- All four mandated files read successfully: repo/qa/seed-scenarios.json, repo/qa/QA_KICKOFF_TASK.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
+- All three files retrieved. Now let me compile the protocol report.
+- All three mandated files read successfully: repo/qa/scenarios.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
 Failed
 - None.
 Blocked
@@ -83,7 +83,7 @@ Follow-up
   it("flags discovery replies that drift into unrelated suite wrap-up claims", () => {
     const report = `
 Worked
-- All four requested files were read: repo/qa/seed-scenarios.json, repo/qa/QA_KICKOFF_TASK.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
+- All three requested files were read: repo/qa/scenarios.md, repo/extensions/qa-lab/src/suite.ts, repo/docs/help/testing.md.
 Failed
 - None.
 Blocked

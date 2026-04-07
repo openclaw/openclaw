@@ -113,7 +113,7 @@ function resolveIdentityAvatarUrl(
   if (!avatar) {
     return undefined;
   }
-  const trimmed = avatar.trim();
+  const trimmed = normalizeOptionalString(avatar) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -183,12 +183,12 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  if (entry.displayName?.trim()) {
-    return entry.displayName.trim();
+  if (normalizeOptionalString(entry.displayName)) {
+    return normalizeOptionalString(entry.displayName);
   }
 
-  if (entry.subject?.trim()) {
-    return entry.subject.trim();
+  if (normalizeOptionalString(entry.subject)) {
+    return normalizeOptionalString(entry.subject);
   }
 
   if (firstUserMessage?.trim()) {
@@ -284,13 +284,14 @@ function resolveChildSessionKeys(
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
   for (const entry of listSubagentRunsForController(controllerSessionKey)) {
-    const childSessionKey = entry.childSessionKey?.trim();
+    const childSessionKey = normalizeOptionalString(entry.childSessionKey);
     if (!childSessionKey) {
       continue;
     }
     const latest = getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
     const latestControllerSessionKey =
-      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+      normalizeOptionalString(latest?.controllerSessionKey) ||
+      normalizeOptionalString(latest?.requesterSessionKey);
     if (latestControllerSessionKey !== controllerSessionKey) {
       continue;
     }
@@ -300,15 +301,16 @@ function resolveChildSessionKeys(
     if (!entry || key === controllerSessionKey) {
       continue;
     }
-    const spawnedBy = entry.spawnedBy?.trim();
-    const parentSessionKey = entry.parentSessionKey?.trim();
+    const spawnedBy = normalizeOptionalString(entry.spawnedBy);
+    const parentSessionKey = normalizeOptionalString(entry.parentSessionKey);
     if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
       continue;
     }
     const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
     if (latest) {
       const latestControllerSessionKey =
-        latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+        normalizeOptionalString(latest.controllerSessionKey) ||
+        normalizeOptionalString(latest.requesterSessionKey);
       if (latestControllerSessionKey !== controllerSessionKey) {
         continue;
       }
@@ -388,13 +390,13 @@ export function loadSessionEntry(sessionKey: string) {
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg,
-    key: sessionKey.trim(),
+    key: normalizeOptionalString(sessionKey) ?? "",
     canonicalKey,
     agentId,
   });
   const target = resolveGatewaySessionStoreTarget({
     cfg,
-    key: sessionKey.trim(),
+    key: normalizeOptionalString(sessionKey) ?? "",
     store,
   });
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
@@ -434,7 +436,7 @@ function findFreshestStoreMatch(
 ): { entry: SessionEntry; key: string } | undefined {
   const matches = new Map<string, { entry: SessionEntry; key: string }>();
   for (const candidate of candidates) {
-    const trimmed = candidate.trim();
+    const trimmed = normalizeOptionalString(candidate) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -486,7 +488,7 @@ export function pruneLegacyStoreKeys(params: {
 }) {
   const keysToDelete = new Set<string>();
   for (const candidate of params.candidates) {
-    const trimmed = String(candidate ?? "").trim();
+    const trimmed = normalizeOptionalString(String(candidate ?? "")) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -720,7 +722,7 @@ export function resolveSessionStoreKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): string {
-  const raw = (params.sessionKey ?? "").trim();
+  const raw = normalizeOptionalString(params.sessionKey) ?? "";
   if (!raw) {
     return raw;
   }
@@ -769,7 +771,7 @@ export function canonicalizeSpawnedByForAgent(
   agentId: string,
   spawnedBy?: string,
 ): string | undefined {
-  const raw = spawnedBy?.trim();
+  const raw = normalizeOptionalString(spawnedBy) ?? "";
   if (!raw) {
     return undefined;
   }
@@ -895,7 +897,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   canonicalKey: string;
   storeKeys: string[];
 } {
-  const key = params.key.trim();
+  const key = normalizeOptionalString(params.key) ?? "";
   const canonicalKey = resolveSessionStoreKey({
     cfg: params.cfg,
     sessionKey: key,
@@ -1411,7 +1413,7 @@ export function listSessionsFromStore(params: {
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
-  const label = typeof opts.label === "string" ? opts.label.trim() : "";
+  const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =

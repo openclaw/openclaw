@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
@@ -16,6 +20,36 @@ import {
 } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+
+vi.mock("../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversationRef(sessionKey: string | undefined | null) {
+    const raw = parseRawSessionConversationRef(sessionKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = parseThreadSessionSuffix(raw.rawId);
+    const id = (parsed.baseSessionKey ?? raw.rawId).trim();
+    if (!id) {
+      return null;
+    }
+    return {
+      channel: raw.channel,
+      kind: raw.kind,
+      rawId: raw.rawId,
+      id,
+      threadId: parsed.threadId,
+      baseSessionKey: `${raw.prefix}:${id}`,
+      baseConversationId: id,
+      parentConversationCandidates: parsed.threadId ? [id] : [],
+    };
+  },
+}));
+
+vi.mock("./outbound/targets.js", async () => {
+  return await vi.importActual<typeof import("./outbound/targets-session.js")>(
+    "./outbound/targets-session.js",
+  );
+});
 
 const baseRequest: ExecApprovalRequest = {
   id: "req-1",
