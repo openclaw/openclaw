@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
@@ -19,7 +21,36 @@ afterEach(async () => {
   }
 });
 
-function messageText(message: { content?: unknown }): string {
+function createAssistantTextMessage(text: string, timestamp: number): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "responses",
+    provider: "openai",
+    model: "gpt-test",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
+function messageText(message: AgentMessage): string {
+  if (!("content" in message)) {
+    return "";
+  }
   const content = message.content;
   if (typeof content === "string") {
     return content;
@@ -43,21 +74,15 @@ describe("hardenManualCompactionBoundary", () => {
     const session = SessionManager.create(dir, dir);
 
     session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
-    session.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "very long old answer" }],
-      timestamp: 2,
-    });
+    session.appendMessage(createAssistantTextMessage("very long old answer", 2));
     const firstKeepId = session.getBranch().at(-1)?.id;
     expect(firstKeepId).toBeTruthy();
     session.appendCompaction("old summary", firstKeepId!, 100);
 
     session.appendMessage({ role: "user", content: "new question", timestamp: 3 });
-    session.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "detailed new answer that should be summarized away" }],
-      timestamp: 4,
-    });
+    session.appendMessage(
+      createAssistantTextMessage("detailed new answer that should be summarized away", 4),
+    );
     const secondKeepId = session.getBranch().at(-1)?.id;
     expect(secondKeepId).toBeTruthy();
     const latestCompactionId = session.appendCompaction("fresh summary", secondKeepId!, 200);
@@ -78,7 +103,10 @@ describe("hardenManualCompactionBoundary", () => {
     const reopened = SessionManager.open(sessionFile!);
     const latest = reopened.getLeafEntry();
     expect(latest?.type).toBe("compaction");
-    expect(latest?.firstKeptEntryId).toBe(latestCompactionId);
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(latestCompactionId);
 
     reopened.appendMessage({ role: "user", content: "what was happening?", timestamp: 5 });
     const after = SessionManager.open(sessionFile!);
@@ -94,11 +122,7 @@ describe("hardenManualCompactionBoundary", () => {
     const dir = await makeTmpDir();
     const session = SessionManager.create(dir, dir);
     session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    session.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "hi" }],
-      timestamp: 2,
-    });
+    session.appendMessage(createAssistantTextMessage("hi", 2));
     const sessionFile = session.getSessionFile();
     expect(sessionFile).toBeTruthy();
 
