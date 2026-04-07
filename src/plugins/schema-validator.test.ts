@@ -240,6 +240,24 @@ describe("schema validator", () => {
     expect(issue?.allowedValues).toBeUndefined();
   });
 
+  it("includes the unexpected property name in additionalProperties errors", () => {
+    const result = expectValidationFailure({
+      cacheKey: "schema-validator.test.additionalProperties",
+      schema: {
+        type: "object",
+        properties: {
+          allowed: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      value: { allowed: "ok", extra: "not allowed" },
+    });
+
+    const issue = expectValidationIssue(result, "<root>");
+    expect(issue?.message).toContain("must NOT have additional properties");
+    expect(issue?.message).toContain("unexpected property: 'extra'");
+  });
+
   it("sanitizes terminal text while preserving structured fields", () => {
     const maliciousProperty = "evil\nkey\t\x1b[31mred\x1b[0m";
     const result = expectValidationFailure({
