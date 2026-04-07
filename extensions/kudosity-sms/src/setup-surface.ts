@@ -73,7 +73,9 @@ export const kudositySmsSetupWizard: ChannelSetupWizard = {
     unconfiguredScore: 0,
     resolveConfigured: ({ cfg }) => isKudositySmsConfigured(cfg),
     resolveExtraStatusLines: ({ cfg, configured }) => {
-      if (!configured) return [];
+      if (!configured) {
+        return [];
+      }
       const sender = getSender(cfg);
       return sender ? [`Sender: ${sender}`] : [];
     },

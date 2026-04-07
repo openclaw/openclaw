@@ -7,6 +7,38 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { kudositySmsPlugin } from "./channel.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+import { kudositySmsSetupWizard } from "./setup-surface.js";
+
+// ─── Test Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Cast arbitrary test fixtures to `OpenClawConfig`.
+ *
+ * The real config type is a large discriminated union owned by core. Tests
+ * only care about the handful of nested fields the kudosity-sms plugin reads,
+ * so we use a focused unsafe cast helper rather than spelling out the full
+ * shape everywhere. Going through `unknown` keeps `typescript/no-explicit-any`
+ * happy while still documenting the intent.
+ */
+function asCfg(input: unknown): OpenClawConfig {
+  return input as OpenClawConfig;
+}
+
+type SendTextCtx = Parameters<
+  NonNullable<NonNullable<typeof kudositySmsPlugin.outbound>["sendText"]>
+>[0];
+type SendMediaCtx = Parameters<
+  NonNullable<NonNullable<typeof kudositySmsPlugin.outbound>["sendMedia"]>
+>[0];
+
+/** Cast a partial outbound context literal to the concrete adapter parameter type. */
+function asSendTextCtx(input: unknown): SendTextCtx {
+  return input as SendTextCtx;
+}
+function asSendMediaCtx(input: unknown): SendMediaCtx {
+  return input as SendMediaCtx;
+}
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
 
@@ -62,20 +94,20 @@ describe("kudositySmsPlugin", () => {
 
   describe("config adapter", () => {
     it("should list a single default account", () => {
-      const ids = kudositySmsPlugin.config.listAccountIds({} as any);
+      const ids = kudositySmsPlugin.config.listAccountIds(asCfg({}));
       expect(ids).toEqual(["default"]);
     });
 
     it("should resolve account from nested config keys", () => {
       const account = kudositySmsPlugin.config.resolveAccount(
-        {
+        asCfg({
           channels: {
             "kudosity-sms": {
               apiKey: "my-api-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
-        } as any,
+        }),
         "default",
       );
 
@@ -92,7 +124,7 @@ describe("kudositySmsPlugin", () => {
       process.env.KUDOSITY_SENDER = "+61411111111";
 
       try {
-        const account = kudositySmsPlugin.config.resolveAccount({ channels: {} } as any, "default");
+        const account = kudositySmsPlugin.config.resolveAccount(asCfg({ channels: {} }), "default");
         expect(account.apiKey).toBe("env-api-key");
         expect(account.sender).toBe("+61411111111");
       } finally {
@@ -107,14 +139,14 @@ describe("kudositySmsPlugin", () => {
 
       try {
         const account = kudositySmsPlugin.config.resolveAccount(
-          {
+          asCfg({
             channels: {
               "kudosity-sms": {
                 apiKey: "config-key", // pragma: allowlist secret
                 sender: "+61400000000",
               },
             },
-          } as any,
+          }),
           "default",
         );
         expect(account.apiKey).toBe("config-key");
@@ -130,7 +162,7 @@ describe("kudositySmsPlugin", () => {
       delete process.env.KUDOSITY_SENDER;
 
       try {
-        const account = kudositySmsPlugin.config.resolveAccount({ channels: {} } as any, "default");
+        const account = kudositySmsPlugin.config.resolveAccount(asCfg({ channels: {} }), "default");
         expect(account.apiKey).toBe("");
         expect(account.sender).toBe("");
       } finally {
@@ -140,7 +172,7 @@ describe("kudositySmsPlugin", () => {
     });
 
     it("should return default account id", () => {
-      const id = kudositySmsPlugin.config.defaultAccountId!({} as any);
+      const id = kudositySmsPlugin.config.defaultAccountId!(asCfg({}));
       expect(id).toBe("default");
     });
 
@@ -150,7 +182,7 @@ describe("kudositySmsPlugin", () => {
         apiKey: "my-key", // pragma: allowlist secret
         sender: "+61400000000",
       };
-      expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(true);
+      expect(kudositySmsPlugin.config.isConfigured!(account, asCfg({}))).toBe(true);
     });
 
     it("should report not configured when apiKey is missing", () => {
@@ -159,7 +191,7 @@ describe("kudositySmsPlugin", () => {
         apiKey: "",
         sender: "+61400000000",
       };
-      expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(false);
+      expect(kudositySmsPlugin.config.isConfigured!(account, asCfg({}))).toBe(false);
     });
 
     it("should report not configured when sender is missing", () => {
@@ -168,7 +200,7 @@ describe("kudositySmsPlugin", () => {
         apiKey: "my-key", // pragma: allowlist secret
         sender: "",
       };
-      expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(false);
+      expect(kudositySmsPlugin.config.isConfigured!(account, asCfg({}))).toBe(false);
     });
 
     it("should give reason when apiKey is missing", () => {
@@ -177,7 +209,7 @@ describe("kudositySmsPlugin", () => {
         apiKey: "",
         sender: "+61400000000",
       };
-      expect(kudositySmsPlugin.config.unconfiguredReason!(account, {} as any)).toBe(
+      expect(kudositySmsPlugin.config.unconfiguredReason!(account, asCfg({}))).toBe(
         "Missing Kudosity API key",
       );
     });
@@ -188,16 +220,17 @@ describe("kudositySmsPlugin", () => {
         apiKey: "my-key", // pragma: allowlist secret
         sender: "",
       };
-      expect(kudositySmsPlugin.config.unconfiguredReason!(account, {} as any)).toBe(
+      expect(kudositySmsPlugin.config.unconfiguredReason!(account, asCfg({}))).toBe(
         "Missing sender number",
       );
     });
   });
 
   describe("setup", () => {
-    it("should expose a declarative setupWizard", () => {
+    it("should wire the declarative setupWizard onto the plugin", () => {
       expect(kudositySmsPlugin.setupWizard).toBeDefined();
-      expect(kudositySmsPlugin.setupWizard?.channel).toBe("kudosity-sms");
+      expect(kudositySmsPlugin.setupWizard).toBe(kudositySmsSetupWizard);
+      expect(kudositySmsSetupWizard.channel).toBe("kudosity-sms");
     });
 
     it("should report not configured when apiKey and sender are both missing", async () => {
@@ -207,8 +240,8 @@ describe("kudositySmsPlugin", () => {
       delete process.env.KUDOSITY_SENDER;
 
       try {
-        const configured = await kudositySmsPlugin.setupWizard!.status.resolveConfigured({
-          cfg: { channels: {} } as any,
+        const configured = await kudositySmsSetupWizard.status.resolveConfigured({
+          cfg: asCfg({ channels: {} }),
         });
         expect(configured).toBe(false);
       } finally {
@@ -218,29 +251,33 @@ describe("kudositySmsPlugin", () => {
     });
 
     it("should report configured when apiKey and sender are both set", async () => {
-      const configured = await kudositySmsPlugin.setupWizard!.status.resolveConfigured({
-        cfg: {
+      const configured = await kudositySmsSetupWizard.status.resolveConfigured({
+        cfg: asCfg({
           channels: {
             "kudosity-sms": {
               apiKey: "abc", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
-        } as any,
+        }),
       });
       expect(configured).toBe(true);
     });
 
     it("should clear credentials and disable channel via disable()", () => {
-      const next = kudositySmsPlugin.setupWizard!.disable!({
-        channels: {
-          "kudosity-sms": {
-            apiKey: "abc", // pragma: allowlist secret
-            sender: "+61400000000",
-            enabled: true,
+      const next = kudositySmsSetupWizard.disable!(
+        asCfg({
+          channels: {
+            "kudosity-sms": {
+              apiKey: "abc", // pragma: allowlist secret
+              sender: "+61400000000",
+              enabled: true,
+            },
           },
-        },
-      } as any) as any;
+        }),
+      ) as unknown as {
+        channels: Record<string, { apiKey?: string; sender?: string; enabled?: boolean }>;
+      };
       const section = next.channels["kudosity-sms"];
       expect(section.apiKey).toBeUndefined();
       expect(section.sender).toBeUndefined();
@@ -270,12 +307,14 @@ describe("kudositySmsPlugin", () => {
           },
         };
 
-        const result = await kudositySmsPlugin.outbound!.sendText!({
-          cfg,
-          to: "+61478038915",
-          text: "Hello from the AI!",
-          accountId: "default",
-        } as any);
+        const result = await kudositySmsPlugin.outbound!.sendText!(
+          asSendTextCtx({
+            cfg,
+            to: "+61478038915",
+            text: "Hello from the AI!",
+            accountId: "default",
+          }),
+        );
 
         expect(result.channel).toBe("kudosity-sms");
         expect(result.messageId).toBe("sms-response-123");
@@ -306,11 +345,13 @@ describe("kudositySmsPlugin", () => {
           },
         };
 
-        await kudositySmsPlugin.outbound!.sendText!({
-          cfg,
-          to: "+61 478 038 915",
-          text: "test",
-        } as any);
+        await kudositySmsPlugin.outbound!.sendText!(
+          asSendTextCtx({
+            cfg,
+            to: "+61 478 038 915",
+            text: "test",
+          }),
+        );
 
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.anything(),
@@ -331,11 +372,13 @@ describe("kudositySmsPlugin", () => {
         };
 
         await expect(
-          kudositySmsPlugin.outbound!.sendText!({
-            cfg,
-            to: "",
-            text: "test",
-          } as any),
+          kudositySmsPlugin.outbound!.sendText!(
+            asSendTextCtx({
+              cfg,
+              to: "",
+              text: "test",
+            }),
+          ),
         ).rejects.toThrow("recipient phone number is required");
       });
 
@@ -350,11 +393,13 @@ describe("kudositySmsPlugin", () => {
         };
 
         await expect(
-          kudositySmsPlugin.outbound!.sendText!({
-            cfg,
-            to: "not-a-number",
-            text: "test",
-          } as any),
+          kudositySmsPlugin.outbound!.sendText!(
+            asSendTextCtx({
+              cfg,
+              to: "not-a-number",
+              text: "test",
+            }),
+          ),
         ).rejects.toThrow("invalid phone number format");
       });
 
@@ -370,11 +415,13 @@ describe("kudositySmsPlugin", () => {
           },
         };
 
-        await kudositySmsPlugin.outbound!.sendText!({
-          cfg,
-          to: "+61478038915",
-          text: "test",
-        } as any);
+        await kudositySmsPlugin.outbound!.sendText!(
+          asSendTextCtx({
+            cfg,
+            to: "+61478038915",
+            text: "test",
+          }),
+        );
 
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -400,13 +447,15 @@ describe("kudositySmsPlugin", () => {
           },
         };
 
-        const result = await kudositySmsPlugin.outbound!.sendMedia!({
-          cfg,
-          to: "+61478038915",
-          text: "Check this out!",
-          mediaUrl: "https://example.com/image.png",
-          accountId: "default",
-        } as any);
+        const result = await kudositySmsPlugin.outbound!.sendMedia!(
+          asSendMediaCtx({
+            cfg,
+            to: "+61478038915",
+            text: "Check this out!",
+            mediaUrl: "https://example.com/image.png",
+            accountId: "default",
+          }),
+        );
 
         expect(result.channel).toBe("kudosity-sms");
         expect(result.messageId).toBe("sms-response-123");
@@ -435,12 +484,14 @@ describe("kudositySmsPlugin", () => {
           },
         };
 
-        await kudositySmsPlugin.outbound!.sendMedia!({
-          cfg,
-          to: "+61478038915",
-          text: "",
-          mediaUrl: "https://example.com/image.png",
-        } as any);
+        await kudositySmsPlugin.outbound!.sendMedia!(
+          asSendMediaCtx({
+            cfg,
+            to: "+61478038915",
+            text: "",
+            mediaUrl: "https://example.com/image.png",
+          }),
+        );
 
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.anything(),
@@ -462,12 +513,14 @@ describe("kudositySmsPlugin", () => {
           },
         };
 
-        await kudositySmsPlugin.outbound!.sendMedia!({
-          cfg,
-          to: "+61478038915",
-          text: "caption",
-          mediaUrl: "https://example.com/photo.jpg",
-        } as any);
+        await kudositySmsPlugin.outbound!.sendMedia!(
+          asSendMediaCtx({
+            cfg,
+            to: "+61478038915",
+            text: "caption",
+            mediaUrl: "https://example.com/photo.jpg",
+          }),
+        );
 
         expect(mockWarn).toHaveBeenCalledWith(
           expect.stringContaining("media attachments are not supported via SMS"),
@@ -485,11 +538,13 @@ describe("kudositySmsPlugin", () => {
         };
 
         await expect(
-          kudositySmsPlugin.outbound!.sendMedia!({
-            cfg,
-            to: "",
-            text: "test",
-          } as any),
+          kudositySmsPlugin.outbound!.sendMedia!(
+            asSendMediaCtx({
+              cfg,
+              to: "",
+              text: "test",
+            }),
+          ),
         ).rejects.toThrow("recipient phone number is required");
       });
     });

@@ -30,7 +30,7 @@ const E164_RE = /^\+?[1-9]\d{6,14}$/;
  * Strips whitespace, dashes, parens, and dots, then checks E.164 format.
  */
 function cleanPhoneNumber(raw: string, fieldName = "recipient"): string {
-  const cleaned = raw.replace(/[\s\-\(\)\.]/g, "");
+  const cleaned = raw.replace(/[\s\-().]/g, "");
   if (!cleaned) {
     throw new Error(`Kudosity SMS: ${fieldName} phone number is required`);
   }
@@ -56,6 +56,13 @@ export interface KudositySmsAccount {
   accountId: string;
   apiKey: string;
   sender: string;
+  enabled?: boolean;
+}
+
+/** Shape of the `channels["kudosity-sms"]` section in an OpenClaw config. */
+interface KudositySmsChannelSection {
+  apiKey?: string;
+  sender?: string;
   enabled?: boolean;
 }
 
@@ -86,10 +93,11 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
    * Reads API key and sender from nested config or env vars.
    */
   resolveAccount(cfg, _accountId) {
-    const section = (cfg as Record<string, any>).channels?.[CHANNEL_KEY];
-    const apiKey = String(section?.apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
-    const sender = String(section?.sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
-    const enabled = section?.enabled as boolean | undefined;
+    const channels = (cfg as { channels?: Record<string, unknown> }).channels;
+    const section = (channels?.[CHANNEL_KEY] ?? {}) as KudositySmsChannelSection;
+    const apiKey = String(section.apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
+    const sender = String(section.sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
+    const enabled = section.enabled;
     return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
 
@@ -111,8 +119,12 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
    * Explain why the account is not configured.
    */
   unconfiguredReason(account, _cfg) {
-    if (!account.apiKey?.trim()) return "Missing Kudosity API key";
-    if (!account.sender?.trim()) return "Missing sender number";
+    if (!account.apiKey?.trim()) {
+      return "Missing Kudosity API key";
+    }
+    if (!account.sender?.trim()) {
+      return "Missing sender number";
+    }
     return "Not configured";
   },
 };
