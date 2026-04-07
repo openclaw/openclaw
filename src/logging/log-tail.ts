@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { clamp } from "../utils.js";
+import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
 
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
@@ -158,5 +159,14 @@ export async function readConfiguredLogTail(params?: {
     limit: params?.limit ?? DEFAULT_LIMIT,
     maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,
   });
-  return { file, ...result };
+  return {
+    file,
+    ...result,
+    lines: result.lines.map((line) =>
+      redactSensitiveText(line, {
+        mode: "tools",
+        patterns: getDefaultRedactPatterns(),
+      }),
+    ),
+  };
 }

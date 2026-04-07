@@ -22,6 +22,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("curl --token abcdef…ghij https://api.test");
   });
 
+  it("masks hook token CLI flags", () => {
+    const input = "gog gmail watch serve --hook-token abcdef1234567890ghij";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
+  });
+
   it("masks JSON fields", () => {
     const input = '{"token":"abcdef1234567890ghij"}';
     const output = redactSensitiveText(input, {

@@ -250,6 +250,29 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   return args;
 }
 
+export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
+  const args = [
+    "gmail",
+    "watch",
+    "serve",
+    "--account",
+    cfg.account,
+    "--bind",
+    cfg.serve.bind,
+    "--port",
+    String(cfg.serve.port),
+    "--path",
+    cfg.serve.path,
+  ];
+  if (cfg.includeBody) {
+    args.push("--include-body");
+  }
+  if (cfg.maxBytes > 0) {
+    args.push("--max-bytes", String(cfg.maxBytes));
+  }
+  return args;
+}
+
 export function buildTopicPath(projectId: string, topicName: string): string {
   return `projects/${projectId}/topics/${topicName}`;
 }
