@@ -11,7 +11,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { getChildLogger, getLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -315,9 +315,16 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   // Long-lived subsystem loggers (most callers do `const log =
   // createSubsystemLogger(...)` at module scope) cache their child file
   // logger. The base file logger can be rebuilt — for example when the daily
-  // rolling-log path turns over — so we re-fetch the child whenever the
-  // generation counter advances.
+  // rolling-log path turns over at midnight — so we re-fetch the child
+  // whenever the generation counter advances.
+  //
+  // Critically, we must call `getLogger()` first to force a settings refresh.
+  // The generation counter is only bumped when `getLogger()` rebuilds the
+  // base; if a long-lived subsystem logger keeps emitting without anyone else
+  // calling `getLogger()`, the counter would never advance and the cached
+  // child would keep writing to the previous day's file.
   const ensureFileLogger = (): TsLogger<LogObj> => {
+    getLogger();
     if (!fileLogger || fileLoggerGeneration !== loggingState.loggerGeneration) {
       fileLogger = getChildLogger({ subsystem });
       fileLoggerGeneration = loggingState.loggerGeneration;
