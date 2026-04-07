@@ -211,11 +211,8 @@ function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThin
 }
 
 function getDisabledThinkingConfig(modelId: string): Record<string, unknown> {
-  if (isGemini3ProModel(modelId)) {
-    return { thinkingLevel: "LOW" };
-  }
   if (isGemini3FlashModel(modelId)) {
-    return { thinkingLevel: "MINIMAL" };
+    return { thinkingBudget: 0 };
   }
   return { thinkingBudget: 0 };
 }
@@ -743,3 +740,4 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
     return eventStream as unknown as ReturnType<StreamFn>;
   };
 }
+
