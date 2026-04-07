@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mergeTelegramAccountConfig } from "../../extensions/telegram/api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
@@ -343,40 +344,41 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual([]);
   });
 
-  it("moves missing default account from single-account top-level config when named accounts already exist", () => {
+  it("preserves top-level Telegram allowlist fallback for existing named accounts", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
         telegram: {
           enabled: true,
-          botToken: "legacy-token",
           dmPolicy: "allowlist",
           allowFrom: ["123"],
           groupPolicy: "allowlist",
-          streaming: { mode: "partial" },
           accounts: {
-            alerts: {
+            bot1: {
               enabled: true,
-              botToken: "alerts-token",
+              botToken: "bot-1-token",
+            },
+            bot2: {
+              enabled: true,
+              botToken: "bot-2-token",
             },
           },
         },
       },
     });
 
-    expect(res.config.channels?.telegram?.accounts?.default).toEqual({
-      botToken: "legacy-token",
+    expect(mergeTelegramAccountConfig(res.config, "bot1")).toMatchObject({
       dmPolicy: "allowlist",
       allowFrom: ["123"],
       groupPolicy: "allowlist",
-      streaming: { mode: "partial" },
     });
-    expect(res.config.channels?.telegram?.botToken).toBeUndefined();
-    expect(res.config.channels?.telegram?.dmPolicy).toBeUndefined();
-    expect(res.config.channels?.telegram?.allowFrom).toBeUndefined();
-    expect(res.config.channels?.telegram?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.telegram?.streaming).toBeUndefined();
-    expect(res.config.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
-    expect(res.changes).toContain(
+    expect(mergeTelegramAccountConfig(res.config, "bot2")).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      groupPolicy: "allowlist",
+    });
+    expect(res.config.channels?.telegram?.accounts?.bot1?.botToken).toBe("bot-1-token");
+    expect(res.config.channels?.telegram?.accounts?.bot2?.botToken).toBe("bot-2-token");
+    expect(res.changes).not.toContain(
       "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
     );
   });
