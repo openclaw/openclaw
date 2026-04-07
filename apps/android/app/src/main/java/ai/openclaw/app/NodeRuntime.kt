@@ -405,13 +405,13 @@ class NodeRuntime(
     talkMode.setMainSessionKey(resolvedKey)
     if (_mainSessionKey.value == resolvedKey) return
     _mainSessionKey.value = resolvedKey
+    emitWearProxyEvent("mainSessionKey", resolvedKey)
     chat.applyMainSessionKey(resolvedKey)
     updateHomeCanvasState()
   }
 
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
-    if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
     emitWearProxyEvent("mainSessionKey", trimmed)

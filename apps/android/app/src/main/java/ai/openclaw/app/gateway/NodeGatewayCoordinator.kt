@@ -154,7 +154,12 @@ class NodeGatewayCoordinator(
         _statusText.value = "Failed: no cached gateway endpoint"
         return
       }
-    _operatorStatusText.value = "Connecting…"
+    val connectPlan = resolveConnectPlan(auth = null)
+    desiredNodeConnectAuth = connectPlan.nodeAuth
+    desiredOperatorConnectAuth = connectPlan.operatorAuth
+    shouldConnectOperator = connectPlan.connectOperator
+    _operatorStatusText.value = if (connectPlan.connectOperator) "Connecting…" else "Offline"
+    nodeStatusText = "Connecting…"
     updateStatus()
     val tls = connectionManager.resolveTlsParams(endpoint)
     connectSessions(endpoint, tls, reconnect = true)

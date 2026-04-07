@@ -114,6 +114,48 @@ class NodeGatewayCoordinatorWearConfigTest {
     assertNull(readField<String?>(desired, "password"))
   }
 
+  @Test
+  fun refreshConnection_recomputesDesiredAuthFromCurrentPrefs() {
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    val coordinator = newCoordinator(prefs)
+    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+
+    prefs.saveGatewayToken("fresh-shared-token")
+    prefs.saveGatewayBootstrapToken("")
+    prefs.saveGatewayPassword("")
+    writeField(coordinator, "connectedEndpoint", endpoint)
+    writeField(
+      coordinator,
+      "desiredNodeConnectAuth",
+      GatewayConnectAuth(token = "stale-token", bootstrapToken = "stale-bootstrap", password = "stale-password"),
+    )
+    writeField(
+      coordinator,
+      "desiredOperatorConnectAuth",
+      GatewayConnectAuth(token = "stale-token", bootstrapToken = null, password = null),
+    )
+    writeField(coordinator, "shouldConnectOperator", false)
+
+    coordinator.refreshConnection()
+
+    assertEquals(
+      GatewayConnectAuth(token = "fresh-shared-token", bootstrapToken = null, password = null),
+      readField<GatewayConnectAuth?>(coordinator, "desiredNodeConnectAuth"),
+    )
+    assertEquals(
+      GatewayConnectAuth(token = "fresh-shared-token", bootstrapToken = null, password = null),
+      readField<GatewayConnectAuth?>(coordinator, "desiredOperatorConnectAuth"),
+    )
+    assertTrue(readField(coordinator, "shouldConnectOperator"))
+
+    val desired = readField<Any?>(coordinator.nodeSession, "desired")
+    assertNotNull(desired)
+    assertEquals(endpoint, readField(desired!!, "endpoint"))
+    assertEquals("fresh-shared-token", readField<String?>(desired, "token"))
+    assertNull(readField<String?>(desired, "bootstrapToken"))
+    assertNull(readField<String?>(desired, "password"))
+  }
+
   private fun newCoordinator(
     prefs: SecurePrefs,
     identityStore: DeviceIdentityStore = DeviceIdentityStore(context),
