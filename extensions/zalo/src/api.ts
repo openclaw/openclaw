@@ -87,6 +87,7 @@ export class ZaloApiError extends Error {
     message: string,
     public readonly errorCode?: number,
     public readonly description?: string,
+    public readonly httpStatus?: number,
   ) {
     super(message);
     this.name = "ZaloApiError";
@@ -94,7 +95,7 @@ export class ZaloApiError extends Error {
 
   /** True if this is a long-polling timeout (no updates available) */
   get isPollingTimeout(): boolean {
-    return this.errorCode === 408;
+    return this.errorCode === 408 && this.httpStatus === undefined;
   }
 }
 
@@ -125,11 +126,29 @@ export async function callZaloApi<T = unknown>(
     });
 
     if (!response.ok) {
-      const errBody = await response.text().catch(() => "");
+      const text = await response.text().catch(() => "");
+      let parsed: ZaloApiResponse | undefined;
+      try {
+        parsed = JSON.parse(text) as ZaloApiResponse;
+      } catch {
+        // not JSON
+      }
+
+      if (parsed && parsed.error_code !== undefined) {
+        throw new ZaloApiError(
+          parsed.description ?? `Zalo API error: ${method}`,
+          parsed.error_code,
+          parsed.description,
+          response.status,
+        );
+      }
+
+      const truncated = text.length > 200 ? text.slice(0, 200) + "\u2026" : text;
       throw new ZaloApiError(
-        errBody || `Zalo API HTTP error: ${method}`,
-        response.status,
+        truncated || `Zalo API HTTP error: ${method}`,
+        undefined,
         `HTTP ${response.status}`,
+        response.status,
       );
     }
 
