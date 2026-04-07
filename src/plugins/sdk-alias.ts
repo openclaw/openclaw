@@ -449,6 +449,16 @@ export function shouldPreferNativeJiti(modulePath: string): boolean {
   if (process.platform === "win32") {
     return false;
   }
+  const normalizedModulePath = modulePath.replace(/\\/g, "/");
+  if (
+    normalizedModulePath.includes("/dist/extensions/") ||
+    normalizedModulePath.includes("/dist-runtime/extensions/")
+  ) {
+    // Bundled plugin entrypoints execute inside nested package scopes such as
+    // @openclaw/matrix. Native ESM resolution from there does not honor our
+    // openclaw/plugin-sdk alias map, so keep those loads on Jiti.
+    return false;
+  }
   switch (path.extname(modulePath).toLowerCase()) {
     case ".js":
     case ".mjs":

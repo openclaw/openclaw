@@ -644,6 +644,9 @@ describe("plugin sdk alias helpers", () => {
 
   it("uses transpiled Jiti loads for source TypeScript plugin entries", () => {
     expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
+    expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("matrix", "runtime-api.js")}`)).toBe(
+      false,
+    );
     expect(
       shouldPreferNativeJiti(`/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`),
     ).toBe(false);

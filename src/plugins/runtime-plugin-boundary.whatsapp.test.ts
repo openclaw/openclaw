@@ -17,6 +17,10 @@ type HeavyModule = {
   ) => void;
 };
 
+type MatrixScopedModule = {
+  exportedDefaultAccountId: string;
+};
+
 const tempDirs: string[] = [];
 
 function writeRuntimeFixtureText(rootDir: string, relativePath: string, value: string) {
@@ -76,6 +80,54 @@ function createBundledWhatsAppRuntimeFixture() {
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
 }
 
+function createBundledMatrixScopedAliasFixture() {
+  const rootDir = makeTrackedTempDir("openclaw-matrix-boundary", tempDirs);
+  for (const [relativePath, value] of Object.entries({
+    "package.json": JSON.stringify(
+      {
+        name: "openclaw",
+        type: "module",
+        bin: {
+          openclaw: "openclaw.mjs",
+        },
+        exports: {
+          "./plugin-sdk": {
+            default: "./dist/plugin-sdk/index.js",
+          },
+          "./plugin-sdk/account-id": {
+            default: "./dist/plugin-sdk/account-id.js",
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "openclaw.mjs": "export {};\n",
+    "dist/plugin-sdk/index.js": "export {};\n",
+    "dist/plugin-sdk/account-id.js":
+      'export const DEFAULT_ACCOUNT_ID = "default-account";\n',
+    [bundledDistPluginFile("matrix", "index.js")]: "export default {};\n",
+    [bundledDistPluginFile("matrix", "package.json")]: JSON.stringify(
+      {
+        name: "@openclaw/matrix",
+        type: "module",
+      },
+      null,
+      2,
+    ),
+    [bundledDistPluginFile("matrix", "runtime-api.js")]: [
+      'import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
+      "export const exportedDefaultAccountId = DEFAULT_ACCOUNT_ID;",
+      "",
+    ].join("\n"),
+  })) {
+    writeRuntimeFixtureText(rootDir, relativePath, value);
+  }
+  stageBundledPluginRuntime({ repoRoot: rootDir });
+
+  return path.join(rootDir, "dist-runtime", "extensions", "matrix");
+}
+
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
   const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
   return {
@@ -112,5 +164,16 @@ afterEach(() => {
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
     expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
+  });
+
+  it("keeps bundled dist-runtime plugin-sdk self-imports on the alias-aware Jiti path", () => {
+    const runtimePluginDir = createBundledMatrixScopedAliasFixture();
+    const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
+    const module = loadPluginBoundaryModuleWithJiti<MatrixScopedModule>(
+      path.join(runtimePluginDir, "runtime-api.js"),
+      loaders,
+    );
+
+    expect(module.exportedDefaultAccountId).toBe("default-account");
   });
 });
