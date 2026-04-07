@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findTaskByRunId,
   getTaskById,
@@ -8,8 +9,7 @@ import type { TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
 function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(ownerKey);
 }
 
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {

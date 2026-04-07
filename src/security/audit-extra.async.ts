@@ -24,6 +24,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -328,16 +329,6 @@ function isPinnedRegistrySpec(spec: string): boolean {
   }
   const version = value.slice(at + 1).trim();
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
-}
-
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  try {
-    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function buildCodeSafetySummaryCacheKey(params: {

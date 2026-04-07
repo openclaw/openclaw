@@ -305,12 +305,15 @@ Notes:
   - `pnpm test:live src/gateway/gateway-acp-bind.live.test.ts`
   - `OPENCLAW_LIVE_ACP_BIND=1`
 - Defaults:
-  - ACP agent: `claude`
+  - ACP agents in Docker: `claude,codex,gemini`
+  - ACP agent for direct `pnpm test:live ...`: `claude`
   - Synthetic channel: Slack DM-style conversation context
   - ACP backend: `acpx`
 - Overrides:
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=claude`
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=codex`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=gemini`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini`
   - `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND='npx -y @agentclientprotocol/claude-agent-acp@<version>'`
 - Notes:
   - This lane uses the gateway `chat.send` surface with admin-only synthetic originating-route fields so tests can attach message-channel context without pretending to deliver externally.
@@ -330,10 +333,20 @@ Docker recipe:
 pnpm test:docker:live-acp-bind
 ```
 
+Single-agent Docker recipes:
+
+```bash
+pnpm test:docker:live-acp-bind:claude
+pnpm test:docker:live-acp-bind:codex
+pnpm test:docker:live-acp-bind:gemini
+```
+
 Docker notes:
 
 - The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
-- It sources `~/.profile`, stages the matching CLI auth material into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code` or `@openai/codex`) if missing.
+- By default, it runs the ACP bind smoke against all supported live CLI agents in sequence: `claude`, `codex`, then `gemini`.
+- Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini` to narrow the matrix.
+- It sources `~/.profile`, stages the matching CLI auth material into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) if missing.
 - Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
 
 ### Recommended live recipes

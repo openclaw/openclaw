@@ -13,6 +13,7 @@ import type {
   ReplyToMode,
 } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
+import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
   formatMatrixMediaTooLargeText,
@@ -906,7 +907,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (isMatrixMediaSizeLimitError(err)) {
               mediaSizeLimitExceeded = true;
             }
-            const errorText = err instanceof Error ? err.message : String(err);
+            const errorText = formatMatrixErrorMessage(err);
             logVerboseMessage(
               `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
             );

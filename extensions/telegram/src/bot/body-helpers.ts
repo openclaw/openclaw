@@ -1,5 +1,6 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type TelegramMediaMessage = Pick<
   Message,
@@ -74,7 +75,7 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
     label = username;
   }
   const normalizedSenderId =
-    senderId != null && `${senderId}`.trim() ? `${senderId}`.trim() : undefined;
+    senderId != null ? normalizeOptionalString(String(senderId)) : undefined;
   const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);
   const idPart = fallbackId ? `id:${fallbackId}` : undefined;
   if (label && idPart) {

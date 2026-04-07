@@ -3,7 +3,7 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as runtimeDoctor from "openclaw/plugin-sdk/runtime-doctor";
+import { hasLegacyAccountStreamingAliases } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -172,8 +172,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "telegram", "accounts"],
     message:
       "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) =>
-      runtimeDoctor.hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
   },
 ];
 

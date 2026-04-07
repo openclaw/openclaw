@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../registry.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,6 +27,7 @@ vi.mock("../loader.js", () => ({
 }));
 
 vi.mock("../runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
   getActivePluginRegistry: (...args: Parameters<typeof mocks.getActivePluginRegistry>) =>
     mocks.getActivePluginRegistry(...args),
 }));
@@ -52,13 +53,11 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 describe("ensurePluginRegistryLoaded", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     const mod = await import("./runtime-registry-loader.js");
     ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
     resetPluginRegistryLoadedForTests = () => mod.__testing.resetPluginRegistryLoadedForTests();
-  });
-
-  beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();

@@ -4,6 +4,7 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -91,8 +92,7 @@ function toTargetIdSet(values: readonly string[]): Set<string> {
 }
 
 function normalizeScopedChannelId(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function selectChannelTargetIds(channel?: string): Set<string> {

@@ -2,7 +2,7 @@ import type { webhook } from "@line/bot-sdk";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
-  resolveMentionGatingWithBypass,
+  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand, resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -501,17 +501,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const wasMentionedByPattern =
       message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
     const wasMentioned = wasMentionedByNative || wasMentionedByPattern;
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup: true,
-      requireMention,
-      canDetectMention: message.type === "text",
-      wasMentioned,
-      hasAnyMention: hasAnyLineMention(message),
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommand(rawText, cfg),
-      commandAuthorized: decision.commandAuthorized,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: message.type === "text",
+        wasMentioned,
+        hasAnyMention: hasAnyLineMention(message),
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup: true,
+        requireMention,
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommand(rawText, cfg),
+        commandAuthorized: decision.commandAuthorized,
+      },
     });
-    if (mentionGate.shouldSkip) {
+    if (mentionDecision.shouldSkip) {
       logVerbose(`line: skipping group message (requireMention, not mentioned)`);
       const historyKey = groupId ?? roomId;
       const senderId = sourceInfo.userId ?? "unknown";

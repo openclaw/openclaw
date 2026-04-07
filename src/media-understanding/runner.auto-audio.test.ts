@@ -75,7 +75,7 @@ describe("runCapability auto audio entries", () => {
       },
     });
     expect(result.outputs[0]?.text).toBe("ok");
-    expect(seenModel).toBe("gpt-4o-mini-transcribe");
+    expect(seenModel).toBe("gpt-4o-transcribe");
     expect(result.decision.outcome).toBe("success");
   });
 
@@ -144,7 +144,7 @@ describe("runCapability auto audio entries", () => {
                 capabilities: ["audio"],
                 transcribeAudio: async () => ({
                   text: "openai",
-                  model: "gpt-4o-mini-transcribe",
+                  model: "gpt-4o-transcribe",
                 }),
               },
               mistral: {

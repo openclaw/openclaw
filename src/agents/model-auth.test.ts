@@ -95,11 +95,14 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         return undefined;
       }
       const providerConfig = params.context.providerConfig;
-      const hasApiConfig =
-        Boolean(providerConfig?.api?.trim()) ||
-        Boolean(providerConfig?.baseUrl?.trim()) ||
-        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-      if (!hasApiConfig) {
+      const hasMeaningfulOllamaConfig =
+        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
+        Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
+        Boolean(
+          providerConfig?.baseUrl?.trim() &&
+          providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
+        );
+      if (!hasMeaningfulOllamaConfig) {
         return undefined;
       }
       return {

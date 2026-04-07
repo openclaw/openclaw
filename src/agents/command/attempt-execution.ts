@@ -473,6 +473,8 @@ export function runAgentAttempt(params: {
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
+    bootstrapContextMode: params.opts.bootstrapContextMode,
+    bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,

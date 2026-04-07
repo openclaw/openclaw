@@ -1,3 +1,4 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -6,7 +7,6 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
-  resolveMentionGatingWithBypass,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
   type OpenClawConfig,
@@ -321,19 +321,23 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       cfg: config,
       surface: "googlechat",
     });
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup: true,
-      requireMention,
-      canDetectMention: true,
-      wasMentioned: mentionInfo.wasMentioned,
-      implicitMention: false,
-      hasAnyMention: mentionInfo.hasAnyMention,
-      allowTextCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
-      commandAuthorized: commandAuthorized === true,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: mentionInfo.wasMentioned,
+        hasAnyMention: mentionInfo.hasAnyMention,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup: true,
+        requireMention,
+        allowTextCommands,
+        hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
+        commandAuthorized: commandAuthorized === true,
+      },
     });
-    effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (mentionGate.shouldSkip) {
+    effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    if (mentionDecision.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
       return { ok: false };
     }

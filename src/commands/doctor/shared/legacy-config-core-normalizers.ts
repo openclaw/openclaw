@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { shouldMoveSingleAccountChannelKey } from "../../../channels/plugins/setup-helpers.js";
+import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import { normalizeTalkSection } from "../../../config/talk.js";
@@ -132,15 +132,10 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     if (hasDefault) {
       continue;
     }
-
-    const keysToMove = Object.entries(rawChannel)
-      .filter(([key, value]) => {
-        if (key === "accounts" || key === "enabled" || value === undefined) {
-          return false;
-        }
-        return shouldMoveSingleAccountChannelKey({ channelKey: channelId, key });
-      })
-      .map(([key]) => key);
+    const keysToMove = resolveSingleAccountKeysToMove({
+      channelKey: channelId,
+      channel: rawChannel,
+    });
     if (keysToMove.length === 0) {
       continue;
     }

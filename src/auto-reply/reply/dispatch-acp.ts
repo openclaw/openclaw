@@ -14,6 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -84,18 +85,21 @@ function hasInboundMediaForAcp(ctx: FinalizedMsgContext): boolean {
   return Boolean(
     ctx.StickerMediaIncluded ||
     ctx.Sticker ||
-    ctx.MediaPath?.trim() ||
-    ctx.MediaUrl?.trim() ||
-    ctx.MediaPaths?.some((value) => value?.trim()) ||
-    ctx.MediaUrls?.some((value) => value?.trim()) ||
+    normalizeOptionalString(ctx.MediaPath) ||
+    normalizeOptionalString(ctx.MediaUrl) ||
+    ctx.MediaPaths?.some((value) => normalizeOptionalString(value)) ||
+    ctx.MediaUrls?.some((value) => normalizeOptionalString(value)) ||
     ctx.MediaTypes?.length,
   );
 }
 
 function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  if (typeof id === "string" && id.trim()) {
-    return id.trim();
+  if (typeof id === "string") {
+    const normalizedId = normalizeOptionalString(id);
+    if (normalizedId) {
+      return normalizedId;
+    }
   }
   if (typeof id === "number" || typeof id === "bigint") {
     return String(id);
@@ -109,33 +113,24 @@ async function hasBoundConversationForSession(params: {
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
 }): Promise<boolean> {
-  const channel = String(params.channelRaw ?? "")
-    .trim()
-    .toLowerCase();
+  const channel = normalizeOptionalString(params.channelRaw)?.toLowerCase() ?? "";
   if (!channel) {
     return false;
   }
-  const accountId = String(params.accountIdRaw ?? "")
-    .trim()
-    .toLowerCase();
+  const accountId = normalizeOptionalString(params.accountIdRaw)?.toLowerCase() ?? "";
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
   const normalizedAccountId =
-    accountId ||
-    (typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
-      ? configuredDefaultAccountId.trim().toLowerCase()
-      : "default");
+    accountId || normalizeOptionalString(configuredDefaultAccountId)?.toLowerCase() || "default";
   const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
-    const bindingChannel = String(binding.conversation.channel ?? "")
-      .trim()
-      .toLowerCase();
-    const bindingAccountId = String(binding.conversation.accountId ?? "")
-      .trim()
-      .toLowerCase();
-    const conversationId = String(binding.conversation.conversationId ?? "").trim();
+    const bindingChannel =
+      normalizeOptionalString(binding.conversation.channel)?.toLowerCase() ?? "";
+    const bindingAccountId =
+      normalizeOptionalString(binding.conversation.accountId)?.toLowerCase() ?? "";
+    const conversationId = normalizeOptionalString(binding.conversation.conversationId) ?? "";
     return (
       bindingChannel === channel &&
       (bindingAccountId || "default") === normalizedAccountId &&
@@ -149,21 +144,17 @@ function resolveDispatchAccountId(params: {
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
 }): string | undefined {
-  const channel = String(params.channelRaw ?? "")
-    .trim()
-    .toLowerCase();
+  const channel = normalizeOptionalString(params.channelRaw)?.toLowerCase() ?? "";
   if (!channel) {
-    return params.accountIdRaw?.trim() || undefined;
+    return normalizeOptionalString(params.accountIdRaw);
   }
-  const explicit = params.accountIdRaw?.trim();
+  const explicit = normalizeOptionalString(params.accountIdRaw);
   if (explicit) {
     return explicit;
   }
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
-  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
-    ? configuredDefaultAccountId.trim()
-    : undefined;
+  return normalizeOptionalString(configuredDefaultAccountId);
 }
 
 export type AcpDispatchAttemptResult = {
@@ -315,7 +306,7 @@ export async function tryDispatchAcpReply(params: {
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
-  const sessionKey = params.sessionKey?.trim();
+  const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey || params.bypassForCommand) {
     return null;
   }
@@ -362,11 +353,9 @@ export async function tryDispatchAcpReply(params: {
 
   const resolvedAcpAgent =
     acpResolution.kind === "ready"
-      ? (
-          acpResolution.meta.agent?.trim() ||
-          params.cfg.acp?.defaultAgent?.trim() ||
-          resolveAgentIdFromSessionKey(canonicalSessionKey)
-        ).trim()
+      ? (normalizeOptionalString(acpResolution.meta.agent) ??
+        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
+        resolveAgentIdFromSessionKey(canonicalSessionKey))
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const effectiveDispatchAccountId = resolveDispatchAccountId({
     cfg: params.cfg,
@@ -470,9 +459,10 @@ export async function tryDispatchAcpReply(params: {
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
-    if (params.runId?.trim()) {
+    const runId = normalizeOptionalString(params.runId);
+    if (runId) {
       emitAgentEvent({
-        runId: params.runId.trim(),
+        runId,
         sessionKey,
         stream: "lifecycle",
         data: {
@@ -507,9 +497,10 @@ export async function tryDispatchAcpReply(params: {
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
-    if (params.runId?.trim()) {
+    const runId = normalizeOptionalString(params.runId);
+    if (runId) {
       emitAgentEvent({
-        runId: params.runId.trim(),
+        runId,
         sessionKey,
         stream: "lifecycle",
         data: {

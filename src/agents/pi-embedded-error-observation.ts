@@ -1,6 +1,7 @@
 import { readLoggingConfig } from "../logging/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { getApiErrorPayloadFingerprint, parseApiErrorInfo } from "./pi-embedded-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
@@ -76,7 +77,7 @@ function extractRequestId(text: string | undefined): string | undefined {
     return undefined;
   }
   const match = text.match(REQUEST_ID_RE);
-  return match?.[1]?.trim() || undefined;
+  return normalizeOptionalString(match?.[1]);
 }
 
 function buildObservationFingerprint(params: {

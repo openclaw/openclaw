@@ -3,6 +3,7 @@ import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -15,8 +16,7 @@ let sessionsResolutionDeps: {
 } = defaultSessionsResolutionDeps;
 
 function normalizeKey(value?: string) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 export function resolveMainSessionAlias(cfg: OpenClawConfig) {

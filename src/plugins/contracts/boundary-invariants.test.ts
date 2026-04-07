@@ -7,6 +7,7 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 
 const ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS = new Set([
+  "src/media-generation/provider-capabilities.contract.test.ts",
   "src/plugins/bundled-capability-metadata.test.ts",
   "src/plugins/contracts/boundary-invariants.test.ts",
 ]);
@@ -14,6 +15,7 @@ const ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS = new Set([
 const ALLOWED_EXTENSION_PATH_STRING_TESTS = new Set([
   "src/plugin-sdk/browser-maintenance.test.ts",
   "src/channels/plugins/bundled.shape-guard.test.ts",
+  "src/commands/doctor-legacy-config.migrations.test.ts",
   "src/plugins/contracts/bundled-extension-config-api-guardrails.test.ts",
   "src/scripts/test-projects.test.ts",
 ]);

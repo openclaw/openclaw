@@ -4,6 +4,7 @@ import { matchesApprovalRequestFilters } from "../infra/approval-request-filters
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import { normalizeAccountId } from "./routing.js";
 
@@ -24,8 +25,7 @@ type ApprovalProfileParams = {
 };
 
 function defaultNormalizeSenderId(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {

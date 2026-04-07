@@ -11,11 +11,15 @@ describe("lintMemoryWikiVault", () => {
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
-      initialize: true,
       config: {
         vault: { renderMode: "obsidian" },
       },
     });
+    await Promise.all(
+      ["entities", "concepts", "sources"].map((dir) =>
+        fs.mkdir(path.join(rootDir, dir), { recursive: true }),
+      ),
+    );
 
     const duplicate = renderWikiMarkdown({
       frontmatter: {

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
@@ -362,8 +363,7 @@ function applySetupInput(params: {
 }
 
 function trimResolvedValue(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function collectCredentialValues(params: {

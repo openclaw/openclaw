@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findLatestTaskFlowForOwnerKey,
   getTaskFlowById,
@@ -6,8 +7,7 @@ import {
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(ownerKey);
 }
 
 function canOwnerAccessFlow(flow: TaskFlowRecord, callerOwnerKey: string): boolean {

@@ -6,6 +6,7 @@ import {
   collectBundledPluginPublicSurfaceArtifacts,
   collectBundledPluginRuntimeSidecarArtifacts,
   deriveBundledPluginIdHint,
+  normalizeBundledPluginStringList,
   rewriteBundledPluginEntryToBuiltPath,
   resolveBundledPluginScanDir,
   trimBundledPluginString,
@@ -54,13 +55,6 @@ export function clearBundledPluginMetadataCache(): void {
   bundledPluginMetadataCache.clear();
 }
 
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => trimBundledPluginString(entry) ?? "").filter(Boolean);
-}
-
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
   const packagePath = path.join(pluginDir, "package.json");
   if (!fs.existsSync(packagePath)) {
@@ -100,7 +94,7 @@ function collectBundledPluginMetadataForPackageRoot(
 
     const packageJson = readPackageManifest(pluginDir);
     const packageManifest = getPackageManifestMetadata(packageJson);
-    const extensions = normalizeStringList(packageManifest?.extensions);
+    const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
     if (extensions.length === 0) {
       continue;
     }

@@ -17,6 +17,7 @@ import {
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 
@@ -171,11 +172,7 @@ function gmailOptionsFromCommon(
 }
 
 function stringOption(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function numberOption(value: unknown): number | undefined {

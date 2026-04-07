@@ -15,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
@@ -1001,7 +1002,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       command: {
         ...nodeCommand,
         command,
-        cap: nodeCommand.cap?.trim() || undefined,
+        cap: normalizeOptionalString(nodeCommand.cap),
       },
       source: record.source,
       rootDir: record.rootDir,

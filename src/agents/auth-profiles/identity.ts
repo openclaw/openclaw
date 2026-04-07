@@ -1,12 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { AuthProfileStore } from "./types.js";
 
 function trimOptionalString(value: string | null | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function resolveStoredMetadata(store: AuthProfileStore | undefined, profileId: string) {

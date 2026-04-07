@@ -55,6 +55,7 @@
   "speech-core",
   "plugin-runtime",
   "channel-secret-runtime",
+  "secret-ref-runtime",
   "security-runtime",
   "gateway-runtime",
   "github-copilot-login",

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -221,18 +223,11 @@ function safeStatMtimeMs(filePath: string): number | null {
 }
 
 function normalizeManifestLabel(raw: string | undefined): string | undefined {
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(raw);
 }
 
 function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  const values = raw
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter(Boolean);
-  return values.length > 0 ? values : undefined;
+  return normalizeOptionalTrimmedStringList(raw);
 }
 
 function mergePackageChannelMetaIntoChannelConfigs(params: {

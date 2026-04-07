@@ -5,6 +5,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { CommandContext } from "./commands-types.js";
@@ -26,12 +27,14 @@ function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 function resolveFastSessionKey(ctx: MsgContext): string {
-  const existing = ctx.SessionKey?.trim();
+  const existing = normalizeOptionalString(ctx.SessionKey);
   if (existing) {
     return existing;
   }
-  const provider = ctx.Provider?.trim() || ctx.Surface?.trim() || "main";
-  const destination = ctx.To?.trim() || ctx.From?.trim() || "default";
+  const provider =
+    normalizeOptionalString(ctx.Provider) ?? normalizeOptionalString(ctx.Surface) ?? "main";
+  const destination =
+    normalizeOptionalString(ctx.To) ?? normalizeOptionalString(ctx.From) ?? "default";
   return `agent:main:${provider}:${destination}`;
 }
 
@@ -152,10 +155,10 @@ export function buildFastReplyCommandContext(params: {
 }): CommandContext {
   const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized, commandAuthorized } =
     params;
-  const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
-  const channel = (ctx.Provider ?? surface).trim().toLowerCase();
-  const from = ctx.From?.trim() || undefined;
-  const to = ctx.To?.trim() || undefined;
+  const surface = normalizeOptionalString(ctx.Surface ?? ctx.Provider)?.toLowerCase() ?? "";
+  const channel = normalizeOptionalString(ctx.Provider ?? surface)?.toLowerCase() ?? "";
+  const from = normalizeOptionalString(ctx.From);
+  const to = normalizeOptionalString(ctx.To);
   return {
     surface,
     channel,
@@ -212,9 +215,15 @@ export function initFastReplySessionState(params: {
     sessionFile,
     updatedAt: now,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
-    ...(ctx.Provider?.trim() ? { channel: ctx.Provider.trim() } : {}),
-    ...(ctx.GroupSubject?.trim() ? { subject: ctx.GroupSubject.trim() } : {}),
-    ...(ctx.GroupChannel?.trim() ? { groupChannel: ctx.GroupChannel.trim() } : {}),
+    ...(normalizeOptionalString(ctx.Provider)
+      ? { channel: normalizeOptionalString(ctx.Provider) }
+      : {}),
+    ...(normalizeOptionalString(ctx.GroupSubject)
+      ? { subject: normalizeOptionalString(ctx.GroupSubject) }
+      : {}),
+    ...(normalizeOptionalString(ctx.GroupChannel)
+      ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
+      : {}),
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
   const sessionCtx: TemplateContext = {
@@ -235,7 +244,7 @@ export function initFastReplySessionState(params: {
     resetTriggered,
     systemSent: false,
     abortedLastRun: false,
-    storePath: cfg.session?.store?.trim() ?? "",
+    storePath: normalizeOptionalString(cfg.session?.store) ?? "",
     sessionScope,
     groupResolution: undefined,
     isGroup,

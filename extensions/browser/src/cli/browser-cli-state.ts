@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
 import { runBrowserResizeWithOutput } from "./browser-cli-resize.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
@@ -91,7 +92,7 @@ export function registerBrowserStateCommands(
         path: "/set/offline",
         body: {
           offline,
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: `offline: ${offline}`,
       });
@@ -107,8 +108,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
         const headersJsonValue =
-          (typeof opts.headersJson === "string" && opts.headersJson.trim()) ||
-          (headersJson?.trim() ? headersJson.trim() : undefined);
+          normalizeOptionalString(opts.headersJson) ?? normalizeOptionalString(headersJson);
         if (!headersJsonValue) {
           throw new Error("Missing headers JSON (pass --headers-json or positional JSON argument)");
         }
@@ -131,7 +131,7 @@ export function registerBrowserStateCommands(
             query: profile ? { profile } : undefined,
             body: {
               headers,
-              targetId: opts.targetId?.trim() || undefined,
+              targetId: normalizeOptionalString(opts.targetId),
             },
           },
           { timeoutMs: 20000 },
@@ -157,10 +157,10 @@ export function registerBrowserStateCommands(
         parent,
         path: "/set/credentials",
         body: {
-          username: username?.trim() || undefined,
+          username: normalizeOptionalString(username),
           password,
           clear: Boolean(opts.clear),
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: opts.clear ? "credentials cleared" : "credentials set",
       });
@@ -184,9 +184,9 @@ export function registerBrowserStateCommands(
           latitude: Number.isFinite(latitude) ? latitude : undefined,
           longitude: Number.isFinite(longitude) ? longitude : undefined,
           accuracy: Number.isFinite(opts.accuracy) ? opts.accuracy : undefined,
-          origin: opts.origin?.trim() || undefined,
+          origin: normalizeOptionalString(opts.origin),
           clear: Boolean(opts.clear),
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: opts.clear ? "geolocation cleared" : "geolocation set",
       });
@@ -212,7 +212,7 @@ export function registerBrowserStateCommands(
         path: "/set/media",
         body: {
           colorScheme,
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: `media colorScheme: ${colorScheme}`,
       });
@@ -230,7 +230,7 @@ export function registerBrowserStateCommands(
         path: "/set/timezone",
         body: {
           timezoneId,
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: `timezone: ${timezoneId}`,
       });
@@ -248,7 +248,7 @@ export function registerBrowserStateCommands(
         path: "/set/locale",
         body: {
           locale,
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: `locale: ${locale}`,
       });
@@ -266,7 +266,7 @@ export function registerBrowserStateCommands(
         path: "/set/device",
         body: {
           name,
-          targetId: opts.targetId?.trim() || undefined,
+          targetId: normalizeOptionalString(opts.targetId),
         },
         successMessage: `device: ${name}`,
       });

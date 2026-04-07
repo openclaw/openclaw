@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
 function trimOptional(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 export function hashCliSessionText(value: string | undefined): string | undefined {
@@ -37,11 +37,12 @@ export function getCliSessionBinding(
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
-  if (fromMap?.trim()) {
-    return { sessionId: fromMap.trim() };
+  const normalizedFromMap = normalizeOptionalString(fromMap);
+  if (normalizedFromMap) {
+    return { sessionId: normalizedFromMap };
   }
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    const legacy = entry.claudeCliSessionId?.trim();
+    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
     if (legacy) {
       return { sessionId: legacy };
     }

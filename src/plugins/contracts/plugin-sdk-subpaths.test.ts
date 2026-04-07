@@ -290,6 +290,13 @@ describe("plugin-sdk subpath exports", () => {
     ]) {
       expectSourceMentions(subpath, ["chunkTextForOutbound"]);
     }
+    for (const subpath of ["googlechat", "msteams", "nextcloud-talk", "zalouser"]) {
+      expectSourceMentions(subpath, [
+        "resolveInboundMentionDecision",
+        "resolveMentionGating",
+        "resolveMentionGatingWithBypass",
+      ]);
+    }
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "resolveApprovalApprovers",
@@ -453,6 +460,7 @@ describe("plugin-sdk subpath exports", () => {
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
       "resolveInboundSessionEnvelopeContext",
+      "resolveInboundMentionDecision",
       "resolveMentionGating",
       "resolveMentionGatingWithBypass",
       "resolveOutboundSendDep",
@@ -536,9 +544,11 @@ describe("plugin-sdk subpath exports", () => {
       "formatInboundEnvelope",
       "formatInboundFromLabel",
       "formatLocationText",
+      "implicitMentionKindWhen",
       "logInboundDrop",
       "matchesMentionPatterns",
       "matchesMentionWithExplicit",
+      "resolveInboundMentionDecision",
       "normalizeMentionText",
       "resolveInboundDebounceMs",
       "resolveEnvelopeFormatOptions",

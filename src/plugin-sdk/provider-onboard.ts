@@ -11,6 +11,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
 export {
@@ -60,14 +61,14 @@ function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
 
 function resolveCurrentPrimaryModel(model: unknown): string | undefined {
   if (typeof model === "string") {
-    return model.trim() || undefined;
+    return normalizeOptionalString(model);
   }
   if (
     model &&
     typeof model === "object" &&
     typeof (model as { primary?: unknown }).primary === "string"
   ) {
-    return ((model as { primary: string }).primary || "").trim() || undefined;
+    return normalizeOptionalString((model as { primary: string }).primary);
   }
   return undefined;
 }

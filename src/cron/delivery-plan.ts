@@ -1,4 +1,5 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
@@ -24,19 +25,11 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
 }
 
 function normalizeTo(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeAccountId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeThreadId(value: unknown): string | number | undefined {
@@ -46,8 +39,7 @@ function normalizeThreadId(value: unknown): string | number | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {

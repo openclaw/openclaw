@@ -1,8 +1,9 @@
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
-  const trimmed = (raw ?? "").trim();
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -24,7 +25,8 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
       return joined || undefined;
     }
   }
-  const channelId = normalizeChannelId(parts[0] ?? "") ?? parts[0]?.trim().toLowerCase();
+  const channelId =
+    normalizeChannelId(parts[0] ?? "") ?? normalizeOptionalString(parts[0])?.toLowerCase();
   const messaging = channelId
     ? (getLoadedChannelPlugin(channelId)?.messaging ??
       getBundledChannelPlugin(channelId)?.messaging)

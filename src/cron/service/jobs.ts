@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -717,8 +718,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
 }
 
 function normalizeOptionalTrimmedString(value: unknown): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeOptionalThreadId(value: unknown): string | number | undefined {

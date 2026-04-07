@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type OwnerDisplaySetting = {
   ownerDisplay?: "raw" | "hash";
@@ -12,8 +13,7 @@ export type OwnerDisplaySecretResolution = {
 };
 
 function trimToUndefined(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 /**

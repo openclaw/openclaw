@@ -31,7 +31,8 @@ function sessionMatchesConfiguredBinding(params: {
     return false;
   }
 
-  const desiredBackend = params.spec.backend?.trim() || params.cfg.acp?.backend?.trim() || "";
+  const desiredBackend =
+    normalizeText(params.spec.backend) ?? normalizeText(params.cfg.acp?.backend) ?? "";
   if (desiredBackend) {
     const currentBackend = (params.meta.backend ?? "").trim();
     if (!currentBackend || currentBackend !== desiredBackend) {
@@ -39,7 +40,7 @@ function sessionMatchesConfiguredBinding(params: {
     }
   }
 
-  const desiredCwd = params.spec.cwd?.trim();
+  const desiredCwd = normalizeText(params.spec.cwd);
   if (desiredCwd !== undefined) {
     const currentCwd = (params.meta.runtimeOptions?.cwd ?? params.meta.cwd ?? "").trim();
     if (desiredCwd !== currentCwd) {

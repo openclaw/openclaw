@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -207,7 +208,7 @@ function normalizeBaseUrl(baseUrl?: string): string {
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 function extractTokenFromClawHubConfig(value: unknown): string | undefined {

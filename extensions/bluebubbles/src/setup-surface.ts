@@ -8,6 +8,7 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesAccount, resolveDefaultBlueBubblesAccountId } from "./accounts.js";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
@@ -39,7 +40,7 @@ function validateBlueBubblesAllowFromEntry(value: string): string | null {
     if (parsed.kind === "handle" && !parsed.handle) {
       return null;
     }
-    return value.trim() || null;
+    return normalizeOptionalString(value) ?? null;
   } catch {
     return null;
   }
@@ -76,7 +77,7 @@ const promptBlueBubblesAllowFrom = createPromptParsedAllowFromForAccount({
 });
 
 function validateBlueBubblesServerUrlInput(value: unknown): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return "Required";
   }
@@ -108,11 +109,11 @@ function applyBlueBubblesSetupPatch(
 }
 
 function resolveBlueBubblesServerUrl(cfg: OpenClawConfig, accountId: string): string | undefined {
-  return resolveBlueBubblesAccount({ cfg, accountId }).config.serverUrl?.trim() || undefined;
+  return normalizeOptionalString(resolveBlueBubblesAccount({ cfg, accountId }).config.serverUrl);
 }
 
 function resolveBlueBubblesWebhookPath(cfg: OpenClawConfig, accountId: string): string | undefined {
-  return resolveBlueBubblesAccount({ cfg, accountId }).config.webhookPath?.trim() || undefined;
+  return normalizeOptionalString(resolveBlueBubblesAccount({ cfg, accountId }).config.webhookPath);
 }
 
 function validateBlueBubblesWebhookPath(value: string): string | undefined {

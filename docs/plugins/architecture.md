@@ -1120,7 +1120,8 @@ authoring plugins:
   `openclaw/plugin-sdk/secret-input`, and
   `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
   wiring. `channel-inbound` is the shared home for debounce, mention matching,
-  envelope formatting, and inbound envelope context helpers.
+  inbound mention-policy helpers, envelope formatting, and inbound envelope
+  context helpers.
   `channel-setup` is the narrow optional-install setup seam.
   `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
   deferred startup, including the import-safe setup patch adapters.

@@ -37,6 +37,7 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
+import { persistGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -1840,35 +1841,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         cfg,
         () => pendingSecret ?? crypto.randomBytes(32).toString("hex"),
       );
-      const cfgWithOwnerDisplaySecret = ownerDisplaySecretResolution.config;
-      if (ownerDisplaySecretResolution.generatedSecret) {
-        AUTO_OWNER_DISPLAY_SECRET_BY_PATH.set(
-          configPath,
-          ownerDisplaySecretResolution.generatedSecret,
-        );
-        if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.has(configPath)) {
-          AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.add(configPath);
-          void writeConfigFile(cfgWithOwnerDisplaySecret, { expectedConfigPath: configPath })
-            .then(() => {
-              AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
-              AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
-            })
-            .catch((err) => {
-              if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.has(configPath)) {
-                AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.add(configPath);
-                deps.logger.warn(
-                  `Failed to persist auto-generated commands.ownerDisplaySecret at ${configPath}: ${String(err)}`,
-                );
-              }
-            })
-            .finally(() => {
-              AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.delete(configPath);
-            });
-        }
-      } else {
-        AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
-        AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
-      }
+      const cfgWithOwnerDisplaySecret = persistGeneratedOwnerDisplaySecret({
+        config: ownerDisplaySecretResolution.config,
+        configPath,
+        generatedSecret: ownerDisplaySecretResolution.generatedSecret,
+        logger: deps.logger,
+        state: {
+          pendingByPath: AUTO_OWNER_DISPLAY_SECRET_BY_PATH,
+          persistInFlight: AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT,
+          persistWarned: AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED,
+        },
+        persistConfig: (nextConfig, options) => writeConfigFile(nextConfig, options),
+      });
 
       return applyConfigOverrides(cfgWithOwnerDisplaySecret);
     } catch (err) {

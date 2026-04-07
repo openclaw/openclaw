@@ -3,7 +3,10 @@ import path from "node:path";
 import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
-import { trimBundledPluginString } from "./bundled-plugin-scan.js";
+import {
+  normalizeBundledPluginStringList,
+  trimBundledPluginString,
+} from "./bundled-plugin-scan.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
@@ -34,13 +37,6 @@ type ChannelConfigSurface = {
 };
 
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => trimBundledPluginString(entry) ?? "").filter(Boolean);
-}
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -138,7 +134,7 @@ export function collectBundledChannelConfigs(params: {
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
 }): Record<string, PluginManifestChannelConfig> | undefined {
-  const channelIds = normalizeStringList(params.manifest.channels);
+  const channelIds = normalizeBundledPluginStringList(params.manifest.channels);
   const existingChannelConfigs: Record<string, PluginManifestChannelConfig> =
     params.manifest.channelConfigs && Object.keys(params.manifest.channelConfigs).length > 0
       ? { ...params.manifest.channelConfigs }
@@ -153,7 +149,7 @@ export function collectBundledChannelConfigs(params: {
   for (const channelId of channelIds) {
     const existing = existingChannelConfigs[channelId];
     const channelMeta = resolvePackageChannelMeta(params.packageManifest, channelId);
-    const preferOver = normalizeStringList(channelMeta?.preferOver);
+    const preferOver = normalizeBundledPluginStringList(channelMeta?.preferOver);
     const uiHints: Record<string, PluginConfigUiHint> | undefined =
       surface?.uiHints || existing?.uiHints
         ? {

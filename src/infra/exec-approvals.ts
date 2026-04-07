@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import { expandHomePrefix } from "./home-dir.js";
@@ -852,7 +852,7 @@ export function addAllowlistEntry(
   if (!trimmed) {
     return;
   }
-  const trimmedArgPattern = options?.argPattern?.trim() || undefined;
+  const trimmedArgPattern = normalizeOptionalString(options?.argPattern);
   const existingEntry = allowlist.find(
     (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
   );

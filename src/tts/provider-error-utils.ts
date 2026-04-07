@@ -1,7 +1,8 @@
 export { asFiniteNumber } from "../shared/number-coercion.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 export function asBoolean(value: unknown): boolean | undefined {

@@ -1,4 +1,4 @@
-import type { AcpRuntimeHandle, AcpRuntimeOptions, AcpSessionStore } from "acpx/dist/runtime.js";
+import type { AcpRuntimeHandle, AcpRuntimeOptions, AcpSessionStore } from "acpx/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -54,7 +54,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("acpx/dist/runtime.js", () => ({
+vi.mock("acpx/runtime", () => ({
   ACPX_BACKEND_ID: "acpx",
   AcpxRuntime: mocks.MockAcpxRuntime,
   createAcpRuntime: vi.fn(),

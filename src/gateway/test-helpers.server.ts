@@ -27,6 +27,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -348,7 +349,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   resetAgentRunContextForTest();
   const mod = await getServerModule();
-  mod.__resetModelCatalogCacheForTest();
+  await mod.__resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
   piSdkMock.discoverCalls = 0;
   piSdkMock.models = [];
@@ -881,8 +882,8 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
-  const bootstrapToken = opts?.bootstrapToken?.trim() || undefined;
-  const deviceToken = opts?.deviceToken?.trim() || undefined;
+  const bootstrapToken = normalizeOptionalString(opts?.bootstrapToken);
+  const deviceToken = normalizeOptionalString(opts?.deviceToken);
   const password = opts?.password ?? defaultPassword;
   const authTokenForSignature = resolveAuthTokenForSignature({
     token,

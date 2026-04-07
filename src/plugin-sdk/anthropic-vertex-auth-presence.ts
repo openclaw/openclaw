@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 
 const GCLOUD_DEFAULT_ADC_PATH = join(
@@ -16,11 +17,7 @@ function hasAnthropicVertexMetadataServerAdc(env: NodeJS.ProcessEnv = process.en
 }
 
 function normalizeOptionalPathInput(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.env): string {

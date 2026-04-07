@@ -61,6 +61,24 @@ let createResolverContext: typeof import("./runtime-shared.js").createResolverCo
 let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 
+async function ensureConfigCoverageRuntimeLoaded(): Promise<void> {
+  if (!collectConfigAssignments) {
+    ({ collectConfigAssignments } = await import("./runtime-config-collectors.js"));
+  }
+}
+
+async function ensureAuthCoverageRuntimeLoaded(): Promise<void> {
+  if (!collectAuthStoreAssignments) {
+    ({ collectAuthStoreAssignments } = await import("./runtime-auth-collectors.js"));
+  }
+}
+
+async function ensureRuntimeWebToolsLoaded(): Promise<void> {
+  if (!resolveRuntimeWebTools) {
+    ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+  }
+}
+
 function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): string[] {
   const segments = pathPattern.split(".").filter(Boolean);
   const out: string[] = [];
@@ -197,6 +215,18 @@ function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boole
       entry.id.startsWith("tools.web.") ||
       (entry.id.startsWith("plugins.entries.") &&
         (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+  );
+}
+
+function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): boolean {
+  return (
+    batch.length > 0 &&
+    batch.every(
+      (entry) =>
+        entry.id.startsWith("tools.web.") ||
+        (entry.id.startsWith("plugins.entries.") &&
+          (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+    )
   );
 }
 
@@ -374,14 +404,14 @@ function applyAuthStoreTarget(
   });
 }
 
-async function prepareCoverageSnapshot(params: {
+async function prepareConfigCoverageSnapshot(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  agentDirs: string[];
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   includeRuntimeWebTools?: boolean;
+  skipConfigCollectors?: boolean;
 }) {
+  await ensureConfigCoverageRuntimeLoaded();
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
@@ -389,10 +419,55 @@ async function prepareCoverageSnapshot(params: {
     env: params.env,
   });
 
-  collectConfigAssignments({
+  if (!params.skipConfigCollectors) {
+    collectConfigAssignments({
+      config: resolvedConfig,
+      context,
+      loadablePluginOrigins: params.loadablePluginOrigins,
+    });
+  }
+
+  if (context.assignments.length > 0) {
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      },
+    );
+    applyResolvedAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
+  }
+
+  if (params.includeRuntimeWebTools) {
+    await ensureRuntimeWebToolsLoaded();
+    await resolveRuntimeWebTools({
+      sourceConfig,
+      resolvedConfig,
+      context,
+    });
+  }
+
+  return {
     config: resolvedConfig,
-    context,
-    loadablePluginOrigins: params.loadablePluginOrigins,
+    warnings: context.warnings,
+  };
+}
+
+async function prepareAuthCoverageSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentDirs: string[];
+  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+}) {
+  await ensureAuthCoverageRuntimeLoaded();
+  const sourceConfig = structuredClone(params.config);
+  const context = createResolverContext({
+    sourceConfig,
+    env: params.env,
   });
 
   const authStores = params.agentDirs.map((agentDir) => {
@@ -420,16 +495,7 @@ async function prepareCoverageSnapshot(params: {
     });
   }
 
-  if (params.includeRuntimeWebTools) {
-    await resolveRuntimeWebTools({
-      sourceConfig,
-      resolvedConfig,
-      context,
-    });
-  }
-
   return {
-    config: resolvedConfig,
     authStores,
     warnings: context.warnings,
   };
@@ -437,20 +503,12 @@ async function prepareCoverageSnapshot(params: {
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [sharedRuntime, authCollectors, configCollectors, resolver, webTools] = await Promise.all(
-      [
-        import("./runtime-shared.js"),
-        import("./runtime-auth-collectors.js"),
-        import("./runtime-config-collectors.js"),
-        import("./resolve.js"),
-        import("./runtime-web-tools.js"),
-      ],
-    );
+    const [sharedRuntime, resolver] = await Promise.all([
+      import("./runtime-shared.js"),
+      import("./resolve.js"),
+    ]);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
-    ({ collectAuthStoreAssignments } = authCollectors);
-    ({ collectConfigAssignments } = configCollectors);
     ({ resolveSecretRefValues } = resolver);
-    ({ resolveRuntimeWebTools } = webTools);
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
@@ -469,13 +527,12 @@ describe("secrets runtime target coverage", () => {
         env[runtimeEnvId] = expectedValue;
         applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
       }
-      const snapshot = await prepareCoverageSnapshot({
+      const snapshot = await prepareConfigCoverageSnapshot({
         config,
         env,
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
         loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
         includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
+        skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
       });
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(
@@ -503,7 +560,7 @@ describe("secrets runtime target coverage", () => {
         env[envId] = `resolved-${entry.id}`;
         applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
       }
-      const snapshot = await prepareCoverageSnapshot({
+      const snapshot = await prepareAuthCoverageSnapshot({
         config: {} as OpenClawConfig,
         env,
         agentDirs: ["/tmp/openclaw-agent-main"],

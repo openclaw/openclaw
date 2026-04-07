@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "@openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";
@@ -200,7 +200,7 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
   return XAI_MODEL_CATALOG.map((entry) => toModelDefinition(entry));
 }
 
-export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
+export function resolveXaiCatalogEntry(modelId: string) {
   const lower = modelId.trim().toLowerCase();
   const exact = XAI_MODEL_CATALOG.find((entry) => entry.id.toLowerCase() === lower);
   if (exact) {
