@@ -2331,6 +2331,78 @@ describe("runWithModelFallback", () => {
       // must override the failover normalization.
       expect(run).toHaveBeenCalledTimes(1);
     });
+
+    it("treats cron timeout string reason as terminal (covers plain-string abort)", async () => {
+      // Flagged by codex review on openclaw/openclaw#62682: `src/cron/service/timer.ts:90`
+      // calls `runAbortController.abort(timeoutErrorMessage())` with a plain
+      // string, not an Error. `isTerminalAbort` must handle this shape or
+      // cron timeouts will silently waste fallback attempts.
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort("cron: job execution timed out");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats an Error whose .message matches a known terminal string as terminal", async () => {
+      // Defensive: if a caller wraps `timeoutErrorMessage()` in `new Error(...)`
+      // before passing it to `abort()`, the outer `name` will be generic
+      // ("Error") but the `.message` will carry the known terminal marker.
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const wrapped = new Error("cron: job execution timed out");
+      const controller = new AbortController();
+      controller.abort(wrapped);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT treat unrelated string reasons as terminal", async () => {
+      // Back-compat guard: arbitrary strings passed to abort() must still
+      // flow through normal fallback (not get mistakenly short-circuited).
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const controller = new AbortController();
+      controller.abort("some unrelated cancel reason");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+        abortSignal: controller.signal,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
