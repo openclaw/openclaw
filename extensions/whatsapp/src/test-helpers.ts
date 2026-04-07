@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -105,7 +106,7 @@ function resolveChannelContextVisibilityModeMock(params: {
 
 function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Provider?: string }) {
   const from = ctx.From?.trim() ?? "";
-  const chatType = ctx.ChatType?.trim().toLowerCase();
+  const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   if (!from) {
     return null;
   }
@@ -119,7 +120,7 @@ function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Pro
   }
   return {
     key: `whatsapp:group:${from.toLowerCase()}`,
-    channel: ctx.Provider?.trim().toLowerCase() || "whatsapp",
+    channel: normalizeLowercaseStringOrEmpty(ctx.Provider) || "whatsapp",
     id: from.toLowerCase(),
     chatType: chatType === "channel" ? "channel" : "group",
   };

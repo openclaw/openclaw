@@ -418,7 +418,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
         reply: { text: formatPluginsList(loaded.report) },
       };
     }
-    if (pluginsCommand.name.toLowerCase() === "all") {
+    if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
       return {
         shouldContinue: false,
         reply: {

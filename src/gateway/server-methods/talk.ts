@@ -203,8 +203,8 @@ function inferMimeType(
   outputFormat: string | undefined,
   fileExtension: string | undefined,
 ): string | undefined {
-  const normalizedOutput = outputFormat?.trim().toLowerCase();
-  const normalizedExtension = fileExtension?.trim().toLowerCase();
+  const normalizedOutput = normalizeOptionalString(outputFormat)?.toLowerCase();
+  const normalizedExtension = normalizeOptionalString(fileExtension)?.toLowerCase();
   if (
     normalizedOutput === "mp3" ||
     normalizedOutput?.startsWith("mp3_") ||

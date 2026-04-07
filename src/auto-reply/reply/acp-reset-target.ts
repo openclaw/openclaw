@@ -8,7 +8,10 @@ import { listAcpBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 const acpResetTargetDeps = {
   getSessionBindingService,
@@ -57,7 +60,9 @@ function resolveRawConfiguredAcpSessionKey(params: {
   parentConversationId?: string;
 }): string | undefined {
   for (const binding of acpResetTargetDeps.listAcpBindings(params.cfg)) {
-    const bindingChannel = (normalizeOptionalString(binding.match.channel) ?? "").toLowerCase();
+    const bindingChannel = normalizeLowercaseStringOrEmpty(
+      normalizeOptionalString(binding.match.channel),
+    );
     if (!bindingChannel || bindingChannel !== params.channel) {
       continue;
     }
@@ -111,7 +116,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
     activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
   const activeIsNonAcp = Boolean(activeSessionKey) && !activeAcpSessionKey;
 
-  const channel = (normalizeOptionalString(params.channel) ?? "").toLowerCase();
+  const channel = normalizeLowercaseStringOrEmpty(normalizeOptionalString(params.channel));
   const conversationId = normalizeOptionalString(params.conversationId) ?? "";
   if (!channel || !conversationId) {
     return activeAcpSessionKey;

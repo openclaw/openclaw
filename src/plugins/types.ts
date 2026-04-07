@@ -15,6 +15,7 @@ import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
+import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
@@ -141,6 +142,8 @@ export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
+  /** Effective filesystem policy for the active tool run. */
+  fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -2212,6 +2215,10 @@ export type OpenClawPluginApi = {
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
+  /** Register a compaction provider (pluggable summarization backend). */
+  registerCompactionProvider: (
+    provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (

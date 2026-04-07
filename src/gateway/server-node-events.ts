@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -501,7 +504,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const change = normalizeOptionalString(obj.change)?.toLowerCase();
+      const change = normalizeOptionalString(obj.change)
+        ? normalizeLowercaseStringOrEmpty(obj.change)
+        : undefined;
       if (change !== "posted" && change !== "removed") {
         return;
       }
@@ -636,8 +641,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const transport =
-        typeof obj.transport === "string" ? obj.transport.trim().toLowerCase() : "direct";
+      const transport = normalizeLowercaseStringOrEmpty(obj.transport) || "direct";
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {

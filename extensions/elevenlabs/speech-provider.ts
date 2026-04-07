@@ -17,6 +17,7 @@ import {
   requireInRange,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { elevenLabsTTS } from "./tts.js";
@@ -54,7 +55,7 @@ type ElevenLabsProviderConfig = {
 };
 
 function parseBooleanValue(value: string): boolean | undefined {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (["true", "1", "yes", "on"].includes(normalized)) {
     return true;
   }

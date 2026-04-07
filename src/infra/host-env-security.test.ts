@@ -156,6 +156,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
     expect(isDangerousHostEnvVarName("ld_preload")).toBe(true);
     expect(isDangerousHostEnvVarName("BASH_FUNC_echo%%")).toBe(true);
+    expect(isDangerousHostEnvVarName("JAVA_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("java_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("JAVA_TOOL_OPTIONS")).toBe(true);
     expect(isDangerousHostEnvVarName("java_tool_options")).toBe(true);
     expect(isDangerousHostEnvVarName("_JAVA_OPTIONS")).toBe(true);
@@ -223,6 +225,7 @@ describe("sanitizeHostExecEnv", () => {
         HGRCPATH: "/tmp/evil-hgrc",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         AWS_CONFIG_FILE: "/tmp/aws-config",
@@ -307,12 +310,15 @@ describe("sanitizeHostExecEnv", () => {
         GOPRIVATE: "example.invalid/*",
         GOENV: "/tmp/evil-goenv",
         GOPATH: "/tmp/evil-go",
+        CARGO_HOME: "/tmp/evil-cargo",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         VIRTUAL_ENV: "/tmp/evil-venv",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
+        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         GOFLAGS: "-mod=mod",
+        RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         PHPRC: "/tmp/evil-php.ini",
@@ -346,7 +352,9 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
+    expect(env.JAVA_OPTS).toBeUndefined();
     expect(env.GOFLAGS).toBeUndefined();
+    expect(env.RUSTFLAGS).toBeUndefined();
     expect(env.MAKEFLAGS).toBeUndefined();
     expect(env.MFLAGS).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
@@ -384,6 +392,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOPRIVATE).toBeUndefined();
     expect(env.GOENV).toBeUndefined();
     expect(env.GOPATH).toBeUndefined();
+    expect(env.CARGO_HOME).toBeUndefined();
     expect(env.PYTHONUSERBASE).toBeUndefined();
     expect(env.VIRTUAL_ENV).toBeUndefined();
     expect(env.SAFE).toBe("ok");
@@ -559,8 +568,12 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("hgrcpath")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("rustflags")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_build_rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
@@ -618,12 +631,15 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPRIVATE: "example.invalid/*",
         GOENV: "/tmp/evil-goenv",
         GOPATH: "/tmp/evil-go",
+        CARGO_HOME: "/tmp/evil-cargo",
         HGRCPATH: "/tmp/evil-hgrc",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
         VIRTUAL_ENV: "/tmp/evil-venv",
+        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         YARN_RC_FILENAME: ".evil-yarnrc.yml",
         HTTPS_PROXY: "http://proxy.example.test:8080",
         GIT_SSL_NO_VERIFY: "1",
@@ -638,6 +654,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "C_INCLUDE_PATH",
       "CARGO_BUILD_RUSTC_WRAPPER",
+      "CARGO_HOME",
       "CARGO_REGISTRIES_CRATES_IO_INDEX",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
@@ -661,6 +678,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "GOPROXY",
       "HGRCPATH",
       "HTTPS_PROXY",
+      "JAVA_OPTS",
       "LIBRARY_PATH",
       "MAKEFLAGS",
       "MFLAGS",
@@ -677,6 +695,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "PYTHONUSERBASE",
       "REQUESTS_CA_BUNDLE",
       "RUSTC_WRAPPER",
+      "RUSTFLAGS",
       "SSL_CERT_DIR",
       "SSL_CERT_FILE",
       "UV_DEFAULT_INDEX",
@@ -730,13 +749,16 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GOPRIVATE).toBeUndefined();
     expect(result.env.GOENV).toBeUndefined();
     expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.CARGO_HOME).toBeUndefined();
     expect(result.env.HGRCPATH).toBeUndefined();
     expect(result.env.HTTPS_PROXY).toBeUndefined();
+    expect(result.env.JAVA_OPTS).toBeUndefined();
     expect(result.env.MAKEFLAGS).toBeUndefined();
     expect(result.env.MFLAGS).toBeUndefined();
     expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
     expect(result.env.RUSTC_WRAPPER).toBeUndefined();
+    expect(result.env.RUSTFLAGS).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
     expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });

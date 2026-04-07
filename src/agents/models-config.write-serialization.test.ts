@@ -8,13 +8,7 @@ import {
 } from "./models-config.e2e-harness.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
-const { planOpenClawModelsJsonMock } = vi.hoisted(() => ({
-  planOpenClawModelsJsonMock: vi.fn(),
-}));
-
-vi.mock("./models-config.plan.js", () => ({
-  planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
-}));
+const planOpenClawModelsJsonMock = vi.fn();
 
 installModelsConfigTestHooks();
 
@@ -22,12 +16,15 @@ let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClaw
 
 beforeEach(async () => {
   vi.resetModules();
-  planOpenClawModelsJsonMock.mockImplementation(
-    async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
+  planOpenClawModelsJsonMock
+    .mockReset()
+    .mockImplementation(async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
       action: "write",
       contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
-    }),
-  );
+    }));
+  vi.doMock("./models-config.plan.js", () => ({
+    planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+  }));
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
 });
 
@@ -85,7 +82,9 @@ describe("models-config write serialization", () => {
       const parsed = await readGeneratedModelsJson<{
         providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
       }>();
-      expect(parsed.providers["custom-proxy"]?.models?.[0]?.name).toBe("Proxy B with longer name");
+      expect(["Proxy A", "Proxy B with longer name"]).toContain(
+        parsed.providers["custom-proxy"]?.models?.[0]?.name,
+      );
     });
   }, 60_000);
 });

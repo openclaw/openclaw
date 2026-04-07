@@ -10,6 +10,7 @@ import {
   resolveInputFileLimits,
 } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -71,10 +72,7 @@ const TEXT_EXT_MIME = new Map<string, string>([
 ]);
 
 function sanitizeMimeType(value?: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeExecutableToken } from "./exec-wrapper-resolution.js";
 
 export type InterpreterInlineEvalHit = {
@@ -291,7 +292,7 @@ export function describeInterpreterInlineEval(hit: InterpreterInlineEvalHit): st
 }
 
 export function isInterpreterLikeAllowlistPattern(pattern: string | undefined | null): boolean {
-  const trimmed = pattern?.trim().toLowerCase() ?? "";
+  const trimmed = normalizeLowercaseStringOrEmpty(pattern);
   if (!trimmed) {
     return false;
   }

@@ -19,6 +19,10 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import {
+  getRegisteredCompactionProvider,
+  registerCompactionProvider,
+} from "./compaction-provider.js";
 import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
@@ -1296,6 +1300,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     message: `context engine already registered: ${id} (${result.existingOwner})`,
                   });
                 }
+              },
+              registerCompactionProvider: (
+                provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
+              ) => {
+                const existing = getRegisteredCompactionProvider(provider.id);
+                if (existing) {
+                  const ownerDetail = existing.ownerPluginId
+                    ? ` (owner: ${existing.ownerPluginId})`
+                    : "";
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `compaction provider already registered: ${provider.id}${ownerDetail}`,
+                  });
+                  return;
+                }
+                registerCompactionProvider(provider, { ownerPluginId: record.id });
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

@@ -25,6 +25,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolveConfigDir,
   resolveUserPath,
@@ -251,7 +252,7 @@ function resolveLazyProviderConfig(
   cfg?: OpenClawConfig,
 ): SpeechProviderConfig {
   const canonical =
-    normalizeConfiguredSpeechProviderId(providerId) ?? providerId.trim().toLowerCase();
+    normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
   const existing = config.providerConfigs[canonical];
   const effectiveCfg = cfg ?? config.sourceConfig;
   if (existing && !effectiveCfg) {
@@ -314,7 +315,7 @@ export function getResolvedSpeechProviderConfig(
   const canonical =
     canonicalizeSpeechProviderId(providerId, cfg) ??
     normalizeConfiguredSpeechProviderId(providerId) ??
-    providerId.trim().toLowerCase();
+    normalizeLowercaseStringOrEmpty(providerId);
   return resolveLazyProviderConfig(config, canonical, cfg);
 }
 

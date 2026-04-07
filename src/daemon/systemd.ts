@@ -299,7 +299,7 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
     normalized.includes(" is-enabled ") &&
@@ -713,3 +713,4 @@ export async function uninstallLegacySystemdUnits({
 
   return units;
 }
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

@@ -6,9 +6,8 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
 import {
-  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
-  resolvePluginLoaderJitiTryNative,
+  resolvePluginLoaderJitiConfig,
   resolveLoaderPackageRoot,
 } from "../plugins/sdk-alias.js";
 
@@ -137,13 +136,11 @@ function resolveFacadeModuleLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
     preferBuiltDist: true,
-  });
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
   });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {

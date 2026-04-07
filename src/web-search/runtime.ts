@@ -271,13 +271,11 @@ function hasExplicitWebSearchSelection(params: {
     return true;
   }
   const availableProviderIds = new Set(
-    (params.providers ?? []).map((provider) => provider.id.trim().toLowerCase()),
+    (params.providers ?? []).map((provider) => normalizeLowercaseStringOrEmpty(provider.id)),
   );
   const configuredProviderId =
-    params.search &&
-    "provider" in params.search &&
-    typeof params.search.provider === "string"
-      ? params.search.provider.trim().toLowerCase()
+    params.search && "provider" in params.search && typeof params.search.provider === "string"
+      ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
   if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {
     return true;

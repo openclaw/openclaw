@@ -635,10 +635,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes browser extension targets to the extension channel config", () => {
+  it("routes browser extension targets to the extensions config", () => {
     expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
       {
-        config: "vitest.extension-channels.config.ts",
+        config: "vitest.extensions.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/browser/index.test.ts"],
         watchMode: false,

@@ -440,6 +440,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
     acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);
+    acpMocks.getAcpRuntimeBackend.mockReset();
     acpMocks.requireAcpRuntimeBackend.mockReset();
     sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
