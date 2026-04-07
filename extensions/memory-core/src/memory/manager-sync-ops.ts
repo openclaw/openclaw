@@ -148,6 +148,8 @@ export abstract class MemoryManagerSyncOps {
   protected closed = false;
   protected dirty = false;
   protected sessionsDirty = false;
+  /** Cached result of hasIndexedContent(); reset to null when chunks are modified. */
+  protected hasIndexedContentCached: boolean | null = null;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
@@ -780,6 +782,7 @@ export abstract class MemoryManagerSyncOps {
         } catch {}
       }
       deleteChunksByPathAndSource.run(stale.path, "memory");
+      this.hasIndexedContentCached = null;
       if (deleteFtsRowsByPathAndSource) {
         try {
           deleteFtsRowsByPathAndSource.run(stale.path, "memory");
@@ -920,6 +923,7 @@ export abstract class MemoryManagerSyncOps {
         } catch {}
       }
       deleteChunksByPathAndSource.run(stale.path, "sessions");
+      this.hasIndexedContentCached = null;
       if (deleteFtsRowsByPathSourceAndModel) {
         try {
           deleteFtsRowsByPathSourceAndModel.run(
@@ -1308,6 +1312,7 @@ export abstract class MemoryManagerSyncOps {
   private resetIndex() {
     this.db.exec(`DELETE FROM files`);
     this.db.exec(`DELETE FROM chunks`);
+    this.hasIndexedContentCached = null;
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);

@@ -555,15 +555,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
+    if (this.hasIndexedContentCached !== null) {
+      return this.hasIndexedContentCached;
+    }
     const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
       | {
           found?: number;
         }
       | undefined;
     if (chunkRow?.found === 1) {
+      this.hasIndexedContentCached = true;
       return true;
     }
     if (!this.fts.enabled || !this.fts.available) {
+      this.hasIndexedContentCached = false;
       return false;
     }
     const ftsRow = this.db.prepare(`SELECT 1 as found FROM ${FTS_TABLE} LIMIT 1`).get() as
@@ -571,7 +576,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           found?: number;
         }
       | undefined;
-    return ftsRow?.found === 1;
+    const result = ftsRow?.found === 1;
+    this.hasIndexedContentCached = result;
+    return result;
   }
 
   private async searchVector(
