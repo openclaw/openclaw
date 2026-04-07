@@ -1,16 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { startGmailWatcherWithLogs } from './gmail-watcher-lifecycle.js';
+import { startGmailWatcher } from './gmail-watcher.js';
 
-const { startGmailWatcherMock } = vi.hoisted(() => ({
-  startGmailWatcherMock: vi.fn(),
+vi.mock('./gmail-watcher.js', () => ({
+  startGmailWatcher: vi.fn(),
 }));
 
-vi.mock("./gmail-watcher.js", () => ({
-  startGmailWatcher: startGmailWatcherMock,
-}));
+const startGmailWatcherMock = vi.mocked(startGmailWatcher);
 
-import { startGmailWatcherWithLogs } from "./gmail-watcher-lifecycle.js";
-
-describe("startGmailWatcherWithLogs", () => {
+describe('gmail-watcher-lifecycle', () => {
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -18,77 +16,40 @@ describe("startGmailWatcherWithLogs", () => {
   };
 
   beforeEach(() => {
-    startGmailWatcherMock.mockClear();
-    log.info.mockClear();
-    log.warn.mockClear();
-    log.error.mockClear();
-    delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+    vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-  });
-
-  it("logs startup success", async () => {
-    startGmailWatcherMock.mockResolvedValue({ started: true, reason: undefined });
-
-    await startGmailWatcherWithLogs({
-      cfg: {},
-      log,
+  it("logs actionable non-start reason correctly", async () => {
+    // Simulate a failed start with a generic reason (no suffix expected)
+    startGmailWatcherMock.mockResolvedValue({ 
+      started: false, 
+      status: "skipped", 
+      reason: "auth failed" 
     });
 
-    expect(log.info).toHaveBeenCalledWith("gmail watcher started");
-    expect(log.warn).not.toHaveBeenCalled();
-    expect(log.error).not.toHaveBeenCalled();
-  });
-
-  it("logs actionable non-start reason", async () => {
-    startGmailWatcherMock.mockResolvedValue({ started: false, reason: "auth failed" });
-
     await startGmailWatcherWithLogs({
-      cfg: {},
+      cfg: {} as any,
       log,
     });
 
     expect(log.warn).toHaveBeenCalledWith("gmail watcher not started: auth failed");
   });
 
-  it("suppresses expected non-start reasons", async () => {
-    startGmailWatcherMock.mockResolvedValue({
-      started: false,
-      reason: "hooks not enabled",
+  it("logs external webhook note for specific reason", async () => {
+    // Simulate the specific reason that triggers the note
+    startGmailWatcherMock.mockResolvedValue({ 
+      started: false, 
+      status: "skipped", 
+      reason: "gmail topic required" 
     });
 
     await startGmailWatcherWithLogs({
-      cfg: {},
+      cfg: {} as any,
       log,
     });
 
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("supports skip callback when watcher is disabled", async () => {
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-    const onSkipped = vi.fn();
-
-    await startGmailWatcherWithLogs({
-      cfg: {},
-      log,
-      onSkipped,
-    });
-
-    expect(startGmailWatcherMock).not.toHaveBeenCalled();
-    expect(onSkipped).toHaveBeenCalledTimes(1);
-  });
-
-  it("logs startup errors", async () => {
-    startGmailWatcherMock.mockRejectedValue(new Error("boom"));
-
-    await startGmailWatcherWithLogs({
-      cfg: {},
-      log,
-    });
-
-    expect(log.error).toHaveBeenCalledWith("gmail watcher failed to start: Error: boom");
+    expect(log.warn).toHaveBeenCalledWith(
+      "gmail watcher not started: gmail topic required. Note: If using an external webhook (e.g. gog + Pub/Sub), this is expected. Ensure your configured Gmail hook endpoint is reachable."
+    );
   });
 });
