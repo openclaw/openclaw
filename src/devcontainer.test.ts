@@ -23,11 +23,11 @@ describe(".devcontainer", () => {
       expect(config.build.dockerfile).toBe("Dockerfile");
     });
 
-    it("runs pnpm install as the post-create command", async () => {
+    it("runs on-create script as post-create command", async () => {
       const config = JSON.parse(
         await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
       );
-      expect(config.postCreateCommand).toContain("pnpm install");
+      expect(config.postCreateCommand).toContain("on-create.sh");
     });
 
     it("does not forward ports by default", async () => {
@@ -37,20 +37,11 @@ describe(".devcontainer", () => {
       expect(config.forwardPorts).toBeUndefined();
     });
 
-    it("mounts host SSH directory for git auth", async () => {
+    it("does not use fragile bind mounts for auth", async () => {
       const config = JSON.parse(
         await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
       );
-      const mounts: string[] = config.mounts ?? [];
-      expect(mounts.some((m) => m.includes(".ssh"))).toBe(true);
-    });
-
-    it("mounts host GitHub CLI config for gh auth passthrough", async () => {
-      const config = JSON.parse(
-        await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
-      );
-      const mounts: string[] = config.mounts ?? [];
-      expect(mounts.some((m) => m.includes(".config/gh"))).toBe(true);
+      expect(config.mounts).toBeUndefined();
     });
 
     it("passes ANTHROPIC_API_KEY from host environment", async () => {
@@ -61,7 +52,7 @@ describe(".devcontainer", () => {
       expect(env.ANTHROPIC_API_KEY).toBe("${localEnv:ANTHROPIC_API_KEY}");
     });
 
-    it("passes GH_TOKEN from host environment for Copilot CLI", async () => {
+    it("passes GH_TOKEN from host environment", async () => {
       const config = JSON.parse(
         await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
       );
@@ -99,9 +90,9 @@ describe(".devcontainer", () => {
       expect(dockerfile).toContain("@anthropic-ai/claude-code");
     });
 
-    it("installs Copilot CLI via npm", async () => {
+    it("installs Copilot as a gh extension", async () => {
       const dockerfile = await readFile(join(devcontainerDir, "Dockerfile"), "utf8");
-      expect(dockerfile).toContain("@github/copilot");
+      expect(dockerfile).toContain("gh extension install github/gh-copilot");
     });
 
     it("enables corepack for pnpm", async () => {
@@ -119,6 +110,39 @@ describe(".devcontainer", () => {
     it("does not run as root by default", async () => {
       const dockerfile = await readFile(join(devcontainerDir, "Dockerfile"), "utf8");
       expect(dockerfile).toMatch(/USER\s+node/);
+    });
+  });
+
+  describe("on-create script", () => {
+    it("exists in .devcontainer/", async () => {
+      const s = await stat(join(devcontainerDir, "on-create.sh"));
+      expect(s.isFile()).toBe(true);
+    });
+
+    it("runs pnpm install", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain("pnpm install");
+    });
+
+    it("checks GitHub CLI auth status", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain("gh auth status");
+    });
+
+    it("checks ANTHROPIC_API_KEY", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain("ANTHROPIC_API_KEY");
+    });
+
+    it("auto-configures git identity from GitHub when possible", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain("gh api user");
+      expect(script).toContain("git config --global user.name");
+    });
+
+    it("checks SSH agent forwarding", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      expect(script).toContain("SSH_AUTH_SOCK");
     });
   });
 

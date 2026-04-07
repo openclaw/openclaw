@@ -6,12 +6,7 @@
   "workspaceFolder": "/workspaces/openclaw",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/openclaw,type=bind,consistency=cached",
 
-  "postCreateCommand": "pnpm install",
-
-  "mounts": [
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/node/.ssh,type=bind,readonly",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/gh,target=/home/node/.config/gh,type=bind,readonly"
-  ],
+  "postCreateCommand": "bash .devcontainer/on-create.sh",
 
   "remoteEnv": {
     "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",

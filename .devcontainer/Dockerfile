@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # Development container for OpenClaw.
-# Provides Node 22, pnpm, GitHub CLI, Copilot CLI, and Claude CLI
-# on Debian bookworm. Works with Docker and Podman.
+# Provides Node 22, pnpm, GitHub CLI, GitHub Copilot (gh extension),
+# and Claude CLI on Debian bookworm. Works with Docker and Podman.
 
 FROM node:22-bookworm
 
@@ -34,7 +34,10 @@ RUN apt-get update && \
 # Enable corepack so pnpm is available without a separate global install.
 RUN corepack enable
 
-# Install Claude CLI and Copilot CLI globally.
-RUN npm install -g @anthropic-ai/claude-code @github/copilot
+# Install Claude CLI globally.
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install GitHub Copilot as a gh extension.
+RUN gh extension install github/gh-copilot
 
 USER node

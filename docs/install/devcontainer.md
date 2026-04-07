@@ -11,7 +11,7 @@ title: "Dev Container"
 
 A [dev container](https://containers.dev/) provides a full Linux development
 environment for OpenClaw that works on any host OS. The setup includes Node 22,
-pnpm, GitHub CLI, Copilot CLI, and Claude CLI out of the box.
+pnpm, GitHub CLI, GitHub Copilot (gh extension), and Claude CLI out of the box.
 
 The configuration works with both **Docker** and **Podman** as the container
 runtime.
@@ -53,60 +53,48 @@ systemctl --user enable --now podman.socket
 2. When prompted, click **Reopen in Container** (or run the
    `Dev Containers: Reopen in Container` command).
 
-3. The container builds, installs dependencies via `pnpm install`, and you are
-   ready to develop.
+3. The container builds, installs dependencies, and runs an auth check that
+   reports what is ready and what needs attention.
 
 ## What is included
 
-| Tool                          | Purpose                       |
-| ----------------------------- | ----------------------------- |
-| Node 22 (Debian bookworm)     | Runtime                       |
-| pnpm (via corepack)           | Package manager               |
-| GitHub CLI (`gh`)             | PR and issue workflows        |
-| Copilot CLI (`copilot`)       | AI-assisted terminal commands |
-| Claude CLI (`claude`)         | AI coding agent               |
-| git, curl, jq, openssh-client | Standard dev utilities        |
+| Tool | Purpose |
+| --- | --- |
+| Node 22 (Debian bookworm) | Runtime |
+| pnpm (via corepack) | Package manager |
+| GitHub CLI (`gh`) | PR and issue workflows |
+| GitHub Copilot (`gh copilot`) | AI-assisted terminal commands |
+| Claude CLI (`claude`) | AI coding agent |
+| git, curl, jq, openssh-client | Standard dev utilities |
 
 ## Authentication
 
-The dev container supports two authentication strategies: **host passthrough**
-(recommended) and **in-container login**.
+The dev container uses **environment variable passthrough** for authentication.
+No host directory mounts are needed, so the container starts reliably on any OS
+without prerequisites.
+
+The `on-create.sh` script runs automatically after the container is created. It
+installs dependencies and checks authentication, auto-configuring git identity
+from your GitHub account when possible.
 
 ### Host passthrough (recommended)
 
-The container automatically mounts your host credentials so tools work without
-extra login steps:
+Set these environment variables on your host before opening the container:
 
-| Credential        | How it is passed                                            |
-| ----------------- | ----------------------------------------------------------- |
-| SSH keys          | `~/.ssh` is bind-mounted read-only into the container       |
-| GitHub CLI        | `~/.config/gh` is bind-mounted read-only into the container |
-| Anthropic API key | `ANTHROPIC_API_KEY` env var is forwarded from the host      |
-| GitHub token      | `GH_TOKEN` env var is forwarded from the host               |
+| Credential | Host env var | How to set it |
+| --- | --- | --- |
+| GitHub CLI | `GH_TOKEN` | `export GH_TOKEN="$(gh auth token)"` |
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` | `export ANTHROPIC_API_KEY="sk-ant-..."` |
+| SSH keys | Automatic | VS Code forwards your ssh-agent automatically |
+| Git identity | Automatic | Auto-configured from your GitHub account via `gh api user` |
 
-**Setup on your host before opening the container:**
-
-```bash
-# Authenticate GitHub CLI (creates ~/.config/gh/hosts.yml)
-gh auth login
-
-# Export your Anthropic API key (add to your shell profile)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Optionally export GH_TOKEN for Copilot CLI
-export GH_TOKEN="ghp_..."
-```
-
-<Note>
-  On Windows the mounts resolve `USERPROFILE` (typically `C:\Users\<name>`).
-  Ensure your `~/.ssh` and `~/.config/gh` directories exist before opening the
-  container.
-</Note>
+Add the exports to your shell profile (`.bashrc`, `.zshrc`, or PowerShell
+`$PROFILE`) so they persist across sessions.
 
 ### In-container authentication (fallback)
 
-If host passthrough is not available, authenticate directly inside the
-container terminal:
+If host env vars are not set, authenticate directly inside the container
+terminal:
 
 ```bash
 # GitHub CLI
@@ -115,10 +103,7 @@ gh auth login
 # Claude CLI
 claude login
 
-# Copilot CLI
-copilot
-
-# Git (if SSH keys are not mounted)
+# Git identity (if not auto-configured)
 git config --global user.name "Your Name"
 git config --global user.email "you@example.com"
 ```
@@ -154,15 +139,6 @@ Add extensions to the `customizations.vscode.extensions` array in
 Copilot Chat, GitHub PR extension, and Oxc.
 
 ## Troubleshooting
-
-### Mount errors on first open
-
-If `~/.ssh` or `~/.config/gh` do not exist on your host, the container may fail
-to start. Create the directories first:
-
-```bash
-mkdir -p ~/.ssh ~/.config/gh
-```
 
 ### Podman rootless permission issues
 
