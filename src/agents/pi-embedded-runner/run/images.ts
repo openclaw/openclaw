@@ -3,9 +3,9 @@ import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { detectMime } from "../../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { resolveMediaBufferPath } from "../../../media/store.js";
-import { detectMime } from "../../../media/mime.js";
 import { loadWebMedia, optimizeImageToJpeg } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -372,55 +372,58 @@ export async function loadImageFromRef(
       log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
       return null;
     }
-   const mediaId = uriMatch[1];
-   try {
-    const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-    const buffer = await fs.readFile(physicalPath);
+    const mediaId = uriMatch[1];
+    try {
+      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
+      const buffer = await fs.readFile(physicalPath);
 
-    if (options?.maxBytes !== undefined && buffer.byteLength > options.maxBytes) {
-      log.debug(`Native image: media-uri file exceeds maxBytes, skipping: ${mediaId}`);
-      return null;
-    }
+      const ext = path.extname(physicalPath).toLowerCase();
+      let mimeType = MEDIA_EXT_TO_MIME[ext];
 
-        const ext = path.extname(physicalPath).toLowerCase();
-        let mimeType = MEDIA_EXT_TO_MIME[ext];
-        
-        const detected = await detectMime({ buffer, filePath: physicalPath });
-        if (detected?.startsWith("image/")) {
-          mimeType = detected;
+      const detected = await detectMime({ buffer, filePath: physicalPath });
+      if (detected?.startsWith("image/")) {
+        mimeType = detected;
+      }
+
+      if (!mimeType) {
+        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
+        return null;
+      }
+
+      const cap = options?.maxBytes ?? 5 * 1024 * 1024;
+      let finalBuffer: Buffer = buffer;
+      let finalMime = mimeType;
+
+      if (mimeType === "image/jpeg" || mimeType === "image/heic" || mimeType === "image/heif") {
+        try {
+          const optimized = await optimizeImageToJpeg(buffer, cap, {
+            fileName: path.basename(physicalPath),
+            contentType: mimeType,
+          });
+          finalBuffer = Buffer.from(optimized.buffer);
+          finalMime = "image/jpeg";
+        } catch (optimizeErr) {
+          log.debug(
+            `Native image: failed to optimize ${physicalPath}, falling back to original bytes. Err: ${String(optimizeErr)}`,
+          );
         }
+      }
 
-        if (!mimeType) {
-          log.debug(`Native image: media store entry is not an image: ${mediaId}`);
-          return null;
-        }
-
-        const cap = options?.maxBytes ?? 5 * 1024 * 1024;
-        let finalBuffer: Buffer = buffer;
-        let finalMime = mimeType;
-        
-        if (mimeType === "image/jpeg" || mimeType === "image/heic" || mimeType === "image/heif") {
-           try {
-              const optimized = await optimizeImageToJpeg(buffer, cap, { 
-                fileName: path.basename(physicalPath), 
-                contentType: mimeType 
-              });
-              finalBuffer = Buffer.from(optimized.buffer);
-              finalMime = "image/jpeg";
-           } catch (optimizeErr) {
-              log.debug(`Native image: failed to optimize ${physicalPath}, falling back to original bytes. Err: ${String(optimizeErr)}`);
-           }
-        }
-
-        log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-        return { type: "image", data: finalBuffer.toString("base64"), mimeType: finalMime };
-
-      } catch (err) {
+      if (options?.maxBytes !== undefined && finalBuffer.byteLength > options.maxBytes) {
         log.debug(
-          `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
+          `Native image: media-uri file exceeds maxBytes after optimization, skipping: ${mediaId}`,
         );
         return null;
       }
+
+      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+      return { type: "image", data: finalBuffer.toString("base64"), mimeType: finalMime };
+    } catch (err) {
+      log.debug(
+        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
+      );
+      return null;
+    }
   }
 
   try {
