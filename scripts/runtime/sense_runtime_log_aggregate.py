@@ -327,11 +327,17 @@ def derive_digest_bucket_ui_hint_tokens(
 
 
 def derive_digest_bucket_ui_layouts(
+    digest_bucket_badge_tuple: object,
     digest_bucket_ui_hint: object,
     digest_bucket_ui_hint_compact: object,
     digest_bucket_ui_hint_line2: object,
     digest_bucket_ui_hint_tokens: object,
 ) -> dict[str, object]:
+    badge = (
+        dict(digest_bucket_badge_tuple)
+        if isinstance(digest_bucket_badge_tuple, dict)
+        else {'palette': 'muted', 'short': 'UNK', 'order': 0}
+    )
     hint = (
         dict(digest_bucket_ui_hint)
         if isinstance(digest_bucket_ui_hint, dict)
@@ -357,6 +363,7 @@ def derive_digest_bucket_ui_layouts(
         else ['UNK', '0.0%', 'Follower']
     )
     return {
+        'badge': badge,
         'hint': hint,
         'compact': compact,
         'line2': line2,
@@ -792,6 +799,7 @@ def main() -> int:
                 item.get('digest_bucket_leader'),
             )
             item['digest_bucket_ui_layouts'] = derive_digest_bucket_ui_layouts(
+                item.get('digest_bucket_badge_tuple'),
                 item.get('digest_bucket_ui_hint'),
                 item.get('digest_bucket_ui_hint_compact'),
                 item.get('digest_bucket_ui_hint_line2'),
