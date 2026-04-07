@@ -33,6 +33,7 @@ import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
+import type { GatewayMemoryProbe } from "./doctor-gateway-health.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
@@ -312,17 +313,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
   opts?: {
-    gatewayMemoryProbe?: {
-      checked: boolean;
-      ready: boolean;
-      error?: string;
-      skipped?: boolean;
-      fts?: {
-        enabled: boolean;
-        available: boolean;
-        error?: string;
-      };
-    };
+    gatewayMemoryProbe?: GatewayMemoryProbe;
   },
 ): Promise<void> {
   await noteWorkspaceMemoryHealth(cfg);
