@@ -130,7 +130,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_research",
     description: "Deep web research",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -138,7 +138,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_contents",
     description: "Extract content from URLs",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
