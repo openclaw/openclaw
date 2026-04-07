@@ -317,8 +317,9 @@ export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): 
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    // best-effort observer path only; successful writes must still complete.
+    if (process.env.OPENCLAW_DEBUG) console.error(`[config:audit] Config audit write failed:`, err);
   }
 }
 
@@ -331,7 +332,7 @@ export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): vo
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    if (process.env.OPENCLAW_DEBUG) console.error(`[config:audit] Config audit sync write failed:`, err);
   }
 }

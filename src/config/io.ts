@@ -193,8 +193,9 @@ async function tightenStateDirPermissionsIfNeeded(params: {
       return;
     }
     await params.fsModule.promises.chmod(configDir, 0o700);
-  } catch {
+  } catch (err) {
     // Best-effort hardening only; callers still need the config write to proceed.
+    if (process.env.OPENCLAW_DEBUG) console.error(`[config:io] Failed to tighten permissions on ${configDir}:`, err);
   }
 }
 
@@ -328,7 +329,8 @@ async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<Conf
     const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
     return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
+  } catch (err) {
+    deps.logger.warn(`Config health state read failed: ${err instanceof Error ? err.message : err}`);
     return {};
   }
 }
@@ -339,7 +341,8 @@ function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthSt
     const raw = deps.fs.readFileSync(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
     return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
+  } catch (err) {
+    deps.logger.warn(`Config health state sync read failed: ${err instanceof Error ? err.message : err}`);
     return {};
   }
 }
@@ -355,8 +358,8 @@ async function writeConfigHealthState(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health state write failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -368,8 +371,8 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health state sync write failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
