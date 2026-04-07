@@ -1,18 +1,14 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
@@ -32,6 +28,8 @@ import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
+import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
+import { DEFAULT_ACCOUNT_ID, matrixConfigAdapter } from "./config-adapter.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import { matrixDoctor } from "./doctor.js";
 import { shouldSuppressLocalMatrixExecApprovalPrompt } from "./exec-approvals.js";
@@ -40,14 +38,11 @@ import {
   resolveMatrixGroupToolPolicy,
 } from "./group-mentions.js";
 import {
-  listMatrixAccountIds,
-  resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
-import { formatMatrixErrorMessage } from "./matrix/errors.js";
-import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
   normalizeMatrixMessagingTarget,
@@ -151,34 +146,6 @@ function projectMatrixConversationBinding(binding: {
       typeof binding.metadata?.maxAgeMs === "number" ? binding.metadata.maxAgeMs : undefined,
   };
 }
-
-const matrixConfigAdapter = createScopedChannelConfigAdapter<
-  ResolvedMatrixAccount,
-  ReturnType<typeof resolveMatrixAccountConfig>,
-  CoreConfig
->({
-  sectionKey: "matrix",
-  listAccountIds: listMatrixAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-  resolveAccessorAccount: ({ cfg, accountId }) =>
-    resolveMatrixAccountConfig({ cfg: cfg, accountId }),
-  defaultAccountId: resolveDefaultMatrixAccountId,
-  clearBaseFields: [
-    "name",
-    "homeserver",
-    "network",
-    "proxy",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceId",
-    "deviceName",
-    "avatarUrl",
-    "initialSyncLimit",
-  ],
-  resolveAllowFrom: (account) => account.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
-});
 
 const resolveMatrixDmPolicy = createScopedDmSecurityResolver<ResolvedMatrixAccount>({
   channelKey: "matrix",
@@ -465,32 +432,20 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("matrix", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
-        probeAccount: async ({ account, timeoutMs, cfg }) => {
-          try {
-            const { probeMatrix, resolveMatrixAuth } = await loadMatrixChannelRuntime();
-            const auth = await resolveMatrixAuth({
-              cfg: cfg as CoreConfig,
-              accountId: account.accountId,
-            });
-            return await probeMatrix({
-              homeserver: auth.homeserver,
-              accessToken: auth.accessToken,
-              userId: auth.userId,
-              deviceId: auth.deviceId,
-              timeoutMs,
-              accountId: account.accountId,
-              allowPrivateNetwork: auth.allowPrivateNetwork,
-              ssrfPolicy: auth.ssrfPolicy,
-              dispatcherPolicy: auth.dispatcherPolicy,
-            });
-          } catch (err) {
-            return {
-              ok: false,
-              error: formatMatrixErrorMessage(err),
-              elapsedMs: 0,
-            };
-          }
-        },
+        probeAccount: async ({ account, timeoutMs, cfg }) =>
+          await createMatrixProbeAccount({
+            resolveMatrixAuth: async ({ cfg, accountId }) =>
+              (await loadMatrixChannelRuntime()).resolveMatrixAuth({
+                cfg,
+                accountId,
+              }),
+            probeMatrix: async (params) =>
+              await (await loadMatrixChannelRuntime()).probeMatrix(params),
+          })({
+            account,
+            timeoutMs,
+            cfg,
+          }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
           name: account.name,
@@ -562,15 +517,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       ),
     },
     pairing: {
-      text: {
-        idLabel: "matrixUserId",
-        message: PAIRING_APPROVED_MESSAGE,
-        normalizeAllowEntry: createPairingPrefixStripper(/^matrix:/i),
-        notify: async ({ id, message, accountId }) => {
-          const { sendMessageMatrix } = await loadMatrixChannelRuntime();
-          await sendMessageMatrix(`user:${id}`, message, accountId ? { accountId } : {});
-        },
-      },
+      text: createMatrixPairingText(
+        async (to, message, options) =>
+          await (await loadMatrixChannelRuntime()).sendMessageMatrix(to, message, options),
+      ),
     },
     threading: {
       resolveReplyToMode: createScopedAccountReplyToModeResolver<
