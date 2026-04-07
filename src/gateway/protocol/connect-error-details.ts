@@ -1,3 +1,11 @@
+/**
+ * Explains why Control UI on plain HTTP from a non-localhost address cannot use
+ * device identity (browser WebCrypto secure-context requirement). Keep the
+ * leading phrase stable: gateway and UI tests match on "control ui requires device identity".
+ */
+export const CONTROL_UI_DEVICE_IDENTITY_INSECURE_CONTEXT_MESSAGE =
+  "control ui requires device identity: browsers expose WebCrypto only on HTTPS or localhost; use HTTPS, an SSH tunnel to 127.0.0.1:18789, or gateway.controlUi.dangerouslyDisableDeviceAuth on trusted networks (see docs). gateway.controlUi.allowInsecureAuth applies only on localhost HTTP.";
+
 export const ConnectErrorDetailCodes = {
   AUTH_REQUIRED: "AUTH_REQUIRED",
   AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
