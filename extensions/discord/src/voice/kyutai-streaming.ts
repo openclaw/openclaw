@@ -32,7 +32,9 @@ export async function kyutaiPrewarm(): Promise<boolean> {
 export async function kyutaiPrewarmWithAudio(): Promise<Buffer | null> {
   try {
     const res = await fetch(`${KYUTAI_BASE_URL}/load`, { method: "POST" });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return null;
+    }
 
     // Warmup inference to compile CUDA kernels — collect audio to play as greeting
     try {
@@ -47,7 +49,9 @@ export async function kyutaiPrewarmWithAudio(): Promise<Buffer | null> {
         let headerSkipped = false;
         while (true) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            break;
+          }
           const buf = Buffer.from(value);
           if (!headerSkipped) {
             // Skip the 8-byte PCMS header
@@ -85,7 +89,9 @@ export async function kyutaiStatus(): Promise<{
 }> {
   try {
     const res = await fetch(`${KYUTAI_BASE_URL}/status`);
-    if (!res.ok) return { reachable: true, loaded: false, idleSeconds: -1 };
+    if (!res.ok) {
+      return { reachable: true, loaded: false, idleSeconds: -1 };
+    }
     const data = (await res.json()) as { loaded?: boolean; idle_seconds?: number };
     return {
       reachable: true,
@@ -115,9 +121,7 @@ export class Resample24kMonoTo48kStereo extends Transform {
   }
 
   _transform(chunk: Buffer, _encoding: string, callback: TransformCallback): void {
-    const input = this.leftover.length > 0
-      ? Buffer.concat([this.leftover, chunk])
-      : chunk;
+    const input = this.leftover.length > 0 ? Buffer.concat([this.leftover, chunk]) : chunk;
 
     const sampleCount = Math.floor(input.length / 2);
     const remainder = input.length % 2;
@@ -135,23 +139,23 @@ export class Resample24kMonoTo48kStereo extends Transform {
 
     for (let i = 0; i < sampleCount; i++) {
       const s0 = input.readInt16LE(i * 2);
-      const s1 = i + 1 < sampleCount
-        ? input.readInt16LE((i + 1) * 2)
-        : s0;
+      const s1 = i + 1 < sampleCount ? input.readInt16LE((i + 1) * 2) : s0;
 
       const mid = ((s0 + s1) >> 1) | 0;
 
       // Sample 1: original, duplicated to both channels
-      output.writeInt16LE(s0, outIdx); outIdx += 2;
-      output.writeInt16LE(s0, outIdx); outIdx += 2;
+      output.writeInt16LE(s0, outIdx);
+      outIdx += 2;
+      output.writeInt16LE(s0, outIdx);
+      outIdx += 2;
       // Sample 2: interpolated, duplicated to both channels
-      output.writeInt16LE(mid, outIdx); outIdx += 2;
-      output.writeInt16LE(mid, outIdx); outIdx += 2;
+      output.writeInt16LE(mid, outIdx);
+      outIdx += 2;
+      output.writeInt16LE(mid, outIdx);
+      outIdx += 2;
     }
 
-    this.leftover = remainder > 0
-      ? input.subarray(sampleCount * 2)
-      : Buffer.alloc(0);
+    this.leftover = remainder > 0 ? input.subarray(sampleCount * 2) : Buffer.alloc(0);
 
     this.push(output);
     callback();
@@ -210,11 +214,13 @@ export async function streamKyutaiTts(text: string): Promise<KyutaiStreamResult>
     readable.push(remainder);
   }
 
-  (async () => {
+  void (async () => {
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done) {
+          break;
+        }
         readable.push(Buffer.from(value));
       }
     } catch (err) {
@@ -246,7 +252,9 @@ export async function streamKyutaiTtsRaw48k(text: string): Promise<Readable> {
  * Stream TTS audio to a temp WAV file for discord.js playback.
  * Fallback path — collects all PCM then writes WAV.
  */
-export async function streamKyutaiTtsToFile(text: string): Promise<{ filePath: string; sampleRate: number }> {
+export async function streamKyutaiTtsToFile(
+  text: string,
+): Promise<{ filePath: string; sampleRate: number }> {
   const { readable, sampleRate } = await streamKyutaiTts(text);
   const fs = await import("node:fs");
   const os = await import("node:os");

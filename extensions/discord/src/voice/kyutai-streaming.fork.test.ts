@@ -1,6 +1,6 @@
+import { Readable } from "node:stream";
 // Fork-only tests for kyutai-streaming.ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { Readable } from "node:stream";
 
 // We test the protocol parsing and stream behavior by mocking fetch.
 
@@ -15,7 +15,7 @@ function buildPcmsResponse(sampleRate: number, pcmChunks: Buffer[]): ReadableStr
   return new ReadableStream({
     pull(controller) {
       if (index < allChunks.length) {
-        controller.enqueue(new Uint8Array(allChunks[index]!));
+        controller.enqueue(new Uint8Array(allChunks[index]));
         index++;
       } else {
         controller.close();
@@ -90,7 +90,7 @@ describe("streamKyutaiTts", () => {
     const body = new ReadableStream({
       pull(controller) {
         if (index < chunks.length) {
-          controller.enqueue(new Uint8Array(chunks[index]!));
+          controller.enqueue(new Uint8Array(chunks[index]));
           index++;
         } else {
           controller.close();
