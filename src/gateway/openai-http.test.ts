@@ -851,6 +851,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("surfaces error content in streaming mode when lifecycle error fires", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      // Emit lifecycle error without any assistant deltas
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "error" } } as never);
+      // Yield the microtask queue so the synchronous event handler runs before we return
+      await Promise.resolve();
+      return { payloads: [{ text: "" }] };
+    }) as never);
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const data = parseSseDataLines(text);
+    expect(data[data.length - 1]).toBe("[DONE]");
+
+    const chunks = data
+      .filter((d) => d !== "[DONE]")
+      .map((d) => JSON.parse(d) as Record<string, unknown>);
+    const stopChoice = chunks
+      .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .find((choice) => choice.finish_reason === "stop");
+    // Before the fix, this would be undefined — the error was swallowed
+    expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
+      "Error: internal error",
+    );
+  });
+
   it("treats shared-secret bearer callers as owner operators", async () => {
     const port = await getFreePort();
     const server = await startTokenServer(port);
