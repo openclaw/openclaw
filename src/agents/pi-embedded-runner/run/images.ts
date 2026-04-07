@@ -46,6 +46,16 @@ function isImageExtension(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
+function isImageCompatibleMediaKind(kind: string): boolean {
+  // Some integrations classify image attachments as `document`.
+  return kind === "image" || kind === "document";
+}
+
+function coerceImageMimeType(media: { contentType?: string }): string {
+  const mimeType = (media.contentType ?? "").trim().toLowerCase();
+  return mimeType.startsWith("image/") ? mimeType : "image/jpeg";
+}
+
 async function sanitizeImagesWithLog(
   images: ImageContent[],
   label: string,
@@ -223,14 +233,16 @@ export async function loadImageFromRef(
         })
       : await loadWebMedia(targetPath, options?.maxBytes);
 
-    if (media.kind !== "image") {
+    if (!isImageCompatibleMediaKind(media.kind)) {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
       return null;
     }
 
     // EXIF orientation is already normalized by loadWebMedia -> resizeToJpeg
     // Default to JPEG since optimization converts images to JPEG format
-    const mimeType = media.contentType ?? "image/jpeg";
+    const mimeType = coerceImageMimeType({
+      contentType: media.contentType,
+    });
     const data = media.buffer.toString("base64");
 
     return { type: "image", data, mimeType };

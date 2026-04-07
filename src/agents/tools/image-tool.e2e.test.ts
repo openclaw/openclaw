@@ -448,6 +448,21 @@ describe("image tool data URL support", () => {
   });
 });
 
+describe("image tool media compatibility", () => {
+  it("accepts image and document kinds for image-tool inputs", () => {
+    expect(__testing.isImageToolCompatibleMedia({ kind: "image" })).toBe(true);
+    expect(__testing.isImageToolCompatibleMedia({ kind: "document" })).toBe(true);
+    expect(__testing.isImageToolCompatibleMedia({ kind: "audio" })).toBe(false);
+  });
+
+  it("normalizes non-image mime types to image/png", () => {
+    expect(__testing.coerceImageMimeType({ contentType: "image/webp" })).toBe("image/webp");
+    expect(__testing.coerceImageMimeType({ contentType: "application/octet-stream" })).toBe(
+      "image/png",
+    );
+  });
+});
+
 describe("image tool MiniMax VLM routing", () => {
   const pngB64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";

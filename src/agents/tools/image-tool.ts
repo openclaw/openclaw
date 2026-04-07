@@ -31,6 +31,8 @@ const DEFAULT_MAX_IMAGES = 20;
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
+  isImageToolCompatibleMedia,
+  coerceImageMimeType,
   resolveImageToolMaxTokens,
 } as const;
 
@@ -181,6 +183,17 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
     return Math.floor(configured * 1024 * 1024);
   }
   return undefined;
+}
+
+function isImageToolCompatibleMedia(media: { kind: string }): boolean {
+  // Some inbound channels surface image files as `document`; in image-tool context,
+  // treat them as image-compatible so they continue through vision processing.
+  return media.kind === "image" || media.kind === "document";
+}
+
+function coerceImageMimeType(media: { contentType?: string; mimeType?: string }): string {
+  const mime = (media.contentType ?? media.mimeType ?? "").trim().toLowerCase();
+  return mime.startsWith("image/") ? mime : "image/png";
 }
 
 function buildImageContext(
@@ -527,14 +540,14 @@ export function createImageTool(options?: {
                 maxBytes,
                 localRoots,
               });
-        if (media.kind !== "image") {
+        if (!isImageToolCompatibleMedia(media)) {
           throw new Error(`Unsupported media type: ${media.kind}`);
         }
 
-        const mimeType =
-          ("contentType" in media && media.contentType) ||
-          ("mimeType" in media && media.mimeType) ||
-          "image/png";
+        const mimeType = coerceImageMimeType({
+          contentType: "contentType" in media ? media.contentType : undefined,
+          mimeType: "mimeType" in media ? media.mimeType : undefined,
+        });
         const base64 = media.buffer.toString("base64");
         loadedImages.push({
           base64,

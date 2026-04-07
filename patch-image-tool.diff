@@ -1,0 +1,91 @@
+diff --git a/src/agents/pi-embedded-runner/run/images.ts b/src/agents/pi-embedded-runner/run/images.ts
+index c11f191..779c7f9 100644
+--- a/src/agents/pi-embedded-runner/run/images.ts
++++ b/src/agents/pi-embedded-runner/run/images.ts
+@@ -46,6 +46,16 @@ function isImageExtension(filePath: string): boolean {
+   return IMAGE_EXTENSIONS.has(ext);
+ }
+ 
++function isImageCompatibleMediaKind(kind: string): boolean {
++  // Some integrations classify image attachments as `document`.
++  return kind === "image" || kind === "document";
++}
++
++function coerceImageMimeType(media: { contentType?: string }): string {
++  const mimeType = (media.contentType ?? "").trim().toLowerCase();
++  return mimeType.startsWith("image/") ? mimeType : "image/jpeg";
++}
++
+ async function sanitizeImagesWithLog(
+   images: ImageContent[],
+   label: string,
+@@ -223,14 +233,16 @@ export async function loadImageFromRef(
+         })
+       : await loadWebMedia(targetPath, options?.maxBytes);
+ 
+-    if (media.kind !== "image") {
++    if (!isImageCompatibleMediaKind(media.kind)) {
+       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
+       return null;
+     }
+ 
+     // EXIF orientation is already normalized by loadWebMedia -> resizeToJpeg
+     // Default to JPEG since optimization converts images to JPEG format
+-    const mimeType = media.contentType ?? "image/jpeg";
++    const mimeType = coerceImageMimeType({
++      contentType: media.contentType,
++    });
+     const data = media.buffer.toString("base64");
+ 
+     return { type: "image", data, mimeType };
+diff --git a/src/agents/tools/image-tool.ts b/src/agents/tools/image-tool.ts
+index f27f9bd..0a21645 100644
+--- a/src/agents/tools/image-tool.ts
++++ b/src/agents/tools/image-tool.ts
+@@ -31,6 +31,8 @@ const DEFAULT_MAX_IMAGES = 20;
+ export const __testing = {
+   decodeDataUrl,
+   coerceImageAssistantText,
++  isImageToolCompatibleMedia,
++  coerceImageMimeType,
+   resolveImageToolMaxTokens,
+ } as const;
+ 
+@@ -183,6 +185,17 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
+   return undefined;
+ }
+ 
++function isImageToolCompatibleMedia(media: { kind: string }): boolean {
++  // Some inbound channels surface image files as `document`; in image-tool context,
++  // treat them as image-compatible so they continue through vision processing.
++  return media.kind === "image" || media.kind === "document";
++}
++
++function coerceImageMimeType(media: { contentType?: string; mimeType?: string }): string {
++  const mime = (media.contentType ?? media.mimeType ?? "").trim().toLowerCase();
++  return mime.startsWith("image/") ? mime : "image/png";
++}
++
+ function buildImageContext(
+   prompt: string,
+   images: Array<{ base64: string; mimeType: string }>,
+@@ -527,14 +540,14 @@ export function createImageTool(options?: {
+                 maxBytes,
+                 localRoots,
+               });
+-        if (media.kind !== "image") {
++        if (!isImageToolCompatibleMedia(media)) {
+           throw new Error(`Unsupported media type: ${media.kind}`);
+         }
+ 
+-        const mimeType =
+-          ("contentType" in media && media.contentType) ||
+-          ("mimeType" in media && media.mimeType) ||
+-          "image/png";
++        const mimeType = coerceImageMimeType({
++          contentType: "contentType" in media ? media.contentType : undefined,
++          mimeType: "mimeType" in media ? media.mimeType : undefined,
++        });
+         const base64 = media.buffer.toString("base64");
+         loadedImages.push({
+           base64,
