@@ -49,6 +49,20 @@ import {
   type ArtifactsListResult,
   type ArtifactSummary,
   ArtifactSummarySchema,
+  type AgentsWorkspaceDeleteParams,
+  type AgentsWorkspaceDeleteResult,
+  type AgentsWorkspaceGetParams,
+  type AgentsWorkspaceGetResult,
+  type AgentsWorkspaceListParams,
+  type AgentsWorkspaceListResult,
+  type AgentsWorkspaceMkdirParams,
+  type AgentsWorkspaceMkdirResult,
+  type AgentsWorkspaceMoveParams,
+  type AgentsWorkspaceMoveResult,
+  type AgentsWorkspaceSetParams,
+  type AgentsWorkspaceSetResult,
+  type AgentsWorkspaceStatParams,
+  type AgentsWorkspaceStatResult,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
@@ -347,6 +361,22 @@ import {
   type WizardStep,
   WizardStepSchema,
 } from "./schema.js";
+import {
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceSetParamsSchema,
+  AgentsWorkspaceSetResultSchema,
+  AgentsWorkspaceDeleteParamsSchema,
+  AgentsWorkspaceDeleteResultSchema,
+  AgentsWorkspaceMkdirParamsSchema,
+  AgentsWorkspaceMkdirResultSchema,
+  AgentsWorkspaceMoveParamsSchema,
+  AgentsWorkspaceMoveResultSchema,
+  AgentsWorkspaceStatParamsSchema,
+  AgentsWorkspaceStatResultSchema,
+} from "./schema/protocol-schemas.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
   allErrors: true,
@@ -610,6 +640,48 @@ export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+export const validateAgentsWorkspaceListParams = ajv.compile<AgentsWorkspaceListParams>(
+  AgentsWorkspaceListParamsSchema,
+);
+export const validateAgentsWorkspaceListResult = ajv.compile<AgentsWorkspaceListResult>(
+  AgentsWorkspaceListResultSchema,
+);
+export const validateAgentsWorkspaceGetParams = ajv.compile<AgentsWorkspaceGetParams>(
+  AgentsWorkspaceGetParamsSchema,
+);
+export const validateAgentsWorkspaceGetResult = ajv.compile<AgentsWorkspaceGetResult>(
+  AgentsWorkspaceGetResultSchema,
+);
+export const validateAgentsWorkspaceSetParams = ajv.compile<AgentsWorkspaceSetParams>(
+  AgentsWorkspaceSetParamsSchema,
+);
+export const validateAgentsWorkspaceSetResult = ajv.compile<AgentsWorkspaceSetResult>(
+  AgentsWorkspaceSetResultSchema,
+);
+export const validateAgentsWorkspaceDeleteParams = ajv.compile<AgentsWorkspaceDeleteParams>(
+  AgentsWorkspaceDeleteParamsSchema,
+);
+export const validateAgentsWorkspaceDeleteResult = ajv.compile<AgentsWorkspaceDeleteResult>(
+  AgentsWorkspaceDeleteResultSchema,
+);
+export const validateAgentsWorkspaceMkdirParams = ajv.compile<AgentsWorkspaceMkdirParams>(
+  AgentsWorkspaceMkdirParamsSchema,
+);
+export const validateAgentsWorkspaceMkdirResult = ajv.compile<AgentsWorkspaceMkdirResult>(
+  AgentsWorkspaceMkdirResultSchema,
+);
+export const validateAgentsWorkspaceMoveParams = ajv.compile<AgentsWorkspaceMoveParams>(
+  AgentsWorkspaceMoveParamsSchema,
+);
+export const validateAgentsWorkspaceMoveResult = ajv.compile<AgentsWorkspaceMoveResult>(
+  AgentsWorkspaceMoveResultSchema,
+);
+export const validateAgentsWorkspaceStatParams = ajv.compile<AgentsWorkspaceStatParams>(
+  AgentsWorkspaceStatParamsSchema,
+);
+export const validateAgentsWorkspaceStatResult = ajv.compile<AgentsWorkspaceStatResult>(
+  AgentsWorkspaceStatResultSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {

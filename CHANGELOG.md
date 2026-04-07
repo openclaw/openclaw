@@ -2964,6 +2964,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Lobster: run bundled Lobster workflows in process instead of spawning the external CLI, reducing transport overhead and unblocking native runtime integration. (#61523) Thanks @mbelinky.
 - Plugins/Lobster: harden managed resume validation so invalid TaskFlow resume calls fail earlier, and memoize embedded runtime loading per runner while keeping failed loads retryable. (#61566) Thanks @mbelinky.
 - Agents/bootstrap: add opt-in `agents.defaults.contextInjection: "continuation-skip"` so safe continuation turns can skip workspace bootstrap re-injection, while heartbeat runs and post-compaction retries still rebuild context when needed. Fixes #9157. Thanks @cgdusek.
+- Gateway/workspace API: add `agents.workspace.*` RPC methods for file management including list, get, set, delete, mkdir, move, and stat operations with scope-based permissions and path traversal protection.
 
 ### Fixes
 
