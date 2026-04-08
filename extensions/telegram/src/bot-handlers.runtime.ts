@@ -1030,6 +1030,11 @@ export const registerTelegramHandlers = ({
         ...mediaRuntimeOptions,
       });
     } catch (mediaErr) {
+      // [DIAG #62496] Log resolveMedia failure path
+      logger.warn(
+        { chatId, error: String(mediaErr) },
+        "diag:voice: resolveMedia threw",
+      );
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
@@ -1063,6 +1068,12 @@ export const registerTelegramHandlers = ({
       return;
     }
 
+    // [DIAG #62496] Log resolveMedia result
+    logger.warn(
+      { chatId, mediaPath: media?.path ?? null, contentType: media?.contentType ?? null, hasMedia: media !== null },
+      "diag:voice: resolveMedia result",
+    );
+
     // Skip sticker-only messages where the sticker was skipped (animated/video)
     // These have no media and no text content to process.
     const hasText = Boolean(getTelegramTextParts(msg).text.trim());
@@ -1080,6 +1091,13 @@ export const registerTelegramHandlers = ({
           },
         ]
       : [];
+
+    // [DIAG #62496] Log allMedia after construction
+    logger.warn(
+      { chatId, allMediaLength: allMedia.length, mediaTypes: allMedia.map((m) => m.contentType) },
+      "diag:voice: allMedia constructed",
+    );
+
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =

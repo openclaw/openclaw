@@ -113,6 +113,11 @@ export const buildTelegramMessageContext = async ({
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  // [DIAG #62496] Log entry into buildTelegramMessageContext
+  logger.info(
+    { chatId, isGroup, allMediaLength: allMedia.length },
+    "diag:voice: buildTelegramMessageContext entry",
+  );
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const reactionApi =
@@ -197,6 +202,11 @@ export const buildTelegramMessageContext = async ({
     requireSenderForAllowOverride: false,
   });
   if (!baseAccess.allowed) {
+    // [DIAG #62496] Log which baseAccess guard blocked the message
+    logger.info(
+      { chatId, isGroup, reason: baseAccess.reason, senderId },
+      "diag:voice: baseAccess blocked",
+    );
     if (baseAccess.reason === "group-disabled") {
       logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
       return null;
@@ -218,6 +228,11 @@ export const buildTelegramMessageContext = async ({
   const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
   if (topicRequiredButMissing) {
+    // [DIAG #62496] Log requireTopic guard blocking DM
+    logger.info(
+      { chatId, requireTopic, dmThreadId: dmThreadId ?? null },
+      "diag:voice: requireTopic blocked DM",
+    );
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
@@ -263,6 +278,11 @@ export const buildTelegramMessageContext = async ({
       upsertPairingRequest,
     }))
   ) {
+    // [DIAG #62496] Log enforceTelegramDmAccess rejection
+    logger.info(
+      { chatId, isGroup, dmPolicy: effectiveDmPolicy, senderId },
+      "diag:voice: enforceTelegramDmAccess blocked",
+    );
     return null;
   }
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
@@ -333,6 +353,12 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
     direction: "inbound",
   });
+
+  // [DIAG #62496] Log that all pre-body guards passed
+  logger.info(
+    { chatId, isGroup, allMediaLength: allMedia.length, senderId },
+    "diag:voice: all guards passed, calling resolveTelegramInboundBody",
+  );
 
   const bodyResult = await resolveTelegramInboundBody({
     cfg,

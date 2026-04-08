@@ -175,6 +175,13 @@ export async function resolveTelegramInboundBody(params: {
     bodyText = `${mediaTag}\n${bodyText}`.trim();
   }
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+
+  // [DIAG #62496] Log hasAudio and its inputs
+  logger.info(
+    { chatId, hasAudio, allMediaLength: allMedia.length, mediaTypes: allMedia.map((m) => m.contentType) },
+    "diag:voice: hasAudio computed",
+  );
+
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
@@ -191,7 +198,28 @@ export async function resolveTelegramInboundBody(params: {
         !disableAudioPreflight &&
         senderAllowedForAudioPreflight));
 
+  // [DIAG #62496] Log needsPreflightTranscription and all conditions
+  logger.info(
+    {
+      chatId,
+      needsPreflightTranscription,
+      hasAudio,
+      hasUserText,
+      isGroup,
+      requireMention,
+      mentionRegexCount: mentionRegexes.length,
+      disableAudioPreflight,
+      senderAllowedForAudioPreflight,
+    },
+    "diag:voice: needsPreflightTranscription evaluated",
+  );
+
   if (needsPreflightTranscription) {
+    // [DIAG #62496] Log before transcribeFirstAudio
+    logger.info(
+      { chatId, mediaPaths: allMedia.map((m) => m.path), mediaTypes: allMedia.map((m) => m.contentType) },
+      "diag:voice: calling transcribeFirstAudio",
+    );
     try {
       const { transcribeFirstAudio } = await import("./media-understanding.runtime.js");
       const tempCtx: MsgContext = {
@@ -206,7 +234,17 @@ export async function resolveTelegramInboundBody(params: {
         cfg,
         agentDir: undefined,
       });
+      // [DIAG #62496] Log transcribeFirstAudio result
+      logger.info(
+        { chatId, hasTranscript: Boolean(preflightTranscript), transcriptLength: preflightTranscript?.length ?? 0 },
+        "diag:voice: transcribeFirstAudio completed",
+      );
     } catch (err) {
+      // [DIAG #62496] Log transcribeFirstAudio failure
+      logger.info(
+        { chatId, error: String(err) },
+        "diag:voice: transcribeFirstAudio failed",
+      );
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }
