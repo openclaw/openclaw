@@ -42,15 +42,25 @@ import {
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { createTypingController } from "../../auto-reply/reply/typing.js";
-import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { createRuntimeFollowup } from "./runtime-followup.js";
 
 const SESSION_KEY = "agent:main:telegram:direct:123:thread:123:456";
 
 function makeFollowupRun() {
+  const sessionEntry = {
+    sessionId: "session-abc",
+    lastChannel: "telegram",
+    lastTo: "12345",
+    chatType: "direct",
+  };
   return {
     prompt: "continue",
     enqueuedAt: Date.now(),
+    _sessionMeta: {
+      storePath: "/tmp/custom-sessions.json",
+      sessionStore: { [SESSION_KEY]: sessionEntry },
+      sessionEntry,
+    },
     run: {
       agentId: "main",
       agentDir: "/tmp/agent",
@@ -81,15 +91,8 @@ beforeEach(() => {
   (getExistingFollowupQueue as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
   // Default: enqueue succeeds
   (enqueueFollowupRun as ReturnType<typeof vi.fn>).mockReturnValue(true);
-  // Default: followup run built successfully
+  // Default: followup run built successfully (includes _sessionMeta)
   (buildFollowupRunForSession as ReturnType<typeof vi.fn>).mockResolvedValue(makeFollowupRun());
-  (resolveStorePath as ReturnType<typeof vi.fn>).mockReturnValue("/tmp/custom-sessions.json");
-  (loadSessionStore as ReturnType<typeof vi.fn>).mockReturnValue({
-    [SESSION_KEY]: {
-      sessionId: "session-abc",
-      sessionFile: "/tmp/session-abc.jsonl",
-    },
-  });
 });
 
 describe("createRuntimeFollowup", () => {
@@ -183,16 +186,11 @@ describe("createRuntimeFollowup", () => {
     expect(kickFollowupDrainIfIdle).toHaveBeenCalledTimes(2);
   });
 
-  it("passes session metadata into cold followup runner", async () => {
+  it("passes session metadata from _sessionMeta into cold followup runner", async () => {
     (getExistingFollowupQueue as ReturnType<typeof vi.fn>).mockReturnValue({ draining: false });
-    const sessionStore = {
-      [SESSION_KEY]: {
-        sessionId: "session-abc",
-        sessionFile: "/tmp/session-abc.jsonl",
-      },
-    };
-    (loadSessionStore as ReturnType<typeof vi.fn>).mockReturnValue(sessionStore);
 
+    // _sessionMeta is provided by buildFollowupRunForSession (via makeFollowupRun)
+    // so runtime-followup no longer calls resolveStorePath/loadSessionStore directly.
     const followup = createRuntimeFollowup();
     const result = await followup.enqueueFollowupTurn({
       sessionKey: SESSION_KEY,
@@ -200,13 +198,11 @@ describe("createRuntimeFollowup", () => {
     });
 
     expect(result).toBe(true);
-    expect(resolveStorePath).toHaveBeenCalledWith("/tmp/custom-sessions.json", {
-      agentId: "main",
-    });
+    // Verify session metadata from _sessionMeta flows into the cold runner
     expect(createFollowupRunner).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionEntry: sessionStore[SESSION_KEY],
-        sessionStore,
+        sessionEntry: expect.objectContaining({ sessionId: "session-abc" }),
+        sessionStore: expect.objectContaining({ [SESSION_KEY]: expect.any(Object) }),
         sessionKey: SESSION_KEY,
         storePath: "/tmp/custom-sessions.json",
         defaultModel: "claude-opus-4-6",

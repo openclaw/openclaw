@@ -1,5 +1,4 @@
 import { DEFAULT_MODEL } from "../../agents/defaults.js";
-import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { PluginRuntimeCore } from "./types-core.js";
@@ -21,20 +20,9 @@ export function createRuntimeFollowup(): PluginRuntimeCore["followup"] {
           return false;
         }
 
-        let runnerStorePath: string | undefined;
-        let runnerSessionStore: ReturnType<typeof loadSessionStore> | undefined;
-        let runnerSessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
-        try {
-          runnerStorePath = resolveStorePath(followupRun.run.config.session?.store, {
-            agentId: followupRun.run.agentId,
-          });
-          runnerSessionStore = loadSessionStore(runnerStorePath);
-          runnerSessionEntry = runnerSessionStore[params.sessionKey];
-        } catch (err) {
-          logVerbose(
-            `[runtime.followup] failed to preload session metadata for "${params.sessionKey}": ${String(err)}`,
-          );
-        }
+        // Reuse session metadata already loaded by buildFollowupRunForSession
+        // instead of loading the store a second time.
+        const { storePath, sessionStore, sessionEntry } = followupRun._sessionMeta;
 
         // Preserve an existing queue's mode instead of forcing "followup".
         const existingMode = getExistingFollowupQueue(params.sessionKey)?.mode;
@@ -67,10 +55,10 @@ export function createRuntimeFollowup(): PluginRuntimeCore["followup"] {
           const runner = createFollowupRunner({
             typing: noopTyping,
             typingMode: "never",
-            sessionEntry: runnerSessionEntry,
-            sessionStore: runnerSessionStore,
+            sessionEntry,
+            sessionStore,
             sessionKey: params.sessionKey,
-            storePath: runnerStorePath,
+            storePath,
             defaultModel: followupRun.run.model ?? DEFAULT_MODEL,
           });
           rememberFollowupDrainCallback(params.sessionKey, runner);
