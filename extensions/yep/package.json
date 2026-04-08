@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Yep plugin",
   "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
