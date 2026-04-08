@@ -278,8 +278,13 @@ export async function runWebSearch(
     }
     // Track when the auto-detected primary provider returns null so we can throw a
     // specific error instead of falling through to the generic "no provider" error.
-    if (params.providerId === undefined && primaryResolved === null) {
-      // trimPrimaryId is "" when providerId param is undefined — use the searched id
+    // Only do this when web search is actually enabled — if disabled, let the generic
+    // "web_search is disabled" error surface rather than a misleading provider error.
+    if (
+      params.providerId === undefined &&
+      primaryResolved === null &&
+      resolveWebSearchEnabled({ search, sandboxed: params.sandboxed })
+    ) {
       const searchedId = trimmedPrimaryId || "auto-detected";
       primaryInitError = new Error(
         `Web search provider "${searchedId}" is not available (tool returned null).`,
