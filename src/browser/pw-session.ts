@@ -523,15 +523,28 @@ export function refLocator(page: Page, ref: string) {
       ? ref.slice(4)
       : ref;
 
-  if (/^e\d+$/.test(normalized)) {
+  // Support both e-prefixed refs (e1, e2, ...) from aria snapshots and numeric refs (1, 2, ...)
+  // that are returned to users via --format ai snapshots after remapping.
+  if (/^e?\d+$/.test(normalized)) {
     const state = pageStates.get(page);
+    // First try to look up by the ref as-given (supports both e-prefixed and numeric)
+    let info = state?.roleRefs?.[normalized];
+    // If not found and ref is numeric-only, try e-prefixed version (internal cache uses e-prefix)
+    if (!info && /^\d+$/.test(normalized)) {
+      info = state?.roleRefs?.[`e${normalized}`];
+    }
+    // If not found and ref is e-prefixed, try numeric version (in case cache uses numeric)
+    if (!info && /^e\d+$/.test(normalized)) {
+      info = state?.roleRefs?.[normalized.slice(1)];
+    }
     if (state?.roleRefsMode === "aria") {
       const scope = state.roleRefsFrameSelector
         ? page.frameLocator(state.roleRefsFrameSelector)
         : page;
-      return scope.locator(`aria-ref=${normalized}`);
+      // For aria mode, always use the e-prefixed form for aria-ref locator
+      const ariaRef = /^e\d+$/.test(normalized) ? normalized : `e${normalized}`;
+      return scope.locator(`aria-ref=${ariaRef}`);
     }
-    const info = state?.roleRefs?.[normalized];
     if (!info) {
       throw new Error(
         `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,

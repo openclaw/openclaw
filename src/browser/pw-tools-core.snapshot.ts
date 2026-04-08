@@ -91,7 +91,23 @@ export async function snapshotAiViaPlaywright(opts: {
     refs: built.refs,
     mode: "aria",
   });
-  return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
+
+  // Remap e-prefixed refs (e1, e2, ...) to numeric refs (1, 2, ...) for user-facing output.
+  const numericRefs: RoleRefMap = {};
+  let numericSnapshot = snapshot;
+  for (const [key, value] of Object.entries(built.refs)) {
+    if (/^e\d+$/.test(key)) {
+      const num = key.slice(1);
+      numericRefs[num] = value;
+      numericSnapshot = numericSnapshot.replaceAll(`[ref=${key}]`, `[${num}]`);
+    } else {
+      numericRefs[key] = value;
+    }
+  }
+
+  return truncated
+    ? { snapshot: numericSnapshot, truncated, refs: numericRefs }
+    : { snapshot: numericSnapshot, refs: numericRefs };
 }
 
 export async function snapshotRoleViaPlaywright(opts: {
