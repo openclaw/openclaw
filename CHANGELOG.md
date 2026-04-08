@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - iOS: pin release versioning to an explicit CalVer in `apps/ios/version.json`, keep TestFlight iteration on the same short version until maintainers intentionally promote the next gateway version, and add the documented `pnpm ios:version:pin -- --from-gateway` workflow for release trains. (#63001) Thanks @ngutman.
 - Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit, and reset flows so old daily notes can be replayed safely into `DREAMS.md`. Thanks @mbelinky.
+- Control UI/dreaming: add a structured diary view with timeline navigation, backfill/reset controls, and traceable dreaming summaries. Thanks @mbelinky.
 
 ### Fixes
 
