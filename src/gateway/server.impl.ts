@@ -1245,6 +1245,14 @@ export async function startGatewayServer(
             connIds,
             { dropIfSlow: true },
           );
+          if (event.reason === "reset" || event.reason === "deleted") {
+            broadcastToConnIds(
+              "socket_drain",
+              { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
+              connIds,
+              { dropIfSlow: true },
+            );
+          }
         });
 
     if (!minimalTestGateway) {
