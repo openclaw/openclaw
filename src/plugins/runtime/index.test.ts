@@ -7,6 +7,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import * as deliveryContextModule from "../../utils/delivery-context.js";
 import { VERSION } from "../../version.js";
 import {
   clearGatewaySubagentRuntime,
@@ -276,8 +277,8 @@ describe("plugin runtime command execution", () => {
 
     const runtime = createPluginRuntime();
 
-    expect(() => runtime.acp.spawn({ task: "hello" }, {})).toThrow(
-      "api.runtime.acp.spawn() requires plugins.allowAcpSpawn: true in openclaw.json",
+    await expect(runtime.acp.spawn({ task: "hello" }, {})).rejects.toThrow(
+      "api.runtime.acp helpers require plugins.allowAcpSpawn: true in openclaw.json",
     );
     await expect(
       runtime.acp.prompt({
@@ -285,7 +286,7 @@ describe("plugin runtime command execution", () => {
         text: "hello",
       }),
     ).rejects.toThrow(
-      "api.runtime.acp.prompt() requires plugins.allowAcpSpawn: true in openclaw.json",
+      "api.runtime.acp helpers require plugins.allowAcpSpawn: true in openclaw.json",
     );
   });
 
@@ -302,6 +303,9 @@ describe("plugin runtime command execution", () => {
     const callGateway = vi.spyOn(gatewayCallModule, "callGateway").mockResolvedValue({
       runId: "prompt-run-id",
     });
+    const resolveConversationDeliveryTarget = vi
+      .spyOn(deliveryContextModule, "resolveConversationDeliveryTarget")
+      .mockReturnValue({ to: "-100123", threadId: "77" });
 
     const runtime = createPluginRuntime();
 
@@ -324,25 +328,75 @@ describe("plugin runtime command execution", () => {
       runtime.acp.prompt({
         sessionKey: "child-session",
         text: "follow up",
-        channel: "discord",
+        channel: "telegram",
         accountId: "zeus",
-        threadId: "12345",
+        conversationId: "topic:77",
+        parentConversationId: "-100123",
       }),
     ).resolves.toEqual({ runId: "prompt-run-id" });
+    expect(resolveConversationDeliveryTarget).toHaveBeenCalledWith({
+      channel: "telegram",
+      conversationId: "topic:77",
+      parentConversationId: "-100123",
+    });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agent",
         params: expect.objectContaining({
           sessionKey: "child-session",
           message: "follow up",
-          channel: "discord",
+          channel: "telegram",
           accountId: "zeus",
-          threadId: "12345",
-          to: "channel:12345",
+          threadId: "77",
+          to: "-100123",
           deliver: true,
           idempotencyKey: expect.any(String),
         }),
       }),
     );
+  });
+
+  it("omits delivery fields for session-only ACP prompts", async () => {
+    vi.spyOn(configModule, "loadConfig").mockReturnValue({
+      plugins: { allowAcpSpawn: true },
+    } as never);
+    const callGateway = vi.spyOn(gatewayCallModule, "callGateway").mockResolvedValue({
+      runId: "prompt-run-id",
+    });
+
+    const runtime = createPluginRuntime();
+
+    await expect(
+      runtime.acp.prompt({
+        sessionKey: "child-session",
+        text: "follow up",
+      }),
+    ).resolves.toEqual({ runId: "prompt-run-id" });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: {
+          message: "follow up",
+          sessionKey: "child-session",
+          idempotencyKey: expect.any(String),
+        },
+      }),
+    );
+  });
+
+  it("fails loudly when ACP prompt gateway response omits runId", async () => {
+    vi.spyOn(configModule, "loadConfig").mockReturnValue({
+      plugins: { allowAcpSpawn: true },
+    } as never);
+    vi.spyOn(gatewayCallModule, "callGateway").mockResolvedValue({});
+
+    const runtime = createPluginRuntime();
+
+    await expect(
+      runtime.acp.prompt({
+        sessionKey: "child-session",
+        text: "follow up",
+      }),
+    ).rejects.toThrow("api.runtime.acp.prompt() expected gateway to return runId");
   });
 });

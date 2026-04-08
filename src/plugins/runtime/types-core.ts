@@ -128,7 +128,10 @@ export type PluginRuntimeCore = {
       text: string;
       channel?: string;
       accountId?: string;
+      /** Legacy alias for channels where the threaded destination is also the conversation id. */
       threadId?: string;
+      conversationId?: string;
+      parentConversationId?: string;
     }) => Promise<{ runId: string }>;
   };
   modelAuth: {
