@@ -188,7 +188,6 @@ Verify generated media is reattached on the follow-up turn.
 - action: session.create
   key: agent:qa:image-roundtrip
 ```
-````
 
 # Steps
 
@@ -221,7 +220,6 @@ Verify generated media is reattached on the follow-up turn.
 - assert: artifact.exists
   ref: lighthouseImage
 ```
-
 ````
 
 ## Runner Capabilities The DSL Must Cover
@@ -458,7 +456,7 @@ type QaBusAttachment = {
   altText?: string;
   transcript?: string;
 };
-````
+```
 
 Then add `attachments?: QaBusAttachment[]` to:
 

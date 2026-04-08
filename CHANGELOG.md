@@ -99,6 +99,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions_send: pass `threadId` through announce delivery so cross-session notifications land in the correct Telegram forum topic instead of the group's general thread. (#62758) Thanks @jalehman.
 - Daemon/systemd: keep sudo systemctl calls scoped to the invoking user when machine-scoped systemctl fails, while still avoiding machine fallback for permission-denied user bus errors. (#62337) Thanks @Aftabbs.
 - Docs/i18n: relocalize final localized-page links after translation and remove the zh-CN homepage redirect override so localized Mintlify pages resolve to the correct language roots again. (#61796) Thanks @hxy91819.
+- Agents/exec: keep timed-out shell-backgrounded commands on the failed path and point long-running jobs to exec background/yield sessions so process polling is only suggested for registered sessions.
 
 ## 2026.4.5
 
@@ -1773,6 +1774,9 @@ Docs: https://docs.openclaw.ai
 - macOS overlays: fix VoiceWake, Talk, and Notify overlay exclusivity crashes by removing shared `inout` visibility mutation from `OverlayPanelFactory.present`, and add a repeated Talk overlay smoke test. (#39275, #39321) Thanks @fellanH.
 - macOS Talk Mode: set the speech recognition request `taskHint` to `.dictation` for mic capture, and add regression coverage for the request defaults. (#38445) Thanks @dmiv.
 - macOS release packaging: default `scripts/package-mac-app.sh` to universal binaries for `BUILD_CONFIG=release`, and clarify that `scripts/package-mac-dist.sh` already produces the release zip + DMG. (#33891) Thanks @cgdusek.
+- Tools/web search: restore Perplexity OpenRouter/Sonar compatibility for legacy `OPENROUTER_API_KEY`, `sk-or-...`, and explicit `perplexity.baseUrl` / `model` setups while keeping direct Perplexity keys on the native Search API path. (#39937) Thanks @obviyus.
+- Tools/web search: restore Perplexity OpenRouter/Sonar compatibility for legacy `OPENROUTER_API_KEY`, `sk-or-...`, and explicit `perplexity.baseUrl` / `model` setups while keeping direct Perplexity keys on the native Search API path. (#39937) Thanks @obviyus.
+- Doctor/Codex OAuth: warn only for legacy `models.providers.openai-codex` transport overrides that can shadow the built-in Codex OAuth path, while leaving supported custom proxies and header-only overrides alone. (#40143) Thanks @bde1.
 - Hooks/session-memory: keep `/new` and `/reset` memory artifacts in the bound agent workspace and align saved reset session keys with that workspace when stale main-agent keys leak into the hook path. (#39875) thanks @rbutera.
 - Sessions/model switch: clear stale cached `contextTokens` when a session changes models so status and runtime paths recompute against the active model window. (#38044) thanks @yuweuii.
 - ACP/session history: persist transcripts for successful ACP child runs, preserve exact transcript text, record ACP spawned-session lineage, and keep spawn-time transcript-path persistence best-effort so history storage failures do not block execution. (#40137) thanks @mbelinky.
