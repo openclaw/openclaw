@@ -50,6 +50,7 @@ export class DreamService {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.isDreaming = false;
   }
 
   private async tick(): Promise<void> {

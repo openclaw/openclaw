@@ -10,6 +10,9 @@ describe("AMHR (Associative Multi-Hop Retrieval)", () => {
     const graphDb = new GraphDB("/tmp/amhr-test-graph.jsonl", undefined as any, mockLogger as any);
 
     // Mock graph data: Вова --[likes]--> Fishing, Fishing --[needs]--> Rod
+    vi.spyOn(graphDb, "findEdgesForTexts").mockResolvedValue([
+      { source: "Вова", target: "Fishing", relation: "likes", timestamp: Date.now() },
+    ]);
     vi.spyOn(graphDb, "traverse").mockResolvedValue({
       nodes: ["Вова", "Fishing", "Rod"],
       edges: [

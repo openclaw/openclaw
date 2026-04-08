@@ -56,7 +56,10 @@ describe("Memory Hardening & Performance (RED)", () => {
       });
 
       // If we ask for "antigravity", it should find it via keyword even if vector is totally different
-      const graphMock = { traverse: vi.fn().mockResolvedValue({ edges: [] }) } as any;
+      const graphMock = {
+        traverse: vi.fn().mockResolvedValue({ nodes: ["antigravity"], edges: [] }),
+        findEdgesForTexts: vi.fn().mockResolvedValue([]),
+      } as any;
       const results = await db.searchWithAMHR([0.9, 0.9, 0.9], 5, graphMock, 0.1);
 
       const found = results.some((r) => r.entry.text.includes("antigravity"));

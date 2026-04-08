@@ -190,8 +190,16 @@ async function processFacts(
 
     // Check for contradictions or duplicates
     const existing = await db.search(vector, 1, 0.9);
+
+    // Bug #15: Handle corrections instead of skipping similar matches.
     if (existing.length > 0) {
-      continue;
+      if (fact.isCorrection) {
+        const oldId = existing[0].entry.id;
+        logger.info(`[memory-hybrid] Replacing corrected memory: ${oldId}`);
+        await db.delete(oldId);
+      } else {
+        continue;
+      }
     }
 
     const entry = await db.store({

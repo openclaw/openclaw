@@ -64,8 +64,9 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay =
     } catch (err) {
       lastError = err;
       if (i < maxRetries) {
-        // Skip sleep completely in test environments
+        // Skip long sleep in test environments, but keep a tiny delay to avoid infinite loops
         if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
           continue;
         }
 

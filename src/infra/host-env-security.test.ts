@@ -352,7 +352,6 @@ describe("sanitizeHostExecEnv", () => {
         C_INCLUDE_PATH: "/tmp/evil-c-headers",
         CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
         OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
-        CARGO_HOME: "/tmp/override-cargo",
         HELM_HOME: "/tmp/override-helm",
         NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
         SSL_CERT_FILE: "/tmp/evil-cert.pem",

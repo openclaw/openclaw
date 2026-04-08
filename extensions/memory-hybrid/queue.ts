@@ -10,6 +10,7 @@ export interface QueueOptions {
 export class MemoryQueue {
   private queue: Array<{ name: string; task: () => Promise<void> }> = [];
   private processing = false;
+  private stopping = false;
   private delayMs: number;
   private maxSize: number;
   private logger?: Logger;
@@ -23,6 +24,11 @@ export class MemoryQueue {
   }
 
   push(name: string, task: () => Promise<void>): void {
+    if (this.stopping) {
+      this.logger?.warn(`[memory-hybrid] Rejecting task "${name}" because queue is stopping.`);
+      return;
+    }
+
     if (this.queue.length >= this.maxSize) {
       this.onError(
         name,
@@ -66,7 +72,7 @@ export class MemoryQueue {
       this.onError(name, err);
     }
 
-    if (this.delayMs > 0) {
+    if (this.delayMs > 0 && !this.stopping) {
       await new Promise((r) => setTimeout(r, this.delayMs));
     }
 
@@ -77,6 +83,7 @@ export class MemoryQueue {
    * Gracefully shuts down the queue by draining all pending tasks.
    */
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.queue.length === 0 && !this.processing) {
       return;
     }

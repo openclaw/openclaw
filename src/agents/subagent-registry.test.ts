@@ -46,7 +46,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: mocks.loadConfig,
+    loadConfig: mocks.loadConfig as any,
   };
 });
 
@@ -62,7 +62,7 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 }));
 
 vi.mock("./subagent-registry-state.js", () => ({
-  getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead as any,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
   restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
 }));
@@ -108,7 +108,7 @@ describe("subagent registry seam flow", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
     mocks.onAgentEvent.mockReturnValue(noop);
-    mocks.loadConfig.mockReturnValue({
+    (mocks.loadConfig as any).mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" },
     });
@@ -139,8 +139,8 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-      getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-      loadConfig: mocks.loadConfig,
+      getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead as any,
+      loadConfig: mocks.loadConfig as any,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,

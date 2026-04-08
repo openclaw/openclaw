@@ -188,7 +188,12 @@ export const memoryConfigSchema = {
         ? "openai"
         : "google"
       : undefined;
-    const chatProvider = chatProviderHint ?? detectChatProvider(chatModel);
+
+    // Bug #13: Honor explicit chatProvider override from config if provided
+    const chatProvider =
+      typeof cfg.chatProvider === "string"
+        ? (cfg.chatProvider as ChatProvider)
+        : (chatProviderHint ?? detectChatProvider(chatModel));
 
     // --- Hybrid Weights ---
     let hybridWeights = DEFAULT_HYBRID_WEIGHTS;

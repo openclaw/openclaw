@@ -274,6 +274,11 @@ export class WorkingMemoryBuffer {
    */
   private findSimilar(text: string): BufferEntry | undefined {
     const normalized = text.toLowerCase().trim();
+    if (normalized.length < 5) {
+      return undefined;
+    }
+
+    const words = new Set(normalized.split(/\s+/).filter((w) => w.length > 3));
 
     return this.buffer.find((entry) => {
       const entryNorm = entry.text.toLowerCase().trim();
@@ -290,13 +295,27 @@ export class WorkingMemoryBuffer {
         }
       }
 
-      // 3. Levenshtein Distance (Slowest but smartest)
-      // Guard: skip for long texts (>200 chars) — substring match above is sufficient
-      // Also only run if lengths are somewhat close
+      // 3. Word Overlap (Faster than Levenshtein)
+      // If 80% of long words match, consider it similar
+      if (words.size > 2) {
+        const entryWords = entryNorm.split(/\s+/).filter((w) => w.length > 3);
+        let matchCount = 0;
+        for (const w of entryWords) {
+          if (words.has(w)) {
+            matchCount++;
+          }
+        }
+        if (matchCount / Math.max(words.size, entryWords.length) > 0.8) {
+          return true;
+        }
+      }
+
+      // 4. Levenshtein Distance (Last resort, only for short texts)
+      // Bug #17: Skip heavy matrix calculation for long texts to avoid CPU spikes.
       if (
-        normalized.length <= 200 &&
-        entryNorm.length <= 200 &&
-        Math.abs(normalized.length - entryNorm.length) < 10
+        normalized.length <= 100 &&
+        entryNorm.length <= 100 &&
+        Math.abs(normalized.length - entryNorm.length) < 5
       ) {
         const dist = this.levenshteinDistance(normalized, entryNorm);
         const maxLength = Math.max(normalized.length, entryNorm.length);

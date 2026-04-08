@@ -144,20 +144,19 @@ export class MemoryDB {
   }
 
   /**
-   * Probe the table schema by reading one row and recording which columns exist.
+   * Probe the table schema by reading metadata and recording which columns exist.
    * Logs a warning if important columns are missing (older DB version).
    */
   private async detectColumns(): Promise<void> {
     if (!this.table) {
       return;
     }
-    const probeRows = await this.table.query().limit(1).toArray();
-    if (probeRows.length === 0) {
-      // Empty table — assume full schema (will be created on first insert)
-      this.availableColumns = new Set(MemoryDB.ALL_COLUMNS);
-      return;
-    }
-    this.availableColumns = new Set(Object.keys(probeRows[0]));
+
+    // Bug #14: Read schema metadata directly instead of probing rows.
+    // Probing fails on empty tables that have an old schema.
+    const schema = await this.table.schema();
+    this.availableColumns = new Set(schema.fields.map((f) => f.name));
+
     const missing = MemoryDB.ALL_COLUMNS.filter((c) => !this.availableColumns.has(c));
     if (missing.length > 0) {
       this.logger.warn(
@@ -389,39 +388,62 @@ export class MemoryDB {
     }
 
     // Phase 2: Graph Discovery
-    // Extract entities from current results and traverse
-    const entities = initialResults.map((r) => r.entry.text);
-    const traversal = await graphDB.traverse(entities, 1, 10);
+    // Seed traversal from entities present in results, NOT full sentences.
+    // Bug #12: Adjacency lookups are exact-keyed by entity ID, sentences usually miss.
+    const seedEdges = await graphDB.findEdgesForTexts(
+      initialResults.map((r) => r.entry.text),
+      20,
+    );
+    const seedNodeIds = new Set<string>();
+    for (const edge of seedEdges) {
+      seedNodeIds.add(edge.source);
+      seedNodeIds.add(edge.target);
+    }
 
-    const discoveredEntities = new Set<string>();
+    if (seedNodeIds.size === 0) {
+      return initialResults;
+    }
+
+    const traversal = await graphDB.traverse(Array.from(seedNodeIds), 1, 10);
+
+    const discoveredEntities = new Set<string>(traversal.nodes);
     for (const edge of traversal.edges) {
       discoveredEntities.add(edge.target);
       discoveredEntities.add(edge.source);
     }
 
-    // Remove entities already in initial results to avoid redundancy
-    for (const r of initialResults) {
-      discoveredEntities.delete(r.entry.text);
-    }
-
+    // Phase 3: Fetch Associative Memories
+    const associativeResults: MemorySearchResult[] = [];
     if (discoveredEntities.size === 0) {
       return initialResults;
     }
 
-    // Phase 3: Fetch Associative Memories
-    const associativeResults: MemorySearchResult[] = [];
-
     await this.ensureInitialized();
 
-    // Use FTS search instead of LIKE for much better performance and recall
-    // Graceful fallback: if FTS index is missing, skip associative search
+    // Use FTS search with proper MATCH syntax for keywords
+    // We join entities with OR for maximum recall
     let matchedMemories: Array<Record<string, unknown>> = [];
     try {
-      matchedMemories = await this.table!.search(Array.from(discoveredEntities).join(" "))
-        .limit(10)
-        .toArray();
+      const query = Array.from(discoveredEntities)
+        .filter((e) => e.length > 2)
+        .map((e) => `'${e.replace(/'/g, "''")}'`)
+        .join(" OR ");
+
+      if (query) {
+        matchedMemories = await this.table!.query()
+          .where(`text MATCH ${query}`)
+          .limit(10)
+          .toArray();
+      }
     } catch {
-      // FTS index may not exist on older databases — skip silently
+      // Fallback: simple text search if FTS MATCH is not supported or index is missing
+      try {
+        matchedMemories = await this.table!.search(Array.from(discoveredEntities).join(" "))
+          .limit(10)
+          .toArray();
+      } catch {
+        // Final fallback: skip associative search
+      }
     }
 
     for (const m of matchedMemories) {

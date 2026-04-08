@@ -340,7 +340,7 @@ describe("msteams graph attachments", () => {
             },
           ],
         },
-        { maxBytes: 4 },
+        { maxBytes: 4 } as any,
       );
 
       expect(media.media).toEqual([]);

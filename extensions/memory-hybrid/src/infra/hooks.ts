@@ -134,6 +134,8 @@ export function registerHooks(
       api.logger.info("memory-hybrid: shutting down, draining queue...");
       try {
         await memoryQueue.stop();
+        // Bug #16: Flush pending conversation turns before shutdown
+        await deps.conversationStack.flush(deps.chatModel, deps.tracer, api.logger);
         await db.flushRecallCounts();
         api.logger.info("memory-hybrid: cleanup complete.");
       } catch (err) {
