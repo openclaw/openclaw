@@ -1442,3 +1442,100 @@ describe("image tool response validation", () => {
     expect(text).toBe("hello");
   });
 });
+
+describe("image tool timeout config", () => {
+  it("forwards tools.media.image.timeoutSeconds to the describe call", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const capturedTimeoutMs: number[] = [];
+      const describeSpy = vi.fn(
+        async (params: ImageDescriptionRequest): Promise<{ text: string; model: string }> => {
+          capturedTimeoutMs.push(params.timeoutMs);
+          return { text: "described", model: params.model };
+        },
+      );
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: () => new Map(),
+        getMediaUnderstandingProvider: () => undefined,
+        describeImageWithModel: describeSpy,
+        describeImagesWithModel: vi.fn(async () => ({ text: "described", model: "m" })),
+        resolveAutoMediaKeyProviders: () => [],
+        resolveDefaultMediaModel: () => undefined,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/gpt-5.4-mini" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-completions",
+              baseUrl: "https://api.openai.invalid/v1",
+              apiKey: "test-key",
+              models: [makeModelDefinition("gpt-5.4-mini", ["text", "image"])],
+            },
+          },
+        },
+        tools: { media: { image: { timeoutSeconds: 120 } } },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(describeSpy).toHaveBeenCalledTimes(1);
+      expect(capturedTimeoutMs[0]).toBe(120_000);
+    });
+  });
+
+  it("uses the default 60s timeout when config is not set", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const capturedTimeoutMs: number[] = [];
+      const describeSpy = vi.fn(
+        async (params: ImageDescriptionRequest): Promise<{ text: string; model: string }> => {
+          capturedTimeoutMs.push(params.timeoutMs);
+          return { text: "described", model: params.model };
+        },
+      );
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: () => new Map(),
+        getMediaUnderstandingProvider: () => undefined,
+        describeImageWithModel: describeSpy,
+        describeImagesWithModel: vi.fn(async () => ({ text: "described", model: "m" })),
+        resolveAutoMediaKeyProviders: () => [],
+        resolveDefaultMediaModel: () => undefined,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/gpt-5.4-mini" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-completions",
+              baseUrl: "https://api.openai.invalid/v1",
+              apiKey: "test-key",
+              models: [makeModelDefinition("gpt-5.4-mini", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(describeSpy).toHaveBeenCalledTimes(1);
+      expect(capturedTimeoutMs[0]).toBe(60_000);
+    });
+  });
+});

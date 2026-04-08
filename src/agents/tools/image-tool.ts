@@ -2,10 +2,12 @@ import { resolve, isAbsolute } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  DEFAULT_TIMEOUT_SECONDS,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
+import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
@@ -191,6 +193,10 @@ async function runImagePrompt(params: {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
   const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
+  const timeoutMs = resolveTimeoutMs(
+    params.cfg?.tools?.media?.image?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS.image,
+  );
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
@@ -216,7 +222,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
@@ -234,7 +240,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
@@ -251,7 +257,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
