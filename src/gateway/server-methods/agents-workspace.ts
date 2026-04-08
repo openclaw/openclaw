@@ -211,7 +211,11 @@ async function workspaceDelete(
       // so use fs.rm with recursive flag after verifying the path is within root
       const realRoot = await fs.realpath(workspaceDir);
       const realPath = await fs.realpath(fullPath);
-      if (!realPath.startsWith(realRoot + path.sep) && realPath !== realRoot) {
+      // Block deletion of the workspace root itself
+      if (realPath === realRoot) {
+        throw new Error("Cannot delete workspace root directory");
+      }
+      if (!realPath.startsWith(realRoot + path.sep)) {
         throw new Error("Path resolves outside workspace root");
       }
       await fs.rm(fullPath, { recursive: true });

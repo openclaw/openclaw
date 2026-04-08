@@ -1974,6 +1974,7 @@ export function renderApp(state: AppViewState) {
                   if (panel === "workspace" && resolvedAgentId) {
                     state.workspaceLoading = true;
                     state.workspaceError = null;
+                    const requestedAgentId = resolvedAgentId;
                     // Load workspace files
                     void state.client
                       ?.request<import("./types.js").AgentsWorkspaceListResult>(
@@ -1984,11 +1985,17 @@ export function renderApp(state: AppViewState) {
                         },
                       )
                       .then((result) => {
+                        if (state.agentsSelectedId !== requestedAgentId) {
+                          return;
+                        }
                         state.workspaceEntries = result?.entries ?? null;
                         state.workspacePath = result?.path ?? "";
                         state.workspaceLoading = false;
                       })
                       .catch((err) => {
+                        if (state.agentsSelectedId !== requestedAgentId) {
+                          return;
+                        }
                         state.workspaceError = String(err);
                         state.workspaceLoading = false;
                       });
@@ -2447,7 +2454,7 @@ export function renderApp(state: AppViewState) {
                       },
                     )
                     .then((result) => {
-                      if (result?.content) {
+                      if (result && result.content != null) {
                         const fileName = downloadPath.split("/").pop() || "download";
                         // Decode base64 to binary for correct file download
                         const binaryStr = atob(result.content);
