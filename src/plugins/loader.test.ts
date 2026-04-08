@@ -32,8 +32,10 @@ import {
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import {
+  clearMemoryPluginState,
   buildMemoryPromptSection,
   getMemoryRuntime,
+  listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
@@ -1689,6 +1691,74 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("restores memory public artifacts when serving a plugin registry from cache", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-memory-artifacts",
+      filename: "cache-memory-artifacts.cjs",
+      body: `module.exports = {
+        id: "cache-memory-artifacts",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              listArtifacts: async () => [{
+                kind: "memory-root",
+                workspaceDir: "/tmp/cache-memory-artifacts",
+                relativePath: "MEMORY.md",
+                absolutePath: "/tmp/cache-memory-artifacts/MEMORY.md",
+                agentIds: ["main"],
+                contentType: "markdown",
+              }],
+            },
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-memory-artifacts"],
+          slots: { memory: "cache-memory-artifacts" },
+        },
+      },
+      onlyPluginIds: ["cache-memory-artifacts"],
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    loadOpenClawPlugins(options);
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/cache-memory-artifacts",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/cache-memory-artifacts/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    clearMemoryPluginState();
+
+    loadOpenClawPlugins(options);
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/cache-memory-artifacts",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/cache-memory-artifacts/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
   });
 
   it.each([
