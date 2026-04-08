@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import spinners from "unicode-animations";
 
 type SpinnerName = keyof typeof spinners;
@@ -17,19 +17,27 @@ export function UnicodeSpinner({
 	style?: React.CSSProperties;
 }) {
 	const [frame, setFrame] = useState(0);
-	const s = spinners[name];
+	const spinner = useMemo(() => spinners[name] ?? spinners.braille, [name]);
+	const frameCount = spinner.frames.length;
+	const currentFrame = frameCount > 0
+		? spinner.frames[frame % frameCount]
+		: "";
 
 	useEffect(() => {
-		const timer = setInterval(
-			() => setFrame((f) => (f + 1) % s.frames.length),
-			s.interval,
+		setFrame(0);
+		if (frameCount <= 1 || spinner.interval <= 0) {
+			return;
+		}
+		const timer = window.setInterval(
+			() => setFrame((current) => (current + 1) % frameCount),
+			spinner.interval,
 		);
-		return () => clearInterval(timer);
-	}, [name, s.frames.length, s.interval]);
+		return () => window.clearInterval(timer);
+	}, [spinner, frameCount]);
 
 	return (
 		<span className={className} style={{ fontFamily: "monospace", ...style }}>
-			{s.frames[frame]}
+			{currentFrame}
 			{children != null && <> {children}</>}
 		</span>
 	);

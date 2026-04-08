@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  activateTab,
   HOME_TAB,
   HOME_TAB_ID,
   loadTabs,
@@ -102,6 +103,22 @@ describe("tab preview behavior", () => {
     expect(next.activeTabId).toBe("perm-chat");
   });
 
+  it("reuses state when opening a tab that is already active", () => {
+    const state = openTab(baseState(), fileTab({
+      id: "perm-1",
+      path: "docs/permanent.md",
+      title: "permanent.md",
+    }), { preview: false });
+
+    const next = openTab(state, fileTab({
+      id: "duplicate-id",
+      path: "docs/permanent.md",
+      title: "permanent.md",
+    }));
+
+    expect(next).toBe(state);
+  });
+
   it("promotes preview tabs to permanent when requested", () => {
     const previewState = openTab(baseState(), fileTab({
       id: "preview-1",
@@ -128,6 +145,18 @@ describe("tab preview behavior", () => {
       pinned: true,
       preview: undefined,
     });
+  });
+
+  it("reuses state when activating the already active tab", () => {
+    const state = openTab(baseState(), fileTab({
+      id: "perm-1",
+      path: "docs/permanent.md",
+      title: "permanent.md",
+    }), { preview: false });
+
+    const next = activateTab(state, "perm-1");
+
+    expect(next).toBe(state);
   });
 
   it("can promote the dragged preview tab before reordering it", () => {
