@@ -10,10 +10,16 @@ import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  includesSystemEventToken,
+  normalizeTrimmedString,
+} from "./dreaming-shared.js";
 import {
   applyShortTermPromotions,
   repairShortTermPromotionArtifacts,
@@ -229,7 +235,7 @@ function buildManagedDreamingPatch(
     patch.enabled = true;
   }
 
-  const scheduleKind = normalizeTrimmedString(job.schedule?.kind)?.toLowerCase();
+  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.schedule?.kind));
   const scheduleExpr = normalizeTrimmedString(job.schedule?.expr);
   const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
   if (
@@ -240,16 +246,16 @@ function buildManagedDreamingPatch(
     patch.schedule = desired.schedule;
   }
 
-  const sessionTarget = normalizeTrimmedString(job.sessionTarget)?.toLowerCase();
+  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.sessionTarget));
   if (sessionTarget !== "main") {
     patch.sessionTarget = "main";
   }
-  const wakeMode = normalizeTrimmedString(job.wakeMode)?.toLowerCase();
+  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.wakeMode));
   if (wakeMode !== "next-heartbeat") {
     patch.wakeMode = "next-heartbeat";
   }
 
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
+  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.payload?.kind));
   const payloadText = normalizeTrimmedString(job.payload?.text);
   if (payloadKind !== "systemevent" || !compareOptionalStrings(payloadText, desired.payload.text)) {
     patch.payload = desired.payload;
@@ -418,7 +424,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   if (params.trigger !== "heartbeat") {
     return undefined;
   }
-  if (params.cleanedBody.trim() !== DREAMING_SYSTEM_EVENT_TEXT) {
+  if (!includesSystemEventToken(params.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
     return undefined;
   }
   if (!params.config.enabled) {

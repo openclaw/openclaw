@@ -380,6 +380,7 @@ export async function snapshotDom(opts: {
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxTextChars)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const nodes = [];
     const root = document.documentElement;
     if (!root) return { nodes };
@@ -389,7 +390,7 @@ export async function snapshotDom(opts: {
       const el = cur.el;
       if (!el || el.nodeType !== 1) continue;
       const ref = "n" + String(nodes.length + 1);
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
@@ -510,9 +511,10 @@ export async function querySelector(opts: {
     const lim = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxText)};
     const maxHtml = ${JSON.stringify(maxHtml)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const els = Array.from(document.querySelectorAll(sel)).slice(0, lim);
     return els.map((el, i) => {
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       let text = "";

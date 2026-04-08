@@ -215,7 +215,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    await params.onReplyStart?.();
+    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+      logVerbose(
+        `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   };
 
   const tryEditToolMessage = async (

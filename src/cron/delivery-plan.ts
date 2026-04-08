@@ -1,5 +1,10 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { normalizeOptionalString, normalizeOptionalThreadValue } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../shared/string-coerce.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
@@ -14,10 +19,7 @@ export type CronDeliveryPlan = {
 };
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -28,7 +30,8 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
-  const normalizedMode = typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
+  const normalizedMode =
+    typeof rawMode === "string" ? normalizeLowercaseStringOrEmpty(rawMode) : rawMode;
   const mode =
     normalizedMode === "announce"
       ? "announce"
@@ -97,10 +100,7 @@ export type CronFailureDestinationInput = {
 };
 
 function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   if (trimmed === "announce" || trimmed === "webhook") {
     return trimmed;
   }

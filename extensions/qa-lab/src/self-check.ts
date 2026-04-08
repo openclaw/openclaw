@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { startQaLabServer } from "./lab-server.js";
 import { renderQaMarkdownReport } from "./report.js";
@@ -14,10 +14,19 @@ export type QaSelfCheckResult = {
   scenarioResult: QaScenarioResult;
 };
 
+export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
+  if (params?.outputPath) {
+    return params.outputPath;
+  }
+  const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
+  return path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md");
+}
+
 export async function runQaSelfCheckAgainstState(params: {
   state: QaBusState;
   cfg: OpenClawConfig;
   outputPath?: string;
+  repoRoot?: string;
   notes?: string[];
 }): Promise<QaSelfCheckResult> {
   const startedAt = new Date();
@@ -64,8 +73,10 @@ export async function runQaSelfCheckAgainstState(params: {
     ],
   });
 
-  const outputPath =
-    params.outputPath ?? path.join(process.cwd(), ".artifacts", "qa-e2e", "self-check.md");
+  const outputPath = resolveQaSelfCheckOutputPath({
+    outputPath: params.outputPath,
+    repoRoot: params.repoRoot,
+  });
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, report, "utf8");
 
@@ -77,8 +88,9 @@ export async function runQaSelfCheckAgainstState(params: {
   };
 }
 
-export async function runQaLabSelfCheck(params?: { outputPath?: string }) {
+export async function runQaLabSelfCheck(params?: { repoRoot?: string; outputPath?: string }) {
   const server = await startQaLabServer({
+    repoRoot: params?.repoRoot,
     outputPath: params?.outputPath,
   });
   try {

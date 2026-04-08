@@ -530,6 +530,7 @@ describe("loadPluginManifestRegistry", () => {
       configSchema: { type: "object" },
       configContracts: {
         compatibilityMigrationPaths: ["models.bedrockDiscovery"],
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
@@ -546,12 +547,61 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.configContracts).toEqual({
       compatibilityMigrationPaths: ["models.bedrockDiscovery"],
+      compatibilityRuntimePaths: ["tools.web.search.apiKey"],
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,
         paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
       },
     });
+  });
+
+  it("resolves contract plugin ids by compatibility runtime path", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "brave",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["brave"],
+      },
+      configContracts: {
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      },
+    });
+
+    const otherDir = makeTempDir();
+    writeManifest(otherDir, {
+      id: "google",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["gemini"],
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "brave",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "google",
+        rootDir: otherDir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(
+      registry.plugins
+        .filter(
+          (plugin) =>
+            (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+            (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(
+              "tools.web.search.apiKey",
+            ),
+        )
+        .map((plugin) => plugin.id),
+    ).toEqual(["brave"]);
   });
   it("does not promote legacy top-level capability fields into contracts", () => {
     const dir = makeTempDir();

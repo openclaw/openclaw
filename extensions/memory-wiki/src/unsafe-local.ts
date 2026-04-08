@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -24,7 +25,7 @@ type UnsafeLocalArtifact = {
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
 
 function detectFenceLanguage(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   if (ext === ".json" || ext === ".jsonl") {
     return "json";
   }
@@ -46,7 +47,10 @@ async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
       files.push(...(await listAllowedFilesRecursive(fullPath)));
       continue;
     }
-    if (entry.isFile() && DIRECTORY_TEXT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+    if (
+      entry.isFile() &&
+      DIRECTORY_TEXT_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(entry.name)))
+    ) {
       files.push(fullPath);
     }
   }

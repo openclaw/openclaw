@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+import {
+  buildQaGatewayConfig,
+  DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+  mergeQaControlUiAllowedOrigins,
+} from "./qa-gateway-config.js";
 
 function getPrimaryModel(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -28,16 +32,18 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-channel"]);
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
+    expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
   });
 
-  it("uses built-in OpenAI provider wiring in live mode", () => {
+  it("uses built-in provider wiring in frontier live mode", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",
       gatewayPort: 18789,
       gatewayToken: "token",
       qaBusBaseUrl: "http://127.0.0.1:43124",
       workspaceDir: "/tmp/qa-workspace",
-      providerMode: "live-openai",
+      providerMode: "live-frontier",
+      fastMode: true,
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
     });
@@ -50,6 +56,26 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
       params: { transport: "sse", openaiWsWarmup: false, fastMode: true },
     });
+  });
+
+  it("does not force OpenAI when the frontier lane only needs Anthropic and Google", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      qaBusBaseUrl: "http://127.0.0.1:43124",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      primaryModel: "anthropic/claude-sonnet-4-6",
+      alternateModel: "google/gemini-pro-test",
+      imageGenerationModel: null,
+    });
+
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "anthropic", "google", "qa-channel"]);
+    expect(cfg.plugins?.entries?.anthropic).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.google).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.openai).toBeUndefined();
+    expect(cfg.agents?.defaults).not.toHaveProperty("imageGenerationModel");
   });
 
   it("can disable control ui for suite-only gateway children", () => {
@@ -65,5 +91,42 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.gateway?.controlUi?.enabled).toBe(false);
     expect(cfg.gateway?.controlUi).not.toHaveProperty("allowInsecureAuth");
     expect(cfg.gateway?.controlUi).not.toHaveProperty("allowedOrigins");
+  });
+
+  it("pins control ui to a provided built root when available", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      qaBusBaseUrl: "http://127.0.0.1:43124",
+      workspaceDir: "/tmp/qa-workspace",
+      controlUiRoot: "/tmp/openclaw/dist/control-ui",
+    });
+
+    expect(cfg.gateway?.controlUi?.enabled).toBe(true);
+    expect(cfg.gateway?.controlUi?.root).toBe("/tmp/openclaw/dist/control-ui");
+  });
+
+  it("merges dynamic qa-lab origins without dropping the built control ui root", () => {
+    expect(mergeQaControlUiAllowedOrigins(["http://127.0.0.1:60196", "  "])).toEqual([
+      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+      "http://127.0.0.1:60196",
+    ]);
+
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      qaBusBaseUrl: "http://127.0.0.1:43124",
+      workspaceDir: "/tmp/qa-workspace",
+      controlUiRoot: "/tmp/openclaw/dist/control-ui",
+      controlUiAllowedOrigins: ["http://127.0.0.1:60196"],
+    });
+
+    expect(cfg.gateway?.controlUi?.root).toBe("/tmp/openclaw/dist/control-ui");
+    expect(cfg.gateway?.controlUi?.allowedOrigins).toEqual([
+      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+      "http://127.0.0.1:60196",
+    ]);
   });
 });

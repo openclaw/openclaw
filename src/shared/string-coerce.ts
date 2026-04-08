@@ -14,8 +14,30 @@ export function normalizeOptionalString(value: unknown): string | undefined {
   return normalizeNullableString(value) ?? undefined;
 }
 
+export function normalizeStringifiedOptionalString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return normalizeOptionalString(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return normalizeOptionalString(String(value));
+  }
+  return undefined;
+}
+
 export function normalizeOptionalLowercaseString(value: unknown): string | undefined {
   return normalizeOptionalString(value)?.toLowerCase();
+}
+
+export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalLowercaseString(value) ?? "";
+}
+
+export function lowercasePreservingWhitespace(value: string): string {
+  return value.toLowerCase();
+}
+
+export function localeLowercasePreservingWhitespace(value: string): string {
+  return value.toLocaleLowerCase();
 }
 
 export function resolvePrimaryStringValue(value: unknown): string | undefined {

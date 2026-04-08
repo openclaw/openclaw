@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCliJson, parseCliJsonl } from "./cli-output.js";
+import { extractCliErrorMessage, parseCliJson, parseCliJsonl } from "./cli-output.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -245,5 +245,42 @@ describe("parseCliJsonl", () => {
       sessionId: "session-999",
       usage: undefined,
     });
+  });
+
+  it("extracts nested Claude API errors from failed stream-json output", () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    const apiError = `API Error: 400 ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message,
+      },
+      request_id: "req_011CZqHuXhFetYCnr8325DQc",
+    })}`;
+    const result = extractCliErrorMessage(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: apiError }],
+          },
+          session_id: "session-api-error",
+          error: "unknown",
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: apiError,
+          session_id: "session-api-error",
+        }),
+      ].join("\n"),
+    );
+
+    expect(result).toBe(message);
   });
 });

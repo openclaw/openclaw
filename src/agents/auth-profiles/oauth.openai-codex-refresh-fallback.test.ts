@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
@@ -66,10 +66,9 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
 }));
 
-async function loadFreshOAuthModuleForTest() {
-  vi.resetModules();
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-}
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
   return JSON.parse(
@@ -105,6 +104,10 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   let tempRoot = "";
   let agentDir = "";
 
+  beforeAll(async () => {
+    ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+  });
+
   beforeEach(async () => {
     resetFileLockStateForTest();
     getOAuthApiKeyMock.mockReset();
@@ -128,7 +131,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    await loadFreshOAuthModuleForTest();
   });
 
   afterEach(async () => {
