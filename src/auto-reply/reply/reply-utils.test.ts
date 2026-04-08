@@ -125,6 +125,14 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).not.toContain("NO_REPLY");
   });
 
+  it("strips glued leading NO_REPLY text without leaking the token", () => {
+    const result = normalizeReplyPayload({
+      text: "NO_REPLYThe user is saying hello",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("The user is saying hello");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();

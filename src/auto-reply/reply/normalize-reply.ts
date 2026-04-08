@@ -7,6 +7,7 @@ import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../tokens.js";
@@ -64,7 +65,9 @@ export function normalizeReplyPayload(
   // token never leaks to end users.  If stripping leaves nothing, treat it as
   // silent just like the exact-match path above.  (#30916, #30955)
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
-    text = stripLeadingSilentToken(text, silentToken);
+    if (startsWithSilentToken(text, silentToken)) {
+      text = stripLeadingSilentToken(text, silentToken);
+    }
     text = stripSilentToken(text, silentToken);
     if (!hasContent(text)) {
       opts.onSkip?.("silent");

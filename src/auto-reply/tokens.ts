@@ -5,6 +5,7 @@ export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
+const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
 
 function getSilentExactRegex(token: string): RegExp {
   const cached = silentExactRegexByToken.get(token);
@@ -88,6 +89,19 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
 
 const silentLeadingRegexByToken = new Map<string, RegExp>();
 
+function getSilentLeadingAttachedRegex(token: string): RegExp {
+  const cached = silentLeadingAttachedRegexByToken.get(token);
+  if (cached) {
+    return cached;
+  }
+  const escaped = escapeRegExp(token);
+  // Match one or more leading occurrences of the token where the final token
+  // is glued directly to visible content (for example `NO_REPLYhello`).
+  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=\\S)`, "i");
+  silentLeadingAttachedRegexByToken.set(token, regex);
+  return regex;
+}
+
 function getSilentLeadingRegex(token: string): RegExp {
   const cached = silentLeadingRegexByToken.get(token);
   if (cached) {
@@ -110,8 +124,8 @@ export function stripLeadingSilentToken(text: string, token: string = SILENT_REP
 }
 
 /**
- * Check whether text starts with the silent reply token.
- * Used in streaming to detect leading NO_REPLY that should be stripped.
+ * Check whether text starts with one or more leading silent reply tokens where
+ * the final token is glued directly to visible content.
  */
 export function startsWithSilentToken(
   text: string | undefined,
@@ -120,7 +134,7 @@ export function startsWithSilentToken(
   if (!text) {
     return false;
   }
-  return text.trimStart().startsWith(token);
+  return getSilentLeadingAttachedRegex(token).test(text);
 }
 
 export function isSilentReplyPrefixText(
