@@ -482,6 +482,10 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
         }
       }
+      const useWebhook = Boolean(account.config.webhookUrl);
+      // Publish transport mode so the health monitor's stale-socket heuristic
+      // correctly skips webhook-mode channels (PRODUCT-2933).
+      ctx.setStatus({ mode: useWebhook ? "webhook" : "polling" });
       ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
       return getTelegramRuntime().channel.telegram.monitorTelegramProvider({
         token,
@@ -489,7 +493,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        useWebhook: Boolean(account.config.webhookUrl),
+        useWebhook,
         webhookUrl: account.config.webhookUrl,
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
