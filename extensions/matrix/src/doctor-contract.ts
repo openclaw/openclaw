@@ -71,35 +71,23 @@ function migrateLegacyTrustedDmPolicy(params: {
   if (!dm || dm.policy !== "trusted") {
     return { entry: params.entry, changed: false };
   }
-  // Always migrate "trusted" → "pairing" and leave dm.allowFrom intact.
-  //
-  // Both "pairing" and "allowlist" merge dm.allowFrom with the pairing store
-  // entries from core.channel.pairing.readAllowFromStore() in
-  // resolveMatrixMonitorAccessState (extensions/matrix/src/matrix/monitor/access-state.ts),
-  // so an explicit allowFrom list and previously paired senders are accepted
-  // under either policy. The only semantic difference is what happens to an
-  // unknown sender:
-  //
-  //   - "pairing":   send a pairing request reply (operator can approve)
-  //   - "allowlist": drop silently (no path for new senders to gain access)
-  //
-  // We don't know exactly what behavior legacy "trusted" had for unknown
-  // senders, but "pairing" is a strict superset of "allowlist" for accepting
-  // existing senders, and it preserves the ability to onboard new ones, which
-  // is the most likely intent of an operator who chose "trusted" in the first
-  // place. Mapping unconditionally to "pairing" also avoids the edge case
-  // where allowFrom is whitespace-only or otherwise effectively empty after
-  // downstream normalization.
-  const nextDm = { ...dm, policy: "pairing" };
   const allowFromRaw = dm.allowFrom;
-  const preservedCount = Array.isArray(allowFromRaw)
+  // Trim before counting: downstream allowlist normalization drops whitespace-only
+  // entries, so a config like ["   "] must still fall back to "pairing"
+  // instead of becoming an effectively empty allowlist.
+  const allowFromEntries = Array.isArray(allowFromRaw)
     ? allowFromRaw.filter(
         (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
       ).length
     : 0;
+  // Preserve the operator's existing trust boundary when an explicit allowFrom
+  // list is present; only fall back to pairing when the effective allowlist is
+  // empty.
+  const nextPolicy: "allowlist" | "pairing" = allowFromEntries > 0 ? "allowlist" : "pairing";
+  const nextDm = { ...dm, policy: nextPolicy };
   params.changes.push(
-    `Migrated ${params.pathPrefix}.dm.policy "trusted" → "pairing" (legacy alias removed; ` +
-      `${preservedCount > 0 ? `preserved ${preservedCount} ${params.pathPrefix}.dm.allowFrom ${preservedCount === 1 ? "entry" : "entries"}` : "no allowFrom entries present"}).`,
+    `Migrated ${params.pathPrefix}.dm.policy "trusted" → "${nextPolicy}" (legacy alias removed; ` +
+      `${allowFromEntries > 0 ? `preserved ${allowFromEntries} ${params.pathPrefix}.dm.allowFrom ${allowFromEntries === 1 ? "entry" : "entries"}` : "no allowFrom entries present, defaulting to pairing for safety"}).`,
   );
   return { entry: { ...params.entry, dm: nextDm }, changed: true };
 }
