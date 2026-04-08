@@ -1,5 +1,6 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -360,6 +361,48 @@ export async function monitorWebInbox(options: {
       }
     } catch (err) {
       logVerbose(`Inbound media download failed: ${String(err)}`);
+    }
+
+    // Preflight audio transcription: if the body is just <media:audio> and we have
+    // an audio file, transcribe it before handing off to the agent — same approach
+    // as Telegram and Discord.
+    if (body === "<media:audio>" && mediaPath && mediaType?.startsWith("audio/")) {
+      const cfg = loadConfig();
+      if (cfg.tools?.media?.audio?.enabled !== false) {
+        try {
+          const { transcribeFirstAudio } = await import("./preflight-audio.runtime.js");
+          const transcript = await transcribeFirstAudio({
+            ctx: {
+              MediaPaths: [mediaPath],
+              MediaTypes: [mediaType],
+            },
+            cfg,
+            agentDir: undefined,
+          });
+          if (transcript) {
+            body = transcript;
+            // Echo transcript back to chat if configured
+            const audioCfg = cfg.tools?.media?.audio;
+            if (audioCfg?.echoTranscript) {
+              const chatJid = msg.key?.remoteJid;
+              if (chatJid) {
+                const format = audioCfg.echoFormat ?? '📝 "{transcript}"';
+                const echoText = format.replaceAll("{transcript}", transcript);
+                await sock.sendMessage(chatJid, { text: echoText });
+              }
+            }
+            if (shouldLogVerbose()) {
+              logVerbose(`whatsapp: preflight audio transcribed (${transcript.length} chars)`);
+            }
+            // Clear media fields — audio has been consumed as text
+            mediaPath = undefined;
+            mediaType = undefined;
+            mediaFileName = undefined;
+          }
+        } catch (err) {
+          logVerbose(`whatsapp: preflight audio transcription failed: ${String(err)}`);
+        }
+      }
     }
 
     return {
