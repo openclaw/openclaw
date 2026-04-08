@@ -23,6 +23,12 @@ assembly, and contract enforcement.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
+- Preserve laziness in discovery and activation flows. Loader, registry, and
+  public-artifact changes must not eagerly import bundled plugin runtime barrels
+  when metadata, light exports, or typed contracts are sufficient.
+- If a plugin exposes separate light and heavy runtime surfaces, keep discovery,
+  inventory, and setup-state checks on the light path until actual execution
+  needs the heavy module.
 - If a loader or registry change affects plugin authors, update the public SDK,
   docs, and contract tests instead of relying on incidental internals.
 - Do not normalize "plugin-owned" into "core-owned" by scattering direct reads
@@ -34,3 +40,23 @@ assembly, and contract enforcement.
 - Keep contract loading and contract tests on the dedicated bundled registry
   path. Do not make contract validation depend on activating providers through
   unrelated production resolution flows.
+- Prefer shared provider-family helpers over ad hoc policy in plugin registry
+  hooks. If multiple providers need the same replay policy, tool compat, stream
+  wrapper composition, or payload patch behavior, centralize that helper before
+  adding another plugin-local lambda.
+- Keep provider policy layers separated:
+  auth/catalog/onboarding stay plugin-owned,
+  transport/replay/tool compat families belong in shared helpers,
+  registry/runtime code should compose those layers rather than re-encoding
+  policy inline.
+- When a provider hook grows a nested chain of wrapper composition or repeated
+  compat flags, treat that as a regression signal. Extract the shared helper or
+  composer instead of letting one more plugin carry a near-copy.
+
+## Verification
+
+- If you touch loader, registry, activation, or public-artifact code that can
+  change bundled plugin import fanout, run `pnpm build`.
+- If the change can alter bundled plugin startup cost, re-profile the affected
+  plugin entrypoint with:
+  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`

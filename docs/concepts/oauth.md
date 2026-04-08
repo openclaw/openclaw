@@ -3,16 +3,25 @@ summary: "OAuth in OpenClaw: token exchange, storage, and multi-account patterns
 read_when:
   - You want to understand OpenClaw OAuth end-to-end
   - You hit token invalidation / logout issues
-  - You want setup-token or OAuth auth flows
+  - You want Claude CLI or OAuth auth flows
   - You want multiple accounts or profile routing
 title: "OAuth"
 ---
 
 # OAuth
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, you can either use the **setup-token** flow or reuse a local **Claude CLI** login on the gateway host. Anthropic subscription use outside Claude Code has been restricted for some users in the past, so treat it as a user-choice risk and verify current Anthropic policy yourself. OpenAI Codex OAuth is explicitly supported for use in external tools like OpenClaw. This page explains:
+OpenClaw supports “subscription auth” via OAuth for providers that offer it
+(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
+is now:
 
-For Anthropic in production, API key auth is the safer recommended path over subscription setup-token auth.
+- **Anthropic API key**: normal Anthropic API billing
+- **Anthropic Claude CLI / subscription auth inside OpenClaw**: Anthropic staff
+  told us this usage is allowed again
+
+OpenAI Codex OAuth is explicitly supported for use in external tools like
+OpenClaw. This page explains:
+
+For Anthropic in production, API key auth is the safer recommended path.
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
@@ -37,6 +46,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
+- when credentials are reused from an external CLI like Codex CLI, OpenClaw
+  mirrors them with provenance and re-reads that external source instead of
+  rotating the refresh token itself
 
 ## Storage (where tokens live)
 
@@ -54,74 +66,46 @@ All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full r
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
-## Anthropic setup-token (subscription auth)
+## Anthropic legacy token compatibility
 
 <Warning>
-Anthropic setup-token support is technical compatibility, not a policy guarantee.
-Anthropic has blocked some subscription usage outside Claude Code in the past.
-Decide for yourself whether to use subscription auth, and verify Anthropic's current terms.
+Anthropic's public Claude Code docs say direct Claude Code use stays within
+Claude subscription limits, and Anthropic staff told us OpenClaw-style Claude
+CLI usage is allowed again. OpenClaw therefore treats Claude CLI reuse and
+`claude -p` usage as sanctioned for this integration unless Anthropic
+publishes a new policy.
+
+For Anthropic's current direct-Claude-Code plan docs, see [Using Claude Code
+with your Pro or Max
+plan](https://support.claude.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan)
+and [Using Claude Code with your Team or Enterprise
+plan](https://support.anthropic.com/en/articles/11845131-using-claude-code-with-your-team-or-enterprise-plan/).
+
+If you want other subscription-style options in OpenClaw, see [OpenAI
+Codex](/providers/openai), [Qwen Cloud Coding
+Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
+and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
-Run `claude setup-token` on any machine, then paste it into OpenClaw:
-
-```bash
-openclaw models auth setup-token --provider anthropic
-```
-
-If you generated the token elsewhere, paste it manually:
-
-```bash
-openclaw models auth paste-token --provider anthropic
-```
-
-Verify:
-
-```bash
-openclaw models status
-```
+OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.
 
 ## Anthropic Claude CLI migration
 
-If Claude CLI is already installed and signed in on the gateway host, you can
-switch Anthropic model selection over to the local CLI backend:
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-Onboarding shortcut:
-
-```bash
-openclaw onboard --auth-choice anthropic-cli
-```
-
-This keeps existing Anthropic auth profiles for rollback, but rewrites the main
-default-model path from `anthropic/...` to `claude-cli/...`.
+OpenClaw supports Anthropic Claude CLI reuse again. If you already have a local
+Claude login on the host, onboarding/configure can reuse it directly.
 
 ## OAuth exchange (how login works)
 
 OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
-### Anthropic setup-token / Claude CLI
+### Anthropic setup-token
 
 Flow shape:
 
-Setup-token path:
-
-1. run `claude setup-token`
-2. paste the token into OpenClaw
-3. store as a token auth profile (no refresh)
-
-Claude CLI path:
-
-1. sign in with `claude auth login` on the gateway host
-2. run `openclaw models auth login --provider anthropic --method cli --set-default`
-3. store no new auth profile; switch model selection to `claude-cli/...`
-
-Wizard paths:
-
-- `openclaw onboard` → auth choice `anthropic-cli`
-- `openclaw onboard` → auth choice `setup-token` (Anthropic)
+1. start Anthropic setup-token or paste-token from OpenClaw
+2. OpenClaw stores the resulting Anthropic credential in an auth profile
+3. model selection stays on `anthropic/...`
+4. existing Anthropic auth profiles remain available for rollback/order control
 
 ### OpenAI Codex (ChatGPT OAuth)
 
@@ -146,6 +130,8 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
+- exception: reused external CLI credentials stay externally managed; OpenClaw
+  re-reads the CLI auth store and never spends the copied refresh token itself
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

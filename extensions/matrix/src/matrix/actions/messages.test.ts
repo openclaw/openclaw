@@ -65,7 +65,7 @@ function createMessagesClient(params: {
   }));
   const hydrateEvents = vi.fn(
     async (_roomId: string, _events: Array<Record<string, unknown>>) =>
-      (params.hydratedChunk ?? params.chunk) as any,
+      (params.hydratedChunk ?? params.chunk) as unknown,
   );
   const getEvent = vi.fn(async () => params.pollRoot ?? null);
   const getRelations = vi.fn(async () => ({
@@ -143,6 +143,44 @@ describe("matrix message actions", () => {
         "m.mentions": { user_ids: ["@bob:example.org"] },
         "m.new_content": expect.objectContaining({
           "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
+        }),
+      }),
+    );
+  });
+
+  it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
+    installMatrixActionTestRuntime();
+    const sendMessage = vi.fn().mockResolvedValue("evt-edit");
+    const client = {
+      getEvent: vi.fn().mockResolvedValue({
+        content: {
+          body: "hello @alice:example.org",
+        },
+      }),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      sendMessage,
+      prepareForOneOff: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(() => undefined),
+      stopAndPersist: vi.fn(async () => undefined),
+    } as unknown as MatrixClient;
+
+    const result = await editMatrixMessage(
+      "!room:example.org",
+      "$original",
+      "hello again @alice:example.org",
+      { client },
+    );
+
+    expect(result).toEqual({ eventId: "evt-edit" });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "!room:example.org",
+      expect.objectContaining({
+        "m.mentions": {},
+        "m.new_content": expect.objectContaining({
+          body: "hello again @alice:example.org",
+          "m.mentions": { user_ids: ["@alice:example.org"] },
         }),
       }),
     );

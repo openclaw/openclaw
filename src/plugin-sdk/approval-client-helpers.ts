@@ -4,14 +4,19 @@ import { matchesApprovalRequestFilters } from "../infra/approval-request-filters
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import { normalizeAccountId } from "./routing.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalTarget = "dm" | "channel" | "both";
+type ChannelExecApprovalEnableMode = boolean | "auto";
 
 type ChannelApprovalConfig = {
-  enabled?: boolean;
+  enabled?: ChannelExecApprovalEnableMode;
   target?: ApprovalTarget;
   agentFilter?: string[];
   sessionFilter?: string[];
@@ -22,17 +27,24 @@ type ApprovalProfileParams = {
   accountId?: string | null;
 };
 
-function defaultNormalizeSenderId(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
   const execApprovals = cfg.approvals?.exec;
   if (!execApprovals?.enabled) {
     return false;
   }
   return execApprovals.mode === "targets" || execApprovals.mode === "both";
+}
+
+export { getExecApprovalReplyMetadata, matchesApprovalRequestFilters };
+
+export function isChannelExecApprovalClientEnabledFromConfig(params: {
+  enabled?: ChannelExecApprovalEnableMode;
+  approverCount: number;
+}): boolean {
+  if (params.approverCount <= 0) {
+    return false;
+  }
+  return params.enabled !== false;
 }
 
 export function isChannelExecApprovalTargetRecipient(params: {
@@ -47,9 +59,9 @@ export function isChannelExecApprovalTargetRecipient(params: {
     normalizedAccountId?: string;
   }) => boolean;
 }): boolean {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
   const normalizedSenderId = params.senderId ? normalizeSenderId(params.senderId) : undefined;
-  const normalizedChannel = params.channel.trim().toLowerCase();
+  const normalizedChannel = normalizeOptionalLowercaseString(params.channel);
   if (!normalizedSenderId || !isApprovalTargetsMode(params.cfg)) {
     return false;
   }
@@ -59,7 +71,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
   }
   const normalizedAccountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   return targets.some((target) => {
-    if (target.channel?.trim().toLowerCase() !== normalizedChannel) {
+    if (normalizeOptionalLowercaseString(target.channel) !== normalizedChannel) {
       return false;
     }
     if (
@@ -87,11 +99,14 @@ export function createChannelExecApprovalProfile(params: {
   fallbackAgentIdFromSessionKey?: boolean;
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
 
   const isClientEnabled = (input: ApprovalProfileParams): boolean => {
     const config = params.resolveConfig(input);
-    return Boolean(config?.enabled && params.resolveApprovers(input).length > 0);
+    return isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: params.resolveApprovers(input).length,
+    });
   };
 
   const isApprover = (input: ApprovalProfileParams & { senderId?: string | null }): boolean => {
@@ -119,16 +134,19 @@ export function createChannelExecApprovalProfile(params: {
       return false;
     }
     const config = params.resolveConfig(input);
-    if (!config?.enabled) {
-      return false;
-    }
-    if (params.resolveApprovers(input).length === 0) {
+    const approverCount = params.resolveApprovers(input).length;
+    if (
+      !isChannelExecApprovalClientEnabledFromConfig({
+        enabled: config?.enabled,
+        approverCount,
+      })
+    ) {
       return false;
     }
     return matchesApprovalRequestFilters({
       request: input.request.request,
-      agentFilter: config.agentFilter,
-      sessionFilter: config.sessionFilter,
+      agentFilter: config?.agentFilter,
+      sessionFilter: config?.sessionFilter,
       fallbackAgentIdFromSessionKey: params.fallbackAgentIdFromSessionKey === true,
     });
   };

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -238,7 +239,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "openclaw", input: "hi" }),
       });
-      expect(resMissingAuth.status).toBe(403);
+      expect(resMissingAuth.status).toBe(200);
       await ensureResponseConsumed(resMissingAuth);
 
       const resMissingModel = await postResponses(port, { input: "hi" });
@@ -466,7 +467,41 @@ describe("OpenResponses HTTP API (e2e)", () => {
         (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(inputFileMessage).toBe("read this");
       expect(inputFilePrompt).toContain('<file name="hello.txt">');
+      expect(inputFilePrompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      expect(inputFilePrompt).toContain("Source: External");
       await ensureResponseConsumed(resInputFile);
+
+      mockAgentOnce([{ text: "ok" }]);
+      const resInputFileWhitespace = await postResponses(port, {
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "read this" },
+              {
+                type: "input_file",
+                source: {
+                  type: "base64",
+                  media_type: "text/plain",
+                  data: Buffer.from("  hello  ").toString("base64"),
+                  filename: "spaces.txt",
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(resInputFileWhitespace.status).toBe(200);
+      const optsInputFileWhitespace = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const inputFileWhitespacePrompt =
+        (optsInputFileWhitespace as { extraSystemPrompt?: string } | undefined)
+          ?.extraSystemPrompt ?? "";
+      expect(inputFileWhitespacePrompt).toContain('<file name="spaces.txt">');
+      expect(inputFileWhitespacePrompt).toContain("\n  hello  \n");
+      expect(inputFileWhitespacePrompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      await ensureResponseConsumed(resInputFileWhitespace);
 
       mockAgentOnce([{ text: "ok" }]);
       const resInputFileInjection = await postResponses(port, {
@@ -608,6 +643,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const item = output[0] ?? {};
       expect(item.type).toBe("message");
       expect(item.role).toBe("assistant");
+      expect(item.phase).toBe("final_answer");
 
       const content = item.content as Array<Record<string, unknown>>;
       expect(content.length).toBe(1);
@@ -673,6 +709,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
         .join("");
       expect(deltas).toBe("hello");
 
+      const completedDeltaResponse = deltaEvents.find((e) => e.event === "response.completed");
+      const completedDeltaOutput = (
+        JSON.parse(completedDeltaResponse?.data ?? "{}") as {
+          response?: { output?: Array<Record<string, unknown>> };
+        }
+      ).response?.output;
+      expect(completedDeltaOutput?.[0]?.phase).toBe("final_answer");
+
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],
@@ -714,7 +758,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it("treats HTTP callers as non-owner regardless of requested scopes", async () => {
+  it("treats write-scoped HTTP callers as non-owner and admin-scoped callers as owner", async () => {
     const port = enabledPort;
 
     agentCommand.mockClear();
@@ -743,8 +787,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const adminScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    // Requested HTTP scopes do not prove owner identity for owner-only tools.
-    expect(adminScopeOpts?.senderIsOwner).toBe(false);
+    expect(adminScopeOpts?.senderIsOwner).toBe(true);
     await ensureResponseConsumed(adminScopeResponse);
 
     agentCommand.mockClear();
@@ -765,7 +808,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const streamingOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    expect(streamingOpts?.senderIsOwner).toBe(false);
+    expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
     expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
   });
@@ -832,6 +875,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     };
     expect(json.status).toBe("incomplete");
     expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(json.output?.[0]?.phase).toBe("commentary");
     expect(
       ((json.output?.[0]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
         | string
@@ -883,6 +927,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     ).response;
     expect(response?.status).toBe("incomplete");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(response?.output?.[0]?.phase).toBe("commentary");
     expect(
       (((response?.output?.[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
         ?.text as string | undefined) ?? "",
@@ -1125,4 +1170,109 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await capServer.close({ reason: "responses url cap hardening test done" });
     }
   });
+
+  it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
+    const port = enabledPort;
+    let serverAbortSignal: AbortSignal | undefined;
+
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(
+      (opts: unknown) =>
+        new Promise<undefined>((resolve) => {
+          const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+          serverAbortSignal = signal;
+          if (signal?.aborted) {
+            resolve(undefined);
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+        }),
+    );
+
+    const clientReq = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: "/v1/responses",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+    clientReq.on("error", () => {});
+    clientReq.end(
+      JSON.stringify({
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    });
+
+    clientReq.destroy();
+
+    await vi.waitFor(
+      () => {
+        expect(serverAbortSignal?.aborted).toBe(true);
+      },
+      { timeout: 5_000, interval: 50 },
+    );
+  });
+
+  it(
+    "aborts agent command when non-streaming client disconnects",
+    { timeout: 15_000 },
+    async () => {
+      const port = enabledPort;
+      let serverAbortSignal: AbortSignal | undefined;
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce(
+        (opts: unknown) =>
+          new Promise<undefined>((resolve) => {
+            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+            serverAbortSignal = signal;
+            if (signal?.aborted) {
+              resolve(undefined);
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          }),
+      );
+
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: "/v1/responses",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer secret",
+        },
+      });
+      clientReq.on("error", () => {});
+      clientReq.end(
+        JSON.stringify({
+          model: "openclaw",
+          input: "hi",
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      });
+
+      clientReq.destroy();
+
+      await vi.waitFor(
+        () => {
+          expect(serverAbortSignal?.aborted).toBe(true);
+        },
+        { timeout: 5_000, interval: 50 },
+      );
+    },
+  );
 });

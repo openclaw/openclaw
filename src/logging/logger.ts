@@ -166,10 +166,13 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   if (!loggingState.cachedSettings) {
     loggingState.cachedSettings = settings;
   }
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
-  return levelToMinLevel(level) <= levelToMinLevel(settings.level);
+  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
@@ -382,7 +385,7 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
+  const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
   return base.getSubLogger({
     name,
@@ -397,6 +400,7 @@ export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): Pin
     toPinoLikeLogger(
       logger.getSubLogger({
         name: bindings ? JSON.stringify(bindings) : undefined,
+        minLevel: logger.settings.minLevel,
       }),
       level,
     );

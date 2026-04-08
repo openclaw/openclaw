@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  matrixSetupAdapter,
+  matrixSetupWizard,
+} from "../../test/helpers/channels/matrix-setup-contract.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -110,6 +114,114 @@ function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
       npmSpec: "@openclaw/msteams",
     },
   };
+}
+
+async function setMatrixOnboardingRegistryForTests(): Promise<void> {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "matrix",
+            label: "Matrix",
+            capabilities: { chatTypes: ["direct", "group", "thread"] },
+          }),
+          meta: {
+            id: "matrix",
+            label: "Matrix",
+            selectionLabel: "Matrix (plugin)",
+            docsPath: "/channels/matrix",
+            blurb: "open protocol; configure a homeserver + access token.",
+          },
+          setup: matrixSetupAdapter,
+          setupWizard: matrixSetupWizard,
+        },
+      },
+    ]),
+  );
+}
+
+async function withClearedMatrixSetupEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previousEnv = {
+    MATRIX_HOMESERVER: process.env.MATRIX_HOMESERVER,
+    MATRIX_USER_ID: process.env.MATRIX_USER_ID,
+    MATRIX_ACCESS_TOKEN: process.env.MATRIX_ACCESS_TOKEN,
+    MATRIX_PASSWORD: process.env.MATRIX_PASSWORD,
+    MATRIX_DEVICE_ID: process.env.MATRIX_DEVICE_ID,
+    MATRIX_DEVICE_NAME: process.env.MATRIX_DEVICE_NAME,
+  };
+  delete process.env.MATRIX_HOMESERVER;
+  delete process.env.MATRIX_USER_ID;
+  delete process.env.MATRIX_ACCESS_TOKEN;
+  delete process.env.MATRIX_PASSWORD;
+  delete process.env.MATRIX_DEVICE_ID;
+  delete process.env.MATRIX_DEVICE_NAME;
+
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+function createMatrixQuickstartPrompter(notes: string[]): WizardPrompter {
+  const select = vi.fn(async ({ message }: { message: string }) => {
+    if (message === "Select channel (QuickStart)") {
+      return "matrix";
+    }
+    if (message === "Matrix auth method") {
+      return "token";
+    }
+    throw new Error(`unexpected select prompt: ${message}`);
+  });
+  const multiselect = vi.fn(async () => {
+    throw new Error("unexpected multiselect");
+  });
+  const text = vi.fn(async ({ message }: { message: string }) => {
+    if (message === "Matrix homeserver URL") {
+      return "https://matrix.example.org";
+    }
+    if (message === "Matrix access token") {
+      return "matrix-token";
+    }
+    if (message === "Matrix device name (optional)") {
+      return "OpenClaw Gateway";
+    }
+    throw new Error(`unexpected text prompt: ${message}`);
+  });
+  const confirm = vi.fn(async ({ message }: { message: string }) => {
+    if (message === "Enable end-to-end encryption (E2EE)?") {
+      return false;
+    }
+    if (message === "Configure Matrix rooms access?") {
+      return false;
+    }
+    if (message === "Configure DM access policies now? (default: pairing)") {
+      return false;
+    }
+    if (message.startsWith("Matrix env vars detected")) {
+      return false;
+    }
+    throw new Error(`unexpected confirm prompt: ${message}`);
+  });
+
+  return createPrompter({
+    select: select as unknown as WizardPrompter["select"],
+    multiselect,
+    text: text as unknown as WizardPrompter["text"],
+    confirm: confirm as unknown as WizardPrompter["confirm"],
+    note: vi.fn(async (message: unknown) => {
+      notes.push(String(message));
+    }),
+  });
 }
 
 function setMinimalOnboardingRegistryForTests(): void {
@@ -466,8 +578,10 @@ vi.mock("../channel-web.js", () => ({
   loginWeb: vi.fn(async () => {}),
 }));
 
-vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/catalog.js")>();
+vi.mock("../channels/plugins/catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
+    "../channels/plugins/catalog.js",
+  );
   return {
     ...actual,
     listChannelPluginCatalogEntries: ((...args) => {
@@ -480,20 +594,27 @@ vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+vi.mock("../plugins/manifest-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
+    "../plugins/manifest-registry.js",
+  );
   return {
     ...actual,
     loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
   };
 });
 
+vi.mock("../plugin-sdk/matrix-deps.js", () => ({
+  ensureMatrixSdkInstalled: vi.fn(async () => {}),
+  isMatrixSdkAvailable: vi.fn(() => true),
+}));
+
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
 
-vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
-  const actual = await importOriginal();
+vi.mock("./channel-setup/plugin-install.js", async () => {
+  const actual = await vi.importActual("./channel-setup/plugin-install.js");
   return {
     ...(actual as Record<string, unknown>),
     ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
@@ -557,6 +678,27 @@ describe("setupChannels", () => {
 
   it("renders the QuickStart channel picker without requiring the LINE runtime", async () => {
     await expectQuickstartPickerSkipsWithoutRuntime();
+  });
+
+  it("runs Matrix guided setup through setupChannels without falling back", async () => {
+    await withClearedMatrixSetupEnv(async () => {
+      await setMatrixOnboardingRegistryForTests();
+
+      const notes: string[] = [];
+      const prompter = createMatrixQuickstartPrompter(notes);
+      const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+        quickstartDefaults: true,
+      });
+
+      expect(cfg.channels?.matrix).toMatchObject({
+        enabled: true,
+        homeserver: "https://matrix.example.org",
+        accessToken: "matrix-token",
+        deviceName: "OpenClaw Gateway",
+        encryption: false,
+      });
+      expect(notes.join("\n")).not.toContain("matrix does not support guided setup yet.");
+    });
   });
 
   it("renders the QuickStart channel picker without requiring the Matrix runtime", async () => {
@@ -673,6 +815,51 @@ describe("setupChannels", () => {
         pluginId: "@openclaw/msteams-plugin",
       }),
     );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("hides channels marked hidden from setup in the picker", async () => {
+    const qaChannelBase = createChannelTestPluginBase({
+      id: "qa-channel",
+      label: "QA Channel",
+      docsPath: "/channels/qa-channel",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qa-channel",
+          source: "test",
+          plugin: {
+            ...qaChannelBase,
+            meta: {
+              ...qaChannelBase.meta,
+              showInSetup: false,
+            },
+          },
+        },
+      ]),
+    );
+
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        expect(
+          (options as Array<{ label?: string }>).some((option) =>
+            option.label?.includes("QA Channel"),
+          ),
+        ).toBe(false);
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     expect(multiselect).not.toHaveBeenCalled();
   });
 

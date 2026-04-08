@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../test-support.js";
 import type { BrowserServerState } from "./server-context.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
@@ -9,8 +9,7 @@ export function makeState(
   profile: "remote" | "openclaw",
 ): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
   return {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    server: null as any,
+    server: null as unknown as BrowserServerState["server"],
     port: 0,
     resolved: {
       enabled: true,

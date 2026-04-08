@@ -1,3 +1,5 @@
+import { readStringValue } from "../shared/string-coerce.js";
+
 export type GatewaySelfPresence = {
   host?: string;
   ip?: string;
@@ -19,9 +21,9 @@ export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence 
     return null;
   }
   return {
-    host: typeof self.host === "string" ? self.host : undefined,
-    ip: typeof self.ip === "string" ? self.ip : undefined,
-    version: typeof self.version === "string" ? self.version : undefined,
-    platform: typeof self.platform === "string" ? self.platform : undefined,
+    host: readStringValue(self.host),
+    ip: readStringValue(self.ip),
+    version: readStringValue(self.version),
+    platform: readStringValue(self.platform),
   };
 }

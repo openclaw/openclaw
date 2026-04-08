@@ -2,6 +2,7 @@ import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "n
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -196,11 +197,13 @@ export async function getChromeWebSocketUrl(
     return cdpUrl;
   }
   const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
-  const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
+  const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     return null;
   }
-  return normalizeCdpWsUrl(wsUrl, cdpUrl);
+  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, cdpUrl);
+  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy);
+  return normalizedWsUrl;
 }
 
 async function canRunCdpHealthCommand(
@@ -407,7 +410,8 @@ export async function launchOpenClawChrome(
   }
 
   if (!(await isChromeReachable(profile.cdpUrl))) {
-    const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
+    const stderrOutput =
+      normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
     const stderrHint = stderrOutput
       ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
       : "";

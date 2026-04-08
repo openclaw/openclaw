@@ -228,6 +228,30 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
 
+  it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+
+    writeLegacySessionsFixture({
+      root,
+      sessions: {
+        "group:123@g.us": { sessionId: "wa", updatedAt: 10 },
+        "group:abc": { sessionId: "generic", updatedAt: 9 },
+      },
+    });
+
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
+
+    expect(store["agent:main:whatsapp:group:123@g.us"]?.sessionId).toBe("wa");
+    expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("generic");
+  });
+
   it("migrates legacy agent dir with conflict fallback", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     writeLegacyAgentFiles(root, {
@@ -304,10 +328,10 @@ describe("doctor legacy state migrations", () => {
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-default-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-default-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const target = path.join(oauthDir, "telegram-default-allowFrom.json");
@@ -332,10 +356,10 @@ describe("doctor legacy state migrations", () => {
       },
     };
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-bot2-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-bot2-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
@@ -368,10 +392,10 @@ describe("doctor legacy state migrations", () => {
     };
 
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-alerts-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-alerts-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");

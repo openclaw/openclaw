@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
@@ -10,14 +10,14 @@ const mocks = vi.hoisted(() => ({
   getChannelActivity: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    loadConfig: mocks.loadConfig,
-  };
-});
+vi.mock("../../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
+  readConfigFileSnapshot: vi.fn(async () => ({
+    config: {},
+    path: "openclaw.config.json",
+    raw: "{}",
+  })),
+}));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,

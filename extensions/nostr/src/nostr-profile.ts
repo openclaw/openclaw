@@ -6,6 +6,7 @@
  */
 
 import { finalizeEvent, SimplePool, type Event } from "nostr-tools";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 
 // ============================================================================
@@ -182,12 +183,11 @@ export async function publishProfileEvent(
         setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
-      // oxlint-disable-next-line typescript/no-floating-promises
-      await Promise.race([pool.publish([relay], event), timeoutPromise]);
+      await Promise.race([...pool.publish([relay], event), timeoutPromise]);
 
       successes.push(relay);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatErrorMessage(err);
       failures.push({ relay, error: errorMessage });
     }
   });
