@@ -101,6 +101,7 @@ export type AuthProbeOptions = {
   timeoutMs: number;
   concurrency: number;
   maxTokens: number;
+  probeAll?: boolean;
 };
 
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
@@ -270,11 +271,19 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const model = selectProbeModel({
-      provider: providerKey,
-      candidates,
-      catalog,
-    });
+    const models: Array<{ provider: string; model: string } | null> = [];
+    if (options.probeAll) {
+      const providerModels = candidates.get(providerKey);
+      if (providerModels && providerModels.length > 0) {
+        for (const m of providerModels) {
+          models.push({ provider: providerKey, model: m });
+        }
+      } else {
+        models.push(selectProbeModel({ provider: providerKey, candidates, catalog }));
+      }
+    } else {
+      models.push(selectProbeModel({ provider: providerKey, candidates, catalog }));
+    }
 
     const profileIds = listProfilesForProvider(store, providerKey);
     const explicitOrder = (() => {
@@ -297,10 +306,11 @@ export async function buildProbeTargets(params: {
         const mode = profile?.type;
         const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
         if (explicitOrder && !explicitOrder.includes(profileId)) {
+          const firstModel = models[0];
           results.push({
             provider: providerKey,
             profileId,
-            model: model ? `${model.provider}/${model.model}` : undefined,
+            model: firstModel ? `${firstModel.provider}/${firstModel.model}` : undefined,
             label,
             source: "profile",
             mode,
@@ -318,9 +328,10 @@ export async function buildProbeTargets(params: {
             profileId,
           });
           const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);
+          const firstModel = models[0];
           results.push({
             provider: providerKey,
-            model: model ? `${model.provider}/${model.model}` : undefined,
+            model: firstModel ? `${firstModel.provider}/${firstModel.model}` : undefined,
             profileId,
             label,
             source: "profile",
@@ -337,9 +348,10 @@ export async function buildProbeTargets(params: {
           cache: refResolveCache,
         });
         if (unresolvedRefIssue) {
+          const firstModel = models[0];
           results.push({
             provider: providerKey,
-            model: model ? `${model.provider}/${model.model}` : undefined,
+            model: firstModel ? `${firstModel.provider}/${firstModel.model}` : undefined,
             profileId,
             label,
             source: "profile",
@@ -350,7 +362,10 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
-        if (!model) {
+        const validModels = models.filter(
+          (m): m is { provider: string; model: string } => m !== null,
+        );
+        if (validModels.length === 0) {
           results.push({
             provider: providerKey,
             model: undefined,
@@ -364,14 +379,16 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
-        targets.push({
-          provider: providerKey,
-          model,
-          profileId,
-          label,
-          source: "profile",
-          mode,
-        });
+        for (const model of validModels) {
+          targets.push({
+            provider: providerKey,
+            model,
+            profileId,
+            label,
+            source: "profile",
+            mode,
+          });
+        }
       }
       continue;
     }
@@ -390,7 +407,10 @@ export async function buildProbeTargets(params: {
     const source = envKey ? "env" : "models.json";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
-    if (!model) {
+    const validModels = models.filter(
+      (m): m is { provider: string; model: string } => m !== null,
+    );
+    if (validModels.length === 0) {
       results.push({
         provider: providerKey,
         model: undefined,
@@ -404,13 +424,15 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    targets.push({
-      provider: providerKey,
-      model,
-      label,
-      source,
-      mode,
-    });
+    for (const model of validModels) {
+      targets.push({
+        provider: providerKey,
+        model,
+        label,
+        source,
+        mode,
+      });
+    }
   }
 
   return { targets, results };
