@@ -1,7 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import {
+  isOpenClawHomeEnvExplicit,
+  resolveRequiredHomeDir,
+} from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -91,7 +94,7 @@ function resolveProfileStateDir(
   // isolation at the root level. Appending a profile suffix would create a mismatch
   // between the CLI path (<OPENCLAW_HOME>/.openclaw-<profile>) and the daemon path
   // (<OPENCLAW_HOME>/.openclaw), so we skip the suffix in this case.
-  if (env.OPENCLAW_HOME?.trim()) {
+  if (isOpenClawHomeEnvExplicit(env as NodeJS.ProcessEnv)) {
     return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), ".openclaw");
   }
   const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
