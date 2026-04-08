@@ -2,6 +2,16 @@ import { fetchBrowserJson } from "./client-fetch.js";
 
 export type BrowserTransport = "cdp" | "chrome-mcp";
 
+export type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
+
+export type BrowserDoctorCheck = {
+  id: string;
+  label: string;
+  status: BrowserDoctorCheckStatus;
+  summary: string;
+  fixHint?: string;
+};
+
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
@@ -23,6 +33,14 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+};
+
+export type BrowserDoctorReport = {
+  ok: boolean;
+  profile: string;
+  transport: BrowserTransport;
+  checks: BrowserDoctorCheck[];
+  status: BrowserStatus;
 };
 
 export type ProfileStatus = {
@@ -113,6 +131,16 @@ export async function browserStatus(
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
     timeoutMs: 1500,
+  });
+}
+
+export async function browserDoctor(
+  baseUrl?: string,
+  opts?: { profile?: string },
+): Promise<BrowserDoctorReport> {
+  const q = buildProfileQuery(opts?.profile);
+  return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
+    timeoutMs: 3000,
   });
 }
 

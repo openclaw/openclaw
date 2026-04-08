@@ -9,6 +9,7 @@ export {
   browserCreateProfile,
   browserConsoleMessages,
   browserDeleteProfile,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -52,6 +53,7 @@ export {
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
+  BrowserDoctorReport,
   BrowserFormField,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,

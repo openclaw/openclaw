@@ -179,4 +179,45 @@ describe("browser manage output", () => {
     expect(output).not.toContain("supersecretpasswordvalue1234");
     expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
+
+  it("shows doctor output with failing checks and fixes", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/doctor"
+        ? {
+            ok: false,
+            profile: "openclaw",
+            transport: "cdp",
+            status: {},
+            checks: [
+              {
+                id: "control-server",
+                label: "Browser control server",
+                status: "pass",
+                summary: "Browser control server responded.",
+              },
+              {
+                id: "display",
+                label: "Display session",
+                status: "fail",
+                summary: "No DISPLAY or WAYLAND_DISPLAY is set while browser.headless is false.",
+                fixHint: "Run with a desktop session, start Xvfb, or set browser.headless: true.",
+              },
+            ],
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "doctor"], { from: "user" });
+
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("ok: false");
+    expect(output).toContain("PASS Browser control server: Browser control server responded.");
+    expect(output).toContain(
+      "FAIL Display session: No DISPLAY or WAYLAND_DISPLAY is set while browser.headless is false.",
+    );
+    expect(output).toContain(
+      "fix: Run with a desktop session, start Xvfb, or set browser.headless: true.",
+    );
+  });
 });

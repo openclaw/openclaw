@@ -29,7 +29,25 @@ const browserManageMocks = vi.hoisted(() => ({
           headless: true,
           attachOnly: false,
         }
-      : {},
+      : req.path === "/doctor"
+        ? {
+            ok: true,
+            profile: "openclaw",
+            transport: "cdp",
+            status: {
+              enabled: true,
+              running: true,
+              pid: 1,
+              cdpPort: 18800,
+              chosenBrowser: "chrome",
+              userDataDir: "/tmp/openclaw",
+              color: "blue",
+              headless: true,
+              attachOnly: false,
+            },
+            checks: [],
+          }
+        : {},
   ),
 }));
 

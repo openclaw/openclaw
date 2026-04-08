@@ -1,5 +1,7 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import type { BrowserStatus } from "../client.js";
+import { buildBrowserDoctorReport } from "../doctor.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
@@ -48,6 +50,57 @@ async function withProfilesServiceMutation(params: {
 }
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  async function collectBrowserStatus(
+    profileCtx: ProfileContext,
+    current: ReturnType<typeof ctx.state>,
+  ): Promise<BrowserStatus> {
+    const [cdpHttp, cdpReady] = await Promise.all([
+      profileCtx.isHttpReachable(300),
+      profileCtx.isReachable(600),
+    ]);
+
+    const profileState = current.profiles.get(profileCtx.profile.name);
+    const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+    let detectedBrowser: string | null = null;
+    let detectedExecutablePath: string | null = null;
+    let detectError: string | null = null;
+
+    try {
+      const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
+      if (detected) {
+        detectedBrowser = detected.kind;
+        detectedExecutablePath = detected.path;
+      }
+    } catch (err) {
+      detectError = String(err);
+    }
+
+    return {
+      enabled: current.resolved.enabled,
+      profile: profileCtx.profile.name,
+      driver: profileCtx.profile.driver,
+      transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+      running: cdpReady,
+      cdpReady,
+      cdpHttp,
+      pid: capabilities.usesChromeMcp
+        ? getChromeMcpPid(profileCtx.profile.name)
+        : (profileState?.running?.pid ?? null),
+      cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
+      cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,
+      chosenBrowser: profileState?.running?.exe.kind ?? null,
+      detectedBrowser,
+      detectedExecutablePath,
+      detectError,
+      userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
+      color: profileCtx.profile.color,
+      headless: current.resolved.headless,
+      noSandbox: current.resolved.noSandbox,
+      executablePath: current.resolved.executablePath ?? null,
+      attachOnly: profileCtx.profile.attachOnly,
+    };
+  }
+
   // List all profiles with their status
   app.get("/profiles", async (_req, res) => {
     try {
@@ -74,51 +127,39 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     try {
-      const [cdpHttp, cdpReady] = await Promise.all([
-        profileCtx.isHttpReachable(300),
-        profileCtx.isReachable(600),
-      ]);
-
-      const profileState = current.profiles.get(profileCtx.profile.name);
-      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-      let detectedBrowser: string | null = null;
-      let detectedExecutablePath: string | null = null;
-      let detectError: string | null = null;
-
-      try {
-        const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
-        if (detected) {
-          detectedBrowser = detected.kind;
-          detectedExecutablePath = detected.path;
-        }
-      } catch (err) {
-        detectError = String(err);
+      res.json(await collectBrowserStatus(profileCtx, current));
+    } catch (err) {
+      const mapped = toBrowserErrorResponse(err);
+      if (mapped) {
+        return jsonError(res, mapped.status, mapped.message);
       }
+      jsonError(res, 500, String(err));
+    }
+  });
 
-      res.json({
-        enabled: current.resolved.enabled,
-        profile: profileCtx.profile.name,
-        driver: profileCtx.profile.driver,
-        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
-        running: cdpReady,
-        cdpReady,
-        cdpHttp,
-        pid: capabilities.usesChromeMcp
-          ? getChromeMcpPid(profileCtx.profile.name)
-          : (profileState?.running?.pid ?? null),
-        cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-        cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,
-        chosenBrowser: profileState?.running?.exe.kind ?? null,
-        detectedBrowser,
-        detectedExecutablePath,
-        detectError,
-        userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
-        color: profileCtx.profile.color,
-        headless: current.resolved.headless,
-        noSandbox: current.resolved.noSandbox,
-        executablePath: current.resolved.executablePath ?? null,
-        attachOnly: profileCtx.profile.attachOnly,
-      });
+  app.get("/doctor", async (req, res) => {
+    let current: ReturnType<typeof ctx.state>;
+    try {
+      current = ctx.state();
+    } catch {
+      return jsonError(res, 503, "browser server not started");
+    }
+
+    const profileCtx = getProfileContext(req, ctx);
+    if ("error" in profileCtx) {
+      return jsonError(res, profileCtx.status, profileCtx.error);
+    }
+
+    try {
+      const status = await collectBrowserStatus(profileCtx, current);
+      res.json(
+        buildBrowserDoctorReport({
+          status,
+          platform: process.platform,
+          env: process.env,
+          uid: process.getuid?.() ?? null,
+        }),
+      );
     } catch (err) {
       const mapped = toBrowserErrorResponse(err);
       if (mapped) {

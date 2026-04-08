@@ -1,4 +1,5 @@
 export const browserCoreExamples = [
+  "openclaw browser doctor",
   "openclaw browser status",
   "openclaw browser start",
   "openclaw browser stop",

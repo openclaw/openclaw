@@ -639,6 +639,7 @@ All commands also accept `--json` for machine-readable output (stable payloads).
 
 Basics:
 
+- `openclaw browser doctor`
 - `openclaw browser status`
 - `openclaw browser start`
 - `openclaw browser stop`

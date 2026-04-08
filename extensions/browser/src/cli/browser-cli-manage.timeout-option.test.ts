@@ -30,6 +30,14 @@ describe("browser manage start timeout option", () => {
     expect(statusCall?.[2]).toEqual({ timeoutMs: 45_000 });
   });
 
+  it("uses a longer built-in timeout for browser doctor", async () => {
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "doctor"], { from: "user" });
+
+    const doctorCall = findBrowserManageCall("/doctor");
+    expect(doctorCall?.[2]).toEqual({ timeoutMs: 45_000 });
+  });
+
   it("uses a longer built-in timeout for browser tabs", async () => {
     const program = createBrowserManageProgram({ withParentTimeout: true });
     await program.parseAsync(["browser", "tabs"], { from: "user" });
