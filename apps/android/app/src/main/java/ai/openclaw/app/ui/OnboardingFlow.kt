@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -101,6 +102,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import kotlinx.coroutines.delay
 
 private enum class OnboardingStep(val index: Int, val label: String) {
   Welcome(1, "Welcome"),
@@ -131,6 +133,8 @@ private enum class PermissionToggle {
 private enum class SpecialAccessToggle {
   NotificationListener,
 }
+
+private const val PAIRING_AUTO_RETRY_MS = 6_000L
 
 private val onboardingBackgroundGradient: Brush
   @Composable get() = mobileBackgroundGradient
@@ -737,6 +741,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             )
           OnboardingStep.FinalCheck ->
             FinalStep(
+              viewModel = viewModel,
               parsedGateway = parseGatewayEndpoint(gatewayUrl),
               statusText = statusText,
               isConnected = canFinishOnboarding,
@@ -1566,6 +1571,7 @@ private fun PermissionToggleRow(
 
 @Composable
 private fun FinalStep(
+  viewModel: MainViewModel,
   parsedGateway: GatewayEndpointConfig?,
   statusText: String,
   isConnected: Boolean,
@@ -1580,6 +1586,16 @@ private fun FinalStep(
   val statusLabel = gatewayStatusForDisplay(statusText)
   val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
   val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+
+  LaunchedEffect(pairingRequired, attemptedConnect) {
+    if (!pairingRequired || !attemptedConnect) {
+      return@LaunchedEffect
+    }
+    while (true) {
+      delay(PAIRING_AUTO_RETRY_MS)
+      viewModel.refreshGatewayConnection()
+    }
+  }
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Text("Review", style = onboardingTitle1Style, color = onboardingText)
@@ -1761,7 +1777,11 @@ private fun FinalStep(
           if (pairingRequired) {
             CommandBlock("openclaw devices list")
             CommandBlock("openclaw devices approve <requestId>")
-            Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+            Text(
+              "OpenClaw retries automatically while this screen stays open.",
+              style = onboardingCalloutStyle,
+              color = onboardingTextSecondary,
+            )
           }
         }
       }
