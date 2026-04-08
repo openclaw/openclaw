@@ -276,6 +276,15 @@ export async function runWebSearch(
         `Web search provider "${trimmedPrimaryId}" is not available (tool returned null).`,
       );
     }
+    // Track when the auto-detected primary provider returns null so we can throw a
+    // specific error instead of falling through to the generic "no provider" error.
+    if (params.providerId === undefined && primaryResolved === null) {
+      // trimPrimaryId is "" when providerId param is undefined — use the searched id
+      const searchedId = trimmedPrimaryId || "auto-detected";
+      primaryInitError = new Error(
+        `Web search provider "${searchedId}" is not available (tool returned null).`,
+      );
+    }
   } catch (err) {
     // Non-retryable init errors from the primary should fail fast — do not
     // silently continue and risk masking with a fallback provider.
