@@ -558,7 +558,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
-      const nextArgs = record ? { ...record } : undefined;
+      const nextArgs = record ? { ...record } : args;
       const pathParamNames =
         options?.pathParamNames && options.pathParamNames.length > 0
           ? options.pathParamNames
@@ -579,7 +579,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         });
         const resolvedPath = (await assertSandboxPath({ filePath: sandboxPath, cwd: root, root }))
           .resolved;
-        if (nextArgs) {
+        if (record) {
           nextArgs[pathParamName] = resolvedPath;
         }
       }
