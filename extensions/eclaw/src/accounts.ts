@@ -39,11 +39,14 @@ function resolveImplicitAccountId(
 /**
  * List all configured account IDs for this channel.
  * Returns ["default"] if there's a base config, plus any named accounts.
+ *
+ * When `channels.eclaw` is missing entirely, still start a default account
+ * from env vars (`ECLAW_API_KEY`) so env-only setups work.
  */
 export function listAccountIds(cfg: OpenClawConfig): string[] {
   const channelCfg = getChannelConfig(cfg);
   if (!channelCfg) {
-    return [];
+    return process.env.ECLAW_API_KEY ? [DEFAULT_ACCOUNT_ID] : [];
   }
 
   return listCombinedAccountIds({
@@ -81,7 +84,7 @@ export function resolveAccount(
     accountId: id,
     enabled: merged.enabled ?? true,
     apiKey: (merged.apiKey ?? envApiKey) || "",
-    apiBase: stripTrailingSlash(merged.apiBase ?? envApiBase ?? DEFAULT_API_BASE),
+    apiBase: stripTrailingSlash(merged.apiBase ?? envApiBase),
     botName: merged.botName ?? envBotName,
     webhookUrl: stripTrailingSlash(merged.webhookUrl ?? envWebhookUrl ?? ""),
   };

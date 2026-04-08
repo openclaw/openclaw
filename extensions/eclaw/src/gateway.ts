@@ -5,29 +5,38 @@
  *   1. Resolve credentials (config + env).
  *   2. Construct an EclawClient and register it in the client registry.
  *   3. Generate a per-session callback token.
- *   4. POST /api/channel/register so the E-Claw backend will push webhooks
- *      to the OpenClaw gateway.
- *   5. Auto-bind an entity slot via POST /api/channel/bind.
- *   6. Keep the promise alive until the gateway aborts the account.
- *
- * The inbound webhook itself is served by the webhook-handler module via
- * the OpenClaw plugin HTTP route registry (mirrors the npm package's
- * `/eclaw-webhook` route + Bearer-token routing).
+ *   4. Register the shared `/eclaw-webhook` HTTP route with the OpenClaw
+ *      plugin HTTP registry (multi-account safe — every account shares the
+ *      same path; dispatch is routed by the per-session Bearer token).
+ *   5. POST /api/channel/register so the E-Claw backend will push webhooks
+ *      to that route.
+ *   6. Auto-bind an entity slot via POST /api/channel/bind.
+ *   7. Keep the promise alive until the gateway aborts the account.
  */
 
 import { randomBytes } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import {
+  readJsonWebhookBodyOrReject,
+  registerPluginHttpRoute,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveAccount } from "./accounts.js";
 import { EclawClient } from "./client.js";
 import {
   clearEclawClient,
   setEclawClient,
 } from "./client-registry.js";
+import type { EclawInboundMessage } from "./types.js";
+import { handleEclawWebhookRequest } from "./webhook-handler.js";
 import {
   registerEclawWebhookToken,
   unregisterEclawWebhookToken,
 } from "./webhook-registry.js";
+
+const CHANNEL_ID = "eclaw";
+const WEBHOOK_ROUTE_PATH = "/eclaw-webhook";
 
 export type EclawGatewayContext = {
   cfg: OpenClawConfig;
@@ -40,9 +49,95 @@ export type EclawGatewayContext = {
   };
 };
 
-function formatCallbackUrl(publicUrl: string | undefined): string {
-  const base = (publicUrl ?? "").replace(/\/+$/, "") || "http://localhost";
-  return `${base}/eclaw-webhook`;
+function formatCallbackUrl(
+  publicUrl: string | undefined,
+  log?: EclawGatewayContext["log"],
+  accountId?: string,
+): string {
+  const trimmed = (publicUrl ?? "").replace(/\/+$/, "");
+  if (!trimmed) {
+    log?.warn?.(
+      `E-Claw account ${accountId ?? ""} has no webhookUrl — falling back to http://localhost${WEBHOOK_ROUTE_PATH}. ` +
+        "Set channels.eclaw.webhookUrl or ECLAW_WEBHOOK_URL to the public base URL so the E-Claw backend can reach the webhook.",
+    );
+    return `http://localhost${WEBHOOK_ROUTE_PATH}`;
+  }
+  return `${trimmed}${WEBHOOK_ROUTE_PATH}`;
+}
+
+/**
+ * Shared registration count + unregister for the `/eclaw-webhook` route.
+ *
+ * The route is mounted once and shared across all eclaw accounts; dispatch
+ * inside the handler picks the right account based on the per-session
+ * Bearer token in the registry. Every startAccount call increments a
+ * refcount, and the last stopAccount unregisters the underlying route.
+ */
+let sharedRouteRefCount = 0;
+let sharedRouteUnregister: (() => void) | null = null;
+
+function acquireSharedEclawHttpRoute(params: {
+  cfg: OpenClawConfig;
+  log?: EclawGatewayContext["log"];
+}): () => void {
+  if (sharedRouteUnregister) {
+    sharedRouteRefCount += 1;
+    return makeRouteRelease();
+  }
+
+  const handler = async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const body = await readJsonWebhookBodyOrReject({
+      req,
+      res,
+      emptyObjectOnEmpty: true,
+    });
+    if (!body.ok) {
+      return;
+    }
+    const authHeader =
+      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
+    const result = await handleEclawWebhookRequest({
+      cfg: params.cfg,
+      authHeader,
+      body: (body.value ?? {}) as EclawInboundMessage,
+    });
+    res.statusCode = result.status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(result.body));
+  };
+
+  sharedRouteUnregister = registerPluginHttpRoute({
+    path: WEBHOOK_ROUTE_PATH,
+    auth: "plugin",
+    pluginId: CHANNEL_ID,
+    replaceExisting: false,
+    log: (msg: string) => params.log?.info?.(msg),
+    handler,
+  });
+  sharedRouteRefCount = 1;
+  params.log?.info?.(`E-Claw: registered shared HTTP route ${WEBHOOK_ROUTE_PATH}`);
+  return makeRouteRelease();
+}
+
+function makeRouteRelease(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    sharedRouteRefCount -= 1;
+    if (sharedRouteRefCount <= 0) {
+      sharedRouteRefCount = 0;
+      const fn = sharedRouteUnregister;
+      sharedRouteUnregister = null;
+      fn?.();
+    }
+  };
 }
 
 export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unknown> {
@@ -64,9 +159,10 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
   setEclawClient(accountId, client);
 
   const callbackToken = randomBytes(32).toString("hex");
-  const callbackUrl = formatCallbackUrl(account.webhookUrl);
+  const callbackUrl = formatCallbackUrl(account.webhookUrl, log, accountId);
 
   registerEclawWebhookToken(callbackToken, accountId);
+  const releaseRoute = acquireSharedEclawHttpRoute({ cfg, log });
   log?.info?.(`E-Claw webhook registered at: ${callbackUrl} (account: ${accountId})`);
 
   try {
@@ -84,6 +180,7 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
       `E-Claw setup failed for account ${accountId}: ${(err as Error).message}`,
     );
     unregisterEclawWebhookToken(callbackToken);
+    releaseRoute();
     clearEclawClient(accountId);
     return waitUntilAbort(abortSignal);
   }
@@ -92,10 +189,19 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
     log?.info?.(`Stopping E-Claw account ${accountId}`);
     void client.unregisterCallback();
     unregisterEclawWebhookToken(callbackToken);
+    releaseRoute();
     clearEclawClient(accountId);
   });
 }
 
 export async function stopEclawAccount(ctx: EclawGatewayContext): Promise<void> {
   ctx.log?.info?.(`E-Claw account ${ctx.accountId} stopped`);
+}
+
+/** Test-only: reset the shared-route refcount between test cases. */
+export function __resetEclawSharedRouteForTests(): void {
+  sharedRouteRefCount = 0;
+  const fn = sharedRouteUnregister;
+  sharedRouteUnregister = null;
+  fn?.();
 }

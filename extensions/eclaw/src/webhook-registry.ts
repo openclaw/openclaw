@@ -6,6 +6,10 @@
  * push as `Authorization: Bearer <token>`. The webhook dispatcher looks
  * up the correct accountId by matching the bearer token so multiple
  * E-Claw accounts can share the single `/eclaw-webhook` HTTP route.
+ *
+ * Unauthenticated requests are always rejected — we do not fall back to
+ * routing to a lone registered account, because that would accept any
+ * POST from the public internet.
  */
 
 type EclawTokenEntry = {
@@ -28,20 +32,14 @@ export function unregisterEclawWebhookToken(callbackToken: string): void {
 export function lookupEclawWebhookToken(
   authHeader: string | undefined,
 ): EclawTokenEntry | undefined {
-  if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.slice("Bearer ".length);
-    const hit = registry.get(token);
-    if (hit) {
-      return hit;
-    }
+  if (!authHeader?.startsWith("Bearer ")) {
+    return undefined;
   }
-  // Fallback: if only one handler is registered, route to it. Some
-  // E-Claw backend versions do not echo the callback token.
-  if (registry.size === 1) {
-    const [, only] = registry.entries().next().value ?? [];
-    return only;
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) {
+    return undefined;
   }
-  return undefined;
+  return registry.get(token);
 }
 
 export function eclawWebhookRegistrySize(): number {

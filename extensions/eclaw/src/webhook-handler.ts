@@ -127,7 +127,21 @@ export async function dispatchEclawWebhookMessage(params: {
           if (!client) return;
           const text = typeof payload.text === "string" ? payload.text.trim() : "";
 
-          if (!text || text === silentToken) {
+          // Silent-token: hard stop, regardless of media.
+          if (text === silentToken) {
+            return;
+          }
+
+          // Empty text: still allow media-only delivery through.
+          if (!text) {
+            if (payload.mediaUrl) {
+              await client.sendMessage(
+                "",
+                "IDLE",
+                mapMediaTypeOutbound(payload.mediaType),
+                payload.mediaUrl,
+              );
+            }
             return;
           }
 
@@ -141,18 +155,7 @@ export async function dispatchEclawWebhookMessage(params: {
             return;
           }
 
-          if (text) {
-            await client.sendMessage(text, "IDLE");
-            return;
-          }
-          if (payload.mediaUrl) {
-            await client.sendMessage(
-              "",
-              "IDLE",
-              mapMediaTypeOutbound(payload.mediaType),
-              payload.mediaUrl,
-            );
-          }
+          await client.sendMessage(text, "IDLE");
         },
         onError: () => {
           /* swallow — logged upstream */
