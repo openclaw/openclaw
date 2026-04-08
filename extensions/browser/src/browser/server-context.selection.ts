@@ -7,6 +7,10 @@ import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.j
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import {
+  OPEN_TAB_DISCOVERY_POLL_MS,
+  WSURL_DISCOVERY_WINDOW_MS,
+} from "./server-context.constants.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
@@ -38,12 +42,40 @@ export function createProfileSelectionOps({
     await ensureBrowserAvailable();
     const profileState = getProfileState();
     const tabs1 = await listTabs();
+    let newlyOpened: BrowserTab | null = null;
     if (tabs1.length === 0) {
-      await openTab("about:blank");
+      newlyOpened = await openTab("about:blank");
     }
 
-    const tabs = await listTabs();
-    const candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    const tabs = newlyOpened ? await listTabs() : tabs1;
+    let candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+
+    // When wsUrl-filtering leaves candidates empty but tabs do exist (e.g. newly
+    // opened tab whose CDP wsUrl hasn't populated yet, or post-Playwright-error
+    // state), poll briefly then fall back to unfiltered tabs so we don't throw
+    // "tab not found" for reachable targets.
+    if (candidates.length === 0 && tabs.length > 0 && capabilities.supportsPerTabWs) {
+      const deadline = Date.now() + WSURL_DISCOVERY_WINDOW_MS;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS));
+        const refreshed = await listTabs();
+        const withWs = refreshed.filter((t) => Boolean(t.wsUrl));
+        if (withWs.length > 0) {
+          candidates = withWs;
+          break;
+        }
+      }
+      // Still empty after polling — use tabs without wsUrl rather than throwing.
+      // The persistent Playwright connection can still reach them by targetId.
+      if (candidates.length === 0) {
+        candidates = tabs;
+      }
+    }
+
+    // If listTabs() returned empty even after openTab, use the opened tab directly.
+    if (candidates.length === 0 && newlyOpened) {
+      candidates = [newlyOpened];
+    }
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
