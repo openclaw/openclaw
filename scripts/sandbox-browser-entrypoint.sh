@@ -47,9 +47,15 @@ else
   CHROME_ARGS=()
 fi
 
+if [[ "${CDP_PORT}" -ge 65535 ]]; then
+  CHROME_CDP_PORT="$((CDP_PORT - 1))"
+else
+  CHROME_CDP_PORT="$((CDP_PORT + 1))"
+fi
+
 CHROME_ARGS+=(
-  "--remote-debugging-address=0.0.0.0"
-  "--remote-debugging-port=${CDP_PORT}"
+  "--remote-debugging-address=127.0.0.1"
+  "--remote-debugging-port=${CHROME_CDP_PORT}"
   "--user-data-dir=${HOME}/.chrome"
   "--no-first-run"
   "--no-default-browser-check"
@@ -58,7 +64,10 @@ CHROME_ARGS+=(
   "--disable-features=TranslateUI"
   "--disable-breakpad"
   "--disable-crash-reporter"
+  # Restored: prevents Chromium from forking a zygote subprocess which hangs in restricted namespaces
+  "--no-zygote"
   "--metrics-recording-only"
+  # Fix: Bypass system keyring to prevent silent deadlocks in headless docker
   "--password-store=basic"
   "--use-mock-keychain"
 )
@@ -68,6 +77,8 @@ if [[ "${DISABLE_GRAPHICS_FLAGS_LOWER}" == "1" || "${DISABLE_GRAPHICS_FLAGS_LOWE
   CHROME_ARGS+=(
     "--disable-3d-apis"
     "--disable-gpu"
+    # Restored: avoids Mesa/llvmpipe fallback that can OOM-kill the container
+    "--disable-software-rasterizer"
   )
 fi
 
@@ -94,7 +105,7 @@ chromium "${CHROME_ARGS[@]}" about:blank &
 
 READY=0
 for _ in $(seq 1 50); do
-  if curl -sS --max-time 1 "http://127.0.0.1:${CDP_PORT}/json/version" >/dev/null; then
+  if curl -sS --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" >/dev/null; then
     READY=1
     break
   fi
@@ -106,8 +117,13 @@ if [[ "$READY" != "1" ]]; then
   exit 1
 fi
 
+SOCAT_LISTEN_ADDR="TCP-LISTEN:${CDP_PORT},fork,reuseaddr,bind=0.0.0.0"
+if [[ -n "${CDP_SOURCE_RANGE}" ]]; then
+  SOCAT_LISTEN_ADDR="${SOCAT_LISTEN_ADDR},range=${CDP_SOURCE_RANGE}"
+fi
+socat "${SOCAT_LISTEN_ADDR}" "TCP:127.0.0.1:${CHROME_CDP_PORT}" &
+
 if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then
-  # VNC auth passwords are max 8 chars; use a random default when not provided.
   if [[ -z "${NOVNC_PASSWORD}" ]]; then
     NOVNC_PASSWORD="$(< /proc/sys/kernel/random/uuid)"
     NOVNC_PASSWORD="${NOVNC_PASSWORD//-/}"

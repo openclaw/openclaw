@@ -338,23 +338,23 @@ export async function ensureSandboxBrowser(params: {
       return bridge;
     }
 
-  const onEnsureAttachTarget = params.cfg.browser.autoStart
+    const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
-           const currentState = await dockerContainerState(containerName);
+          const currentState = await dockerContainerState(containerName);
           if (currentState.exists && !currentState.running) {
-             await execDocker(["start", containerName]);
-           }
-           const ok = await waitForSandboxCdp({
-             cdpPort: mappedCdp,
+            await execDocker(["start", containerName]);
+          }
+          const ok = await waitForSandboxCdp({
+            cdpPort: mappedCdp,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
-           if (!ok) {
+          if (!ok) {
             await execDocker(["rm", "-f", containerName], { allowFailure: true });
-             throw new Error(
+            throw new Error(
               `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
             );
-           }
-         }
+          }
+        }
       : undefined;
 
     return await startBrowserBridgeServer({
