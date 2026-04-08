@@ -3044,6 +3044,65 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("defaults response.create reasoning effort to high for reasoning models", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-default");
+    const stream = streamFn(
+      { ...modelStub, reasoning: true } as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      undefined,
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-default", "Default thought"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "high" });
+  });
+
+  it("forwards shared reasoning to response.create reasoning effort", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-shared");
+    const opts = { reasoning: "medium" };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-shared", "Shared thought"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "medium" });
+  });
+
   it("omits response.create reasoning when reasoningEffort is none", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
     const opts = { reasoningEffort: "none" };

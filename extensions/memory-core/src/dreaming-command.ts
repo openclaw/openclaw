@@ -1,5 +1,6 @@
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 
@@ -84,7 +85,7 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
       const [firstToken = ""] = args
         .split(/\s+/)
         .filter(Boolean)
-        .map((token) => token.toLowerCase());
+        .map((token) => normalizeLowercaseStringOrEmpty(token));
       const currentConfig = api.runtime.config.loadConfig();
 
       if (

@@ -9,7 +9,10 @@ import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-provider
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -271,22 +274,18 @@ function hasExplicitWebSearchSelection(params: {
     return true;
   }
   const availableProviderIds = new Set(
-    (params.providers ?? []).map((provider) => provider.id.trim().toLowerCase()),
+    (params.providers ?? []).map((provider) => normalizeLowercaseStringOrEmpty(provider.id)),
   );
   const configuredProviderId =
-    params.search &&
-    "provider" in params.search &&
-    typeof params.search.provider === "string"
-      ? params.search.provider.trim().toLowerCase()
+    params.search && "provider" in params.search && typeof params.search.provider === "string"
+      ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
   if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {
     return true;
   }
-  const runtimeConfiguredId = (
-    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured
-  )
-    ?.trim()
-    .toLowerCase();
+  const runtimeConfiguredId = normalizeOptionalLowercaseString(
+    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured,
+  );
   if (
     params.runtimeWebSearch?.providerSource === "configured" &&
     runtimeConfiguredId &&

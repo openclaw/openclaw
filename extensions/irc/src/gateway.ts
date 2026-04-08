@@ -1,6 +1,8 @@
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { createAccountStatusSink } from "./channel-api.js";
+import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 type IrcChannelRuntimeModule = typeof import("./channel-runtime.js");
@@ -16,9 +18,9 @@ export async function startIrcGatewayAccount(ctx: {
   cfg: CoreConfig;
   accountId: string;
   account: ResolvedIrcAccount;
-  runtime: unknown;
+  runtime: RuntimeEnv;
   abortSignal: AbortSignal;
-  setStatus: (patch: Record<string, unknown>) => void;
+  setStatus: (next: ChannelAccountSnapshot) => void;
   log?: {
     info?: (message: string) => void;
   };

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
@@ -10,6 +11,18 @@ const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
+const resolveCommandSecretRefsViaGatewayMock = vi.fn();
+let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
+let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
+let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
+let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
+let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
+let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
+let sessionRunAccounting: typeof import("./session-run-accounting.js");
+let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
+let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
+let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -223,50 +236,63 @@ async function persistRunSessionUsageForFollowupTest(
   await saveSessionStore(storePath, store);
 }
 
-vi.mock(
-  "../../agents/model-fallback.js",
-  async () => await import("../../test-utils/model-fallback.mock.js"),
-);
-vi.mock("../../agents/session-write-lock.js", () => ({
-  acquireSessionWriteLock: vi.fn(async () => ({
-    release: async () => {},
-  })),
-  resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
-}));
-vi.mock("../../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn(async () => false),
-  compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
-  isEmbeddedPiRunActive: vi.fn(() => false),
-  isEmbeddedPiRunStreaming: vi.fn(() => false),
-  queueEmbeddedPiMessage: vi.fn(async () => undefined),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-  waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
-}));
-vi.mock("./queue.js", () => ({
-  clearFollowupQueue: clearFollowupQueueForFollowupTest,
-  enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
-  refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
-}));
-vi.mock("./session-run-accounting.js", () => ({
-  persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
-  incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
-}));
-vi.mock("./agent-runner-memory.js", () => ({
-  runPreflightCompactionIfNeeded: (...args: unknown[]) =>
-    runPreflightCompactionIfNeededMock(...args),
-}));
-vi.mock("./route-reply.js", () => ({
-  isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
-  routeReply: (...args: unknown[]) => routeReplyMock(...args),
-}));
-
-const { createFollowupRunner } = await import("./followup-runner.js");
-const { loadSessionStore, saveSessionStore, clearSessionStoreCacheForTest } =
-  await import("../../config/sessions/store.js");
-const { clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js");
-const sessionRunAccounting = await import("./session-run-accounting.js");
-const { createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js");
+async function loadFreshFollowupRunnerModuleForTest() {
+  vi.resetModules();
+  vi.doUnmock("../../config/config.js");
+  vi.doMock(
+    "../../agents/model-fallback.js",
+    async () => await import("../../test-utils/model-fallback.mock.js"),
+  );
+  vi.doMock("../../agents/session-write-lock.js", () => ({
+    acquireSessionWriteLock: vi.fn(async () => ({
+      release: async () => {},
+    })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
+  }));
+  vi.doMock("../../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn(async () => false),
+    compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
+    isEmbeddedPiRunActive: vi.fn(() => false),
+    isEmbeddedPiRunStreaming: vi.fn(() => false),
+    queueEmbeddedPiMessage: vi.fn(async () => undefined),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
+  }));
+  vi.doMock("./queue.js", () => ({
+    clearFollowupQueue: clearFollowupQueueForFollowupTest,
+    enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
+    refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
+  }));
+  vi.doMock("./session-run-accounting.js", () => ({
+    persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
+    incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
+  }));
+  vi.doMock("./agent-runner-memory.js", () => ({
+    runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+    runPreflightCompactionIfNeeded: (...args: unknown[]) =>
+      runPreflightCompactionIfNeededMock(...args),
+  }));
+  vi.doMock("./route-reply.js", () => ({
+    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
+    routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  }));
+  vi.doMock("../../cli/command-secret-gateway.js", () => ({
+    resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
+      resolveCommandSecretRefsViaGatewayMock(...args),
+  }));
+  vi.doMock("../../cli/command-secret-targets.js", () => ({
+    getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries."]),
+  }));
+  ({ createFollowupRunner } = await import("./followup-runner.js"));
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+    await import("../../config/config.js"));
+  ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
+    await import("../../config/sessions/store.js"));
+  ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  sessionRunAccounting = await import("./session-run-accounting.js");
+  ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
+}
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -278,13 +304,25 @@ const ROUTABLE_TEST_CHANNELS = new Set([
   "feishu",
 ]);
 
-beforeEach(async () => {
+beforeAll(async () => {
+  await loadFreshFollowupRunnerModuleForTest();
+});
+
+beforeEach(() => {
+  clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
+  resolveCommandSecretRefsViaGatewayMock.mockReset();
   runPreflightCompactionIfNeededMock.mockImplementation(
     async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
   );
+  resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+    targetStatesByPath: {},
+    hadUnresolvedTargets: false,
+  }));
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -296,7 +334,8 @@ beforeEach(async () => {
   FOLLOWUP_TEST_SESSION_STORES.clear();
 });
 
-afterEach(async () => {
+afterEach(() => {
+  clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
@@ -353,6 +392,128 @@ function mockCompactionRun(params: {
 function createAsyncReplySpy() {
   return vi.fn(async () => {});
 }
+
+describe("createFollowupRunner runtime config", () => {
+  it("uses the active runtime snapshot for queued embedded followup runs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "resolved-runtime-key",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: sourceConfig,
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          config?: unknown;
+        }
+      | undefined;
+    expect(call?.config).toBe(runtimeConfig);
+  });
+
+  it("resolves queued embedded followups before preflight helpers read config", async () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          whisper: {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          whisper: {
+            apiKey: "resolved-runtime-key",
+          },
+        },
+      },
+    };
+    resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
+      resolvedConfig: runtimeConfig,
+      diagnostics: [],
+      targetStatesByPath: { "skills.entries.whisper.apiKey": "resolved_local" },
+      hadUnresolvedTargets: false,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+    const queued = createQueuedRun({
+      run: {
+        config: sourceConfig,
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    await runner(queued);
+
+    expect(queued.run.config).toBe(runtimeConfig);
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: runtimeConfig,
+      }),
+    );
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          config?: unknown;
+        }
+      | undefined;
+    expect(call?.config).toBe(runtimeConfig);
+  });
+});
 
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {

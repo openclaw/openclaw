@@ -89,6 +89,7 @@ function resolveSetupProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     env: base.env,
     onlyPluginIds: base.requestedPluginIds,
+    includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });
   if (providerPluginIds.length === 0) {
     return undefined;
@@ -192,6 +193,7 @@ export function resolvePluginProviders(params: {
   cache?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
   mode?: "runtime" | "setup";
+  includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderPlugin[] {
   const base = resolvePluginProviderLoadBase(params);
   if (params.mode === "setup") {

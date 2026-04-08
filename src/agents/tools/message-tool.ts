@@ -283,6 +283,9 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
+    image: Type.Optional(
+      Type.String({ description: "Cover image URL or local file path for the event." }),
+    ),
     durationMin: Type.Optional(Type.Number()),
     until: Type.Optional(Type.String()),
   };

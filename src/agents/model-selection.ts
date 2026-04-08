@@ -11,6 +11,7 @@ import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.r
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
@@ -176,7 +177,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!model) {
     return undefined;
   }
-  const normalized = model.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(model);
   const providers = new Set<string>();
   const addProvider = (provider: string) => {
     const normalizedProvider = normalizeProviderId(provider);
@@ -198,7 +199,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       if (!parsed) {
         continue;
       }
-      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+      if (parsed.model === model || normalizeLowercaseStringOrEmpty(parsed.model) === normalized) {
         addProvider(parsed.provider);
         if (providers.size > 1) {
           return undefined;
@@ -218,7 +219,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || modelId.toLowerCase() === normalized) {
+        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
           addProvider(providerId);
         }
       }
@@ -276,7 +277,9 @@ export function buildModelAliasIndex(params: {
     if (!parsed) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias =
+      normalizeOptionalString(String((entryRaw as { alias?: string } | undefined)?.alias ?? "")) ??
+      "";
     if (!alias) {
       continue;
     }
@@ -603,11 +606,11 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       continue;
     }
     for (const model of provider.models) {
-      const id = typeof model?.id === "string" ? model.id.trim() : "";
+      const id = normalizeOptionalString(model?.id) ?? "";
       if (!id) {
         continue;
       }
-      const name = typeof model?.name === "string" && model.name.trim() ? model.name.trim() : id;
+      const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
           ? model.contextWindow
@@ -717,20 +720,22 @@ export function resolveThinkingDefault(params: {
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModel = params.model.toLowerCase().replace(/\./g, "-");
+  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
   const catalogCandidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
   const configuredModels = params.cfg.agents?.defaults?.models;
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
+  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
+  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
   const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
   const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
   const explicitModelConfigured =
     (configuredModels ? canonicalKey in configuredModels : false) ||
     Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
-    normalizedPrimarySelection === canonicalKey.toLowerCase() ||
-    Boolean(legacyKey && normalizedPrimarySelection === legacyKey.toLowerCase()) ||
+    normalizedPrimarySelection === normalizedCanonicalKey ||
+    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
     normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??

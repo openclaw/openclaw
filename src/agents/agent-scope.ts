@@ -12,7 +12,9 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import {
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   readStringValue,
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
@@ -215,7 +217,7 @@ export function resolveFallbackAgentId(params: {
   agentId?: string | null;
   sessionKey?: string | null;
 }): string {
-  const explicitAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+  const explicitAgentId = normalizeOptionalString(params.agentId) ?? "";
   if (explicitAgentId) {
     return normalizeAgentId(explicitAgentId);
   }
@@ -293,7 +295,7 @@ function normalizePathForComparison(input: string): string {
     // Keep lexical path for non-existent directories.
   }
   if (process.platform === "win32") {
-    return normalized.toLowerCase();
+    return lowercasePreservingWhitespace(normalized);
   }
   return normalized;
 }

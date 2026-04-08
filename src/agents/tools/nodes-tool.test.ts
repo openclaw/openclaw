@@ -64,6 +64,45 @@ vi.mock("../../cli/nodes-screen.js", () => ({
 
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
 
+function mockNodePairApproveFlow(pendingRequest: {
+  requiredApproveScopes?: string[];
+  commands?: string[];
+}): void {
+  gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
+    if (method === "node.pair.list") {
+      return {
+        pending: [
+          {
+            requestId: "req-1",
+            ...pendingRequest,
+          },
+        ],
+      };
+    }
+    if (method === "node.pair.approve") {
+      return { ok: true, method, params, extra };
+    }
+    throw new Error(`unexpected method: ${String(method)}`);
+  });
+}
+
+function expectNodePairApproveScopes(scopes: string[]): void {
+  expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+    1,
+    "node.pair.list",
+    {},
+    {},
+    { scopes: ["operator.pairing"] },
+  );
+  expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+    2,
+    "node.pair.approve",
+    {},
+    { requestId: "req-1" },
+    { scopes },
+  );
+}
+
 describe("createNodesTool screen_record duration guardrails", () => {
   beforeAll(async () => {
     ({ createNodesTool } = await import("./nodes-tool.js"));
@@ -212,21 +251,8 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
-    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
-      if (method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "req-1",
-              requiredApproveScopes: ["operator.pairing", "operator.admin"],
-            },
-          ],
-        };
-      }
-      if (method === "node.pair.approve") {
-        return { ok: true, method, params, extra };
-      }
-      throw new Error(`unexpected method: ${String(method)}`);
+    mockNodePairApproveFlow({
+      requiredApproveScopes: ["operator.pairing", "operator.admin"],
     });
     const tool = createNodesTool();
 
@@ -235,38 +261,12 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      1,
-      "node.pair.list",
-      {},
-      {},
-      { scopes: ["operator.pairing"] },
-    );
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "node.pair.approve",
-      {},
-      { requestId: "req-1" },
-      { scopes: ["operator.pairing", "operator.admin"] },
-    );
+    expectNodePairApproveScopes(["operator.pairing", "operator.admin"]);
   });
 
   it("uses operator.pairing plus operator.write to approve non-exec node pair requests", async () => {
-    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
-      if (method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "req-1",
-              requiredApproveScopes: ["operator.pairing", "operator.write"],
-            },
-          ],
-        };
-      }
-      if (method === "node.pair.approve") {
-        return { ok: true, method, params, extra };
-      }
-      throw new Error(`unexpected method: ${String(method)}`);
+    mockNodePairApproveFlow({
+      requiredApproveScopes: ["operator.pairing", "operator.write"],
     });
     const tool = createNodesTool();
 
@@ -275,38 +275,12 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      1,
-      "node.pair.list",
-      {},
-      {},
-      { scopes: ["operator.pairing"] },
-    );
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "node.pair.approve",
-      {},
-      { requestId: "req-1" },
-      { scopes: ["operator.pairing", "operator.write"] },
-    );
+    expectNodePairApproveScopes(["operator.pairing", "operator.write"]);
   });
 
   it("uses operator.pairing for commandless node pair requests", async () => {
-    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
-      if (method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "req-1",
-              requiredApproveScopes: ["operator.pairing"],
-            },
-          ],
-        };
-      }
-      if (method === "node.pair.approve") {
-        return { ok: true, method, params, extra };
-      }
-      throw new Error(`unexpected method: ${String(method)}`);
+    mockNodePairApproveFlow({
+      requiredApproveScopes: ["operator.pairing"],
     });
     const tool = createNodesTool();
 
@@ -315,38 +289,12 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      1,
-      "node.pair.list",
-      {},
-      {},
-      { scopes: ["operator.pairing"] },
-    );
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "node.pair.approve",
-      {},
-      { requestId: "req-1" },
-      { scopes: ["operator.pairing"] },
-    );
+    expectNodePairApproveScopes(["operator.pairing"]);
   });
 
   it("falls back to command inspection when the gateway does not advertise required scopes", async () => {
-    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
-      if (method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "req-1",
-              commands: ["canvas.snapshot"],
-            },
-          ],
-        };
-      }
-      if (method === "node.pair.approve") {
-        return { ok: true, method, params, extra };
-      }
-      throw new Error(`unexpected method: ${String(method)}`);
+    mockNodePairApproveFlow({
+      commands: ["canvas.snapshot"],
     });
     const tool = createNodesTool();
 
@@ -355,20 +303,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      1,
-      "node.pair.list",
-      {},
-      {},
-      { scopes: ["operator.pairing"] },
-    );
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "node.pair.approve",
-      {},
-      { requestId: "req-1" },
-      { scopes: ["operator.pairing", "operator.write"] },
-    );
+    expectNodePairApproveScopes(["operator.pairing", "operator.write"]);
   });
 
   it("blocks invokeCommand system.run so exec stays the only shell path", async () => {

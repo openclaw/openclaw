@@ -2,15 +2,10 @@ import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function normalizeOptionalLowercaseString(value: unknown): string | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized || undefined;
-}
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export function stripZalouserTargetPrefix(raw: string): string {
   return raw

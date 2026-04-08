@@ -70,6 +70,7 @@ type SettingsHost = {
   dreamingStatus: null;
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
@@ -158,6 +159,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamingStatus: null,
   dreamingModeSaving: false,
   dreamDiaryLoading: false,
+  dreamDiaryActionLoading: false,
   dreamDiaryError: null,
   dreamDiaryPath: null,
   dreamDiaryContent: null,

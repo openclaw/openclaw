@@ -17,10 +17,14 @@ import {
   runGreetingPromptForBareNewOrReset,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
+
+const TEST_PRIMARY_PROFILE_ID = "openai-codex:primary@example.test";
+const TEST_SECONDARY_PROFILE_ID = "openai-codex:secondary@example.test";
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
   runReplyAgent: async (params: {
@@ -29,6 +33,8 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       run: {
         provider: string;
         model: string;
+        authProfileId?: string;
+        authProfileIdSource?: "auto" | "user";
         sessionId: string;
         sessionKey?: string;
         sessionFile: string;
@@ -61,6 +67,8 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
         prompt: params.commandBody,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
+        authProfileId: params.followupRun.run.authProfileId,
+        authProfileIdSource: params.followupRun.run.authProfileIdSource,
         sessionId: params.followupRun.run.sessionId,
         sessionKey: params.followupRun.run.sessionKey,
         sessionFile: params.followupRun.run.sessionFile,
@@ -528,6 +536,7 @@ describe("trigger handling", () => {
           ChatType: "direct",
           Provider: "telegram",
           Surface: "telegram",
+          SessionKey: targetSessionKey,
         },
         {},
         cfg,
@@ -538,6 +547,129 @@ describe("trigger handling", () => {
         expect.objectContaining({
           provider: "openai",
           model: "gpt-4.1-mini",
+        }),
+      );
+    });
+  });
+
+  it("applies native model auth profile overrides to the target session", async () => {
+    await withTempHome(async (home) => {
+      const cfg = withFullRuntimeReplyConfig({
+        ...makeCfg(home),
+        session: { store: join(home, "native-model-auth.sessions.json") },
+      });
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockReset();
+      const storePath = cfg.session?.store;
+      if (!storePath) {
+        throw new Error("missing session store path");
+      }
+      const authDir = join(home, ".openclaw", "agents", "main", "agent");
+      await fs.mkdir(authDir, { recursive: true });
+      await fs.writeFile(
+        join(authDir, "auth-profiles.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              [TEST_PRIMARY_PROFILE_ID]: {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "oauth-access-token-josh",
+              },
+              [TEST_SECONDARY_PROFILE_ID]: {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "oauth-access-token",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      await fs.writeFile(
+        join(authDir, "auth-state.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            order: {
+              "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const slashSessionKey = "telegram:slash:111";
+      const targetSessionKey = MAIN_SESSION_KEY;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [targetSessionKey]: {
+            sessionId: "session-target",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: `/model openai-codex/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: slashSessionKey,
+          CommandSource: "native",
+          CommandTargetSessionKey: targetSessionKey,
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain(`Auth profile set to ${TEST_SECONDARY_PROFILE_ID}`);
+
+      const store = loadSessionStore(storePath);
+      expect(store[targetSessionKey]?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(store[targetSessionKey]?.authProfileOverrideSource).toBe("user");
+      expect(store[slashSessionKey]).toBeUndefined();
+
+      runEmbeddedPiAgentMock.mockReset();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      await getReplyFromConfig(
+        {
+          Body: "hi",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: targetSessionKey,
+        },
+        {},
+        cfg,
+      );
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          authProfileId: TEST_SECONDARY_PROFILE_ID,
+          authProfileIdSource: "user",
         }),
       );
     });

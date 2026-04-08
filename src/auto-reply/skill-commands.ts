@@ -9,7 +9,10 @@ import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agent
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {
   listReservedChatSlashCommandNames,
@@ -119,7 +122,7 @@ export function listSkillCommandsForAgents(params: {
       reservedNames: used,
     });
     for (const command of commands) {
-      used.add(command.name.toLowerCase());
+      used.add(normalizeLowercaseStringOrEmpty(command.name));
       entries.push(command);
     }
   }

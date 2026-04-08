@@ -13,7 +13,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -325,7 +325,7 @@ export function createProviderApiKeyResolver(
   config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const authProvider = normalizeProviderIdForAuth(provider);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
     const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
@@ -361,7 +361,7 @@ export function createProviderAuthResolver(
   config?: OpenClawConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
-    const authProvider = normalizeProviderIdForAuth(provider);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
     const ids = listProfilesForProvider(authStore, authProvider);
     let oauthCandidate:
       | {
@@ -446,7 +446,7 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   // Providers own any provider-specific fallback auth logic via
   // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
   // non-secret markers from source config, but must never persist plaintext.
-  const authProvider = normalizeProviderIdForAuth(params.provider);
+  const authProvider = resolveProviderIdForAuth(params.provider, { config: params.config });
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: authProvider,
     config: params.config,

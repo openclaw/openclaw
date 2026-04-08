@@ -13,7 +13,11 @@ import {
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
 import { resolveComponentInteractionContext } from "./agent-components-helpers.js";
-import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
+import {
+  createAgentComponentButton,
+  createAgentSelectMenu,
+  resolveDiscordComponentOriginatingTo,
+} from "./agent-components.js";
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({
@@ -257,6 +261,23 @@ describe("agent components", () => {
       }),
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("uses user conversation ids for direct-message component originating targets", () => {
+    expect(
+      resolveDiscordComponentOriginatingTo({
+        isDirectMessage: true,
+        userId: "123456789",
+        channelId: "dm-channel",
+      }),
+    ).toBe("user:123456789");
+    expect(
+      resolveDiscordComponentOriginatingTo({
+        isDirectMessage: false,
+        userId: "123456789",
+        channelId: "guild-channel",
+      }),
+    ).toBe("channel:guild-channel");
   });
 
   it("blocks DM component interactions in disabled mode without reading pairing store", async () => {

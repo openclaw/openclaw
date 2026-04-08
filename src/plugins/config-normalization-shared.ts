@@ -1,6 +1,9 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
@@ -46,7 +49,7 @@ function normalizeSlotValue(value: unknown): string | null | undefined {
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.toLowerCase() === "none") {
+  if (normalizeOptionalLowercaseString(trimmed) === "none") {
     return null;
   }
   return trimmed;

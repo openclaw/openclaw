@@ -313,7 +313,6 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionChannelsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionChannelsConfig.test?.include).toEqual(
       expect.arrayContaining([
-        "browser/**/*.test.ts",
         "discord/**/*.test.ts",
         "line/**/*.test.ts",
         "slack/**/*.test.ts",
@@ -549,6 +548,11 @@ describe("scoped vitest configs", () => {
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultGatewayConfig.test?.exclude).toContain("gateway.test.ts");
+    expect(defaultGatewayConfig.test?.exclude).toContain(
+      "server.startup-matrix-migration.integration.test.ts",
+    );
+    expect(defaultGatewayConfig.test?.exclude).toContain("sessions-history-http.test.ts");
   });
 
   it("normalizes infra include patterns relative to the scoped dir", () => {
@@ -657,6 +661,7 @@ describe("scoped vitest configs", () => {
   it("normalizes plugins include patterns relative to the scoped dir", () => {
     expect(defaultPluginsConfig.test?.dir).toBe("src/plugins");
     expect(defaultPluginsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultPluginsConfig.test?.exclude).toContain("contracts/**");
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

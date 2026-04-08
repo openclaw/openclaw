@@ -1,9 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+const { refreshChatMock, refreshChatAvatarMock, loadChatHistoryMock, loadSessionsMock } =
+  vi.hoisted(() => ({
+    refreshChatMock: vi.fn(),
+    refreshChatAvatarMock: vi.fn(),
+    loadChatHistoryMock: vi.fn(),
+    loadSessionsMock: vi.fn(),
+  }));
+
+vi.mock("./app-chat.ts", () => ({
+  refreshChat: refreshChatMock,
+  refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("./controllers/chat.ts", () => ({
+  loadChatHistory: loadChatHistoryMock,
+}));
+
+vi.mock("./controllers/sessions.ts", () => ({
+  loadSessions: loadSessionsMock,
+}));
+
 import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  switchChatSession,
 } from "./app-render.helpers.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -282,5 +305,67 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("switchChatSession", () => {
+  it("refreshes the chat avatar after clearing session-scoped state", async () => {
+    const settings: AppViewState["settings"] = {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navWidth: 280,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+    };
+    const state = {
+      sessionKey: "main",
+      chatMessage: "draft",
+      chatAttachments: [{ mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" }],
+      chatMessages: [{ role: "assistant", content: "old" }],
+      chatToolMessages: [{ id: "tool-1" }],
+      chatStreamSegments: [{ text: "segment", ts: 1 }],
+      chatThinkingLevel: "high",
+      chatStream: "stream",
+      lastError: "oops",
+      compactionStatus: { phase: "active" },
+      fallbackStatus: { phase: "active" },
+      chatAvatarUrl: "/avatar/old",
+      chatQueue: [{ id: "queued" }],
+      chatRunId: "run-1",
+      chatStreamStartedAt: 1,
+      settings,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:test-b");
+    await Promise.resolve();
+
+    expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(loadSessionsMock).toHaveBeenCalledWith(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
   });
 });

@@ -18,6 +18,7 @@ import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
+  resolveAuthProfileEligibility,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
@@ -294,6 +295,17 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
+      if (lockedProfileId) {
+        const eligibility = resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: authStore,
+          provider,
+          profileId: lockedProfileId,
+        });
+        if (!eligibility.eligible) {
+          throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
+        }
+      }
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
         : resolveAuthProfileOrder({
@@ -302,9 +314,6 @@ export async function runEmbeddedPiAgent(
             provider,
             preferredProfile: preferredProfileId,
           });
-      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
-        throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
-      }
       const profileCandidates = lockedProfileId
         ? [lockedProfileId]
         : profileOrder.length > 0
@@ -676,8 +685,10 @@ export async function runEmbeddedPiAgent(
           const {
             aborted,
             promptError,
+            promptErrorSource,
             preflightRecovery,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
             lastAssistant,
@@ -804,6 +815,7 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "timeout_recovery",
                   diagId: timeoutDiagId,
@@ -951,6 +963,7 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
                   ...(observedOverflowTokens !== undefined
@@ -1091,7 +1104,7 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          if (promptError && !aborted) {
+          if (promptError && !aborted && promptErrorSource !== "compaction") {
             // Plugin-blocked calls are intentional policy decisions, not transient
             // provider failures. Skip all failover/retry classification so the
             // block reason text is not misinterpreted as auth/rate-limit/timeout.
@@ -1121,6 +1134,10 @@ export async function runEmbeddedPiAgent(
             }
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
+            //
+            // promptErrorSource === "compaction" means the model call already completed and the
+            // abort happened only while waiting for compaction/retry cleanup. Retrying from here
+            // would replay that completed tool turn as a fresh prompt attempt.
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
@@ -1451,12 +1468,15 @@ export async function runEmbeddedPiAgent(
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            const timeoutText = idleTimedOut
+              ? "The model did not produce a response before the LLM idle timeout. " +
+                "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
+              : "Request timed out before a response was generated. " +
+                "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             return {
               payloads: [
                 {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  text: timeoutText,
                   isError: true,
                 },
               ],

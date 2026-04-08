@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -18,8 +21,8 @@ export function resolveBrowserControlAuth(
     env,
     tailscaleMode: cfg?.gateway?.tailscale?.mode,
   });
-  const token = typeof auth.token === "string" ? auth.token.trim() : "";
-  const password = typeof auth.password === "string" ? auth.password.trim() : "";
+  const token = normalizeOptionalString(auth.token) ?? "";
+  const password = normalizeOptionalString(auth.password) ?? "";
   return {
     token: token || undefined,
     password: password || undefined,
