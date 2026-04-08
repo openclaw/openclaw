@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@slack/web-api", () => {
   const WebClient = vi.fn(function WebClientMock(
@@ -79,5 +79,74 @@ describe("slack web client config", () => {
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       }),
     );
+  });
+});
+
+describe("slack proxy agent", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    // Clear all proxy env vars before each test
+    for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    // Restore original env
+    for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+      if (originalEnv[key] !== undefined) {
+        process.env[key] = originalEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+  });
+
+  it("sets agent from HTTPS_PROXY env var", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeDefined();
+    expect(options.agent!.constructor.name).toBe("HttpsProxyAgent");
+  });
+
+  it("falls back to HTTP_PROXY when HTTPS_PROXY is not set", () => {
+    process.env.HTTP_PROXY = "http://proxy.example.com:3128";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeDefined();
+  });
+
+  it("does not set agent when no proxy env var is configured", () => {
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeUndefined();
+  });
+
+  it("does not override an explicitly provided agent", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    const customAgent = {} as never;
+    const options = resolveSlackWebClientOptions({ agent: customAgent });
+
+    expect(options.agent).toBe(customAgent);
+  });
+
+  it("prefers lowercase https_proxy over uppercase", () => {
+    process.env.https_proxy = "http://lower.example.com:3128";
+    process.env.HTTPS_PROXY = "http://upper.example.com:3128";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeDefined();
+    // HttpsProxyAgent stores the proxy URL — verify it picked the lower-case one
+    expect((options.agent as { proxy: { href: string } }).proxy.href).toContain("lower.example.com");
+  });
+
+  it("also applies proxy agent to write client options", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    const options = resolveSlackWriteClientOptions();
+
+    expect(options.agent).toBeDefined();
+    expect(options.agent!.constructor.name).toBe("HttpsProxyAgent");
   });
 });
