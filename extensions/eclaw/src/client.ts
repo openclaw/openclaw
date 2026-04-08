@@ -7,6 +7,23 @@
  * Handles all communication between the OpenClaw plugin and the E-Claw
  * backend: callback registration, entity slot binding, outbound messages,
  * and entity-to-entity messaging.
+ *
+ * Response validation (sendMessage / speakTo) is strict: a non-2xx HTTP
+ * status or a `{success:false}` JSON body throws with a diagnostic
+ * snippet of the upstream body (capped at 200 chars). This is required
+ * by the channel plugin reply contract — the dispatcher treats a
+ * resolved outbound call as a successful delivery, so silently-swallowed
+ * failures become undetected message loss. See PR #62934 review round 3
+ * (codex `sendMessage` / `speakTo` P2 items) and
+ * `docs/plugins/sdk-channel-plugins.md` §"Reply pipeline".
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Reply pipeline" —
+ *     outbound delivery errors must surface as rejected promises so the
+ *     dispatcher's `onError` hook runs.
+ *   - docs/plugins/architecture.md §"Channel boundary" — clients
+ *     live inside the extension package; core never calls HTTP on
+ *     behalf of a channel.
  */
 
 import type {

@@ -1,3 +1,47 @@
+/**
+ * Regression test suite for the E-Claw channel plugin.
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/building-plugins.md §"Pre-submission checklist" —
+ *     "Tests pass (`pnpm test -- <bundled-plugin-root>/my-plugin/`)"
+ *     and "`pnpm check` passes (in-repo plugins)"; this file is what
+ *     `pnpm test:extension eclaw` picks up via
+ *     `vitest.extension-messaging-paths.mjs`.
+ *   - docs/plugins/sdk-testing.md — shared test harness helpers and
+ *     contract-test fixtures used by some describe blocks below.
+ *
+ * Test coverage map (review rounds referenced in comments below):
+ *   - `eclaw bundled entries` — basic plugin shape
+ *     (initial port)
+ *   - `eclaw webhook registry` — strict Bearer auth
+ *     (round 2, codex `webhook-registry.ts` P1)
+ *   - `eclaw gateway bind-failure cleanup` — unregister + rethrow
+ *     (rounds 2 + 4, codex P2 "unregister on bind failure" +
+ *     "propagate setup failures")
+ *   - `eclaw env-only account startup` — ECLAW_API_KEY without
+ *     `channels.eclaw` entry (round 2, codex P2)
+ *   - `eclaw webhook media-only delivery` — media-only payload path
+ *     (round 2, codex P1 "media-only dropped")
+ *   - `eclaw onError logging` — delivery failure surfaced via
+ *     runtime error sink (round 2, codex P2)
+ *   - `eclaw client strict response validation` — sendMessage /
+ *     speakTo res.ok + success checks (round 3, codex P2)
+ *   - `eclaw webhook Bearer scheme case-insensitivity (RFC 7235)` —
+ *     case variants, whitespace, non-Bearer schemes
+ *     (round 5, codex webhook-registry.ts P2)
+ *   - `eclaw active-event suppression is async-local, not global` —
+ *     AsyncLocalStorage concurrency test
+ *     (round 5, codex send.ts P1)
+ *   - `eclaw shared HTTP route conflict detection` — sentinel-log
+ *     detection of route conflict / overlap denied
+ *     (round 6, codex gateway.ts P2)
+ *   - `eclaw inbound backupUrl fallback` — media context falls back
+ *     when primary mediaUrl is absent
+ *     (round 7, codex webhook-handler.ts P2)
+ *   - `eclaw state cleanup on shared-route failure` — no leak of
+ *     webhook-token / client registry when acquireSharedEclawHttpRoute
+ *     throws (round 7, codex gateway.ts P2)
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
@@ -740,5 +784,151 @@ describe("eclaw shared HTTP route conflict detection", () => {
         abortSignal: abortCtrl.signal,
       }),
     ).rejects.toThrow(/route overlap denied/);
+  });
+});
+
+describe("eclaw state cleanup on shared-route failure (round 7)", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    const mod = await import("./src/gateway.js");
+    mod.__resetEclawSharedRouteForTests();
+    vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
+    vi.restoreAllMocks();
+  });
+
+  it("does not leak webhook token or client registry when acquireSharedEclawHttpRoute throws", async () => {
+    vi.doMock("openclaw/plugin-sdk/webhook-ingress", () => ({
+      readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+      registerPluginHttpRoute: (p: { log?: (msg: string) => void }) => {
+        p.log?.(
+          "plugin: route conflict at /eclaw-webhook (exact) for account \"default\"",
+        );
+        return () => {};
+      },
+    }));
+    vi.doMock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+      waitUntilAbort: async () => undefined,
+    }));
+
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "env-key";
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+    const { eclawWebhookRegistrySize } = await import("./src/webhook-registry.js");
+    const { getEclawClient } = await import("./src/client-registry.js");
+
+    const sizeBefore = eclawWebhookRegistrySize();
+    const clientBefore = getEclawClient("default");
+
+    const abortCtrl = new AbortController();
+    await expect(
+      startEclawAccount({
+        cfg: {} as never,
+        accountId: "default",
+        abortSignal: abortCtrl.signal,
+      }),
+    ).rejects.toThrow(/route conflict/);
+
+    // Neither the webhook-token registry nor the client registry
+    // should hold a stale entry — the thrown acquireSharedEclawHttpRoute
+    // happens AFTER registerEclawWebhookToken + setEclawClient but
+    // BEFORE the register/bind try/catch, so the guarded cleanup has
+    // to live inside an isolated try block wrapped around the
+    // acquisition. See gateway.ts round-7 fix.
+    expect(eclawWebhookRegistrySize()).toBe(sizeBefore);
+    expect(getEclawClient("default")).toBe(clientBefore);
+  });
+});
+
+describe("eclaw inbound backupUrl fallback (round 7)", () => {
+  const savedEnv = { ...process.env };
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    clearEclawClient("default");
+    vi.restoreAllMocks();
+  });
+
+  it("uses backupUrl as MediaUrl when primary mediaUrl is absent", async () => {
+    const capturedCtx: Array<Record<string, unknown>> = [];
+    const { dispatchEclawWebhookMessage } = await import("./src/webhook-handler.js");
+    const { setEclawRuntime } = await import("./src/runtime.js");
+
+    setEclawRuntime({
+      channel: {
+        reply: {
+          finalizeInboundContext: (ctx: Record<string, unknown>) => {
+            capturedCtx.push(ctx);
+            return ctx;
+          },
+          dispatchReplyWithBufferedBlockDispatcher: async () => {
+            /* no-op */
+          },
+        },
+      },
+    } as never);
+
+    // Install a no-op client so the handler doesn't short-circuit.
+    setEclawClient("default", {} as unknown as EclawClient);
+
+    await dispatchEclawWebhookMessage({
+      accountId: "default",
+      cfg: {} as never,
+      msg: {
+        event: "message",
+        deviceId: "dev-1",
+        entityId: 2,
+        from: "user-1",
+        mediaType: "photo",
+        mediaUrl: undefined,
+        backupUrl: "https://backup.example.test/asset.jpg",
+      } as EclawInboundMessage,
+    });
+
+    expect(capturedCtx).toHaveLength(1);
+    expect(capturedCtx[0]).toMatchObject({
+      MediaType: "image",
+      MediaUrl: "https://backup.example.test/asset.jpg",
+    });
+  });
+
+  it("prefers primary mediaUrl over backupUrl when both are present", async () => {
+    const capturedCtx: Array<Record<string, unknown>> = [];
+    const { dispatchEclawWebhookMessage } = await import("./src/webhook-handler.js");
+    const { setEclawRuntime } = await import("./src/runtime.js");
+
+    setEclawRuntime({
+      channel: {
+        reply: {
+          finalizeInboundContext: (ctx: Record<string, unknown>) => {
+            capturedCtx.push(ctx);
+            return ctx;
+          },
+          dispatchReplyWithBufferedBlockDispatcher: async () => {
+            /* no-op */
+          },
+        },
+      },
+    } as never);
+
+    setEclawClient("default", {} as unknown as EclawClient);
+
+    await dispatchEclawWebhookMessage({
+      accountId: "default",
+      cfg: {} as never,
+      msg: {
+        event: "message",
+        deviceId: "dev-1",
+        entityId: 2,
+        from: "user-1",
+        mediaType: "photo",
+        mediaUrl: "https://primary.example.test/asset.jpg",
+        backupUrl: "https://backup.example.test/asset.jpg",
+      } as EclawInboundMessage,
+    });
+
+    expect(capturedCtx).toHaveLength(1);
+    expect(capturedCtx[0]?.MediaUrl).toBe("https://primary.example.test/asset.jpg");
   });
 });

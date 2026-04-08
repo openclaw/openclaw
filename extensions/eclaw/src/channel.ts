@@ -11,6 +11,17 @@
  * discovery — config resolution, outbound send, gateway start/stop, and a
  * stub setup adapter. Inbound dispatch runs through the webhook-handler
  * module which delegates to the OpenClaw reply runtime.
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Channel plugin contract" —
+ *     `createChatChannelPlugin` is the stable factory; config adapter,
+ *     messaging normalizer, directory adapter, and setup surface are
+ *     the four required slots.
+ *   - docs/plugins/architecture.md §"Plugin SDK import paths" —
+ *     every import here uses `openclaw/plugin-sdk/<subpath>` so the
+ *     extension package boundary check passes.
+ *   - AGENTS.md §"Architecture Boundaries" → "Extension package
+ *     boundary guardrail" — no relative imports outside this package.
  */
 
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";

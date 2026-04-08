@@ -5,6 +5,21 @@
  * Android. Each connected device has a small number of character "slots";
  * an OpenClaw bot claims one slot and exchanges messages with the device
  * owner (and other entities on the same device) via the E-Claw channel API.
+ *
+ * All wire-format types here mirror the E-Claw backend payload contract
+ * (see https://github.com/HankHuang0516/EClaw backend/channel-api.js).
+ * Any field added to the backend MUST also land here before the webhook
+ * handler can use it — e.g. `backupUrl` fallback (PR #62934 review
+ * round 7, codex webhook-handler.ts P2) requires `EclawInboundMessage.
+ * backupUrl` to be declared.
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Channel plugin contract"
+ *     — the `ResolvedAccount` / `InboundMessage` shapes must be
+ *     compatible with the SDK's channel contract types.
+ *   - docs/plugins/architecture.md §"Extension API surface rule" —
+ *     types that cross the package boundary go through `api.ts`, not
+ *     through `src/` relative imports from outside the extension.
  */
 
 type EclawConfigFields = {

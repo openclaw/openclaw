@@ -3,6 +3,23 @@
  *
  * The gateway registers a client when it starts an account, the outbound
  * path looks it up by accountId, and the gateway removes it on shutdown.
+ *
+ * The `activeEvent` context is bound per-request via AsyncLocalStorage
+ * rather than a global per-account Map so that concurrent unrelated
+ * outbound sends on the same account are NOT accidentally suppressed
+ * when a bot-to-bot webhook dispatch is in flight. See PR #62934
+ * review round 5 (codex `send.ts` P1 item).
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Reply pipeline" —
+ *     outbound suppression is the responsibility of the ChannelPlugin
+ *     outbound adapter; gateway-side inline delivery must coordinate
+ *     with it through a per-dispatch flag, not a global one.
+ *   - docs/plugins/architecture.md §"Channel boundary" — channel
+ *     state is owned by the plugin, not core; everything in here is
+ *     module-local state.
+ *   - Node.js AsyncLocalStorage:
+ *     https://nodejs.org/api/async_context.html#class-asynclocalstorage
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";

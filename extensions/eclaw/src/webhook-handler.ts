@@ -1,13 +1,27 @@
 /**
  * Inbound webhook handler for the E-Claw plugin.
  *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/architecture.md §"Channel boundary" — inbound
+ *     dispatch must go through `runtime.channel.reply` rather than
+ *     reaching into core router internals.
+ *   - docs/plugins/sdk-channel-plugins.md §"Channel plugin contract"
+ *     and §"Reply pipeline" — `finalizeInboundContext` +
+ *     `dispatchReplyWithBufferedBlockDispatcher` are the stable seams
+ *     for turning a raw channel payload into a reply dispatch.
+ *
  * Converts an E-Claw push payload into an OpenClaw reply dispatch and
  * routes any deliverable text/media back through the EclawClient.
  *
  * For bot-to-bot (`entity_message`) and `broadcast` events, the handler
- * suppresses duplicate delivery from the outbound pipeline by setting a
- * per-account active-event marker, and then posts both a channel message
- * (to update the wallpaper state) and a speak-to (to reply to the sender).
+ * suppresses duplicate delivery from the outbound pipeline by running
+ * the dispatch inside an `AsyncLocalStorage` frame (see
+ * client-registry.ts rationale — PR #62934 round 5), and then posts
+ * both a channel message (to update the wallpaper state) and a
+ * speak-to (to reply to the sender).
+ *
+ * Bearer token auth is case-insensitive per RFC 7235 §2.1 — see
+ * webhook-registry.ts (PR #62934 round 5).
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
@@ -121,9 +135,16 @@ export async function dispatchEclawWebhookMessage(params: {
     CommandBody: body,
     ChatType: "direct",
   };
-  if (ocMediaType && msg.mediaUrl) {
+  // Prefer primary mediaUrl; fall back to backupUrl when the primary is
+  // missing but a backup mirror is available (E-Claw sometimes pushes
+  // media with only backupUrl populated when the primary CDN is
+  // degraded or the asset was rehosted). Without this fallback the
+  // message looks text-only to the reply dispatcher and media-aware
+  // behavior is lost — see EclawInboundMessage.backupUrl in types.ts.
+  const effectiveMediaUrl = msg.mediaUrl ?? msg.backupUrl ?? undefined;
+  if (ocMediaType && effectiveMediaUrl) {
     inboundCtx.MediaType = ocMediaType;
-    inboundCtx.MediaUrl = msg.mediaUrl;
+    inboundCtx.MediaUrl = effectiveMediaUrl;
   }
 
   const ctxPayload = runtime.channel.reply.finalizeInboundContext(inboundCtx);

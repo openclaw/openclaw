@@ -3,6 +3,21 @@
  *
  * Reads config from channels.eclaw, merges per-account overrides, and
  * falls back to environment variables for the default account.
+ *
+ * `listAccountIds` still returns `[DEFAULT_ACCOUNT_ID]` when
+ * `channels.eclaw` is absent but the `ECLAW_API_KEY` env var is set,
+ * so env-only setups start the default account without requiring a
+ * placeholder config entry (see PR #62934 review round 2 codex P2).
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Config adapter" and
+ *     §"Account resolution" — use
+ *     `openclaw/plugin-sdk/account-resolution` helpers
+ *     (`DEFAULT_ACCOUNT_ID`, `listCombinedAccountIds`,
+ *     `resolveMergedAccountConfig`) rather than reaching into
+ *     `cfg.channels[...]` by hand.
+ *   - docs/plugins/architecture.md §"Plugin SDK import paths" —
+ *     `account-resolution` is the stable cross-package subpath.
  */
 
 import {

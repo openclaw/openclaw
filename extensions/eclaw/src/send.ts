@@ -4,7 +4,22 @@
  * These are invoked from the ChannelPlugin outbound adapter when the
  * OpenClaw runtime wants to deliver a text or media reply to an E-Claw
  * user. For bot-to-bot / broadcast events the gateway handles delivery
- * inline, so the outbound path short-circuits in that case.
+ * inline (see webhook-handler.ts), so the outbound path short-circuits
+ * in that case via `getActiveEclawEvent()`.
+ *
+ * The suppression flag is read from an AsyncLocalStorage context
+ * (see client-registry.ts) so that concurrent unrelated outbound sends
+ * on the same account are NOT dropped. PR #62934 review round 5
+ * (codex send.ts P1 item) — the previous global-Map implementation
+ * caused silent message loss under concurrency.
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Outbound adapter" —
+ *     the outbound.sendText / outbound.sendMedia contract returns
+ *     `{channel, messageId, chatId, ok?}`.
+ *   - docs/plugins/architecture.md §"Channel boundary" —
+ *     channel-owned outbound logic stays inside the extension; core
+ *     never constructs channel payloads directly.
  */
 
 import type { EclawClient } from "./client.js";

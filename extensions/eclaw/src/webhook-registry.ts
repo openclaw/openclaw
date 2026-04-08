@@ -16,6 +16,18 @@
  * There is no "single registered account" fallback. A present-but-wrong
  * token is an active (failed) authentication attempt, not a missing
  * header, so accepting it would let any bogus token hit the dispatcher.
+ *
+ * The Bearer scheme name is matched case-insensitively per RFC 7235
+ * §2.1 ("auth-scheme is case-insensitive"), with tolerance for
+ * surrounding whitespace — see PR #62934 review round 5 (codex
+ * webhook-registry.ts P2 item) and the regression tests in
+ * `extensions/eclaw/index.test.ts` ("RFC 7235" describe block).
+ *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/sdk-channel-plugins.md §"Webhook authentication"
+ *   - docs/plugins/architecture.md §"Plugin SDK import paths"
+ *   - IETF RFC 7235 §2.1 (auth-scheme case-insensitivity):
+ *     https://www.rfc-editor.org/rfc/rfc7235#section-2.1
  */
 
 type EclawTokenEntry = {

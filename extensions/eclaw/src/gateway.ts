@@ -1,6 +1,22 @@
 /**
  * Gateway lifecycle for the E-Claw channel plugin.
  *
+ * Doc references (OpenClaw repo):
+ *   - docs/plugins/architecture.md
+ *       §"Channel boundary"
+ *       §"Plugin SDK import paths" — lists the stable
+ *         `openclaw/plugin-sdk/channel-lifecycle` and
+ *         `openclaw/plugin-sdk/webhook-ingress` subpaths used here.
+ *   - docs/plugins/sdk-channel-plugins.md
+ *       channel plugin contract (outbound/inbound/setup) and the
+ *       `waitUntilAbort` startAccount/stopAccount pattern.
+ *   - docs/plugins/building-plugins.md
+ *       Pre-submission checklist → "pnpm check passes (in-repo plugins)"
+ *   - AGENTS.md
+ *       "Channel boundary", "Architecture Boundaries" —
+ *       extension-owned behavior lives in the extension; do not deep-
+ *       import bundled-plugin internals from core.
+ *
  * Responsibilities on startAccount:
  *   1. Resolve credentials (config + env).
  *   2. Construct an EclawClient and register it in the client registry.
@@ -12,6 +28,12 @@
  *      to that route.
  *   6. Auto-bind an entity slot via POST /api/channel/bind.
  *   7. Keep the promise alive until the gateway aborts the account.
+ *
+ * Failure semantics (see PR #62934 review rounds 4–7):
+ *   - Disabled / missing-apiKey → `waitUntilAbort` (opt-out, not a crash).
+ *   - Route conflict / register / bind failure → clean up local state
+ *     AND the remote E-Claw callback, then re-throw so the channel
+ *     manager marks the account as failed and can restart it.
  */
 
 import { randomBytes } from "node:crypto";
@@ -204,7 +226,27 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
   const callbackUrl = formatCallbackUrl(account.webhookUrl, log, accountId);
 
   registerEclawWebhookToken(callbackToken, accountId);
-  const releaseRoute = acquireSharedEclawHttpRoute({ cfg, log });
+
+  // acquireSharedEclawHttpRoute may throw on route conflict (see
+  // commit 8dfa822af5). That throw happens BEFORE the register/bind
+  // try/catch below, so the webhook token and client we just stashed
+  // would leak into the global registries if we didn't handle it here.
+  // Guard the acquisition with an isolated try so we can roll back the
+  // local state and re-throw, mirroring the cleanup in the register/
+  // bind catch block. See docs/plugins/architecture.md "Channel
+  // boundary" + AGENTS.md "Error handling" — a failed startup must
+  // leave no trace in shared state so manager restarts are clean.
+  let releaseRoute: () => void;
+  try {
+    releaseRoute = acquireSharedEclawHttpRoute({ cfg, log });
+  } catch (err) {
+    log?.error?.(
+      `E-Claw setup failed for account ${accountId}: ${(err as Error).message}`,
+    );
+    unregisterEclawWebhookToken(callbackToken);
+    clearEclawClient(accountId);
+    throw err;
+  }
   log?.info?.(`E-Claw webhook registered at: ${callbackUrl} (account: ${accountId})`);
 
   let callbackRegistered = false;
