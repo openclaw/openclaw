@@ -13,12 +13,16 @@ import { ensureBinary } from "./binaries.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+  try {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+    }
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return {};
   }
-  return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
 /**
@@ -326,7 +330,7 @@ export async function ensureFunnel(
   try {
     const tailscaleBin = await getTailscaleBinary();
     const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
-    const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
+    const parsed = statusOut ? (() => { try { return JSON.parse(statusOut) as Record<string, unknown>; } catch { return {}; } })() : {};
     if (!parsed || Object.keys(parsed).length === 0) {
       runtime.error(danger("Tailscale Funnel is not enabled on this tailnet/device."));
       runtime.error(
