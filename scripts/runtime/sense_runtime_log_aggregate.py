@@ -340,6 +340,7 @@ def derive_digest_bucket_ui_layouts(
     digest_bucket_share: object,
     digest_bucket_dominance_band: object,
     digest_bucket_badge_short: object,
+    digest_bucket_badge_label: object,
 ) -> dict[str, object]:
     badge = (
         dict(digest_bucket_badge_tuple)
@@ -401,6 +402,16 @@ def derive_digest_bucket_ui_layouts(
         'symbol': meta['leader_symbol'],
         'compact': meta['leader_compact'],
         'tokens': list(meta['leader_tokens']),
+    }
+    meta['badge_parts'] = {
+        'label': (
+            digest_bucket_badge_label
+            if isinstance(digest_bucket_badge_label, str)
+            else 'Unknown'
+        ),
+        'short': meta['badge_short'],
+        'palette': meta['palette'],
+        'order': meta['order'],
     }
     return {
         'badge': badge,
@@ -853,6 +864,7 @@ def main() -> int:
                 item.get('digest_bucket_share'),
                 item.get('digest_bucket_dominance_band'),
                 item.get('digest_bucket_badge_short'),
+                item.get('digest_bucket_badge'),
             )
 
     notification_digest_summary.sort(key=derive_digest_order_key)
