@@ -130,6 +130,25 @@ func (docProtocolLeakTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 
 func (docProtocolLeakTranslator) Close() {}
 
+type docPromptBudgetTranslator struct {
+	rawInputs []string
+}
+
+func (t *docPromptBudgetTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	replacer := strings.NewReplacer(
+		"First chunk with `json5` and { braces }", "第一块，含 `json5` 和 { braces }",
+		"Second chunk with | table | pipes |", "第二块，含 | table | pipes |",
+	)
+	return replacer.Replace(text), nil
+}
+
+func (t *docPromptBudgetTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +306,39 @@ func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
 		t.Fatalf("expected protocol wrapper leakage to be removed after split:\n%s", translated)
 	}
 	if !strings.Contains(translated, "First translated") || !strings.Contains(translated, "Second translated") {
+		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedPreSplitsOversizedPromptBudget(t *testing.T) {
+	body := strings.Join([]string{
+		"First chunk with `json5` and { braces }",
+		"",
+		"Second chunk with | table | pipes |",
+		"",
+	}, "\n")
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", "60")
+
+	translator := &docPromptBudgetTranslator{}
+	translated, err := translateDocBodyChunked(
+		context.Background(),
+		translator,
+		"gateway/configuration-reference.md",
+		body,
+		"en",
+		"zh-CN",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	for _, input := range translator.rawInputs {
+		if strings.Contains(input, "First chunk with `json5` and { braces }") && strings.Contains(input, "Second chunk with | table | pipes |") {
+			t.Fatalf("expected prompt budget guard to split before raw translation, saw combined input:\n%s", input)
+		}
+	}
+	if !strings.Contains(translated, "第一块") || !strings.Contains(translated, "第二块") {
 		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
 	}
 }

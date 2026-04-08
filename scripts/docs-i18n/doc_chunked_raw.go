@@ -12,6 +12,7 @@ import (
 )
 
 const defaultDocChunkMaxBytes = 12000
+const defaultDocChunkPromptBudget = 15000
 
 var (
 	docsFenceRE        = regexp.MustCompile(`^\s*(` + "```" + `|~~~)`)
@@ -56,6 +57,26 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		return source, nil
 	}
 	normalizedSource, commonIndent := stripCommonIndent(source)
+	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
+	if len(blocks) > 1 && estimatedPromptCost > docsI18nDocChunkPromptBudget() {
+		mid := len(blocks) / 2
+		log.Printf(
+			"docs-i18n: chunk pre-split %s blocks=%d est_cost=%d budget=%d",
+			chunkID,
+			len(blocks),
+			estimatedPromptCost,
+			docsI18nDocChunkPromptBudget(),
+		)
+		left, err := translateDocBlockGroup(ctx, translator, chunkID+"a", blocks[:mid], srcLang, tgtLang)
+		if err != nil {
+			return "", err
+		}
+		right, err := translateDocBlockGroup(ctx, translator, chunkID+"b", blocks[mid:], srcLang, tgtLang)
+		if err != nil {
+			return "", err
+		}
+		return left + right, nil
+	}
 	log.Printf("docs-i18n: chunk start %s blocks=%d bytes=%d", chunkID, len(blocks), len(source))
 	translated, err := translator.TranslateRaw(ctx, normalizedSource, srcLang, tgtLang)
 	if err == nil {
@@ -287,6 +308,32 @@ func docsI18nDocChunkMaxBytes() int {
 		return defaultDocChunkMaxBytes
 	}
 	return parsed
+}
+
+func docsI18nDocChunkPromptBudget() int {
+	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET"))
+	if value == "" {
+		return defaultDocChunkPromptBudget
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return defaultDocChunkPromptBudget
+	}
+	return parsed
+}
+
+func estimateDocPromptCost(text string) int {
+	cost := len(text)
+	cost += strings.Count(text, "`") * 6
+	cost += strings.Count(text, "|") * 4
+	cost += strings.Count(text, "{") * 4
+	cost += strings.Count(text, "}") * 4
+	cost += strings.Count(text, "[") * 4
+	cost += strings.Count(text, "]") * 4
+	cost += strings.Count(text, ":") * 2
+	cost += strings.Count(text, "<") * 4
+	cost += strings.Count(text, ">") * 4
+	return cost
 }
 
 func stripCommonIndent(text string) (string, string) {
