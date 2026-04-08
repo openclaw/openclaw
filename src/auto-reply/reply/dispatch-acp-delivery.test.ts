@@ -66,7 +66,7 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 function createDispatcher(): ReplyDispatcher {
   return {
     sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => Promise.resolve(true)),
+    sendBlockReply: vi.fn(() => Promise.resolve(true as const)),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
