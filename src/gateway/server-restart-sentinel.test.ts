@@ -543,7 +543,6 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
   });
-
   it("skips outbound restart notice when no canonical delivery context survives restart", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {
