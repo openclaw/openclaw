@@ -291,6 +291,16 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
+          // String-to-object recovery: some models serialize the job as a JSON
+          // string instead of an object (e.g. from script stdout passed verbatim).
+          if (typeof params.job === "string") {
+            try {
+              params.job = JSON.parse(params.job);
+            } catch {
+              /* leave as-is; will fail at the "job required" check below */
+            }
+          }
+
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
           // them inside `job`. When `params.job` is missing or empty, reconstruct
@@ -437,6 +447,15 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
+          }
+
+          // String-to-object recovery for patch (same issue as job above).
+          if (typeof params.patch === "string") {
+            try {
+              params.patch = JSON.parse(params.patch);
+            } catch {
+              /* leave as-is; will fail at the "patch required" check below */
+            }
           }
 
           // Flat-params recovery for patch
