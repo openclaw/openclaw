@@ -18,7 +18,9 @@ describe("qa scenario catalog", () => {
     expect(pack.scenarios.some((scenario) => scenario.id === "image-generation-roundtrip")).toBe(
       true,
     );
-    expect(pack.scenarios.every((scenario) => scenario.execution?.kind === "custom")).toBe(true);
+    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-gollum")).toBe(true);
+    expect(pack.scenarios.every((scenario) => scenario.execution?.kind === "flow")).toBe(true);
+    expect(pack.scenarios.some((scenario) => scenario.execution.flow?.steps.length)).toBe(true);
   });
 
   it("exposes bootstrap data from the markdown pack", () => {

@@ -39,6 +39,13 @@
     },
     "bundle": {
       "stageRuntimeDependencies": true
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@grammyjs/runner",
+        "@grammyjs/transformer-throttler",
+        "grammy"
+      ]
     }
   }
 }

@@ -60,6 +60,14 @@
     "bundle": {
       "stageRuntimeDependencies": true
     },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@buape/carbon",
+        "@discordjs/opus",
+        "https-proxy-agent",
+        "opusscript"
+      ]
+    },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true

@@ -1,4 +1,12 @@
-import { listBundledPluginMetadata } from "../../bundled-plugin-metadata.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  normalizeBundledPluginStringList,
+  resolveBundledPluginScanDir,
+} from "../../bundled-plugin-scan.js";
+import { PLUGIN_MANIFEST_FILENAME, type PluginManifest } from "../../manifest.js";
+import { resolveLoaderPackageRoot } from "../../sdk-alias.js";
 import { uniqueStrings } from "../shared.js";
 
 // Build/test inventory only.
@@ -20,13 +28,76 @@ export type BundledPluginContractSnapshot = {
   toolNames: string[];
 };
 
-const BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES = listBundledPluginMetadata({
-  includeChannelConfigs: false,
-  includeSyntheticChannelConfigs: false,
-});
+const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
+const OPENCLAW_PACKAGE_ROOT =
+  resolveLoaderPackageRoot({
+    modulePath: CURRENT_MODULE_PATH,
+    moduleUrl: import.meta.url,
+  }) ?? fileURLToPath(new URL("../../../..", import.meta.url));
+const RUNNING_FROM_BUILT_ARTIFACT =
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
+
+type BundledCapabilityManifest = Pick<
+  PluginManifest,
+  | "id"
+  | "autoEnableWhenConfiguredProviders"
+  | "cliBackends"
+  | "contracts"
+  | "legacyPluginIds"
+  | "providers"
+>;
+
+function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
+  const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
+  const extensions = normalizeBundledPluginStringList(
+    packageJson?.openclaw && typeof packageJson.openclaw === "object"
+      ? (packageJson.openclaw as { extensions?: unknown }).extensions
+      : undefined,
+  );
+  if (extensions.length === 0) {
+    return undefined;
+  }
+
+  const raw = readJsonRecord(path.join(pluginDir, PLUGIN_MANIFEST_FILENAME));
+  const id = typeof raw?.id === "string" ? raw.id.trim() : "";
+  if (!id) {
+    return undefined;
+  }
+  return raw as BundledCapabilityManifest;
+}
+
+function listBundledCapabilityManifests(): readonly BundledCapabilityManifest[] {
+  const scanDir = resolveBundledPluginScanDir({
+    packageRoot: OPENCLAW_PACKAGE_ROOT,
+    runningFromBuiltArtifact: RUNNING_FROM_BUILT_ARTIFACT,
+  });
+  if (!scanDir) {
+    return [];
+  }
+  return fs
+    .readdirSync(scanDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readBundledCapabilityManifest(path.join(scanDir, entry.name)))
+    .filter((manifest): manifest is BundledCapabilityManifest => manifest !== undefined)
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+const BUNDLED_CAPABILITY_MANIFESTS = listBundledCapabilityManifests();
 
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.map(({ manifest }) => ({
+  BUNDLED_CAPABILITY_MANIFESTS.map((manifest) => ({
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
@@ -80,7 +151,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
+  BUNDLED_CAPABILITY_MANIFESTS.flatMap((manifest) =>
     (manifest.legacyPluginIds ?? []).map(
       (legacyPluginId) => [legacyPluginId, manifest.id] as const,
     ),
@@ -88,7 +159,7 @@ export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
+  BUNDLED_CAPABILITY_MANIFESTS.flatMap((manifest) =>
     (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
       providerId,
       manifest.id,
