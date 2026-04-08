@@ -1003,8 +1003,35 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   }
 
   const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
+  // When the literal store path matches an agent-layout root, scope discovery to
+  // only that root so sessions from the default state directory are not pulled in.
+  // Use realpathSync to normalise symlinks (e.g. /var → /private/var on macOS)
+  // since target store paths are already realpath-resolved by the discovery layer.
+  const scopedTargets = resolvedLiteralAgentsDir
+    ? (() => {
+        let realLiteralAgentsDir: string;
+        try {
+          realLiteralAgentsDir = fs.realpathSync.native(resolvedLiteralAgentsDir);
+        } catch {
+          realLiteralAgentsDir = path.resolve(resolvedLiteralAgentsDir);
+        }
+        return targets.filter((t) => {
+          const tAgentsDir = resolveAgentsDirFromSessionStorePath(t.storePath);
+          if (!tAgentsDir) {
+            return false;
+          }
+          let realTAgentsDir: string;
+          try {
+            realTAgentsDir = fs.realpathSync.native(tAgentsDir);
+          } catch {
+            realTAgentsDir = path.resolve(tAgentsDir);
+          }
+          return realTAgentsDir === realLiteralAgentsDir;
+        });
+      })()
+    : targets;
   const combined: Record<string, SessionEntry> = {};
-  for (const target of targets) {
+  for (const target of scopedTargets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
     const store = loadSessionStore(storePath);

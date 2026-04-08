@@ -861,4 +861,86 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
   });
+
+  test("literal main-agent store paths still discover sibling agent stores (#54435)", async () => {
+    await withStateDirEnv("openclaw-literal-main-store-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const mainDir = path.join(customRoot, "agents", "main", "sessions");
+      const codexDir = path.join(customRoot, "agents", "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      const literalMainStorePath = path.join(mainDir, "sessions.json");
+      fs.writeFileSync(
+        literalMainStorePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: literalMainStorePath,
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(Object.keys(store).toSorted()).toEqual(["agent:codex:acp-task", "agent:main:main"]);
+    });
+  });
+
+  test("literal agent-layout store paths do not leak sessions from the default state dir", async () => {
+    await withStateDirEnv("openclaw-literal-scope-", async ({ stateDir }) => {
+      // Literal path under a custom root
+      const customRoot = path.join(stateDir, "custom-state");
+      const mainDir = path.join(customRoot, "agents", "main", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      const literalMainStorePath = path.join(mainDir, "sessions.json");
+      fs.writeFileSync(
+        literalMainStorePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-custom", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      // Sessions under the default state dir that should NOT leak in
+      const defaultAgentsDir = path.join(stateDir, "agents", "other", "sessions");
+      fs.mkdirSync(defaultAgentsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(defaultAgentsDir, "sessions.json"),
+        JSON.stringify({
+          "agent:other:leaked": { sessionId: "s-leaked", updatedAt: 300 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: literalMainStorePath,
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(Object.keys(store)).toEqual(["agent:main:main"]);
+      expect(store["agent:other:leaked"]).toBeUndefined();
+    });
+  });
 });
