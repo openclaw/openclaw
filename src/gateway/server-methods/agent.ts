@@ -220,7 +220,7 @@ function buildPersistedCompletionWakeExtraSystemPrompt(
     AccountId: entry.lastAccountId ?? entry.origin?.accountId,
     OriginatingTo: entry.lastTo ?? entry.origin?.to,
     OriginatingChannel: entry.lastChannel ?? entry.origin?.provider ?? entry.channel,
-    Provider: entry.channel ?? entry.origin?.provider ?? entry.lastChannel,
+    Provider: entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
     Surface: entry.origin?.surface,
     ChatType: entry.chatType ?? entry.origin?.chatType,
     GroupSubject: entry.subject,

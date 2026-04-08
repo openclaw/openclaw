@@ -877,13 +877,13 @@ describe("gateway agent handler", () => {
     primeMainAgentRun();
     mockMainSessionEntry({
       chatType: "group",
-      channel: "discord",
+      channel: "telegram",
       subject: "Release Squad",
       lastChannel: "discord",
       lastTo: "channel:c3",
       lastAccountId: "acct-1",
       origin: {
-        provider: "discord",
+        provider: "telegram",
         surface: "discord",
         chatType: "group",
         to: "channel:c3",
@@ -926,6 +926,7 @@ describe("gateway agent handler", () => {
     expect(callArgs.extraSystemPrompt).toContain('"chat_id": "channel:c3"');
     expect(callArgs.extraSystemPrompt).toContain('"account_id": "acct-1"');
     expect(callArgs.extraSystemPrompt).toContain('"channel": "discord"');
+    expect(callArgs.extraSystemPrompt).toContain('"provider": "discord"');
     expect(callArgs.extraSystemPrompt).toContain('"chat_type": "group"');
     expect(callArgs.extraSystemPrompt).toContain(
       'You are in the Discord group chat "Release Squad".',
