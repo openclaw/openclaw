@@ -131,6 +131,17 @@ export async function generateVideo(
 
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let skipWarnEmitted = false;
+  const warnOnFirstSkip = (reason: string) => {
+    // Skip events are common in normal fallback flow, so log the *first* one in
+    // a request at warn level with the reason, and leave the rest at debug.
+    // This gives the operator visible feedback that their primary provider was
+    // passed over without flooding logs on long fallback chains.
+    if (!skipWarnEmitted) {
+      skipWarnEmitted = true;
+      log.warn(`video-generation candidate skipped: ${reason}`);
+    }
+  };
 
   for (const candidate of candidates) {
     const provider = getVideoGenerationProvider(candidate.provider, params.cfg);
@@ -167,6 +178,7 @@ export async function generateVideo(
             : `${candidate.provider}/${candidate.model} supports at most ${maxAudio} reference audio(s), ${inputAudioCount} requested; skipping`;
         attempts.push({ provider: candidate.provider, model: candidate.model, error });
         lastError = new Error(error);
+        warnOnFirstSkip(error);
         log.debug(
           `video-generation candidate skipped (audio capability): ${candidate.provider}/${candidate.model}`,
         );
@@ -202,6 +214,7 @@ export async function generateVideo(
       if (mismatch) {
         attempts.push({ provider: candidate.provider, model: candidate.model, error: mismatch });
         lastError = new Error(mismatch);
+        warnOnFirstSkip(mismatch);
         log.debug(
           `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
         );
@@ -235,6 +248,7 @@ export async function generateVideo(
         const error = `${candidate.provider}/${candidate.model} supports at most ${maxDuration}s per video, ${requestedDuration}s requested; skipping`;
         attempts.push({ provider: candidate.provider, model: candidate.model, error });
         lastError = new Error(error);
+        warnOnFirstSkip(error);
         log.debug(
           `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
         );
