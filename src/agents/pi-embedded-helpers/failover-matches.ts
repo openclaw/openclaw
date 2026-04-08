@@ -43,6 +43,11 @@ const COMMON_AUTH_ERROR_PATTERNS = [
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 
+const ZAI_AUTH_ERROR_PATTERNS = [
+  // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
+  ZAI_AUTH_CODE_1113_RE,
+] as const satisfies readonly ErrorPattern[];
+
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
@@ -135,8 +140,7 @@ const ERROR_PATTERNS = {
   auth: [
     ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
     ...COMMON_AUTH_ERROR_PATTERNS,
-    // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
-    ZAI_AUTH_CODE_1113_RE,
+    ...ZAI_AUTH_ERROR_PATTERNS,
   ],
   format: [
     "string should match pattern",
@@ -218,6 +222,7 @@ export function isAuthErrorMessage(raw: string): boolean {
   return matchesErrorPatternGroups(raw, [
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
     COMMON_AUTH_ERROR_PATTERNS,
+    ZAI_AUTH_ERROR_PATTERNS,
   ]);
 }
 
