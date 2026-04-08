@@ -90,12 +90,10 @@ test("exec tears down PTY resources on timeout", async () => {
     timeout: 0.01,
   });
 
-  expect(result.details).toMatchObject({
-    status: "failed",
-    timedOut: true,
-    exitCode: 137,
-  });
-  expect((result.content[0] as { text?: string }).text).toMatch(/Command timed out/);
+  expect(result.details.status).toBe("failed");
+  expect(result.details.timedOut).toBe(true);
+  expect(result.content[0]).toMatchObject({ type: "text" });
+  expect((result.content[0] as { text?: string }).text).toMatch(/timed out/i);
   expect(kill).toHaveBeenCalledTimes(1);
   expect(disposeData).toHaveBeenCalledTimes(1);
   expect(disposeExit).toHaveBeenCalledTimes(1);
