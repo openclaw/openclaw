@@ -814,7 +814,7 @@ export async function steerControlledSubagentRun(params: {
     previousRunId: params.entry.runId,
     nextRunId: runId,
     fallback: params.entry,
-    runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    runTimeoutSeconds: params.entry.runTimeoutSeconds,
   });
   if (!replaced) {
     clearSubagentRunSteerRestart(params.entry.runId);

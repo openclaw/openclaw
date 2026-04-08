@@ -834,7 +834,10 @@ function resolveSubagentWaitTimeoutMs(
   cfg: ReturnType<typeof loadConfig>,
   runTimeoutSeconds?: number,
 ) {
-  return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds ?? 0 });
+  // Pass undefined through so resolveAgentTimeoutMs falls back to the configured default.
+  // Only coerce 0 (explicit "no timeout") — leave undefined as "use default".
+  const overrideSeconds = runTimeoutSeconds === 0 ? 0 : runTimeoutSeconds;
+  return resolveAgentTimeoutMs({ cfg, overrideSeconds: overrideSeconds ?? undefined });
 }
 
 function startSweeper() {
@@ -1344,7 +1347,7 @@ export function replaceSubagentRunAfterSteer(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
   const sessionStartedAt = resolveSubagentSessionStartedAt(source) ?? now;
@@ -1421,7 +1424,7 @@ export function registerSubagentRun(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   subagentRuns.set(params.runId, {

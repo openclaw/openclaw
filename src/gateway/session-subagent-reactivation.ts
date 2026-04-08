@@ -19,6 +19,6 @@ export function reactivateCompletedSubagentSession(params: {
     previousRunId: existing.runId,
     nextRunId: runId,
     fallback: existing,
-    runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
+    runTimeoutSeconds: existing.runTimeoutSeconds,
   });
 }
