@@ -69,6 +69,10 @@ const ChannelHeartbeatVisibilitySchema = z
   .strict()
   .optional();
 
+// Keep this permissive so Feishu account overrides can inherit/override the
+// global messages.tts object without duplicating the full core TTS schema here.
+const AccountTtsConfigSchema = z.record(z.string(), z.unknown()).optional();
+
 /**
  * Dynamic agent creation configuration.
  * When enabled, a new agent is created for each unique DM user.
@@ -199,6 +203,7 @@ export const FeishuAccountConfigSchema = z
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
     webhookPath: z.string().optional(),
+    tts: AccountTtsConfigSchema,
     ...FeishuSharedConfigShape,
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,

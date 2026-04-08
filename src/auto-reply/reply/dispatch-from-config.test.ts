@@ -713,6 +713,32 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("passes accountId into TTS runtime when dispatching on feishu", async () => {
+    setNoAbort();
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      AccountId: "english-bot",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ({ text: "hello from feishu" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "feishu",
+        accountId: "english-bot",
+        kind: "final",
+      }),
+    );
+  });
+
   it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

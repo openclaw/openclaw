@@ -68,6 +68,8 @@ export const resolveTtsConfig: FacadeModule["resolveTtsConfig"] = createLazyFaca
   loadFacadeModule,
   "resolveTtsConfig",
 );
+export const resolveTtsConfigForAccount: FacadeModule["resolveTtsConfigForAccount"] =
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveTtsConfigForAccount");
 export const resolveTtsPrefsPath: FacadeModule["resolveTtsPrefsPath"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "resolveTtsPrefsPath");
 export const resolveTtsProviderOrder: FacadeModule["resolveTtsProviderOrder"] =

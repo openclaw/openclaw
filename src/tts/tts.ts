@@ -13,6 +13,7 @@ export {
   resolveExplicitTtsOverrides,
   resolveTtsAutoMode,
   resolveTtsConfig,
+  resolveTtsConfigForAccount,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
   setLastTtsAttempt,

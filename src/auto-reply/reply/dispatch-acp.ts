@@ -176,6 +176,7 @@ async function finalizeAcpTurnOutput(params: {
   sessionKey: string;
   delivery: AcpDispatchDeliveryCoordinator;
   inboundAudio: boolean;
+  accountId?: string;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   shouldEmitResolvedIdentityNotice: boolean;
@@ -201,6 +202,7 @@ async function finalizeAcpTurnOutput(params: {
         payload: { text: accumulatedBlockText },
         cfg: params.cfg,
         channel: params.ttsChannel,
+        accountId: params.accountId,
         kind: "final",
         inboundAudio: params.inboundAudio,
         ttsAuto: params.sessionTtsAuto,
@@ -435,6 +437,7 @@ export async function tryDispatchAcpReply(params: {
         sessionKey: canonicalSessionKey,
         delivery,
         inboundAudio: params.inboundAudio,
+        accountId: params.ctx.AccountId,
         sessionTtsAuto: params.sessionTtsAuto,
         ttsChannel: params.ttsChannel,
         shouldEmitResolvedIdentityNotice,

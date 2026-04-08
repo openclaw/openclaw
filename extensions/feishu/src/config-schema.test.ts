@@ -220,6 +220,33 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema account TTS", () => {
+  it("accepts account-level tts overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        english: {
+          tts: {
+            enabled: true,
+            provider: "edge",
+            edge: {
+              voice: "en-US-JennyNeural",
+              lang: "en-US",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.accounts?.english?.tts).toMatchObject({
+      provider: "edge",
+      edge: {
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+      },
+    });
+  });
+});
+
 describe("FeishuConfigSchema actions", () => {
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({

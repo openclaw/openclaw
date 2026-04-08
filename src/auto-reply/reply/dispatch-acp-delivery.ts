@@ -89,6 +89,7 @@ async function maybeApplyAcpTts(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   channel?: string;
+  accountId?: string;
   kind: ReplyDispatchKind;
   inboundAudio: boolean;
   ttsAuto?: TtsAutoMode;
@@ -115,6 +116,7 @@ async function maybeApplyAcpTts(params: {
     payload: params.payload,
     cfg: params.cfg,
     channel: params.channel,
+    accountId: params.accountId,
     kind: params.kind,
     inboundAudio: params.inboundAudio,
     ttsAuto: params.ttsAuto,
@@ -293,6 +295,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       payload,
       cfg: params.cfg,
       channel: params.ttsChannel,
+      accountId: resolvedAccountId,
       kind,
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,

@@ -28,6 +28,7 @@ let ensureCustomApiRegisteredMock: typeof import("../../../src/agents/custom-api
 let prepareModelForSimpleCompletionMock: typeof import("../../../src/agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
 let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
+let resolveTtsConfigForAccount: TtsRuntimeModule["resolveTtsConfigForAccount"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
 let getTtsProvider: TtsRuntimeModule["getTtsProvider"];
 let parseTtsDirectives: TtsRuntimeModule["_test"]["parseTtsDirectives"];
@@ -422,6 +423,7 @@ async function setupTtsRuntime() {
   }
   ttsRuntime = await loadTtsRuntime();
   resolveTtsConfig = ttsRuntime.resolveTtsConfig;
+  resolveTtsConfigForAccount = ttsRuntime.resolveTtsConfigForAccount;
   maybeApplyTtsToPayload = ttsRuntime.maybeApplyTtsToPayload;
   getTtsProvider = ttsRuntime.getTtsProvider;
   ({
@@ -751,6 +753,129 @@ export function describeTtsConfigContract() {
 
         expect(config.provider).toBe("microsoft");
         expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
+      });
+    });
+
+    describe("resolveTtsConfigForAccount", () => {
+      it("applies account-level feishu tts overrides", () => {
+        const config = resolveTtsConfigForAccount(
+          asLegacyOpenClawConfig({
+            messages: {
+              tts: {
+                provider: "edge",
+                providers: {
+                  edge: {
+                    voice: "zh-CN-XiaoyiNeural",
+                    lang: "zh-CN",
+                    rate: "+0%",
+                  },
+                },
+              },
+            },
+            channels: {
+              feishu: {
+                accounts: {
+                  "english-bot": {
+                    tts: {
+                      providers: {
+                        edge: {
+                          voice: "en-US-JennyNeural",
+                          lang: "en-US",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+          "feishu",
+          "english-bot",
+        );
+
+        const providerConfig = getResolvedSpeechProviderConfig(config, "microsoft") as {
+          voice?: string;
+          lang?: string;
+          rate?: string;
+        };
+        expect(providerConfig.voice).toBe("en-US-JennyNeural");
+        expect(providerConfig.lang).toBe("en-US");
+        expect(providerConfig.rate).toBe("+0%");
+      });
+
+      it("falls back to global messages.tts when account override is missing", () => {
+        const cfg = asLegacyOpenClawConfig({
+          messages: {
+            tts: {
+              provider: "edge",
+              providers: {
+                edge: {
+                  voice: "zh-CN-XiaoyiNeural",
+                  lang: "zh-CN",
+                },
+              },
+            },
+          },
+          channels: {
+            feishu: {
+              accounts: {
+                "english-bot": {},
+              },
+            },
+          },
+        });
+
+        const globalConfig = resolveTtsConfig(cfg);
+        const accountConfig = resolveTtsConfigForAccount(cfg, "feishu", "english-bot");
+        const globalProviderConfig = getResolvedSpeechProviderConfig(globalConfig, "microsoft") as {
+          voice?: string;
+          lang?: string;
+        };
+        const accountProviderConfig = getResolvedSpeechProviderConfig(
+          accountConfig,
+          "microsoft",
+        ) as {
+          voice?: string;
+          lang?: string;
+        };
+
+        expect(accountProviderConfig).toMatchObject(globalProviderConfig);
+      });
+
+      it("keeps non-feishu paths unchanged", () => {
+        const cfg = asLegacyOpenClawConfig({
+          messages: {
+            tts: {
+              provider: "edge",
+              providers: {
+                edge: {
+                  voice: "zh-CN-XiaoyiNeural",
+                },
+              },
+            },
+          },
+          channels: {
+            feishu: {
+              accounts: {
+                "english-bot": {
+                  tts: {
+                    providers: {
+                      edge: {
+                        voice: "en-US-JennyNeural",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        const baseline = resolveTtsConfig(cfg);
+        const nonFeishu = resolveTtsConfigForAccount(cfg, "discord", "english-bot");
+        expect(getResolvedSpeechProviderConfig(nonFeishu, "microsoft")).toMatchObject(
+          getResolvedSpeechProviderConfig(baseline, "microsoft"),
+        );
       });
     });
 
