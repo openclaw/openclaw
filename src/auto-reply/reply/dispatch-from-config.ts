@@ -83,7 +83,7 @@ const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
 const EMPTY_RUN_FALLBACK_TEXT =
-  "I couldn't produce a sendable reply for that request. A tool may have failed, timed out, or been blocked. Please retry with a narrower task or a different source.";
+  "I couldn't produce a reply for that request. Please try again or rephrase your message.";
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [

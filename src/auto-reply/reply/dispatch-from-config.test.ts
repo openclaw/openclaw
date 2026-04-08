@@ -2893,7 +2893,7 @@ describe("before_dispatch hook", () => {
     });
 
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: expect.stringContaining("I couldn't produce a sendable reply"),
+      text: expect.stringContaining("I couldn't produce a reply"),
       isError: true,
     });
     expect(result.queuedFinal).toBe(true);
