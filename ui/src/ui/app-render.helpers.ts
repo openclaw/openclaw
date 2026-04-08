@@ -48,7 +48,17 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  state.chatAttachments = [];
+  state.chatMessages = [];
+  state.chatToolMessages = [];
+  state.chatStreamSegments = [];
+  state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.lastError = null;
+  state.compactionStatus = null;
+  state.fallbackStatus = null;
+  state.chatAvatarUrl = null;
+  state.chatQueue = [];
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
   (state as unknown as OpenClawApp).resetToolStream();
@@ -504,20 +514,7 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
-  state.sessionKey = nextSessionKey;
-  state.chatMessage = "";
-  state.chatStream = null;
-  // P1: Clear queued chat items from the previous session
-  (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-  state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
-  state.applySettings({
-    ...state.settings,
-    sessionKey: nextSessionKey,
-    lastActiveSessionKey: nextSessionKey,
-  });
+  resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
