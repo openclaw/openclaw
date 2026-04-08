@@ -468,6 +468,48 @@ describe("resolveSlackMedia", () => {
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
+  it("retries with the fallback token when the primary token gets HTML auth content", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response("<!DOCTYPE html><html><body>login</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from([0xff, 0xd8, 0xff, 0xdb]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+      );
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxp-user-token",
+      fallbackToken: "xoxb-bot-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result?.[0]?.path).toBe("/tmp/test.jpg");
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://files.slack.com/test.jpg",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer xoxp-user-token" }),
+      }),
+    );
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://files.slack.com/test.jpg",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer xoxb-bot-token" }),
+      }),
+    );
+  });
+
   it("allows expected HTML uploads", async () => {
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
       createSavedMedia("/tmp/page.html", "text/html"),

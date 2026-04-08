@@ -319,6 +319,22 @@ async function fetchSlackMediaWithFallback(params: {
   }
 }
 
+function isUnexpectedHtmlSlackMedia(params: {
+  file: SlackFile;
+  contentType?: string;
+  buffer: Buffer;
+}): boolean {
+  const fileMime = normalizeOptionalLowercaseString(params.file.mimetype);
+  const fileName = normalizeLowercaseStringOrEmpty(params.file.name);
+  const isExpectedHtml =
+    fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
+  if (isExpectedHtml) {
+    return false;
+  }
+  const detectedMime = normalizeOptionalLowercaseString(params.contentType?.split(";")[0]);
+  return detectedMime === "text/html" || looksLikeHtmlBuffer(params.buffer);
+}
+
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
@@ -362,26 +378,37 @@ export async function resolveSlackMedia(params: {
       }
       try {
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchSlackMediaWithFallback({
-          sourceUrl: url,
-          token: params.token,
-          fallbackToken: params.fallbackToken,
-          fetchImpl,
-          filePathHint: effectiveFile.name ?? effectiveFile.id ?? "slack-file",
-          maxBytes: params.maxBytes,
-        });
-        // Guard against auth/login HTML pages returned instead of binary media.
-        // Allow user-provided HTML files through.
-        const fileMime = normalizeOptionalLowercaseString(effectiveFile.mimetype);
-        const fileName = normalizeLowercaseStringOrEmpty(effectiveFile.name);
+        const fetchMedia = async (token: string, fallbackToken?: string) =>
+          fetchSlackMediaWithFallback({
+            sourceUrl: url,
+            token,
+            fallbackToken,
+            fetchImpl,
+            filePathHint: effectiveFile.name ?? effectiveFile.id ?? "slack-file",
+            maxBytes: params.maxBytes,
+          });
 
-        const isExpectedHtml =
-          fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
-        if (!isExpectedHtml) {
-          const detectedMime = normalizeOptionalLowercaseString(fetched.contentType?.split(";")[0]);
-          if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
-            return null;
-          }
+        let fetched = await fetchMedia(params.token, params.fallbackToken);
+        if (
+          isUnexpectedHtmlSlackMedia({
+            file: effectiveFile,
+            contentType: fetched.contentType,
+            buffer: fetched.buffer,
+          }) &&
+          params.fallbackToken &&
+          params.fallbackToken !== params.token
+        ) {
+          logVerbose("slack media fetch returned html, retrying with fallback token");
+          fetched = await fetchMedia(params.fallbackToken);
+        }
+        if (
+          isUnexpectedHtmlSlackMedia({
+            file: effectiveFile,
+            contentType: fetched.contentType,
+            buffer: fetched.buffer,
+          })
+        ) {
+          return null;
         }
 
         const effectiveMime = resolveSlackMediaMimetype(effectiveFile, fetched.contentType);
