@@ -1,31 +1,19 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 // Tool names that fetch external network content. Their text results are wrapped
 // in <tool_result trusted="false"> delimiters so the model treats them as data,
 // not as instructions. Lowercase, matching normalizeToolName output.
+// MCP tools are intentionally excluded: bundled and external MCP both set
+// details.mcpServer / details.mcpTool, so they cannot be reliably distinguished here.
 const OPEN_WORLD_TOOL_NAMES = new Set(["web_fetch", "web_search", "x_search"]);
 
-function isOpenWorldToolResult(msg: {
-  toolName: string;
-  details?: unknown;
-  isError: boolean;
-}): boolean {
+function isOpenWorldToolResult(msg: { toolName: string; isError: boolean }): boolean {
   // Error payloads are framework-generated text, not external content.
   if (msg.isError) {
     return false;
   }
-  if (OPEN_WORLD_TOOL_NAMES.has(msg.toolName.trim().toLowerCase())) {
-    return true;
-  }
-  // External MCP tools carry mcpServer or mcpTool in their details object.
-  const details = msg.details;
-  if (details && typeof details === "object" && !Array.isArray(details)) {
-    const d = details as Record<string, unknown>;
-    if (typeof d.mcpServer === "string" || typeof d.mcpTool === "string") {
-      return true;
-    }
-  }
-  return false;
+  return OPEN_WORLD_TOOL_NAMES.has(msg.toolName.trim().toLowerCase());
 }
 
 type ToolResultContent = Extract<Context["messages"][number], { role: "toolResult" }>["content"];
@@ -39,13 +27,17 @@ function wrapToolResultContentForTrust(
     if (block.type !== "text") {
       return block;
     }
-    const text = block.text.trim();
-    if (!text) {
+    if (!block.text.trim()) {
       return block;
     }
+    // Strip control chars then HTML-encode angle brackets so an attacker
+    // cannot escape the trust boundary with </tool_result>.
+    const sanitized = sanitizeForPromptLiteral(block.text)
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
     return {
       ...block,
-      text: `<tool_result source="${source}" trusted="false">\n${block.text}\n</tool_result>`,
+      text: `<tool_result source="${source}" trusted="false">\n${sanitized}\n</tool_result>`,
     };
   });
 }
