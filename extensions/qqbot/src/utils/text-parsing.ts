@@ -1,5 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RefAttachmentSummary } from "../ref-index-store.js";
 
 const MAX_FACE_EXT_BYTES = 64 * 1024;

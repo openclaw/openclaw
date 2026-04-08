@@ -61,6 +61,52 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
+type ResetPreservedSelectionState = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
+
+function resolveResetPreservedSelection(params: {
+  entry?: SessionEntry;
+}): Partial<ResetPreservedSelectionState> {
+  const { entry } = params;
+  if (!entry) {
+    return {};
+  }
+
+  const preserved: Partial<ResetPreservedSelectionState> = {};
+  // `modelOverrideSource` is new. Older persisted sessions can still carry
+  // user-selected overrides without the source field, so treat an absent
+  // source as legacy user state during reset and backfill it forward.
+  const preserveLegacyUserModelOverride =
+    entry.modelOverrideSource === "user" ||
+    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
+  if (preserveLegacyUserModelOverride && entry.modelOverride) {
+    preserved.providerOverride = entry.providerOverride;
+    preserved.modelOverride = entry.modelOverride;
+    preserved.modelOverrideSource = "user";
+  }
+
+  // Preserve explicit user auth overrides. Legacy entries (no source field)
+  // are inferred: compactionCount present means auto-failover, absent means user.
+  const isUserAuthOverride =
+    entry.authProfileOverrideSource === "user" ||
+    (!entry.authProfileOverrideSource &&
+      typeof entry.authProfileOverrideCompactionCount !== "number" &&
+      Boolean(entry.authProfileOverride));
+  if (isUserAuthOverride && entry.authProfileOverride) {
+    preserved.authProfileOverride = entry.authProfileOverride;
+    preserved.authProfileOverrideSource = entry.authProfileOverrideSource ?? "user";
+  }
+
+  return preserved;
+}
+
 export function archiveSessionTranscriptsForSession(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -507,9 +553,21 @@ export async function performGatewaySessionReset(params: {
     });
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
-    const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const resetPreservedSelection = resolveResetPreservedSelection({
+      entry: currentEntry,
+    });
+    const resetEntry = {
+      ...stripRuntimeModelState(currentEntry),
+      providerOverride: undefined,
+      modelOverride: undefined,
+      modelOverrideSource: undefined,
+      authProfileOverride: undefined,
+      authProfileOverrideSource: undefined,
+      authProfileOverrideCompactionCount: undefined,
+      ...resetPreservedSelection,
+    };
     const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
@@ -540,21 +598,9 @@ export async function performGatewaySessionReset(params: {
       execAsk: currentEntry?.execAsk,
       execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
-      providerOverride: currentEntry?.providerOverride,
-      modelOverride: currentEntry?.modelOverride,
-      authProfileOverride:
-        currentEntry?.authProfileOverrideSource === "user" ||
-        (!currentEntry?.authProfileOverrideSource &&
-          typeof currentEntry?.authProfileOverrideCompactionCount !== "number")
-          ? currentEntry?.authProfileOverride
-          : undefined,
-      authProfileOverrideSource:
-        currentEntry?.authProfileOverrideSource === "user" ||
-        (!currentEntry?.authProfileOverrideSource &&
-          typeof currentEntry?.authProfileOverrideCompactionCount !== "number")
-          ? currentEntry?.authProfileOverrideSource
-          : undefined,
-      authProfileOverrideCompactionCount: undefined,
+      // Resets should keep the user's explicit selection, but clear any
+      // temporary fallback model that was pinned during the previous run.
+      ...resetPreservedSelection,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
@@ -69,6 +69,13 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
+
+afterAll(() => {
+  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+});
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
   return JSON.parse(

@@ -564,6 +564,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {
+    stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -823,6 +824,8 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects unsupported aspect ratios", async () => {
+    stubImageGenerationProviders();
+
     const tool = createImageGenerateTool({
       config: {
         agents: {

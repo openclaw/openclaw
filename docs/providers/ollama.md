@@ -119,7 +119,8 @@ openclaw models set ollama/gemma4
 When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama`, OpenClaw discovers models from the local Ollama instance at `http://127.0.0.1:11434`:
 
 - Queries `/api/tags`
-- Uses best-effort `/api/show` lookups to read `contextWindow` when available
+- Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision) when available
+- Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt for those models
 - Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)
 - Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw
 - Sets all costs to `0`

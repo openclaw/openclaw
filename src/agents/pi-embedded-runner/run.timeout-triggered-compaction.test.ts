@@ -221,6 +221,25 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
+  it("points idle-timeout errors at the LLM idle timeout config key", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        lastAssistant: {
+          usage: { input: 20000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
+    expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
+  });
+
   it("does not attempt compaction for low-context timeouts on later retries", async () => {
     mockedPickFallbackThinkingLevel.mockReturnValueOnce("low");
     mockedRunEmbeddedAttempt

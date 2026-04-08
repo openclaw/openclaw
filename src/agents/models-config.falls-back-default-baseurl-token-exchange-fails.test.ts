@@ -11,6 +11,13 @@ import {
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
+vi.unmock("./models-config.js");
+vi.unmock("./agent-paths.js");
+vi.unmock("../plugins/manifest-registry.js");
+vi.unmock("../plugins/provider-runtime.js");
+vi.unmock("../plugins/provider-runtime.runtime.js");
+vi.unmock("../secrets/provider-env-vars.js");
+
 installModelsConfigTestHooks({ restoreFetch: true });
 
 async function readCopilotBaseUrl(agentDir: string) {
@@ -24,17 +31,25 @@ async function readCopilotBaseUrl(agentDir: string) {
 describe("models-config", () => {
   it("falls back to default baseUrl when token exchange fails", async () => {
     await withTempHome(async () => {
-      await withEnvAsync({ COPILOT_GITHUB_TOKEN: "gh-token" }, async () => {
-        const fetchMock = vi.fn().mockResolvedValue({
-          ok: false,
-          status: 500,
-          json: async () => ({ message: "boom" }),
-        });
-        globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withEnvAsync(
+        {
+          COPILOT_GITHUB_TOKEN: "gh-token",
+          GH_TOKEN: undefined,
+          GITHUB_TOKEN: undefined,
+          OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "github-copilot",
+        },
+        async () => {
+          const fetchMock = vi.fn().mockResolvedValue({
+            ok: false,
+            status: 500,
+            json: async () => ({ message: "boom" }),
+          });
+          globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-        const { agentDir } = await ensureOpenClawModelsJson({ models: { providers: {} } });
-        expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
-      });
+          const { agentDir } = await ensureOpenClawModelsJson({ models: { providers: {} } });
+          expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
+        },
+      );
     });
   });
 

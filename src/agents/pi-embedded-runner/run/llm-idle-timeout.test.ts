@@ -8,46 +8,82 @@ import {
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
-    expect(resolveLlmIdleTimeoutMs(undefined)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs()).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns default when llm config is missing", () => {
     const cfg = { agents: {} } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns default when idleTimeoutSeconds is not set", () => {
     const cfg = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns 0 when idleTimeoutSeconds is 0 (disabled)", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(0);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(0);
   });
 
   it("returns configured value in milliseconds", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 30 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(30_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(30_000);
   });
 
   it("caps at max safe timeout", () => {
     const cfg = {
       agents: { defaults: { llm: { idleTimeoutSeconds: 10_000_000 } } },
     } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(2_147_000_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(2_147_000_000);
   });
 
   it("ignores negative values", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: -10 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("ignores non-finite values", () => {
     const cfg = {
       agents: { defaults: { llm: { idleTimeoutSeconds: Infinity } } },
     } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("falls back to agents.defaults.timeoutSeconds when llm.idleTimeoutSeconds is not set", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(300_000);
+  });
+
+  it("prefers llm.idleTimeoutSeconds over agents.defaults.timeoutSeconds", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 120 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(120_000);
+  });
+
+  it("keeps idleTimeoutSeconds=0 disabled even when timeoutSeconds is set", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 0 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(0);
+  });
+
+  it("disables the default idle timeout for cron when no timeout is configured", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(0);
+
+    const cfg = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
+  });
+
+  it("uses agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(300_000);
+  });
+
+  it("keeps an explicit cron idle timeout when configured", () => {
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 45 } } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(45_000);
   });
 });
 

@@ -78,6 +78,45 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.agents?.defaults).not.toHaveProperty("imageGenerationModel");
   });
 
+  it("uses owning plugin ids separately from live model provider ids", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      qaBusBaseUrl: "http://127.0.0.1:43124",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      primaryModel: "codex-cli/test-model",
+      alternateModel: "codex-cli/test-model",
+      imageGenerationModel: null,
+      enabledPluginIds: ["openai"],
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("codex-cli/test-model");
+    expect(cfg.plugins?.allow).toEqual(["memory-core", "openai", "qa-channel"]);
+    expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.["codex-cli"]).toBeUndefined();
+  });
+
+  it("can set a QA default thinking level for judge turns", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      qaBusBaseUrl: "http://127.0.0.1:43124",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      thinkingDefault: "xhigh",
+    });
+
+    expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.params).toMatchObject({
+      thinking: "xhigh",
+    });
+  });
+
   it("can disable control ui for suite-only gateway children", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",

@@ -1,5 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.unmock("../plugins/manifest-registry.js");
+vi.unmock("../secrets/provider-env-vars.js");
+
 const ORIGINAL_MODELSTUDIO_API_KEY = process.env.MODELSTUDIO_API_KEY;
 const ORIGINAL_XAI_API_KEY = process.env.XAI_API_KEY;
 let collectProviderApiKeys: typeof import("./live-auth-keys.js").collectProviderApiKeys;

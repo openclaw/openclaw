@@ -105,6 +105,8 @@ export type PluginManifest = {
   cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
+  /** Provider ids that should reuse another provider id for auth lookup. */
+  providerAuthAliases?: Record<string, string>;
   /** Cheap channel env lookup without booting plugin runtime. */
   channelEnvVars?: Record<string, string[]>;
   /**
@@ -194,6 +196,22 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
       continue;
     }
     normalized[providerId] = values;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = normalizeOptionalString(rawKey) ?? "";
+    const value = normalizeOptionalString(rawValue) ?? "";
+    if (!key || !value) {
+      continue;
+    }
+    normalized[key] = value;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -516,6 +534,7 @@ export function loadPluginManifest(
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeTrimmedStringList(raw.skills);
@@ -544,6 +563,7 @@ export function loadPluginManifest(
       modelSupport,
       cliBackends,
       providerAuthEnvVars,
+      providerAuthAliases,
       channelEnvVars,
       providerAuthChoices,
       skills,

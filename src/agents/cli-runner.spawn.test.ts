@@ -51,6 +51,9 @@ function buildPreparedCliRunContext(params: {
           input: "arg" as const,
           modelArg: "--model",
           sessionMode: "existing" as const,
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+          systemPromptWhen: "first" as const,
           serialize: true,
         };
   const backend = { ...baseBackend, ...params.backend };
@@ -219,6 +222,39 @@ describe("runCliAgent spawn path", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("passes Codex system prompts through model_instructions_file", async () => {
+    let promptFileText = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const configArgIndex = input.argv?.indexOf("-c") ?? -1;
+      expect(configArgIndex).toBeGreaterThanOrEqual(0);
+      const configArg = input.argv?.[configArgIndex + 1] ?? "";
+      const match = /^model_instructions_file="(.+)"$/.exec(configArg);
+      expect(match?.[1]).toBeTruthy();
+      promptFileText = await fs.readFile(match?.[1] ?? "", "utf-8");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-codex-system-prompt-file",
+      }),
+    );
+
+    expect(promptFileText).toBe("You are a helpful assistant.");
   });
 
   it("cancels the managed CLI run when the abort signal fires", async () => {

@@ -1,6 +1,7 @@
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { normalizeProviderId, normalizeProviderIdForAuth } from "../provider-id.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { normalizeProviderId } from "../provider-id.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
@@ -78,9 +79,9 @@ export async function upsertAuthProfileWithLock(params: {
 }
 
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
-  const providerKey = normalizeProviderIdForAuth(provider);
+  const providerKey = resolveProviderIdForAuth(provider);
   return Object.entries(store.profiles)
-    .filter(([, cred]) => normalizeProviderIdForAuth(cred.provider) === providerKey)
+    .filter(([, cred]) => resolveProviderIdForAuth(cred.provider) === providerKey)
     .map(([id]) => id);
 }
 
@@ -91,14 +92,15 @@ export async function markAuthProfileGood(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
+  const providerKey = resolveProviderIdForAuth(provider);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
-      if (!profile || profile.provider !== provider) {
+      if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }
-      freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
+      freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
       return true;
     },
   });
@@ -107,9 +109,9 @@ export async function markAuthProfileGood(params: {
     return;
   }
   const profile = store.profiles[profileId];
-  if (!profile || profile.provider !== provider) {
+  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
     return;
   }
-  store.lastGood = { ...store.lastGood, [provider]: profileId };
+  store.lastGood = { ...store.lastGood, [providerKey]: profileId };
   saveAuthProfileStore(store, agentDir);
 }

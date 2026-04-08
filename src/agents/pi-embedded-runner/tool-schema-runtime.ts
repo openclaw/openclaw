@@ -20,6 +20,22 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   model?: ProviderRuntimeModel;
 };
 
+function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
+  params: ProviderToolSchemaParams<TSchemaType, TResult>,
+  provider: string,
+) {
+  return {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    provider,
+    modelId: params.modelId,
+    modelApi: params.modelApi,
+    model: params.model,
+    tools: params.tools as unknown as AnyAgentTool[],
+  };
+}
+
 /**
  * Runs provider-owned tool-schema normalization without encoding provider
  * families in the embedded runner.
@@ -34,16 +50,7 @@ export function normalizeProviderToolSchemas<
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    context: {
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-      tools: params.tools as unknown as AnyAgentTool[],
-    },
+    context: buildProviderToolSchemaContext(params, provider),
   });
   return Array.isArray(pluginNormalized)
     ? (pluginNormalized as AgentTool<TSchemaType, TResult>[])
@@ -60,16 +67,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    context: {
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-      tools: params.tools as unknown as AnyAgentTool[],
-    },
+    context: buildProviderToolSchemaContext(params, provider),
   });
   if (!Array.isArray(diagnostics)) {
     return;

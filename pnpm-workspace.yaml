@@ -8,10 +8,12 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
+  - "hono"
   - "openclaw"
   - "@buape/carbon"
   - "vite"
   - "@cloudflare/workers-types"
+  - "@hono/node-server"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
   - "@oxlint/*"

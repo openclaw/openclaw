@@ -1,6 +1,11 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+} from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -201,6 +206,7 @@ export function createChatRunRegistry(): ChatRunRegistry {
 
 export type ChatRunState = {
   registry: ChatRunRegistry;
+  rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
@@ -211,6 +217,7 @@ export type ChatRunState = {
 
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
+  const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
@@ -218,6 +225,7 @@ export function createChatRunState(): ChatRunState {
 
   const clear = () => {
     registry.clear();
+    rawBuffers.clear();
     buffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
@@ -226,6 +234,7 @@ export function createChatRunState(): ChatRunState {
 
   return {
     registry,
+    rawBuffers,
     buffers,
     deltaSentAt,
     deltaLastBroadcastLen,
@@ -474,6 +483,7 @@ export function createAgentEventHandler({
   const pendingTerminalLifecycleErrors = new Map<string, NodeJS.Timeout>();
 
   const clearBufferedChatState = (clientRunId: string) => {
+    chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
@@ -672,22 +682,28 @@ export function createAgentEventHandler({
     const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
     const cleanedDelta =
       typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
-    const previousText = chatRunState.buffers.get(clientRunId) ?? "";
-    const mergedText = resolveMergedAssistantText({
-      previousText,
+    const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
+    const mergedRawText = resolveMergedAssistantText({
+      previousText: previousRawText,
       nextText: cleanedText,
       nextDelta: cleanedDelta,
     });
-    if (!mergedText) {
+    if (!mergedRawText) {
       return;
     }
+    chatRunState.rawBuffers.set(clientRunId, mergedRawText);
+    if (isSilentReplyText(mergedRawText, SILENT_REPLY_TOKEN)) {
+      chatRunState.buffers.set(clientRunId, "");
+      return;
+    }
+    if (isSilentReplyLeadFragment(mergedRawText)) {
+      chatRunState.buffers.set(clientRunId, mergedRawText);
+      return;
+    }
+    const mergedText = startsWithSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
+      ? stripLeadingSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
+      : mergedRawText;
     chatRunState.buffers.set(clientRunId, mergedText);
-    if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
-      return;
-    }
-    if (isSilentReplyLeadFragment(mergedText)) {
-      return;
-    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -788,6 +804,7 @@ export function createAgentEventHandler({
     // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+    chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
