@@ -7,6 +7,8 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
 import { loadConfig } from "../../config/config.js";
 import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -196,6 +198,18 @@ export function createAcpVisibleTextAccumulator() {
           isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
         ) {
+          pendingSilentPrefix = leadCandidate;
+          return null;
+        }
+        // Strip leading NO_REPLY token when it is glued to visible text
+        // (e.g. "NO_REPLYThe user is saying...") so the token never leaks.
+        if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
+          const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
+          if (stripped) {
+            pendingSilentPrefix = "";
+            visibleText = stripped;
+            return { text: stripped, delta: stripped };
+          }
           pendingSilentPrefix = leadCandidate;
           return null;
         }

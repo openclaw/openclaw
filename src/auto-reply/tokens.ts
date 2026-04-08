@@ -86,6 +86,43 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
   return text.replace(getSilentTrailingRegex(token), "").trim();
 }
 
+const silentLeadingRegexByToken = new Map<string, RegExp>();
+
+function getSilentLeadingRegex(token: string): RegExp {
+  const cached = silentLeadingRegexByToken.get(token);
+  if (cached) {
+    return cached;
+  }
+  const escaped = escapeRegExp(token);
+  // Match one or more leading occurrences of the token, each optionally followed by whitespace
+  const regex = new RegExp(`^(?:\\s*${escaped})+\\s*`, "i");
+  silentLeadingRegexByToken.set(token, regex);
+  return regex;
+}
+
+/**
+ * Strip leading silent reply tokens from text.
+ * Handles cases like "NO_REPLYThe user is saying..." where the token
+ * is not separated from the following text.
+ */
+export function stripLeadingSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
+  return text.replace(getSilentLeadingRegex(token), "").trim();
+}
+
+/**
+ * Check whether text starts with the silent reply token.
+ * Used in streaming to detect leading NO_REPLY that should be stripped.
+ */
+export function startsWithSilentToken(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  return text.trimStart().startsWith(token);
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
