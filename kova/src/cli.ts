@@ -10,7 +10,7 @@ function printHelp() {
       "Kova",
       "",
       "Usage:",
-      "  kova list [inventory|targets|backends [qa]|scenarios [qa]]",
+      "  kova list [inventory|targets|backends [qa]|scenarios [qa]|surfaces [qa]]",
       "  kova run qa [--backend host|multipass] [--provider-mode mock-openai|live-frontier] [--scenario <id>]",
       "  kova report [latest|<run-id>]",
       "",

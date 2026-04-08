@@ -1,6 +1,6 @@
 import { listKovaBackends, listKovaTargets } from "../backends/registry.js";
 import type { KovaRunTarget } from "../backends/types.js";
-import { listKovaQaScenarios } from "../catalog/qa.js";
+import { listKovaQaScenarios, summarizeKovaQaSurfaces } from "../catalog/qa.js";
 
 function parseListArgs(args: string[]) {
   const [subject, maybeTarget] = args;
@@ -35,6 +35,16 @@ function renderScenarioLines(target?: KovaRunTarget) {
   ];
 }
 
+function renderSurfaceLines(target?: KovaRunTarget) {
+  const resolvedTarget: "qa" = target ?? "qa";
+  return [
+    `Surfaces (${resolvedTarget}):`,
+    ...summarizeKovaQaSurfaces().map(
+      (surface) => `  - ${surface.surface}: ${surface.scenarioCount} scenario(s)`,
+    ),
+  ];
+}
+
 export async function listCommand(args: string[]) {
   const options = parseListArgs(args);
 
@@ -53,8 +63,21 @@ export async function listCommand(args: string[]) {
     return;
   }
 
+  if (options.subject === "surfaces") {
+    process.stdout.write(`${renderSurfaceLines(options.target).join("\n")}\n`);
+    return;
+  }
+
   if (options.subject === "inventory") {
-    const lines = [...renderTargetLines(), "", ...renderBackendLines()];
+    const scenarioCount = listKovaQaScenarios().length;
+    const surfaceCount = summarizeKovaQaSurfaces().length;
+    const lines = [
+      ...renderTargetLines(),
+      "",
+      ...renderBackendLines(),
+      "",
+      `QA Catalog: ${scenarioCount} scenario(s) across ${surfaceCount} surface(s)`,
+    ];
     process.stdout.write(`${lines.join("\n")}\n`);
     return;
   }
