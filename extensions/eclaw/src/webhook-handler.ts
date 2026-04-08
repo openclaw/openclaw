@@ -212,22 +212,32 @@ export async function dispatchEclawWebhookMessage(params: {
           await client.sendMessage(text, "IDLE", outboundMediaType, mediaUrl);
         },
         onError: (err: unknown, info?: { kind?: string }) => {
-          // Don't silently drop delivery failures — surface them via
-          // the plugin runtime logger so operators can see partial
-          // failures in the OpenClaw logs. If the runtime has no error
-          // sink wired up (shouldn't happen at runtime), the message is
-          // dropped rather than leaking to stdout — this keeps the
-          // extension free of production lint suppressions.
+          // Surface delivery failures via the plugin runtime's
+          // structured logger so operators can see partial failures
+          // in the OpenClaw logs.
+          //
+          // The correct logger API is
+          //   runtime.logging.getChildLogger({...}).error(msg, meta?)
+          // per `PluginRuntimeCore.logging.getChildLogger` in
+          // src/plugins/runtime/types-core.ts (see `RuntimeLogger`).
+          // Earlier rounds of this PR incorrectly reached for a
+          // top-level `runtime.error` which does not exist on
+          // PluginRuntime — the regression test had a fake runtime
+          // with a flat `.error` method, which passed but did not
+          // reflect the real runtime shape. Every real delivery
+          // failure was silently swallowed. See PR #62934 round 8
+          // (codex webhook-handler.ts P2).
           const message = err instanceof Error ? err.message : String(err);
           const kind = info?.kind ? ` ${info.kind}` : "";
-          const line = `eclaw: reply${kind} delivery failed: ${message}`;
           try {
-            const runtime = getEclawRuntime() as unknown as {
-              error?: (msg: string) => void;
-            };
-            if (typeof runtime?.error === "function") {
-              runtime.error(line);
-            }
+            const runtime = getEclawRuntime();
+            const childLogger = runtime.logging?.getChildLogger?.({
+              plugin: "eclaw",
+              accountId,
+            });
+            childLogger?.error?.(`reply${kind} delivery failed: ${message}`, {
+              kind: info?.kind,
+            });
           } catch {
             /* runtime not initialised — drop silently */
           }

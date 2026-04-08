@@ -446,13 +446,40 @@ describe("eclaw onError logging", () => {
     clearEclawClient("default");
   });
 
-  it("invokes the installed onError callback when delivery throws (no silent swallow)", async () => {
-    const errorsSeen: Array<{ err: unknown; kind?: string }> = [];
+  it("logs delivery failures via runtime.logging.getChildLogger().error (no silent swallow)", async () => {
+    // Round 8 fix: the handler must reach for the RuntimeLogger
+    // returned by `runtime.logging.getChildLogger({...})`, NOT a
+    // top-level `runtime.error` property that does not exist on
+    // PluginRuntime (see src/plugins/runtime/types-core.ts).
+    const errorsSeen: Array<{
+      message: string;
+      meta?: Record<string, unknown>;
+      bindings?: Record<string, unknown>;
+    }> = [];
+
+    const bindingsSeen: Array<Record<string, unknown>> = [];
+    const makeChildLogger = (
+      bindings?: Record<string, unknown>,
+    ): {
+      info: (m: string, meta?: Record<string, unknown>) => void;
+      warn: (m: string, meta?: Record<string, unknown>) => void;
+      error: (m: string, meta?: Record<string, unknown>) => void;
+    } => {
+      if (bindings) {
+        bindingsSeen.push(bindings);
+      }
+      return {
+        info: () => {},
+        warn: () => {},
+        error: (m, meta) => {
+          errorsSeen.push({ message: m, meta, bindings });
+        },
+      };
+    };
+
     setEclawRuntime({
-      // Surface delivery failures via the runtime error sink so the
-      // handler's onError has somewhere to log.
-      error: (msg: string) => {
-        errorsSeen.push({ err: msg });
+      logging: {
+        getChildLogger: makeChildLogger,
       },
       channel: {
         reply: {
@@ -479,7 +506,7 @@ describe("eclaw onError logging", () => {
 
     await dispatchEclawWebhookMessage({
       accountId: "default",
-      cfg: {},
+      cfg: {} as never,
       msg: {
         event: "message",
         deviceId: "dev-1",
@@ -490,8 +517,63 @@ describe("eclaw onError logging", () => {
     });
 
     expect(errorsSeen).toHaveLength(1);
-    expect(String(errorsSeen[0]?.err)).toContain("boom");
-    expect(String(errorsSeen[0]?.err)).toContain("eclaw:");
+    expect(errorsSeen[0]?.message).toContain("boom");
+    expect(errorsSeen[0]?.message).toContain("reply");
+    expect(errorsSeen[0]?.message).toContain("text");
+    expect(errorsSeen[0]?.meta).toEqual({ kind: "text" });
+    // Child logger must be bound with plugin + accountId so log
+    // aggregators can filter per-plugin and per-account.
+    expect(errorsSeen[0]?.bindings).toEqual({
+      plugin: "eclaw",
+      accountId: "default",
+    });
+  });
+
+  it("drops the error silently (no throw) when the runtime has no logging surface", async () => {
+    // Second half of the round-8 fix: a missing `logging` surface
+    // must not crash the webhook dispatch — earlier rounds passed a
+    // runtime with a direct `.error` method which no longer matches
+    // the real `PluginRuntime` shape. The onError block is wrapped
+    // in try/catch so that a missing/misshaped logger never breaks
+    // the inbound path.
+    setEclawRuntime({
+      // Intentionally no `logging` surface.
+      channel: {
+        reply: {
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async (args: {
+            dispatcherOptions: {
+              deliver: (p: {
+                text?: string;
+                mediaType?: string;
+                mediaUrl?: string;
+              }) => Promise<void>;
+              onError?: (err: unknown, info?: { kind?: string }) => void;
+            };
+          }) => {
+            try {
+              await args.dispatcherOptions.deliver({ text: "hello" });
+            } catch (err) {
+              args.dispatcherOptions.onError?.(err, { kind: "text" });
+            }
+          },
+        },
+      },
+    } as never);
+
+    await expect(
+      dispatchEclawWebhookMessage({
+        accountId: "default",
+        cfg: {} as never,
+        msg: {
+          event: "message",
+          deviceId: "dev-1",
+          entityId: 2,
+          from: "user-1",
+          text: "hi",
+        } as EclawInboundMessage,
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 
