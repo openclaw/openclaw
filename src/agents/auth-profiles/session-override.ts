@@ -1,11 +1,18 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import {
-  ensureAuthProfileStore,
-  isProfileInCooldown,
-  resolveAuthProfileOrder,
-} from "../auth-profiles.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
+import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { normalizeProviderId } from "../model-selection.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 function isProfileForProvider(params: {
   provider: string;
@@ -32,7 +39,9 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionEntry.updatedAt = Date.now();
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
+    await (
+      await loadSessionStoreRuntime()
+    ).updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
     });
   }
@@ -60,6 +69,17 @@ export async function resolveSessionAuthProfileOverride(params: {
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return sessionEntry?.authProfileOverride;
+  }
+
+  const hasConfiguredAuthProfiles =
+    Boolean(params.cfg.auth?.profiles && Object.keys(params.cfg.auth.profiles).length > 0) ||
+    Boolean(params.cfg.auth?.order && Object.keys(params.cfg.auth.order).length > 0);
+  if (
+    !sessionEntry.authProfileOverride?.trim() &&
+    !hasConfiguredAuthProfiles &&
+    !hasAnyAuthProfileStoreSource(agentDir)
+  ) {
+    return undefined;
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -141,7 +161,9 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await updateSessionStore(storePath, (store) => {
+      await (
+        await loadSessionStoreRuntime()
+      ).updateSessionStore(storePath, (store) => {
         store[sessionKey] = sessionEntry;
       });
     }

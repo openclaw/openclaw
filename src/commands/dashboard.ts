@@ -1,11 +1,8 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -17,80 +14,21 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const primary = env.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (primary) {
-    return primary;
-  }
-  const legacy = env.CLAWDBOT_GATEWAY_TOKEN?.trim();
-  return legacy || undefined;
-}
-
-async function resolveDashboardToken(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{
-  token?: string;
-  source?: "config" | "env" | "secretRef";
-  unresolvedRefReason?: string;
-  tokenSecretRefConfigured: boolean;
-}> {
-  const { ref } = resolveSecretInputRef({
-    value: cfg.gateway?.auth?.token,
-    defaults: cfg.secrets?.defaults,
-  });
-  const configToken =
-    ref || typeof cfg.gateway?.auth?.token !== "string"
-      ? undefined
-      : cfg.gateway.auth.token.trim() || undefined;
-  if (configToken) {
-    return { token: configToken, source: "config", tokenSecretRefConfigured: false };
-  }
-  if (!ref) {
-    const envToken = readGatewayTokenEnv(env);
-    return envToken
-      ? { token: envToken, source: "env", tokenSecretRefConfigured: false }
-      : { tokenSecretRefConfigured: false };
-  }
-  const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: cfg,
-      env,
-    });
-    const value = resolved.get(secretRefKey(ref));
-    if (typeof value === "string" && value.trim().length > 0) {
-      return { token: value.trim(), source: "secretRef", tokenSecretRefConfigured: true };
-    }
-    const envToken = readGatewayTokenEnv(env);
-    return envToken
-      ? { token: envToken, source: "env", tokenSecretRefConfigured: true }
-      : {
-          unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${refLabel}).`,
-          tokenSecretRefConfigured: true,
-        };
-  } catch {
-    const envToken = readGatewayTokenEnv(env);
-    return envToken
-      ? { token: envToken, source: "env", tokenSecretRefConfigured: true }
-      : {
-          unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${refLabel}).`,
-          tokenSecretRefConfigured: true,
-        };
-  }
-}
-
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
 ) {
   const snapshot = await readConfigFileSnapshot();
-  const cfg = snapshot.valid ? snapshot.config : {};
+  const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const resolvedToken = await resolveDashboardToken(cfg, process.env);
+  const resolvedToken = await resolveGatewayAuthToken({
+    cfg,
+    env: process.env,
+    envFallback: "always",
+  });
   const token = resolvedToken.token ?? "";
 
   // LAN URLs fail secure-context checks in browsers.
@@ -102,14 +40,14 @@ export async function dashboardCommand(
     basePath,
   });
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
-  const includeTokenInUrl = token.length > 0 && !resolvedToken.tokenSecretRefConfigured;
+  const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;
   // Prefer URL fragment to avoid leaking auth tokens via query params.
   const dashboardUrl = includeTokenInUrl
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
-  if (resolvedToken.tokenSecretRefConfigured && token) {
+  if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
     );

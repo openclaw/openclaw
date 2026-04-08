@@ -4,11 +4,12 @@ import { confirm, select, text } from "@clack/prompts";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
@@ -18,13 +19,18 @@ import {
   hasConfigurePlanChanges,
   type ConfigureCandidate,
 } from "./configure-plan.js";
+import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import type { SecretsApplyPlan } from "./plan.js";
-import { PROVIDER_ENV_VARS } from "./provider-env-vars.js";
-import { isValidSecretProviderAlias, resolveDefaultSecretProviderAlias } from "./ref-contract.js";
+import { getProviderEnvVars } from "./provider-env-vars.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
+  isValidSecretProviderAlias,
+  resolveDefaultSecretProviderAlias,
+} from "./ref-contract.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
-import { readJsonObjectIfExists } from "./storage-scan.js";
 
 export type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
@@ -228,13 +234,10 @@ function hasSourceChoice(
 }
 
 function resolveCandidateProviderHint(candidate: ConfigureCandidate): string | undefined {
-  if (typeof candidate.authProfileProvider === "string" && candidate.authProfileProvider.trim()) {
-    return candidate.authProfileProvider.trim().toLowerCase();
-  }
-  if (typeof candidate.providerId === "string" && candidate.providerId.trim()) {
-    return candidate.providerId.trim().toLowerCase();
-  }
-  return undefined;
+  return (
+    normalizeOptionalLowercaseString(candidate.authProfileProvider) ??
+    normalizeOptionalLowercaseString(candidate.providerId)
+  );
 }
 
 function resolveSuggestedEnvSecretId(candidate: ConfigureCandidate): string | undefined {
@@ -242,7 +245,7 @@ function resolveSuggestedEnvSecretId(candidate: ConfigureCandidate): string | un
   if (!hintedProvider) {
     return undefined;
   }
-  const envCandidates = PROVIDER_ENV_VARS[hintedProvider];
+  const envCandidates = getProviderEnvVars(hintedProvider);
   if (!Array.isArray(envCandidates) || envCandidates.length === 0) {
     return undefined;
   }
@@ -264,46 +267,17 @@ function resolveConfigureAgentId(config: OpenClawConfig, explicitAgentId?: strin
   );
 }
 
-function normalizeAuthStoreForConfigure(
-  raw: Record<string, unknown> | null,
-  storePath: string,
-): AuthProfileStore {
-  if (!raw) {
-    return {
-      version: AUTH_STORE_VERSION,
-      profiles: {},
-    };
-  }
-  if (!isRecord(raw.profiles)) {
-    throw new Error(
-      `Cannot run interactive secrets configure because ${storePath} is invalid (missing "profiles" object).`,
-    );
-  }
-  const version = typeof raw.version === "number" && Number.isFinite(raw.version) ? raw.version : 1;
-  return {
-    version,
-    profiles: raw.profiles as AuthProfileStore["profiles"],
-    ...(isRecord(raw.order) ? { order: raw.order as AuthProfileStore["order"] } : {}),
-    ...(isRecord(raw.lastGood) ? { lastGood: raw.lastGood as AuthProfileStore["lastGood"] } : {}),
-    ...(isRecord(raw.usageStats)
-      ? { usageStats: raw.usageStats as AuthProfileStore["usageStats"] }
-      : {}),
-  };
-}
-
 function loadAuthProfileStoreForConfigure(params: {
   config: OpenClawConfig;
   agentId: string;
 }): AuthProfileStore {
   const agentDir = resolveAgentDir(params.config, params.agentId);
-  const storePath = resolveAuthStorePath(agentDir);
-  const parsed = readJsonObjectIfExists(storePath);
-  if (parsed.error) {
-    throw new Error(
-      `Cannot run interactive secrets configure because ${storePath} could not be read: ${parsed.error}`,
-    );
-  }
-  return normalizeAuthStoreForConfigure(parsed.value, storePath);
+  return (
+    loadPersistedAuthProfileStore(agentDir) ?? {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+    }
+  );
 }
 
 async function promptNewAuthProfileCandidate(agentId: string): Promise<ConfigureCandidate> {
@@ -743,6 +717,7 @@ export async function runSecretsConfigureInteractive(
     providersOnly?: boolean;
     skipProviderSetup?: boolean;
     agentId?: string;
+    allowExecInPreflight?: boolean;
   } = {},
 ): Promise<SecretsConfigureResult> {
   if (!process.stdin.isTTY) {
@@ -753,6 +728,7 @@ export async function runSecretsConfigureInteractive(
   }
 
   const env = params.env ?? process.env;
+  const allowExecInPreflight = Boolean(params.allowExecInPreflight);
   const io = createSecretsConfigIO({ env });
   const { snapshot } = await io.readConfigFileSnapshotForWrite();
   if (!snapshot.valid) {
@@ -917,7 +893,16 @@ export async function runSecretsConfigureInteractive(
         await text({
           message: "Secret id",
           initialValue: suggestedId,
-          validate: (value) => (String(value ?? "").trim().length > 0 ? undefined : "Required"),
+          validate: (value) => {
+            const trimmed = String(value ?? "").trim();
+            if (!trimmed) {
+              return "Required";
+            }
+            if (source === "exec" && !isValidExecSecretRefId(trimmed)) {
+              return formatExecSecretRefIdValidationMessage();
+            }
+            return undefined;
+          },
         }),
         "Secrets configure cancelled.",
       );
@@ -926,18 +911,28 @@ export async function runSecretsConfigureInteractive(
         provider: providerAlias,
         id: String(id).trim(),
       };
-      const resolved = await resolveSecretRefValue(ref, {
-        config: stagedConfig,
-        env,
-      });
-      assertExpectedResolvedSecretValue({
-        value: resolved,
-        expected: candidate.expectedResolvedValue,
-        errorMessage:
-          candidate.expectedResolvedValue === "string"
-            ? `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a non-empty string.`
-            : `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a supported value type.`,
-      });
+      if (ref.source === "exec" && !allowExecInPreflight) {
+        const staticError = getSkippedExecRefStaticError({
+          ref,
+          config: stagedConfig,
+        });
+        if (staticError) {
+          throw new Error(staticError);
+        }
+      } else {
+        const resolved = await resolveSecretRefValue(ref, {
+          config: stagedConfig,
+          env,
+        });
+        assertExpectedResolvedSecretValue({
+          value: resolved,
+          expected: candidate.expectedResolvedValue,
+          errorMessage:
+            candidate.expectedResolvedValue === "string"
+              ? `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a non-empty string.`
+              : `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a supported value type.`,
+        });
+      }
 
       const next = {
         ...candidate,
@@ -971,6 +966,7 @@ export async function runSecretsConfigureInteractive(
     plan,
     env,
     write: false,
+    allowExec: allowExecInPreflight,
   });
 
   return { plan, preflight };

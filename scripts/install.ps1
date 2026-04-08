@@ -200,13 +200,15 @@ function Ensure-Git {
 }
 
 function Install-OpenClawNpm {
-    param([string]$Version = "latest")
+    param([string]$Target = "latest")
+
+    $installSpec = Resolve-PackageInstallSpec -Target $Target
     
-    Write-Host "Installing OpenClaw (openclaw@$Version)..." -Level info
+    Write-Host "Installing OpenClaw ($installSpec)..." -Level info
     
     try {
         # Use -ExecutionPolicy Bypass to handle restricted execution policy
-        npm install -g openclaw@$Version --no-fund --no-audit 2>&1
+        npm install -g $installSpec --no-fund --no-audit 2>&1
         Write-Host "OpenClaw installed" -Level success
         return $true
     } catch {
@@ -257,6 +259,34 @@ node "%~dp0..\openclaw\dist\entry.js" %*
     return $true
 }
 
+function Test-ExplicitPackageInstallSpec {
+    param([string]$Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        return $false
+    }
+
+    return $Target.Contains("://") -or
+        $Target.Contains("#") -or
+        $Target -match '^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm):'
+}
+
+function Resolve-PackageInstallSpec {
+    param([string]$Target = "latest")
+
+    $trimmed = $Target.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        return "openclaw@latest"
+    }
+    if ($trimmed.ToLowerInvariant() -eq "main") {
+        return "github:openclaw/openclaw#main"
+    }
+    if (Test-ExplicitPackageInstallSpec -Target $trimmed) {
+        return $trimmed
+    }
+    return "openclaw@$trimmed"
+}
+
 function Add-ToPath {
     param([string]$Path)
     
@@ -301,9 +331,9 @@ function Main {
         }
         
         if ($DryRun) {
-            Write-Host "[DRY RUN] Would install OpenClaw via npm (tag: $Tag)" -Level info
+            Write-Host "[DRY RUN] Would install OpenClaw via npm ($((Resolve-PackageInstallSpec -Target $Tag)))" -Level info
         } else {
-            if (!(Install-OpenClawNpm -Version $Tag)) {
+            if (!(Install-OpenClawNpm -Target $Tag)) {
                 exit 1
             }
         }

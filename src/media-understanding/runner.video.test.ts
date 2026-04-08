@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
@@ -14,7 +15,7 @@ describe("runCapability video provider wiring", () => {
         models: {
           providers: {
             moonshot: {
-              apiKey: "provider-key",
+              apiKey: "provider-key", // pragma: allowlist secret
               baseUrl: "https://provider.example/v1",
               headers: { "X-Provider": "1" },
               models: [],
@@ -74,62 +75,67 @@ describe("runCapability video provider wiring", () => {
   });
 
   it("auto-selects moonshot for video when google is unavailable", async () => {
-    await withEnvAsync(
-      {
-        GEMINI_API_KEY: undefined,
-        MOONSHOT_API_KEY: undefined,
-      },
-      async () => {
-        await withVideoFixture("openclaw-video-auto-moonshot", async ({ ctx, media, cache }) => {
-          const cfg = {
-            models: {
-              providers: {
-                moonshot: {
-                  apiKey: "moonshot-key",
-                  models: [],
+    await withTempDir({ prefix: "openclaw-video-agent-" }, async (isolatedAgentDir) => {
+      await withEnvAsync(
+        {
+          GEMINI_API_KEY: undefined,
+          GOOGLE_API_KEY: undefined,
+          MOONSHOT_API_KEY: undefined,
+          OPENCLAW_AGENT_DIR: isolatedAgentDir,
+          PI_CODING_AGENT_DIR: isolatedAgentDir,
+        },
+        async () => {
+          await withVideoFixture("openclaw-video-auto-moonshot", async ({ ctx, media, cache }) => {
+            const cfg = {
+              models: {
+                providers: {
+                  moonshot: {
+                    apiKey: "moonshot-key", // pragma: allowlist secret
+                    models: [],
+                  },
                 },
               },
-            },
-            tools: {
-              media: {
-                video: {
-                  enabled: true,
+              tools: {
+                media: {
+                  video: {
+                    enabled: true,
+                  },
                 },
               },
-            },
-          } as unknown as OpenClawConfig;
+            } as unknown as OpenClawConfig;
 
-          const result = await runCapability({
-            capability: "video",
-            cfg,
-            ctx,
-            attachments: cache,
-            media,
-            providerRegistry: new Map([
-              [
-                "google",
-                {
-                  id: "google",
-                  capabilities: ["video"],
-                  describeVideo: async () => ({ text: "google" }),
-                },
-              ],
-              [
-                "moonshot",
-                {
-                  id: "moonshot",
-                  capabilities: ["video"],
-                  describeVideo: async () => ({ text: "moonshot", model: "kimi-k2.5" }),
-                },
-              ],
-            ]),
+            const result = await runCapability({
+              capability: "video",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              providerRegistry: new Map([
+                [
+                  "google",
+                  {
+                    id: "google",
+                    capabilities: ["video"],
+                    describeVideo: async () => ({ text: "google" }),
+                  },
+                ],
+                [
+                  "moonshot",
+                  {
+                    id: "moonshot",
+                    capabilities: ["video"],
+                    describeVideo: async () => ({ text: "moonshot", model: "kimi-k2.5" }),
+                  },
+                ],
+              ]),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(result.outputs[0]?.provider).toBe("moonshot");
+            expect(result.outputs[0]?.text).toBe("moonshot");
           });
-
-          expect(result.decision.outcome).toBe("success");
-          expect(result.outputs[0]?.provider).toBe("moonshot");
-          expect(result.outputs[0]?.text).toBe("moonshot");
-        });
-      },
-    );
+        },
+      );
+    });
   });
 });

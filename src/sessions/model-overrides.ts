@@ -11,6 +11,7 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
+  markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
@@ -61,6 +62,17 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // contextTokens are derived from the active session model. When the selected
+  // model changes (or runtime model is already stale), the cached window can
+  // pin the session to an older/smaller limit until another run refreshes it.
+  if (
+    entry.contextTokens !== undefined &&
+    (selectionUpdated || (runtimePresent && !runtimeAligned))
+  ) {
+    delete entry.contextTokens;
+    updated = true;
+  }
+
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;
@@ -91,6 +103,9 @@ export function applyModelOverrideToSessionEntry(params: {
 
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
+    if (selectionUpdated && params.markLiveSwitchPending) {
+      entry.liveModelSwitchPending = true;
+    }
     delete entry.fallbackNoticeSelectedModel;
     delete entry.fallbackNoticeActiveModel;
     delete entry.fallbackNoticeReason;

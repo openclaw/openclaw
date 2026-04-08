@@ -9,22 +9,22 @@ import {
   type PairingChannel,
 } from "../pairing/pairing-store.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
-  const value = (
-    typeof raw === "string"
+  const value = normalizeLowercaseStringOrEmpty(
+    (typeof raw === "string"
       ? raw
       : typeof raw === "number" || typeof raw === "boolean"
         ? String(raw)
         : ""
-  )
-    .trim()
-    .toLowerCase();
+    ).trim(),
+  );
   if (!value) {
     throw new Error("Channel required");
   }
@@ -80,7 +80,7 @@ export function registerPairingCli(program: Command) {
         ? await listChannelPairingRequests(channel, process.env, accountId)
         : await listChannelPairingRequests(channel);
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify({ channel, requests }, null, 2));
+        defaultRuntime.writeJson({ channel, requests });
         return;
       }
       if (requests.length === 0) {
@@ -88,7 +88,7 @@ export function registerPairingCli(program: Command) {
         return;
       }
       const idLabel = resolvePairingIdLabel(channel);
-      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(
         `${theme.heading("Pairing requests")} ${theme.muted(`(${requests.length})`)}`,
       );

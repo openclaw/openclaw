@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   connectReq,
@@ -6,7 +6,7 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getHandshakeTimeoutMs,
+  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   NODE_CLIENT,
@@ -20,6 +20,7 @@ import {
   startGatewayServer,
   TEST_OPERATOR_CLIENT,
   waitForWsClose,
+  withGatewayServer,
   withRuntimeVersionEnv,
 } from "./server.auth.shared.js";
 
@@ -28,12 +29,12 @@ export function registerDefaultAuthTokenSuite(): void {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
-    afterAll(async () => {
+    afterEach(async () => {
       await server.close();
     });
 
@@ -80,10 +81,12 @@ export function registerDefaultAuthTokenSuite(): void {
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        const ws = await openWs(port);
-        const handshakeTimeoutMs = getHandshakeTimeoutMs();
-        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
-        expect(closed).toBe(true);
+        await withGatewayServer(async ({ port: isolatedPort }) => {
+          const ws = await openWs(isolatedPort);
+          const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2500);
+          expect(closed).toBe(true);
+        });
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -93,8 +96,31 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string", () => {
+      const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
+      process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
+      try {
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
+        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
+      } finally {
+        if (prevHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+        if (prevTestHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
+        }
+      }
+    });
+
     test("connect (req) handshake returns hello-ok payload", async () => {
-      const { CONFIG_PATH, STATE_DIR } = await import("../config/config.js");
+      const { STATE_DIR, createConfigIO } = await import("../config/config.js");
       const ws = await openWs(port);
 
       const res = await connectReq(ws);
@@ -106,7 +132,7 @@ export function registerDefaultAuthTokenSuite(): void {
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
-      expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH);
+      expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 
       ws.close();
@@ -157,10 +183,11 @@ export function registerDefaultAuthTokenSuite(): void {
         expectStatusError?: string;
       }> = [
         {
-          name: "operator + valid shared token => connected with preserved scopes",
+          name: "operator + valid shared token => connected with cleared scopes",
           opts: { role: "operator", token, device: null },
           expectConnectOk: true,
-          expectStatusOk: true,
+          expectStatusOk: false,
+          expectStatusError: "missing scope",
         },
         {
           name: "node + valid shared token => rejected without device",

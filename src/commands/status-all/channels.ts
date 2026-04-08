@@ -19,6 +19,8 @@ import type {
 import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
+import { asRecord } from "../../shared/record-coerce.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatTimeAgo } from "./format.js";
 
 export type ChannelRow = {
@@ -44,9 +46,6 @@ type ResolvedChannelAccountRowParams = {
   accountId: string;
 };
 
-const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-
 function summarizeSources(sources: Array<string | undefined>): {
   label: string;
   parts: string[];
@@ -64,7 +63,7 @@ function summarizeSources(sources: Array<string | undefined>): {
 }
 
 function existsSyncMaybe(p: string | undefined): boolean | null {
-  const path = p?.trim() || "";
+  const path = normalizeOptionalString(p) ?? "";
   if (!path) {
     return null;
   }
@@ -91,14 +90,18 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
   return `${head}…${tail} · len ${t.length}`;
 }
 
-function inspectChannelAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
+async function inspectChannelAccount(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountId: string,
+) {
   return (
     plugin.config.inspectAccount?.(cfg, accountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    })
+    }))
   );
 }
 
@@ -106,8 +109,8 @@ async function resolveChannelAccountRow(
   params: ResolvedChannelAccountRowParams,
 ): Promise<ChannelAccountRow> {
   const { plugin, cfg, sourceConfig, accountId } = params;
-  const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
-  const resolvedInspectedAccount = inspectChannelAccount(plugin, cfg, accountId);
+  const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
+  const resolvedInspectedAccount = await inspectChannelAccount(plugin, cfg, accountId);
   const resolvedInspection = resolvedInspectedAccount as {
     enabled?: boolean;
     configured?: boolean;
@@ -177,7 +180,10 @@ const buildAccountNotes = (params: {
   if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
     notes.push(`app:${snapshot.appTokenSource}`);
   }
-  if (snapshot.signingSecretSource && snapshot.signingSecretSource !== "none") {
+  if (
+    snapshot.signingSecretSource &&
+    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
+  ) {
     notes.push(`signing:${snapshot.signingSecretSource}`);
   }
   if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
@@ -350,14 +356,14 @@ function summarizeTokenConfig(params: {
     const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
-      const app = typeof rec.appToken === "string" ? rec.appToken.trim() : "";
+      const bot = normalizeOptionalString(rec.botToken) ?? "";
+      const app = normalizeOptionalString(rec.appToken) ?? "";
       return Boolean(bot) && Boolean(app);
     });
     const partial = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
-      const app = typeof rec.appToken === "string" ? rec.appToken.trim() : "";
+      const bot = normalizeOptionalString(rec.botToken) ?? "";
+      const app = normalizeOptionalString(rec.appToken) ?? "";
       const hasBot = Boolean(bot);
       const hasApp = Boolean(app);
       return (hasBot && !hasApp) || (!hasBot && hasApp);
@@ -405,7 +411,7 @@ function summarizeTokenConfig(params: {
     const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
-      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
+      const bot = normalizeOptionalString(rec.botToken) ?? "";
       return Boolean(bot);
     });
 
@@ -436,7 +442,7 @@ function summarizeTokenConfig(params: {
   const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
   const ready = enabled.filter((a) => {
     const rec = asRecord(a.account);
-    return typeof rec.token === "string" ? Boolean(rec.token.trim()) : false;
+    return Boolean(normalizeOptionalString(rec.token));
   });
   if (unavailable.length > 0) {
     return {

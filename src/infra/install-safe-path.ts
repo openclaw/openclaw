@@ -11,6 +11,20 @@ export function unscopedPackageName(name: string): string {
   return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
 }
 
+export function packageNameMatchesId(packageName: string, id: string): boolean {
+  const trimmedId = id.trim();
+  if (!trimmedId) {
+    return false;
+  }
+
+  const trimmedPackageName = packageName.trim();
+  if (!trimmedPackageName) {
+    return false;
+  }
+
+  return trimmedId === trimmedPackageName || trimmedId === unscopedPackageName(trimmedPackageName);
+}
+
 export function safeDirName(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -47,8 +61,10 @@ export function resolveSafeInstallDir(params: {
   baseDir: string;
   id: string;
   invalidNameMessage: string;
+  nameEncoder?: (id: string) => string;
 }): { ok: true; path: string } | { ok: false; error: string } {
-  const targetDir = path.join(params.baseDir, safeDirName(params.id));
+  const encodedName = (params.nameEncoder ?? safeDirName)(params.id);
+  const targetDir = path.join(params.baseDir, encodedName);
   const resolvedBase = path.resolve(params.baseDir);
   const resolvedTarget = path.resolve(targetDir);
   const relative = path.relative(resolvedBase, resolvedTarget);

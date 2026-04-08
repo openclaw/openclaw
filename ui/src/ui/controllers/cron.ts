@@ -2,6 +2,7 @@ import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -18,6 +19,10 @@ import type {
 } from "../types.ts";
 import { CRON_CHANNEL_LAST } from "../ui-types.ts";
 import type { CronFormState } from "../ui-types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type CronFieldKey =
   | "name"
@@ -84,7 +89,7 @@ export type CronModelSuggestionsState = {
 export function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
 ) {
-  return form.sessionTarget === "isolated" && form.payloadKind === "agentTurn";
+  return form.sessionTarget !== "main" && form.payloadKind === "agentTurn";
 }
 
 export function normalizeCronFormState(form: CronFormState): CronFormState {
@@ -183,7 +188,12 @@ export async function loadCronStatus(state: CronState) {
     const res = await state.client.request<CronStatus>("cron.status", {});
     state.cronStatus = res;
   } catch (err) {
-    state.cronError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.cronStatus = null;
+      state.cronError = formatMissingOperatorReadScopeMessage("cron status");
+    } else {
+      state.cronError = String(err);
+    }
   }
 }
 
@@ -891,13 +901,13 @@ export function startCronEdit(state: CronState, job: CronJob) {
 function buildCloneName(name: string, existingNames: Set<string>) {
   const base = name.trim() || "Job";
   const first = `${base} copy`;
-  if (!existingNames.has(first.toLowerCase())) {
+  if (!existingNames.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
   let index = 2;
   while (index < 1000) {
     const next = `${base} copy ${index}`;
-    if (!existingNames.has(next.toLowerCase())) {
+    if (!existingNames.has(normalizeLowercaseStringOrEmpty(next))) {
       return next;
     }
     index += 1;
@@ -908,7 +918,9 @@ function buildCloneName(name: string, existingNames: Set<string>) {
 export function startCronClone(state: CronState, job: CronJob) {
   clearCronEditState(state);
   state.cronRunsJobId = job.id;
-  const existingNames = new Set(state.cronJobs.map((entry) => entry.name.trim().toLowerCase()));
+  const existingNames = new Set(
+    state.cronJobs.map((entry) => normalizeLowercaseStringOrEmpty(entry.name)),
+  );
   const cloned = jobToForm(job, state.cronForm);
   cloned.name = buildCloneName(job.name, existingNames);
   state.cronForm = cloned;

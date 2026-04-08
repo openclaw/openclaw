@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
-import { resolveBlueBubblesAccount } from "./accounts.js";
+import {
+  resolveBlueBubblesAccount,
+  resolveBlueBubblesEffectiveAllowPrivateNetwork,
+  resolveBlueBubblesPrivateNetworkConfigValue,
+} from "./accounts.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
 export type BlueBubblesAccountResolveOpts = {
@@ -14,6 +18,7 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   password: string;
   accountId: string;
   allowPrivateNetwork: boolean;
+  allowPrivateNetworkConfig?: boolean;
 } {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg ?? {},
@@ -43,10 +48,15 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
+
   return {
     baseUrl,
     password,
     accountId: account.accountId,
-    allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+    allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
+      baseUrl,
+      config: account.config,
+    }),
+    allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(account.config),
   };
 }

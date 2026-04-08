@@ -1,10 +1,16 @@
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../../infra/exec-approvals.js";
+import {
+  type ExecAsk,
+  type ExecSecurity,
+  type ExecTarget,
+  normalizeExecTarget,
+} from "../../../infra/exec-approvals.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 
 type ExecDirectiveParse = {
   cleaned: string;
   hasDirective: boolean;
-  execHost?: ExecHost;
+  execHost?: ExecTarget;
   execSecurity?: ExecSecurity;
   execAsk?: ExecAsk;
   execNode?: string;
@@ -19,16 +25,8 @@ type ExecDirectiveParse = {
   invalidNode: boolean;
 };
 
-function normalizeExecHost(value?: string): ExecHost | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -36,7 +34,7 @@ function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
 }
 
 function normalizeExecAsk(value?: string): ExecAsk | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized as ExecAsk;
   }
@@ -52,7 +50,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
   const len = raw.length;
   let i = skipDirectiveArgPrefix(raw);
   let consumed = i;
-  let execHost: ExecHost | undefined;
+  let execHost: ExecTarget | undefined;
   let execSecurity: ExecSecurity | undefined;
   let execAsk: ExecAsk | undefined;
   let execNode: string | undefined;
@@ -79,7 +77,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (idx === -1) {
       return null;
     }
-    const key = token.slice(0, idx).trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(token.slice(0, idx));
     const value = token.slice(idx + 1).trim();
     if (!key) {
       return null;
@@ -99,7 +97,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     const { key, value } = parsed;
     if (key === "host") {
       rawExecHost = value;
-      execHost = normalizeExecHost(value);
+      execHost = normalizeExecTarget(value) ?? undefined;
       if (!execHost) {
         invalidHost = true;
       }

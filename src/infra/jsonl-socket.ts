@@ -1,12 +1,16 @@
 import net from "node:net";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 
+/**
+ * Sends one JSONL request line, half-closes the write side, and waits for an accepted response line.
+ */
 export async function requestJsonlSocket<T>(params: {
   socketPath: string;
-  payload: string;
+  requestLine: string;
   timeoutMs: number;
   accept: (msg: unknown) => T | null | undefined;
 }): Promise<T | null> {
-  const { socketPath, payload, timeoutMs, accept } = params;
+  const { socketPath, requestLine, timeoutMs, accept } = params;
   return await new Promise((resolve) => {
     const client = new net.Socket();
     let settled = false;
@@ -25,11 +29,11 @@ export async function requestJsonlSocket<T>(params: {
       resolve(value);
     };
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
+    const timer = setNodeTimeout(() => finish(null), timeoutMs);
 
     client.on("error", () => finish(null));
     client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
+      client.end(`${requestLine}\n`);
     });
     client.on("data", (data) => {
       buffer += data.toString("utf8");
@@ -47,7 +51,7 @@ export async function requestJsonlSocket<T>(params: {
           if (result === undefined) {
             continue;
           }
-          clearTimeout(timer);
+          clearNodeTimeout(timer);
           finish(result);
           return;
         } catch {

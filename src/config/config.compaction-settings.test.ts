@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadConfig, resetConfigRuntimeState } from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("config compaction settings", () => {
+  beforeEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   it("preserves memory flush config values", async () => {
     await withTempHomeConfig(
       {
@@ -86,6 +94,45 @@ describe("config compaction settings", () => {
 
         expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
         expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(9000);
+      },
+    );
+  });
+
+  it("preserves recent turn safeguard values through loadConfig()", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              recentTurnsPreserve: 4,
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.recentTurnsPreserve).toBe(4);
+      },
+    );
+  });
+
+  it("preserves oversized quality guard retry values for runtime clamping", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              qualityGuard: {
+                maxRetries: 99,
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.qualityGuard?.maxRetries).toBe(99);
       },
     );
   });

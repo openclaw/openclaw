@@ -3,94 +3,79 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
 import { readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
+import { normalizeChatType } from "../../../channels/chat-type.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
 } from "../../../channels/thread-bindings-messages.js";
 import {
+  formatThreadBindingDisabledError,
+  formatThreadBindingSpawnDisabledError,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingPlacementForCurrentContext,
+  resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import {
-  type SubagentsCommandContext,
-  isDiscordSurface,
-  isTelegramSurface,
-  resolveChannelAccountId,
-  resolveCommandSurfaceChannel,
-  resolveDiscordChannelIdForFocus,
-  resolveFocusTargetSession,
-  resolveTelegramConversationId,
-  stopWithText,
-} from "./shared.js";
+import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
+import { type SubagentsCommandContext, resolveFocusTargetSession, stopWithText } from "./shared.js";
 
 type FocusBindingContext = {
-  channel: "discord" | "telegram";
+  channel: string;
   accountId: string;
   conversationId: string;
+  parentConversationId?: string;
   placement: "current" | "child";
-  labelNoun: "thread" | "conversation";
 };
 
 function resolveFocusBindingContext(
   params: SubagentsCommandContext["params"],
 ): FocusBindingContext | null {
-  if (isDiscordSurface(params)) {
-    const currentThreadId =
-      params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
-    const parentChannelId = currentThreadId ? undefined : resolveDiscordChannelIdForFocus(params);
-    const conversationId = currentThreadId || parentChannelId;
-    if (!conversationId) {
-      return null;
-    }
-    return {
-      channel: "discord",
-      accountId: resolveChannelAccountId(params),
-      conversationId,
-      placement: currentThreadId ? "current" : "child",
-      labelNoun: "thread",
-    };
+  const bindingContext = resolveConversationBindingContextFromAcpCommand(params);
+  if (!bindingContext) {
+    return null;
   }
-  if (isTelegramSurface(params)) {
-    const conversationId = resolveTelegramConversationId(params);
-    if (!conversationId) {
-      return null;
-    }
-    return {
-      channel: "telegram",
-      accountId: resolveChannelAccountId(params),
-      conversationId,
-      placement: "current",
-      labelNoun: "conversation",
-    };
-  }
-  return null;
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  return {
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
+    placement:
+      chatType === "direct"
+        ? "current"
+        : resolveThreadBindingPlacementForCurrentContext({
+            channel: bindingContext.channel,
+            threadId: bindingContext.threadId || undefined,
+          }),
+  };
 }
 
 export async function handleSubagentsFocusAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
   const { params, runs, restTokens } = ctx;
-  const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /focus is only available on Discord and Telegram.");
-  }
-
   const token = restTokens.join(" ").trim();
   if (!token) {
     return stopWithText("Usage: /focus <subagent-label|session-key|session-id|session-label>");
   }
 
-  const accountId = resolveChannelAccountId(params);
+  const bindingContext = resolveFocusBindingContext(params);
+  if (!bindingContext) {
+    return stopWithText("⚠️ /focus must be run inside a bindable conversation.");
+  }
+
   const bindingService = getSessionBindingService();
   const capabilities = bindingService.getCapabilities({
-    channel,
-    accountId,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
   });
   if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
-    const label = channel === "discord" ? "Discord thread" : "Telegram conversation";
-    return stopWithText(`⚠️ ${label} bindings are unavailable for this account.`);
+    return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
   }
 
   const focusTarget = await resolveFocusTargetSession({ runs, token });
@@ -98,31 +83,53 @@ export async function handleSubagentsFocusAction(
     return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
   }
 
-  const bindingContext = resolveFocusBindingContext(params);
-  if (!bindingContext) {
-    if (channel === "telegram") {
+  if (bindingContext.placement === "child") {
+    const spawnPolicy = resolveThreadBindingSpawnPolicy({
+      cfg: params.cfg,
+      channel: bindingContext.channel,
+      accountId: bindingContext.accountId,
+      kind: "subagent",
+    });
+    if (!spawnPolicy.enabled) {
       return stopWithText(
-        "⚠️ /focus on Telegram requires a topic context in groups, or a direct-message conversation.",
+        `⚠️ ${formatThreadBindingDisabledError({
+          channel: spawnPolicy.channel,
+          accountId: spawnPolicy.accountId,
+          kind: "subagent",
+        })}`,
       );
     }
-    return stopWithText("⚠️ Could not resolve a Discord channel for /focus.");
+    if (bindingContext.placement === "child" && !spawnPolicy.spawnEnabled) {
+      return stopWithText(
+        `⚠️ ${formatThreadBindingSpawnDisabledError({
+          channel: spawnPolicy.channel,
+          accountId: spawnPolicy.accountId,
+          kind: "subagent",
+        })}`,
+      );
+    }
   }
 
-  const senderId = params.command.senderId?.trim() || "";
+  const senderId = normalizeOptionalString(params.command.senderId) ?? "";
   const existingBinding = bindingService.resolveByConversation({
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId &&
+    bindingContext.parentConversationId !== bindingContext.conversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
   });
   const boundBy =
     typeof existingBinding?.metadata?.boundBy === "string"
       ? existingBinding.metadata.boundBy.trim()
       : "";
   if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
-    return stopWithText(`⚠️ Only ${boundBy} can refocus this ${bindingContext.labelNoun}.`);
+    return stopWithText(`⚠️ Only ${boundBy} can refocus this conversation.`);
   }
 
   const label = focusTarget.label || token;
+  const accountId = bindingContext.accountId;
   const acpMeta =
     focusTarget.targetKind === "acp"
       ? readAcpSessionEntry({
@@ -131,7 +138,7 @@ export async function handleSubagentsFocusAction(
         })?.acp
       : undefined;
   if (!capabilities.placements.includes(bindingContext.placement)) {
-    return stopWithText(`⚠️ ${channel} bindings are unavailable for this account.`);
+    return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
   }
 
   let binding;
@@ -143,6 +150,10 @@ export async function handleSubagentsFocusAction(
         channel: bindingContext.channel,
         accountId: bindingContext.accountId,
         conversationId: bindingContext.conversationId,
+        ...(bindingContext.parentConversationId &&
+        bindingContext.parentConversationId !== bindingContext.conversationId
+          ? { parentConversationId: bindingContext.parentConversationId }
+          : {}),
       },
       placement: bindingContext.placement,
       metadata: {
@@ -178,14 +189,12 @@ export async function handleSubagentsFocusAction(
       },
     });
   } catch {
-    return stopWithText(
-      `⚠️ Failed to bind this ${bindingContext.labelNoun} to the target session.`,
-    );
+    return stopWithText("⚠️ Failed to bind this conversation to the target session.");
   }
 
   const actionText =
     bindingContext.placement === "child"
-      ? `created thread ${binding.conversation.conversationId} and bound it to ${binding.targetSessionKey}`
-      : `bound this ${bindingContext.labelNoun} to ${binding.targetSessionKey}`;
+      ? `created child conversation ${binding.conversation.conversationId} and bound it to ${binding.targetSessionKey}`
+      : `bound this conversation to ${binding.targetSessionKey}`;
   return stopWithText(`✅ ${actionText} (${focusTarget.targetKind}).`);
 }

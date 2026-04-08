@@ -8,6 +8,7 @@ import {
   formatZonedTimestamp,
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -88,7 +89,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   if (!trimmed) {
     return { mode: "local" };
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
   }
@@ -102,7 +103,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-function formatTimestamp(
+export function formatEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
@@ -179,7 +180,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (params.ip?.trim()) {
     parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
   }
-  const ts = formatTimestamp(params.timestamp, resolved);
+  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }

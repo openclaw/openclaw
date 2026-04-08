@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 
 function buildModel(): Model<"openai-responses"> {
   return {
-    id: "gpt-5.2",
-    name: "gpt-5.2",
+    id: "gpt-5.4",
+    name: "gpt-5.4",
     api: "openai-responses",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
@@ -28,6 +28,13 @@ function extractInputTypes(input: unknown[]) {
       item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
     )
     .filter((t): t is string => typeof t === "string");
+}
+
+function extractInputMessages(input: unknown[]) {
+  return input.filter(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === "object" && (item as Record<string, unknown>).type === "message",
+  );
 }
 
 const ZERO_USAGE = {
@@ -59,7 +66,7 @@ function buildAssistantMessage(params: {
     role: "assistant",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: ZERO_USAGE,
     stopReason: params.stopReason,
     timestamp: Date.now(),
@@ -184,4 +191,36 @@ describe("openai-responses reasoning replay", () => {
     expect(types).toContain("reasoning");
     expect(types).toContain("message");
   });
+
+  it.each(["commentary", "final_answer"] as const)(
+    "replays assistant message phase metadata for %s",
+    async (phase) => {
+      const assistantWithText = buildAssistantMessage({
+        stopReason: "stop",
+        content: [
+          buildReasoningPart(),
+          {
+            type: "text",
+            text: "hello",
+            textSignature: JSON.stringify({ v: 1, id: `msg_${phase}`, phase }),
+          },
+        ],
+      });
+
+      const { input, types } = await runAbortedOpenAIResponsesStream({
+        messages: [
+          { role: "user", content: "Hi", timestamp: Date.now() },
+          assistantWithText,
+          { role: "user", content: "Ok", timestamp: Date.now() },
+        ],
+      });
+
+      expect(types).toContain("message");
+
+      const replayedMessage = extractInputMessages(input).find(
+        (item) => item.id === `msg_${phase}`,
+      );
+      expect(replayedMessage?.phase).toBe(phase);
+    },
+  );
 });
