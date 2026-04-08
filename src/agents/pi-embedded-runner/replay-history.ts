@@ -36,7 +36,7 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, sanitizeThinkingForRecovery } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -416,7 +416,12 @@ export async function sanitizeSessionHistory(params: {
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  // sanitizeThinkingForRecovery detects incomplete thinking (unsigned thinking block)
+  // in the latest assistant message and drops it to prevent LLM rejection errors.
+  // This handles cases where /reset was issued mid-response, leaving an orphaned
+  // incomplete thinking block that would otherwise cause session-recovery loops.
+  const afterThinkingRecovery = sanitizeThinkingForRecovery(droppedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(afterThinkingRecovery.messages, {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing
