@@ -8,6 +8,11 @@
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: eclaw":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/eclaw/**"
+          - "docs/channels/eclaw.md"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:

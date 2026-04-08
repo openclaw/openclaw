@@ -194,7 +194,11 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
     unregisterEclawWebhookToken(callbackToken);
     releaseRoute();
     clearEclawClient(accountId);
-    return waitUntilAbort(abortSignal);
+    // Re-throw so the channel manager sees the failure, marks the account
+    // as failed, and can attempt a restart. Returning `waitUntilAbort` here
+    // would leave the startup task alive forever and the manager would never
+    // know setup failed.
+    throw err;
   }
 
   return waitUntilAbort(abortSignal, () => {

@@ -157,16 +157,21 @@ describe("eclaw gateway bind-failure cleanup", () => {
 
     const logs: string[] = [];
     const abortCtrl = new AbortController();
-    await startEclawAccount({
-      cfg: {} as never,
-      accountId: "default",
-      abortSignal: abortCtrl.signal,
-      log: {
-        info: (m) => logs.push(`info:${m}`),
-        warn: (m) => logs.push(`warn:${m}`),
-        error: (m) => logs.push(`error:${m}`),
-      },
-    });
+    // The catch path now re-throws so the channel manager can mark the
+    // account as failed and attempt a restart. Previously it silently
+    // returned waitUntilAbort, leaving the startup task alive forever.
+    await expect(
+      startEclawAccount({
+        cfg: {} as never,
+        accountId: "default",
+        abortSignal: abortCtrl.signal,
+        log: {
+          info: (m) => logs.push(`info:${m}`),
+          warn: (m) => logs.push(`warn:${m}`),
+          error: (m) => logs.push(`error:${m}`),
+        },
+      }),
+    ).rejects.toThrow(/bind exploded/);
 
     expect(registerCallback).toHaveBeenCalledTimes(1);
     expect(bindEntity).toHaveBeenCalledTimes(1);
