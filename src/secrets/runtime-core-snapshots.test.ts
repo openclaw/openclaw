@@ -38,6 +38,10 @@ const OPENAI_ENV_KEY_REF = {
 
 type SecretsRuntimeEnvSnapshot = ReturnType<typeof captureEnv>;
 
+function normalizeSnapshotWarningPath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
 function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
@@ -225,10 +229,12 @@ describe("secrets runtime snapshot core lanes", () => {
         }),
     });
 
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+    expect(snapshot.warnings.map((warning) => normalizeSnapshotWarningPath(warning.path))).toEqual(
       expect.arrayContaining([
-        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
-        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
+        expect.stringMatching(/\/tmp\/openclaw-agent-main\.auth-profiles\.openai:default\.key$/),
+        expect.stringMatching(
+          /\/tmp\/openclaw-agent-main\.auth-profiles\.github-copilot:default\.token$/,
+        ),
       ]),
     );
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
