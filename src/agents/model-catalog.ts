@@ -155,6 +155,83 @@ export async function loadModelCatalog(params?: {
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
+      // Merge models from user-configured providers in openclaw.json
+      // (`models.providers.<id>.models[]`).
+      //
+      // The Pi SDK registry above only surfaces bundled providers; without this step,
+      // any custom OpenAI-compatible provider declared in `openclaw.json` (e.g. a
+      // local MLX server, packycode, lmstudio-style endpoints) is absent from the
+      // gateway model catalog. Downstream capability checks like
+      // `resolveGatewayModelSupportsImages()` would then return `false` for such
+      // models, causing `parseMessageWithAttachments()` to silently drop every
+      // image attachment with the warning
+      // `parseMessageWithAttachments: N attachment(s) dropped — model does not support images`,
+      // even when the user explicitly declared `"input": ["text", "image"]` on the
+      // configured model entry.
+      //
+      // This restores the behavior of the previous `mergeConfiguredOptInProviderModels`
+      // helper but without its hardcoded provider allowlist — any provider with a
+      // `models[]` array and per-entry `id` is eligible. Fixes #38639.
+      const configuredProviders = cfg.models?.providers;
+      if (configuredProviders && typeof configuredProviders === "object") {
+        const seenForConfigured = new Set(
+          models.map(
+            (entry) =>
+              `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`,
+          ),
+        );
+        for (const [providerKey, providerCfg] of Object.entries(configuredProviders)) {
+          if (!providerCfg || typeof providerCfg !== "object") {
+            continue;
+          }
+          const provider = normalizeOptionalString(String(providerKey)) ?? "";
+          if (!provider) {
+            continue;
+          }
+          const configuredModels = (providerCfg as { models?: unknown }).models;
+          if (!Array.isArray(configuredModels)) {
+            continue;
+          }
+          for (const configuredModel of configuredModels) {
+            if (!configuredModel || typeof configuredModel !== "object") {
+              continue;
+            }
+            const idRaw = (configuredModel as { id?: unknown }).id;
+            const id = normalizeOptionalString(typeof idRaw === "string" ? idRaw : "") ?? "";
+            if (!id) {
+              continue;
+            }
+            const dedupeKey = `${normalizeLowercaseStringOrEmpty(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
+            if (seenForConfigured.has(dedupeKey)) {
+              continue;
+            }
+            if (shouldSuppressBuiltInModel({ provider, id })) {
+              continue;
+            }
+            const rawName = (configuredModel as { name?: unknown }).name;
+            const name = normalizeOptionalString(typeof rawName === "string" ? rawName : id) || id;
+            const contextWindowRaw = (configuredModel as { contextWindow?: unknown })
+              .contextWindow;
+            const contextWindow =
+              typeof contextWindowRaw === "number" && contextWindowRaw > 0
+                ? contextWindowRaw
+                : undefined;
+            const reasoningRaw = (configuredModel as { reasoning?: unknown }).reasoning;
+            const reasoning = typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
+            const inputRaw = (configuredModel as { input?: unknown }).input;
+            const inputFiltered = Array.isArray(inputRaw)
+              ? (inputRaw.filter(
+                  (item): item is ModelInputType =>
+                    item === "text" || item === "image" || item === "document",
+                ) as ModelInputType[])
+              : undefined;
+            const input = inputFiltered && inputFiltered.length > 0 ? inputFiltered : undefined;
+            models.push({ id, name, provider, contextWindow, reasoning, input });
+            seenForConfigured.add(dedupeKey);
+          }
+        }
+        logStage("configured-providers-merged", `entries=${models.length}`);
+      }
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
         env: process.env,
