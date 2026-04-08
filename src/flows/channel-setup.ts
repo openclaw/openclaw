@@ -1,5 +1,8 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
+import {
+  getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries,
+} from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
@@ -153,19 +156,27 @@ export async function setupChannels(
     // added for GHSA-82qx-6vj7-p8m2 without dropping legitimate workspace channels.
     const workspaceDir = resolveWorkspaceDir();
     for (const entry of listChannelPluginCatalogEntries({ workspaceDir })) {
+      let resolvedEntry = entry;
       if (!isTrustedWorkspaceChannelCatalogEntry(entry, next)) {
-        continue;
+        const fallbackEntry = getChannelPluginCatalogEntry(entry.id, {
+          workspaceDir,
+          excludeWorkspace: true,
+        });
+        if (!fallbackEntry) {
+          continue;
+        }
+        resolvedEntry = fallbackEntry;
       }
-      const channel = entry.id as ChannelChoice;
+      const channel = resolvedEntry.id as ChannelChoice;
       if (getVisibleChannelPlugin(channel)) {
         continue;
       }
       const explicitlyEnabled =
-        next.plugins?.entries?.[entry.pluginId ?? channel]?.enabled === true;
+        next.plugins?.entries?.[resolvedEntry.pluginId ?? channel]?.enabled === true;
       if (!explicitlyEnabled && !isChannelConfigured(next, channel)) {
         continue;
       }
-      void loadScopedChannelPlugin(channel, entry.pluginId);
+      void loadScopedChannelPlugin(channel, resolvedEntry.pluginId);
     }
   };
   preloadConfiguredExternalPlugins();

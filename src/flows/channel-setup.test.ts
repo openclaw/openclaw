@@ -6,11 +6,21 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
 );
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn((_cfg?: unknown) => "default"));
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_args?: unknown): unknown[] => []));
+const getChannelPluginCatalogEntry = vi.hoisted(() =>
+  vi.fn((_channel?: unknown, _args?: unknown): unknown => undefined),
+);
 const isTrustedWorkspaceChannelCatalogEntry = vi.hoisted(() =>
   vi.fn((_entry?: unknown, _cfg?: unknown) => true),
 );
 const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => undefined));
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
+const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
+  vi.fn((_args?: unknown) => ({
+    channels: [],
+    channelSetups: [],
+  })),
+);
+const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channel?: unknown) => false));
 const collectChannelStatus = vi.hoisted(() =>
   vi.fn(async (_args?: unknown) => ({
     installedPlugins: [],
@@ -28,6 +38,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../channels/plugins/catalog.js", () => ({
+  getChannelPluginCatalogEntry: (channel?: unknown, args?: unknown) =>
+    getChannelPluginCatalogEntry(channel, args),
   listChannelPluginCatalogEntries: (args?: unknown) => listChannelPluginCatalogEntries(args),
 }));
 
@@ -46,10 +58,8 @@ vi.mock("../commands/channel-setup/registry.js", () => ({
 
 vi.mock("../commands/channel-setup/plugin-install.js", () => ({
   ensureChannelSetupPluginInstalled: vi.fn(),
-  loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => ({
-    channels: [],
-    channelSetups: [],
-  })),
+  loadChannelSetupPluginRegistrySnapshotForChannel: (args?: unknown) =>
+    loadChannelSetupPluginRegistrySnapshotForChannel(args),
 }));
 
 vi.mock("../commands/channel-setup/workspace-trust.js", () => ({
@@ -58,7 +68,7 @@ vi.mock("../commands/channel-setup/workspace-trust.js", () => ({
 }));
 
 vi.mock("../config/channel-configured.js", () => ({
-  isChannelConfigured: vi.fn(() => false),
+  isChannelConfigured: (cfg?: unknown, channel?: unknown) => isChannelConfigured(cfg, channel),
 }));
 
 vi.mock("./channel-setup.status.js", () => ({
@@ -76,7 +86,9 @@ describe("setupChannels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listChannelPluginCatalogEntries.mockReturnValue([]);
+    getChannelPluginCatalogEntry.mockReturnValue(undefined);
     isTrustedWorkspaceChannelCatalogEntry.mockReturnValue(true);
+    isChannelConfigured.mockReturnValue(false);
     collectChannelStatus.mockResolvedValue({
       installedPlugins: [],
       catalogEntries: [],
@@ -108,14 +120,16 @@ describe("setupChannels", () => {
       pluginId: "malicious-plugin",
       meta: {},
     };
+    const bundledFallbackEntry = {
+      id: "matrix",
+      origin: "bundled",
+      pluginId: "matrix",
+      meta: {},
+    };
     listChannelPluginCatalogEntries.mockReturnValue([untrustedEntry]);
-    // Simulate untrusted workspace entry
     isTrustedWorkspaceChannelCatalogEntry.mockReturnValue(false);
-
-    const loadChannelSetupPluginRegistrySnapshotForChannel = vi.fn(() => ({
-      channels: [],
-      channelSetups: [],
-    }));
+    getChannelPluginCatalogEntry.mockReturnValue(bundledFallbackEntry);
+    isChannelConfigured.mockReturnValue(true);
 
     const prompter = {
       confirm: vi.fn(async () => false),
@@ -124,7 +138,16 @@ describe("setupChannels", () => {
 
     await setupChannels({} as never, {} as never, prompter, {});
 
-    // The untrusted entry must not reach loadScopedChannelPlugin
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(getChannelPluginCatalogEntry).toHaveBeenCalledWith("matrix", {
+      workspaceDir: "/tmp/openclaw-workspace",
+      excludeWorkspace: true,
+    });
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith({
+      cfg: {},
+      runtime: {},
+      channel: "matrix",
+      pluginId: "matrix",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
   });
 });
