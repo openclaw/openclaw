@@ -1279,6 +1279,16 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Store the resolved loop-detection config on diagnostic session state so
+      // that event handlers (which lack direct config access) can use it.
+      if (params.sessionKey && clientToolLoopDetection) {
+        const diagStateForConfig = getDiagnosticSessionState({
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+        });
+        diagStateForConfig.loopDetectionConfig = clientToolLoopDetection;
+      }
+
       // Guard against infinite loops when the LLM repeatedly calls non-existent
       // tools. The SDK bypasses all OpenClaw tool hooks for unknown tools, so the
       // detection flag is set by handleToolExecutionEnd via diagnostic session state.
@@ -1295,12 +1305,14 @@ export async function runEmbeddedAttempt(
               `Aborting run due to unknown tool loop: tools=[${toolNames}] ` +
                 `runId=${params.runId} sessionKey=${params.sessionKey}`,
             );
+            diagState.unknownToolLoopDetected = undefined;
             runAbortController.abort(
               new Error(
                 `Run aborted: repeated calls to non-existent tool(s): ${toolNames}. ` +
                   `The agent was stuck in an infinite retry loop.`,
               ),
             );
+            return innerUnknownGuard(model, context, options);
           }
           return innerUnknownGuard(model, context, options);
         };

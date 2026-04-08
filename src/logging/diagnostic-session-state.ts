@@ -11,6 +11,8 @@ export type SessionState = {
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
   /** Set by unknown-tool loop detection; checked by streamFn guard to inject stop signals. */
   unknownToolLoopDetected?: { toolNames: string[]; message: string };
+  /** Resolved loop-detection config, stored by attempt.ts so event handlers can access it. */
+  loopDetectionConfig?: import("../config/types.tools.js").ToolLoopDetectionConfig;
 };
 
 export type ToolCallRecord = {

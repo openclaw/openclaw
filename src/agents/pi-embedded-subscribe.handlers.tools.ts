@@ -1133,7 +1133,11 @@ export async function handleToolExecutionEnd(
           toolCallId,
           error: errorText,
         });
-        const loopResult = detectUnknownToolLoop(sessionState, toolName);
+        const loopResult = detectUnknownToolLoop(
+          sessionState,
+          toolName,
+          sessionState.loopDetectionConfig,
+        );
         if (loopResult.stuck && loopResult.level === "critical") {
           unknownToolLog.error(
             `Blocking unknown tool loop: tool=${toolName} count=${loopResult.count}`,
