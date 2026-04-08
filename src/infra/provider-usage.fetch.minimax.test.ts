@@ -10,6 +10,8 @@ async function expectMinimaxUsageResult(params: {
   };
 }) {
   const mockFetch = createProviderUsageFetch(async (_url, init) => {
+    expect(_url).toBe("https://api.minimax.io/v1/api/openplatform/coding_plan/remains");
+    expect(init?.method).toBe("GET");
     const headers = (init?.headers as Record<string, string> | undefined) ?? {};
     expect(headers.Authorization).toBe("Bearer key");
     expect(headers["MM-API-Source"]).toBe("OpenClaw");
