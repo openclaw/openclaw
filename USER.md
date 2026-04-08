@@ -12,185 +12,205 @@ I've assigned the work to eleqtrizit.
 
 [CLAUDE REVIEW]
 
-## Branch: `logging-redaction`
+## Branch: `logging-redaction` — Security Fix Review
 
-### Issue Context
+### Tracking Issue
 
-GHSA-rw2r-3f8f-c5q8 (NVIDIA-dev/openclaw-tracking#364) — **Severity: High**
-
-A client authenticated with only `operator.read` scope can extract reusable `hookToken` and `pushToken` credentials from `logs.tail` output, then replay the `hookToken` as a bearer token against hook HTTP ingress (`POST /hooks/agent`). This turns a documented read-only scope into a write-capable credential disclosure path.
-
-**Root cause chain:**
-
-1. `buildGogWatchServeArgs()` includes `--token <pushToken>` and `--hook-token <hookToken>` in the `gog` argv.
-2. `gmail-watcher.ts` and `gmail-ops.ts` log `args.join(" ")` verbatim before spawning the process — writing both secrets to the log file.
-3. `logs.tail` is scoped to `operator.read` and returns raw log file lines without any redaction.
-4. The `redactSensitiveText()` CLI pattern did not cover `--hook-token`, only `--token`.
+NVIDIA-dev/openclaw-tracking#364 — GHSA-rw2r-3f8f-c5q8 (severity: high)
 
 ---
 
-### Goal of the Branch
+### What Is This Branch Trying to Accomplish?
 
-Fix the credential disclosure path with defense in depth across three layers:
+This branch patches a credential-disclosure vulnerability where an `operator.read`-scoped gateway client could recover reusable hook credentials (`hookToken`, `pushToken`) by calling `logs.tail`. The exploit chain was:
 
-1. **Source layer**: Stop including secrets in the logged argv string.
-2. **Pattern layer**: Extend `redactSensitiveText()` to catch `--hook-token` in case secrets appear in other log paths.
-3. **Output layer**: Apply redaction to all lines returned by `readConfiguredLogTail()` before they reach `logs.tail` callers.
+1. Gmail watcher startup code built a full `gog gmail watch serve` argv string — including `--token <pushToken>` and `--hook-token <hookToken>` — and logged it verbatim before spawning the process.
+2. The file logger wrote that line to disk without any redaction pass.
+3. The `logs.tail` gateway method returned raw file lines and is scoped to `operator.read` (not write).
+4. The `hookToken` is accepted as a valid bearer token on hook ingress (`POST /hooks/agent`), so disclosure → direct write-path replay.
 
----
-
-### What Was Done
-
-**`src/hooks/gmail.ts`** _(currently has an uncommitted modification — see critical note below)_
-
-- Defines `GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"])`.
-- Adds `buildGogWatchServeLogArgs(cfg)` which calls `buildGogWatchServeArgs()` and filters out every sensitive flag and its immediately following value argument.
-
-**`src/hooks/gmail-watcher.ts`** and **`src/hooks/gmail-ops.ts`**
-
-- Both `spawnGogServe()` callers updated to log `buildGogWatchServeLogArgs(cfg)` instead of the raw `buildGogWatchServeArgs(cfg)`.
-
-**`src/logging/redact.ts`**
-
-- CLI flag regex extended from `--(?:api[-_]?key|token|secret|password|passwd)` to also include `hook[-_]?token`.
-
-**`src/logging/log-tail.ts`**
-
-- `readConfiguredLogTail()` now maps each line through `redactSensitiveText()` before returning the result.
-
-**Tests**
-
-- `src/hooks/gmail.test.ts`: Asserts `buildGogWatchServeLogArgs` output contains no `--token`, `--hook-token`, `push-token`, or `hook-token` values, and matches the exact expected safe arg list.
-- `src/logging/redact.test.ts`: Asserts `--hook-token` values are masked by the extended CLI pattern.
-- `src/gateway/server-methods/server-methods.test.ts`: Integration test writing a raw line containing both `--token` and `--hook-token` secrets to a temp log file, then verifying `logs.tail` returns the redacted form.
+The result is that a read-only client could obtain write-capable credentials — the same class of bug as prior advisories GHSA-8mh7-phf8-xgfm and GHSA-ppwq-6v66-5m6j.
 
 ---
 
-### Assessment
+### What the Branch Does (commit by commit)
 
-**Correctness** — The three-layer approach correctly addresses the vulnerability. The filter logic in `buildGogWatchServeLogArgs` is sound: it removes both the flag (`--hook-token`) and its value by checking whether the current arg or its predecessor is in the sensitive set. The `--hook-url` being included in the sensitive set is a good defensive call even though the issue only explicitly named `--token` and `--hook-token`.
+**78a644bbeb** — `fix(logging): redact gmail watcher startup args`
 
-**Defense-in-depth coverage** — Remediation items 1, 3, and 4 from the issue are addressed. Item 2 (apply `redactSensitiveText()` before file writes, i.e., in the file logger itself) was **not implemented**. This means the log file on disk still retains the raw secrets from any already-written lines. Direct filesystem access to the log file would still expose historic credentials. This is documented as "defense in depth" in the issue, so it is a known gap rather than a mistake, but it is worth calling out.
+- Adds `GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"])` in `src/hooks/gmail.ts`.
+- Adds `buildGogWatchServeLogArgs(cfg)` which filters out both the sensitive flag and its following value using array index look-back.
+- Both `src/hooks/gmail-watcher.ts` and `src/hooks/gmail-ops.ts` switch from logging raw `args.join(" ")` to logging `buildGogWatchServeLogArgs(cfg).join(" ")`.
 
-**Code quality**
+**c1561e43a4** — `fix(logging): normalize redaction formatting`
 
-- The filter-based implementation (current uncommitted state) is **strictly better** than the committed inline approach: it delegates to `buildGogWatchServeArgs()` so any future additions to the real args builder are automatically reflected in the safe log version without requiring a parallel update. The committed version duplicated the args list, which is a DRY violation and a maintenance trap.
-- `GMAIL_WATCH_SENSITIVE_FLAGS` as a `Set` is the right structure for O(1) membership checks.
-- The regex change (`hook[-_]?token`) handles both `--hook-token` and `--hook_token`; slightly over-broad but harmless.
-- `getDefaultRedactPatterns()` is called on every line in `log-tail.ts` on every `logs.tail` call. This is fine for a tail of 500 lines, but `getDefaultRedactPatterns()` compiles patterns each call. If it is not memoized internally, this should be pulled outside the `.map()` — allocate once, iterate. Worth checking.
+- Introduces `ResolvedRedactOptions` (typed `{ mode, patterns: RegExp[] }`) to distinguish resolved from unresolved options.
+- Exports new `resolveRedactOptions()` function so callers can resolve once and reuse across many lines.
+- Extends `parsePattern()` to accept `RegExp` directly (not just `string`), with automatic `g` flag addition when absent.
+- Refactors `redactSensitiveText()` internally to delegate to `resolveRedactOptions()`.
 
-**Test quality**
+**bd4cc1f190** — `fix(logging): harden gmail watcher log redaction`
 
-- The `gmail.test.ts` snapshot assertion (`toEqual([...])`) will correctly reflect the filter-based uncommitted implementation since `--hook-url` and its value are also stripped.
-- The `server-methods.test.ts` test exercises the right scenario: it proves the output layer redaction catches secrets that somehow made it into the log file. This is a good regression anchor.
-- There are no tests for the path where the file logger receives a secret-bearing log line (Remediation #2). This is acceptable given that path is out of scope for this fix, but it means the file-write surface is untested at the redaction boundary.
+- Widens the CLI flag redaction pattern from `--(?:api[-_]?key|token|secret|password|passwd)` to `--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd)`, catching `--hook-token` and `--hook_token` variants.
+- Adds a unit test proving the new pattern redacts `--hook-token` values.
+
+**92584fe167** — `fix(logging): honor configured log tail redaction`
+
+- Modifies `readConfiguredLogTail()` in `src/logging/log-tail.ts` to call `resolveRedactOptions()` once and then map it over every returned line with `redactSensitiveText(line, redaction)`.
+- This makes the `logs.tail` API path a final defense layer regardless of what upstream callers logged.
+
+**2ff95dd883** — `fix(logging): skip redact pattern resolution when off`
+
+- Makes `resolveRedactOptions()` short-circuit and return `{ mode: "off", patterns: [] }` when mode is `"off"`, avoiding unnecessary pattern compilation.
+- Adds a test using a getter trap to prove `patterns` is never accessed when mode is off.
 
 ---
 
-### Critical Issue
+### Defense-in-Depth Assessment
 
-**`src/hooks/gmail.ts` has an uncommitted modification** (`M src/hooks/gmail.ts` in git status). The committed version on this branch adds `buildGogWatchServeLogArgs` as an inline arg builder (no sensitive flags included). The **current working tree** refactors it to the filter-based approach using `GMAIL_WATCH_SENSITIVE_FLAGS`. This is a meaningful behavioral difference:
+The fix applies three distinct protection layers, which directly addresses the advisory's remediation guidance:
 
-- The committed inline approach: `--hook-url` and its value are absent from the log output (not listed at all).
-- The filter approach: `--hook-url` and its value are explicitly removed. Same net result, but the constant `GMAIL_WATCH_SENSITIVE_FLAGS` is the canonical contract for what is considered sensitive.
+| Layer                   | Location                                 | Approach                                              | Status      |
+| ----------------------- | ---------------------------------------- | ----------------------------------------------------- | ----------- |
+| 1. Source suppression   | `src/hooks/gmail.ts` + callers           | Strip secrets from logged argv before `log.info()`    | ✅ Done     |
+| 2. Pattern matching     | `src/logging/redact.ts`                  | `--hook-token` added to CLI flag regex                | ✅ Done     |
+| 3. API egress redaction | `src/logging/log-tail.ts`                | Redact every returned line in `readConfiguredLogTail` | ✅ Done     |
+| 4. File-write redaction | `src/logging/subsystem.ts` / `logger.ts` | Apply `redactSensitiveText` before writing to disk    | ❌ Not done |
 
-The uncommitted state is the **better implementation**, but it must be committed before this branch can land. The branch is not in a shippable state as-is.
+The advisory's remediation step 2 (apply redaction at the logger transport/file-write layer) is **not implemented**. This is a deliberate trade-off — the primary attack vector (the `logs.tail` API) is now fully defended, and the upstream source fix (layer 1) means secrets won't reach the log file from this path. However, the log file on disk **still contains the pre-fix history** until rotated, and any other code path that logs secrets without sanitizing would also persist them to disk unredacted. If the log file is accessible via backup, direct SSH read, or a future read path, those secrets remain exposed.
+
+This gap is not a regression from the current branch — it's a pre-existing architectural property — but it's worth tracking as a follow-up.
 
 ---
 
-### Minor Issues
+### Code Quality
 
-1. **`--hook-url` omission from existing tests**: The test in `gmail.test.ts` asserts the exact output matches a list that does not include `--hook-url`. This works correctly with the filter approach since `--hook-url` is in the sensitive set, but a comment explaining why `--hook-url` is omitted would aid future readers.
-2. **Log file on disk retains secrets**: As noted, Remediation #2 (redact before file writes) is not implemented. Existing log files that predate this fix will still contain exposed credentials. Token rotation guidance or a changelog note about rotating tokens after upgrading would be appropriate.
-3. **`getDefaultRedactPatterns()` call site in `log-tail.ts`**: Called inside the `.map()` callback. If this function recompiles regex patterns each invocation, it is wasteful. Should be pulled to a constant outside the map.
+**Strengths:**
+
+- `GMAIL_WATCH_SENSITIVE_FLAGS` as a `Set` is idiomatic and correct. The filter logic using `args[index - 1] ?? ""` correctly strips both the flag and its value in one pass.
+- `ResolvedRedactOptions` as a distinct type from `RedactOptions` is a clean separation. It makes the resolved/unresolved distinction explicit and prevents callers from accidentally passing unresolved options where compiled patterns are needed.
+- `resolveRedactOptions()` is called **once** before the `lines.map(...)` in `readConfiguredLogTail`, not N times per line. This is correct for performance and for consistency (same config snapshot applied to all lines).
+- The `RegExp` support in `parsePattern` is well-guarded: it clones the regex with `g` flag if absent, rather than mutating the input.
+- Early exit in `resolveRedactOptions` when `mode === "off"` avoids pattern compilation entirely.
+- Both `gmail-watcher.ts` and `gmail-ops.ts` are patched — the fix does not miss the second caller of `spawnGogServe`.
+
+**Minor concerns:**
+
+- `--hook-url` is included in `GMAIL_WATCH_SENSITIVE_FLAGS`. The hook URL (`http://127.0.0.1:18789/hooks/gmail`) is not a credential, but stripping it from logs is conservative and fine. However, it is **not** added to the redact pattern in `redact.ts`. This is consistent (URLs are not secrets) but means if a hook URL with embedded secrets were logged elsewhere, the pattern wouldn't catch it. Not a bug here, just worth noting for completeness.
+- `buildGogWatchServeLogArgs` is a parallel function to `buildGogWatchServeArgs` rather than a parameter to it. This is reasonable for clarity, but a future addition of a new secret flag to `buildGogWatchServeArgs` requires a matching update to `GMAIL_WATCH_SENSITIVE_FLAGS`. There's no compile-time enforcement of this coupling. A comment on `buildGogWatchServeArgs` pointing at the set would help future maintainers.
+- `log-tail.test.ts` imports `readConfiguredLogTail` via `await import(...)` inside the test body (to pick up the module mock). Since there is only one test in the describe block, this works, but if more tests are added they should use `beforeAll` for the import per the repo's test performance guardrails.
+
+---
+
+### Test Coverage
+
+| Test                                                    | File                                                | What it proves                                                                                                             |
+| ------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `builds watch serve log args without secrets`           | `src/hooks/gmail.test.ts`                           | `buildGogWatchServeLogArgs` strips `--token`, `--hook-url`, `--hook-token` and their values; exact remaining args asserted |
+| `masks hook token CLI flags`                            | `src/logging/redact.test.ts`                        | Default pattern catches `--hook-token <value>` and redacts it                                                              |
+| `does not resolve patterns when mode is off`            | `src/logging/redact.test.ts`                        | `resolveRedactOptions` short-circuits; getter trap proves `patterns` not accessed                                          |
+| `reuses resolved redaction settings for returned lines` | `src/logging/log-tail.test.ts`                      | `resolveRedactOptions` called once; each line passed to `redactSensitiveText` with the same resolved options               |
+| `redacts sensitive CLI tokens from returned lines`      | `src/gateway/server-methods/server-methods.test.ts` | End-to-end: `logs.tail` handler returns redacted lines from a file containing raw token values                             |
+
+Coverage is solid. The integration test in `server-methods.test.ts` is especially valuable — it tests the full stack from file content to API response without mocking the redaction logic.
+
+---
+
+### Standards Compliance
+
+- TypeScript strict: no `any` introduced; new types are precise.
+- No inline lint suppressions.
+- Tests use `vi.hoisted()` correctly for mock initialization order.
+- Commits are atomic, scoped, and action-oriented (`fix(logging): ...`).
+- No changelog entry added (pure internal security fix, which is standard for GHSA patches that go through a coordinated advisory).
+- File sizes remain well within the ~700 LOC guideline.
 
 ---
 
 ### Summary
 
-The branch correctly targets a high-severity credential disclosure vulnerability. The defense-in-depth layering is well-structured and the test coverage covers the key regression scenarios. The **one blocking issue** is the uncommitted modification in `src/hooks/gmail.ts` — the filter-based refactor must be committed before landing. Once committed, this branch appears ready for review.
+The branch correctly identifies and closes the primary attack vector: `logs.tail` no longer returns raw hook credentials. The layered approach (source suppression + pattern widening + egress redaction) is solid and follows the advisory's own remediation guidance for layers 1, 3, and 4. The one gap is that log file contents on disk are not sanitized at write time (advisory remediation step 2), which leaves historical log entries exposed if the file is accessed outside `logs.tail`. This is a known and acceptable trade-off given the primary fix. Test coverage is thorough at unit, integration, and end-to-end levels. No standards violations found.
+
+---
 
 [CLAUDE PLAN]
 
-## Source
+## Review Comment Analysis — openclaw/openclaw#62661 / NVIDIA-dev/openclaw-tracking#364
 
-GHSA-rw2r-3f8f-c5q8 — NVIDIA-dev/openclaw-tracking#364 — PR openclaw/openclaw#62661 (`logging-redaction` branch)
+### Triage of All Review Comments
+
+| Source   | Priority | Location                     | Finding                                                                                                                                                                                                                                                       | Status                                                                                                                                                               |
+| -------- | -------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Greptile | P2       | `src/hooks/gmail.ts:253-274` | `buildGogWatchServeLogArgs` was a duplicate of non-sensitive flags and would drift from `buildGogWatchServeArgs` when new flags are added                                                                                                                     | **Already resolved** — current code (line 254-260) derives by filtering `buildGogWatchServeArgs`                                                                     |
+| Codex    | P1       | `src/logging/log-tail.ts`    | `readConfiguredLogTail` hard-codes `mode: "tools"` and default patterns, bypassing user-configured `logging.redactPatterns`                                                                                                                                   | **Already resolved** — `resolveRedactOptions()` with no args calls `resolveConfigRedaction()` which reads from user config; comment is stale (reviewed `c1561e43a4`) |
+| Codex    | P2       | `src/logging/log-tail.ts`    | `getDefaultRedactPatterns()` called per-line, `redactSensitiveText` reparses patterns on each invocation                                                                                                                                                      | **Partially resolved, one path still re-compiles** — see real P2 below                                                                                               |
+| Codex    | P2       | `src/logging/redact.ts:147`  | `resolveRedactOptions` compiles patterns before the mode check when mode is `off`                                                                                                                                                                             | **Already resolved** — commit `2ff95dd883` short-circuits before `resolvePatterns` when `mode === "off"`                                                             |
+| Codex    | P2       | `src/logging/redact.ts:155`  | `readConfiguredLogTail` calls `resolveRedactOptions()` once, passes result to `redactSensitiveText(line, resolved)`, but `redactSensitiveText` calls `resolveRedactOptions(options)` again — re-running `resolvePatterns` and cloning every `RegExp` per line | **Real remaining issue — needs fix**                                                                                                                                 |
+| Codex    | P2       | `USER.md:3`                  | Internal worklog/advisory tracking notes committed to source history                                                                                                                                                                                          | Informational — intentional worklog; no code change required                                                                                                         |
 
 ---
 
-## Issues Found
+### Real Remaining Issue
 
-### 1. BLOCKING — Uncommitted refactor in `src/hooks/gmail.ts`
+**`parsePattern` clones `RegExp` objects that already have the `g` flag, causing per-line regex re-allocation in `logs.tail`.**
 
-The working tree already contains the correct implementation (`GMAIL_WATCH_SENSITIVE_FLAGS` + filter-based `buildGogWatchServeLogArgs`) but it has not been committed. The branch is not in a shippable state without this commit. This is also the exact change Greptile's P2 suggestion requests — the two findings are the same issue.
+When `readConfiguredLogTail` calls:
 
-**Fix:** Commit the current working-tree state of `src/hooks/gmail.ts`. No code changes needed — the implementation is already correct.
-
-### 2. MINOR — `getDefaultRedactPatterns()` allocated inside `.map()` in `src/logging/log-tail.ts:165-169`
-
-`getDefaultRedactPatterns()` returns a new array copy on every invocation, and `resolvePatterns()` inside `redactSensitiveText` recompiles each of the ~18 pattern strings into a `RegExp` per call. With up to 5000 lines per `logs.tail` call, this creates up to ~90,000 regex compilations. The array should be allocated once outside the `.map()`.
-
-**Fix:** In `readConfiguredLogTail()`, extract `getDefaultRedactPatterns()` to a `const` before the `lines:` map:
-
-```typescript
-const redactPatterns = getDefaultRedactPatterns();
-lines: result.lines.map((line) =>
-  redactSensitiveText(line, { mode: "tools", patterns: redactPatterns }),
-),
+```ts
+const redaction = resolveRedactOptions(); // returns ResolvedRedactOptions { mode, patterns: RegExp[] }
+lines: result.lines.map((line) => redactSensitiveText(line, redaction));
 ```
 
-### 3. MINOR — Missing comment in `src/hooks/gmail.test.ts:95-110` explaining absent flags
+`redactSensitiveText(line, redaction)` calls `resolveRedactOptions(redaction)` internally (redact.ts:155), which calls `resolvePatterns(redaction.patterns)` on already-compiled `RegExp[]`, which maps each through `parsePattern`, which currently clones every `RegExp` (lines 58-61). For a 5000-line tail with N=17 patterns, that's 85,000 unnecessary regex object allocations per `logs.tail` call.
 
-The `toEqual` snapshot for `buildGogWatchServeLogArgs` omits `--hook-url` and its value without explanation. A reader unfamiliar with `GMAIL_WATCH_SENSITIVE_FLAGS` will not know why the flag is absent.
+**Not a hidden larger problem** — checked that:
 
-**Fix:** Add a one-line comment above the `toEqual` assertion, e.g.:
+- No other `spawn`/`exec` call sites log raw sensitive args (`buildGogWatchServeLogArgs` is used correctly in both `gmail-watcher.ts:64` and `gmail-ops.ts:357`)
+- No other channel/hook startup code has the same pattern
+- `logs.tail` is the only read-scoped egress path for log content (confirmed in `method-scopes.ts`)
 
-```typescript
-// --token, --hook-url, and --hook-token are stripped by GMAIL_WATCH_SENSITIVE_FLAGS
+---
+
+### Fix Plan
+
+**File:** `src/logging/redact.ts`  
+**Function:** `parsePattern` (lines 57-71)  
+**Change:** Return a `RegExp` as-is if it already has the `g` flag, instead of cloning it.
+
+```ts
+// Before (lines 58-61):
+if (raw instanceof RegExp) {
+  const flags = raw.flags.includes("g") ? raw.flags : `${raw.flags}g`;
+  return new RegExp(raw.source, flags);
+}
+
+// After:
+if (raw instanceof RegExp) {
+  if (raw.flags.includes("g")) return raw; // already global — no clone needed
+  return new RegExp(raw.source, `${raw.flags}g`);
+}
 ```
 
----
+This is safe: `String.replace(globalRegex, ...)` resets `lastIndex` internally, so reusing the same `RegExp` object across calls is correct. The change is backward-compatible — behavior is identical, only allocation is eliminated.
 
-## Hidden Problem Assessment
+**Tests:** No test changes required. Existing tests remain valid:
 
-No larger hidden problem exists beyond the documented known gap. All three exposure vectors in the original GHSA are addressed:
+- `does not resolve patterns when mode is off` — unaffected (short-circuit before `resolvePatterns`)
+- `reuses resolved redaction settings for returned lines` — unaffected (this test checks `resolveRedactOptions` call count, not `parsePattern` cloning)
+- All other redact/log-tail tests — unaffected
 
-- **Source layer** (`gmail.ts` / `gmail-watcher.ts` / `gmail-ops.ts`): Both call sites log via `buildGogWatchServeLogArgs`, preventing secrets from entering the log file going forward.
-- **Pattern layer** (`redact.ts:21`): `hook[-_]?token` is now in `DEFAULT_REDACT_PATTERNS`, so `--hook-token` values are caught by any caller of `redactSensitiveText`.
-- **Output layer** (`log-tail.ts:165-169`): `readConfiguredLogTail` applies redaction before returning lines to `logs.tail` clients, catching any secrets that survived earlier layers.
-
-**Known gap (out of scope):** The file logger (`src/logging/subsystem.ts`) does not apply `redactSensitiveText()` before disk writes (Remediation #2 from the issue). Log files written before this fix retain raw credentials on disk. This is explicitly framed as "defense in depth" in the issue and is not a regression introduced by this branch. Token rotation guidance in the changelog or advisory would be appropriate.
+**Verification gate:** `pnpm test src/logging/redact.test.ts src/logging/log-tail.test.ts` must pass. No build-output impact, so `pnpm build` is not required.
 
 ---
 
-## Action Items (ordered)
+### Known Gap (Informational — No Action for This PR)
 
-1. **Commit `src/hooks/gmail.ts`** — the filter-based refactor is already in the working tree and correct; just needs `scripts/committer "fix(logging): use filter-based approach for gmail watch serve log args" src/hooks/gmail.ts`.
-2. **Fix `log-tail.ts:165-169`** — pull `getDefaultRedactPatterns()` outside the `.map()` call.
-3. **Add comment in `gmail.test.ts:94`** — clarify that `--hook-url` is absent because it is in `GMAIL_WATCH_SENSITIVE_FLAGS`.
-4. **No action** on Remediation #2 (file logger redaction) — explicitly out of scope for this fix per the issue's framing.
+Layer 4 (file-write redaction): `src/logging/subsystem.ts` and `src/logging/logger.ts` do not apply `redactSensitiveText` before writing to disk. This means secrets logged before this fix was deployed remain on disk until log rotation. This is a pre-existing architectural property, not a regression from this branch, and is the remediation step 2 from the advisory. Recommend tracking as a follow-up issue rather than blocking this PR.
 
 [CODEX SUMMARY]
 
-- Read NVIDIA-dev/openclaw-tracking#364 and matched the branch work against Claude's plan.
-- Kept the existing uncommitted `src/hooks/gmail.ts` filter-based `buildGogWatchServeLogArgs()` implementation, which strips `--token`, `--hook-url`, and `--hook-token` plus their values from logged argv output.
-- Updated `src/logging/log-tail.ts` to allocate `getDefaultRedactPatterns()` once per `readConfiguredLogTail()` call instead of once per line during `logs.tail` redaction.
-- Added a clarifying comment in `src/hooks/gmail.test.ts` explaining why `--hook-url` is absent from the expected safe log argv.
-- Ran targeted validation for the touched areas after the edits.
-
-[CODEX]
-
-Resolved the remaining open PR feedback on the `logs.tail` redaction path.
-
-- Updated `src/logging/log-tail.ts` to resolve redaction settings once per request and reuse them for every returned line.
-- Refactored `src/logging/redact.ts` so resolved redaction options can reuse compiled regex patterns instead of recompiling per line.
-- Added `src/logging/log-tail.test.ts` to lock in that `readConfiguredLogTail()` uses one resolved redaction config for the whole response.
-- Re-ran targeted tests for `src/logging/redact.test.ts`, `src/logging/log-tail.test.ts`, `src/gateway/server-methods/server-methods.test.ts`, and `src/hooks/gmail.test.ts`.
-
-[CODEX]
-
-Resolved the remaining live Codex review thread on `src/logging/redact.ts`.
-
-- Updated `src/logging/redact.ts` so `resolveRedactOptions()` short-circuits when `logging.redactSensitive` is `off`, avoiding any pattern resolution or regex compilation on disabled paths.
-- Added a regression in `src/logging/redact.test.ts` that would fail if pattern access still happens while redaction is off.
-- Re-ran targeted tests for `src/logging/redact.test.ts`, `src/logging/log-tail.test.ts`, `src/gateway/server-methods/server-methods.test.ts`, and `src/hooks/gmail.test.ts`.
+- Read `USER.md` and NVIDIA-dev/openclaw-tracking#364 for branch and advisory context.
+- Patched `src/logging/redact.ts` so `parsePattern()` reuses incoming `RegExp` objects that already include the `g` flag instead of cloning them again. This removes the remaining per-line regex allocation churn on the `logs.tail` redaction path while preserving behavior.
+- Added a regression test in `src/logging/redact.test.ts` proving `resolveRedactOptions()` preserves compiled global regex instances.
+- Verification:
+  - `corepack pnpm test src/logging/redact.test.ts`
+  - `corepack pnpm test src/logging/log-tail.test.ts`
