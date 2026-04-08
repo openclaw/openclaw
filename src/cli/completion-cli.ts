@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -66,6 +68,57 @@ async function registerSubcommandsForCompletion(program: Command): Promise<void>
       );
     }
   }
+}
+
+/**
+ * Resolve the shell profile path respecting shell-specific environment
+ * variables so we read/write the same file the user's shell actually loads.
+ *
+ * - zsh:  ${ZDOTDIR:-$HOME}/.zshrc
+ * - bash: ~/.bashrc (fallback ~/.bash_profile)
+ * - fish: ${XDG_CONFIG_HOME:-~/.config}/fish/config.fish
+ * - pwsh: platform default or ${XDG_CONFIG_HOME} on non-Windows
+ */
+export function getShellProfilePath(
+  shell: CompletionShell,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const home = env.HOME || os.homedir();
+
+  if (shell === "zsh") {
+    // zsh reads dotfiles from $ZDOTDIR when set, otherwise $HOME.
+    const zdotdir = env.ZDOTDIR || home;
+    return path.join(zdotdir, ".zshrc");
+  }
+
+  if (shell === "bash") {
+    // Prefer .bashrc
+    const bashrc = path.join(home, ".bashrc");
+    if (existsSync(bashrc)) {
+      return bashrc;
+    }
+    // Fall back to .bash_profile.
+    return path.join(home, ".bash_profile");
+  }
+
+  if (shell === "fish") {
+    // fish follows the XDG Base Directory Specification.
+    const xdgConfig = env.XDG_CONFIG_HOME || path.join(home, ".config");
+    return path.join(xdgConfig, "fish", "config.fish");
+  }
+
+  // PowerShell
+  if (process.platform === "win32") {
+    return path.join(
+      env.USERPROFILE || home,
+      "Documents",
+      "PowerShell",
+      "Microsoft.PowerShell_profile.ps1",
+    );
+  }
+  // pwsh on macOS/Linux also respects XDG_CONFIG_HOME
+  const xdgConfig = env.XDG_CONFIG_HOME || path.join(home, ".config");
+  return path.join(xdgConfig, "powershell", "Microsoft.PowerShell_profile.ps1");
 }
 
 export function registerCompletionCli(program: Command) {

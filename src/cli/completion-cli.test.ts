@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
-import { getCompletionScript } from "./completion-cli.js";
+import { getCompletionScript, getShellProfilePath } from "./completion-cli.js";
 
 function createCompletionProgram(): Command {
   const program = new Command();
@@ -104,6 +104,83 @@ describe("completion-cli", () => {
     );
     expect(script).toContain(
       "complete -c openclaw -n \"__fish_seen_subcommand_from gateway\" -l force -d 'Force the action'",
+    );
+  });
+});
+
+describe("getShellProfilePath", () => {
+  it("zsh: uses ZDOTDIR when set", () => {
+    const result = getShellProfilePath("zsh", {
+      HOME: "/home/user",
+      ZDOTDIR: "/home/user/.config/zsh",
+    });
+    expect(result).toBe(path.join("/home/user/.config/zsh", ".zshrc"));
+  });
+
+  it("zsh: falls back to HOME when ZDOTDIR is not set", () => {
+    const result = getShellProfilePath("zsh", { HOME: "/home/user" });
+    expect(result).toBe(path.join("/home/user", ".zshrc"));
+  });
+
+  it("fish: uses XDG_CONFIG_HOME when set", () => {
+    const result = getShellProfilePath("fish", {
+      HOME: "/home/user",
+      XDG_CONFIG_HOME: "/custom/config",
+    });
+    expect(result).toBe(path.join("/custom/config", "fish", "config.fish"));
+  });
+
+  it("fish: falls back to ~/.config when XDG_CONFIG_HOME is not set", () => {
+    const result = getShellProfilePath("fish", { HOME: "/home/user" });
+    expect(result).toBe(path.join("/home/user/.config", "fish", "config.fish"));
+  });
+
+  it("bash: defaults to .bashrc", async () => {
+    // Create a temp dir with a .bashrc file to ensure the existsSync check works
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bash-profile-"));
+    try {
+      await fs.writeFile(path.join(tempDir, ".bashrc"), "", "utf-8");
+      const result = getShellProfilePath("bash", { HOME: tempDir });
+      expect(result).toBe(path.join(tempDir, ".bashrc"));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bash: falls back to .bash_profile when .bashrc does not exist", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bash-profile-"));
+    try {
+      // Only create .bash_profile, not .bashrc
+      await fs.writeFile(path.join(tempDir, ".bash_profile"), "", "utf-8");
+      const result = getShellProfilePath("bash", { HOME: tempDir });
+      expect(result).toBe(path.join(tempDir, ".bash_profile"));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bash: defaults to .bash_profile when neither file exists", async () => {
+    // macOS Terminal opens login shells that only source .bash_profile,
+    // so creating .bashrc for a fresh user would silently break completion.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bash-profile-"));
+    try {
+      const result = getShellProfilePath("bash", { HOME: tempDir });
+      expect(result).toBe(path.join(tempDir, ".bash_profile"));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("powershell: uses XDG_CONFIG_HOME on non-Windows", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = getShellProfilePath("powershell", {
+      HOME: "/home/user",
+      XDG_CONFIG_HOME: "/custom/config",
+    });
+    expect(result).toBe(
+      path.join("/custom/config", "powershell", "Microsoft.PowerShell_profile.ps1"),
     );
   });
 });
