@@ -135,8 +135,15 @@ function resolveConfigRedaction(): RedactOptions {
 
 export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
   const resolved = options ?? resolveConfigRedaction();
+  const mode = normalizeMode(resolved.mode);
+  if (mode === "off") {
+    return {
+      mode,
+      patterns: [],
+    };
+  }
   return {
-    mode: normalizeMode(resolved.mode),
+    mode,
     patterns: resolvePatterns(resolved.patterns),
   };
 }

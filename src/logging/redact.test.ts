@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
+import { getDefaultRedactPatterns, redactSensitiveText, resolveRedactOptions } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -127,5 +127,22 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+
+  it("does not resolve patterns when mode is off", () => {
+    const options = {
+      mode: "off" as const,
+      get patterns(): never {
+        throw new Error("patterns should not be read when redaction is off");
+      },
+    };
+
+    expect(resolveRedactOptions(options)).toEqual({
+      mode: "off",
+      patterns: [],
+    });
+    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef", options)).toBe(
+      "OPENAI_API_KEY=sk-1234567890abcdef",
+    );
   });
 });
