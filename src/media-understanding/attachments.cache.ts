@@ -50,6 +50,7 @@ function getDefaultLocalPathRoots(): readonly string[] {
 
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
+  includeDefaultLocalPathRoots?: boolean;
 };
 
 function resolveRequestUrl(input: RequestInfo | URL): string {
@@ -70,10 +71,10 @@ export class MediaAttachmentCache {
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
     this.attachments = attachments;
-    this.localPathRoots = mergeInboundPathRoots(
-      options?.localPathRoots,
-      getDefaultLocalPathRoots(),
-    );
+    this.localPathRoots =
+      options?.includeDefaultLocalPathRoots === false
+        ? mergeInboundPathRoots(options.localPathRoots)
+        : mergeInboundPathRoots(options?.localPathRoots, getDefaultLocalPathRoots());
     for (const attachment of attachments) {
       this.entries.set(attachment.index, { attachment });
     }

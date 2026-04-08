@@ -107,7 +107,7 @@ function toAllowlistEntries(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  return value.map((entry) => String(entry).trim()).filter((entry) => Boolean(entry));
+  return normalizeStringEntries(value);
 }
 
 function hasGuildEntries(value: GuildEntries): boolean {

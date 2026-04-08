@@ -16,6 +16,7 @@ import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import {
   listThinkingLevelLabels,
@@ -33,11 +34,11 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
-  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  const mainSessionKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainSessionKey);
   if (mainSessionKey) {
     return mainSessionKey;
   }
-  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
+  const mainKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainKey);
   if (mainKey) {
     return mainKey;
   }
@@ -619,7 +620,7 @@ function buildThinkingOptions(
     if (!trimmed) {
       return;
     }
-    const key = trimmed.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(key)) {
       return;
     }
@@ -636,7 +637,7 @@ function buildThinkingOptions(
   };
 
   for (const label of listThinkingLevelLabels(provider)) {
-    const normalized = normalizeThinkLevel(label) ?? label.trim().toLowerCase();
+    const normalized = normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label);
     addOption(normalized);
   }
   if (currentOverride) {
@@ -819,7 +820,7 @@ function capitalize(s: string): string {
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
-  const normalized = key.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
@@ -868,8 +869,8 @@ export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
 ): string {
-  const label = row?.label?.trim() || "";
-  const displayName = row?.displayName?.trim() || "";
+  const label = normalizeOptionalString(row?.label) ?? "";
+  const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -890,7 +891,7 @@ export function resolveSessionDisplayName(
 }
 
 export function isCronSessionKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(key);
   if (!normalized) {
     return false;
   }
@@ -958,11 +959,11 @@ export function resolveSessionOptionGroups(
     const parsed = parseAgentSessionKey(key);
     const group = parsed
       ? ensureGroup(
-          `agent:${parsed.agentId.toLowerCase()}`,
+          `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
           resolveAgentGroupLabel(state, parsed.agentId),
         )
       : ensureGroup("other", "Other Sessions");
-    const scopeLabel = parsed?.rest?.trim() || key;
+    const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
     const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     group.options.push({
       key,
@@ -1072,11 +1073,12 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
 }
 
 function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {
-  const normalized = agentIdRaw.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(agentIdRaw);
   const agent = (state.agentsList?.agents ?? []).find(
-    (entry) => entry.id.trim().toLowerCase() === normalized,
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalized,
   );
-  const name = agent?.identity?.name?.trim() || agent?.name?.trim() || "";
+  const name =
+    normalizeOptionalString(agent?.identity?.name) ?? normalizeOptionalString(agent?.name) ?? "";
   return name && name !== agentIdRaw ? `${name} (${agentIdRaw})` : agentIdRaw;
 }
 
@@ -1085,13 +1087,13 @@ function resolveSessionScopedOptionLabel(
   row?: SessionsListResult["sessions"][number],
   rest?: string,
 ) {
-  const base = rest?.trim() || key;
+  const base = normalizeOptionalString(rest) ?? key;
   if (!row) {
     return base;
   }
 
-  const label = row.label?.trim() || "";
-  const displayName = row.displayName?.trim() || "";
+  const label = normalizeOptionalString(row.label) ?? "";
+  const displayName = normalizeOptionalString(row.displayName) ?? "";
   if ((label && label !== key) || (displayName && displayName !== key)) {
     return resolveSessionDisplayName(key, row);
   }

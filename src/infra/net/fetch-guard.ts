@@ -37,6 +37,12 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   init?: RequestInit;
   maxRedirects?: number;
+  /**
+   * Allow replaying unsafe request methods and bodies across cross-origin redirects.
+   * Sensitive cross-origin headers (for example Authorization/Cookie) are still stripped.
+   * Defaults to false.
+   */
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   policy?: SsrFPolicy;
@@ -153,8 +159,14 @@ async function assertExplicitProxyAllowed(
     policy:
       dispatcherPolicy.allowPrivateProxy === true
         ? {
+            // The proxy hostname is operator-configured, not user input.
+            // Clear the target-scoped hostnameAllowlist so configured proxies
+            // like localhost or internal hosts aren't rejected by an allowlist
+            // that was built for the target URL (e.g. api.telegram.org).
+            // Private-network IP checks still apply via allowPrivateNetwork.
             ...policy,
             allowPrivateNetwork: true,
+            hostnameAllowlist: undefined,
           }
         : policy,
   });
@@ -224,6 +236,27 @@ function rewriteRedirectInitForMethod(params: {
   return {
     ...init,
     method: "GET",
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
+}
+
+function rewriteRedirectInitForCrossOrigin(params: {
+  init?: RequestInit;
+  allowUnsafeReplay: boolean;
+}): RequestInit | undefined {
+  const { init, allowUnsafeReplay } = params;
+  if (!init || allowUnsafeReplay) {
+    return init;
+  }
+
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  if (currentMethod === "GET" || currentMethod === "HEAD") {
+    return init;
+  }
+
+  return {
+    ...init,
     body: undefined,
     headers: dropBodyHeaders(init.headers),
   };
@@ -336,6 +369,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         }
         currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
+          currentInit = rewriteRedirectInitForCrossOrigin({
+            init: currentInit,
+            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+          });
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);

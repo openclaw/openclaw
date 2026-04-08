@@ -76,8 +76,6 @@ describe("stageBundledPluginRuntimeDeps", () => {
       name: "@openclaw/fixture-plugin",
       version: "1.0.0",
       dependencies: { "left-pad": "1.3.0" },
-      peerDependencies: { react: "^19.0.0" },
-      peerDependenciesMeta: { react: { optional: true } },
       openclaw: { bundle: { stageRuntimeDependencies: true } },
     });
   });

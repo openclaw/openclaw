@@ -2,7 +2,11 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -253,7 +257,7 @@ function buildProviderAllowFromResolution(params: {
 
 function describeAllowFromResolutionError(err: unknown): string {
   if (err instanceof Error) {
-    const name = err.name.trim();
+    const name = normalizeOptionalString(err.name) ?? "";
     return name || "Error";
   }
   return "unknown_error";
@@ -272,7 +276,7 @@ function resolveOwnerAllowFromList(params: {
   }
   const filtered: string[] = [];
   for (const entry of raw) {
-    const trimmed = String(entry ?? "").trim();
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -446,7 +450,7 @@ function resolveCommandSenderAuthorization(params: {
 }
 
 function isConversationLikeIdentity(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -463,7 +467,7 @@ function shouldUseFromAsSenderFallback(params: {
   from?: string | null;
   chatType?: string | null;
 }): boolean {
-  const from = (params.from ?? "").trim();
+  const from = normalizeOptionalString(params.from) ?? "";
   if (!from) {
     return false;
   }
@@ -487,7 +491,7 @@ function resolveSenderCandidates(params: {
   const { plugin, cfg, accountId } = params;
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
-    const trimmed = (value ?? "").trim();
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (!trimmed) {
       return;
     }
@@ -524,7 +528,7 @@ function resolveFallbackAllowFrom(params: {
   providerId?: ChannelId;
   accountId?: string | null;
 }): Array<string | number> {
-  const providerId = params.providerId?.trim();
+  const providerId = normalizeOptionalString(params.providerId);
   if (!providerId) {
     return [];
   }
@@ -570,7 +574,7 @@ function resolveFallbackAccountConfig(
     | undefined,
   accountId?: string | null,
 ) {
-  const normalizedAccountId = accountId?.trim().toLowerCase();
+  const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
   if (!accounts || !normalizedAccountId) {
     return undefined;
   }
@@ -579,7 +583,7 @@ function resolveFallbackAccountConfig(
     return direct;
   }
   const matchKey = Object.keys(accounts).find(
-    (key) => key.trim().toLowerCase() === normalizedAccountId,
+    (key) => normalizeOptionalLowercaseString(key) === normalizedAccountId,
   );
   return matchKey ? accounts[matchKey] : undefined;
 }
@@ -626,8 +630,8 @@ export function resolveCommandAuthorization(params: {
     cfg,
   );
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const from = (ctx.From ?? "").trim();
-  const to = (ctx.To ?? "").trim();
+  const from = normalizeOptionalString(ctx.From) ?? "";
+  const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );

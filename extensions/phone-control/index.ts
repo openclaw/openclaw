@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -54,10 +57,7 @@ function formatGroupList(): string {
 }
 
 function parseDurationMs(input: string | undefined): number | null {
-  if (!input) {
-    return null;
-  }
-  const raw = input.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(input);
   if (!raw) {
     return null;
   }
@@ -260,7 +260,7 @@ function formatHelp(): string {
 }
 
 function parseGroup(raw: string | undefined): ArmGroup | null {
-  const value = normalizeOptionalString(raw)?.toLowerCase() ?? "";
+  const value = normalizeOptionalLowercaseString(raw) ?? "";
   if (!value) {
     return null;
   }
@@ -354,7 +354,7 @@ export default definePluginEntry({
       handler: async (ctx) => {
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
-        const action = tokens[0]?.toLowerCase() ?? "";
+        const action = normalizeLowercaseStringOrEmpty(tokens[0]);
 
         const stateDir = api.runtime.state.resolveStateDir();
         const statePath = resolveStatePath(stateDir);

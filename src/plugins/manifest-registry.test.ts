@@ -579,16 +579,16 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const registry = loadRegistry([
-      {
+      createPluginCandidate({
         idHint: "brave",
         rootDir: dir,
-        origin: "bundled" as const,
-      },
-      {
+        origin: "bundled",
+      }),
+      createPluginCandidate({
         idHint: "google",
         rootDir: otherDir,
-        origin: "bundled" as const,
-      },
+        origin: "bundled",
+      }),
     ]);
 
     expect(

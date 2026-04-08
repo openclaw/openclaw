@@ -1,20 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
-  return import("./models-config.providers.secrets.js");
+  ({ createProviderAuthResolver } = await import("./models-config.providers.secrets.js"));
 }
 
-beforeEach(() => {
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
-});
+beforeAll(loadSecretsModule);
 
 describe("Volcengine and BytePlus providers", () => {
-  it("shares VOLCANO_ENGINE_API_KEY across volcengine auth aliases", async () => {
-    const { createProviderAuthResolver } = await loadSecretsModule();
+  it("shares VOLCANO_ENGINE_API_KEY across volcengine auth aliases", () => {
     const resolveAuth = createProviderAuthResolver(
       {
         VOLCANO_ENGINE_API_KEY: "test-key", // pragma: allowlist secret
@@ -34,8 +32,7 @@ describe("Volcengine and BytePlus providers", () => {
     });
   });
 
-  it("shares BYTEPLUS_API_KEY across byteplus auth aliases", async () => {
-    const { createProviderAuthResolver } = await loadSecretsModule();
+  it("shares BYTEPLUS_API_KEY across byteplus auth aliases", () => {
     const resolveAuth = createProviderAuthResolver(
       {
         BYTEPLUS_API_KEY: "test-key", // pragma: allowlist secret
@@ -55,8 +52,7 @@ describe("Volcengine and BytePlus providers", () => {
     });
   });
 
-  it("reuses env keyRef markers from auth profiles for paired providers", async () => {
-    const { createProviderAuthResolver } = await loadSecretsModule();
+  it("reuses env keyRef markers from auth profiles for paired providers", () => {
     const resolveAuth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
       version: 1,
       profiles: {

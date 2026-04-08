@@ -25,6 +25,10 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import {
@@ -98,7 +102,7 @@ function isLegacyGroupKey(key: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("group:") || lower.startsWith("channel:")) {
     return true;
   }
@@ -151,8 +155,9 @@ function canonicalizeSessionKeyForAgent(params: {
   if (!raw) {
     return raw;
   }
-  if (raw.toLowerCase() === "global" || raw.toLowerCase() === "unknown") {
-    return raw.toLowerCase();
+  const rawLower = normalizeLowercaseStringOrEmpty(raw);
+  if (rawLower === "global" || rawLower === "unknown") {
+    return rawLower;
   }
 
   // When shared-store guard is active, do not remap keys that belong to a
@@ -163,9 +168,8 @@ function canonicalizeSessionKeyForAgent(params: {
   if (params.skipCrossAgentRemap) {
     const parsed = parseAgentSessionKey(raw);
     if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-      return raw.toLowerCase();
+      return rawLower;
     }
-    const rawLower = raw.toLowerCase();
     if (
       agentId !== DEFAULT_AGENT_ID &&
       (rawLower === DEFAULT_MAIN_KEY || rawLower === params.mainKey)
@@ -180,7 +184,7 @@ function canonicalizeSessionKeyForAgent(params: {
     sessionKey: raw,
   });
   if (canonicalMain !== raw) {
-    return canonicalMain.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(canonicalMain);
   }
 
   // Handle cross-agent orphaned main-session keys: "agent:main:main" or
@@ -189,7 +193,6 @@ function canonicalizeSessionKeyForAgent(params: {
   // (hooks, subagents, cron, per-sender) may be intentional cross-agent
   // references and must not be touched (#29683).
   const defaultPrefix = `agent:${DEFAULT_AGENT_ID}:`;
-  const rawLower = raw.toLowerCase();
   if (
     rawLower.startsWith(defaultPrefix) &&
     agentId !== DEFAULT_AGENT_ID &&
@@ -204,16 +207,16 @@ function canonicalizeSessionKeyForAgent(params: {
         agentId,
         sessionKey: remapped,
       });
-      return canonicalized.toLowerCase();
+      return normalizeLowercaseStringOrEmpty(canonicalized);
     }
   }
 
-  if (raw.toLowerCase().startsWith("agent:")) {
-    return raw.toLowerCase();
+  if (rawLower.startsWith("agent:")) {
+    return rawLower;
   }
-  if (raw.toLowerCase().startsWith("subagent:")) {
+  if (rawLower.startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
-    return `agent:${agentId}:subagent:${rest}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:subagent:${rest}`);
   }
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback. WhatsApp shipped channel-qualified group sessions, so
@@ -224,18 +227,18 @@ function canonicalizeSessionKeyForAgent(params: {
       key: raw,
       agentId,
     });
-    if (typeof canonicalized === "string" && canonicalized.trim()) {
-      return canonicalized.trim().toLowerCase();
+    const normalizedCanonicalized = normalizeOptionalLowercaseString(canonicalized);
+    if (normalizedCanonicalized) {
+      return normalizedCanonicalized;
     }
   }
-  const lower = raw.toLowerCase();
-  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
-    return `agent:${agentId}:unknown:${raw}`.toLowerCase();
+  if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
   if (isSurfaceGroupKey(raw)) {
-    return `agent:${agentId}:${raw}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
   }
-  return `agent:${agentId}:${raw}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
 }
 
 function pickLatestLegacyDirectEntry(
@@ -257,7 +260,7 @@ function pickLatestLegacyDirectEntry(
     if (normalized.startsWith("agent:")) {
       continue;
     }
-    if (normalized.toLowerCase().startsWith("subagent:")) {
+    if (normalizeLowercaseStringOrEmpty(normalized).startsWith("subagent:")) {
       continue;
     }
     if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {

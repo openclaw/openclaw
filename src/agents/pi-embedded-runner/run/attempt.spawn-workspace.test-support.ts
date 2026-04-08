@@ -13,6 +13,10 @@ import type {
   IngestResult,
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -391,7 +395,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../../model-selection.js", () => ({
-  normalizeProviderId: (providerId?: string) => providerId?.trim().toLowerCase() ?? "",
+  normalizeProviderId: (providerId?: string) => normalizeLowercaseStringOrEmpty(providerId),
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -457,6 +461,44 @@ vi.mock("../cache-ttl.js", () => ({
     data: unknown,
   ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
+  readLastCacheTtlTimestamp: (
+    sessionManager: {
+      appendCustomEntry?: { mock?: { calls?: unknown[][] } };
+    },
+    context?: { provider?: string; modelId?: string },
+  ) => {
+    const calls = sessionManager.appendCustomEntry?.mock?.calls ?? [];
+    for (let index = calls.length - 1; index >= 0; index -= 1) {
+      const [customType, data] = calls[index] ?? [];
+      if (customType !== "openclaw.cache-ttl") {
+        continue;
+      }
+      const entry = data as
+        | {
+            timestamp?: unknown;
+            provider?: string;
+            modelId?: string;
+          }
+        | undefined;
+      if (
+        context?.provider &&
+        normalizeOptionalLowercaseString(entry?.provider) !==
+          normalizeOptionalLowercaseString(context.provider)
+      ) {
+        continue;
+      }
+      if (
+        context?.modelId &&
+        normalizeOptionalLowercaseString(entry?.modelId) !==
+          normalizeOptionalLowercaseString(context.modelId)
+      ) {
+        continue;
+      }
+      const timestamp = entry?.timestamp;
+      return typeof timestamp === "number" ? timestamp : null;
+    }
+    return null;
+  },
 }));
 
 vi.mock("../compaction-runtime-context.js", () => ({
@@ -589,6 +631,12 @@ export function createSubscriptionMock(): SubscriptionMock {
     isCompactionInFlight: () => false,
   };
 }
+
+type SessionPromptOverride = (
+  session: MutableSession,
+  prompt: string,
+  options?: { images?: unknown[] },
+) => Promise<void>;
 
 let runEmbeddedAttemptPromise:
   | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
@@ -798,6 +846,7 @@ export async function createContextEngineAttemptRunner(params: {
   };
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
   sessionMessages?: AgentMessage[];
+  sessionPrompt?: SessionPromptOverride;
   sessionKey: string;
   tempPaths: string[];
 }) {
@@ -829,7 +878,10 @@ export async function createContextEngineAttemptRunner(params: {
     .mockReturnValue({ messages: seedMessages });
 
   hoisted.createAgentSessionMock.mockImplementation(async () => ({
-    session: createDefaultEmbeddedSession({ initialMessages: seedMessages }),
+    session: createDefaultEmbeddedSession({
+      initialMessages: seedMessages,
+      prompt: params.sessionPrompt,
+    }),
   }));
 
   return await (

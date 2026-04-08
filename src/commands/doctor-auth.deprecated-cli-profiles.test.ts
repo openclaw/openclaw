@@ -10,9 +10,10 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const resolvePluginProvidersMock = vi.fn<() => ProviderPlugin[]>(() => []);
+const isPluginProvidersLoadInFlightMock = vi.fn(() => false);
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  isPluginProvidersLoadInFlight: () => false,
+  isPluginProvidersLoadInFlight: () => isPluginProvidersLoadInFlightMock(),
   resolvePluginProviders: () => resolvePluginProvidersMock(),
 }));
 
@@ -46,6 +47,8 @@ beforeEach(() => {
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
   resolvePluginProvidersMock.mockReset();
   resolvePluginProvidersMock.mockReturnValue([]);
+  isPluginProvidersLoadInFlightMock.mockReset();
+  isPluginProvidersLoadInFlightMock.mockReturnValue(false);
 });
 
 afterEach(() => {

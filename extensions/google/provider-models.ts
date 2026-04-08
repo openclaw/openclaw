@@ -106,7 +106,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = params.ctx.modelId.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
 
   let family: GoogleForwardCompatFamily;
   let patch: Partial<ProviderRuntimeModel> | undefined;
@@ -151,7 +151,9 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMMA_TEMPLATE_IDS,
       cliTemplateIds: GEMMA_TEMPLATE_IDS,
     };
-    patch = { reasoning: false };
+    if (lower.startsWith("gemma-4")) {
+      patch = { reasoning: true };
+    }
   } else {
     return undefined;
   }
@@ -178,7 +180,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
 }
 
 export function isModernGoogleModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
+  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
   return (
     lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3") || lower.startsWith(GEMMA_PREFIX)
   );

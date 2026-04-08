@@ -693,7 +693,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("preserves body while stripping auth headers for cross-origin 307 redirects", async () => {
+  it("drops unsafe bodies while stripping auth headers for cross-origin 307 redirects", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
       .fn()
@@ -709,6 +709,113 @@ describe("fetchWithSsrFGuard hardening", () => {
       url: "https://api.example.com/upload",
       fetchImpl,
       lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBeNull();
+    await result.release();
+  });
+
+  it("preserves unsafe cross-origin 307 bodies only when explicitly enabled", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 307,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      allowCrossOriginUnsafeRedirectReplay: true,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBe('{"secret":"123"}');
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBe("application/json");
+    await result.release();
+  });
+
+  it("drops unsafe bodies while stripping auth headers for cross-origin 308 redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 308,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBeNull();
+    await result.release();
+  });
+
+  it("preserves unsafe cross-origin 308 bodies only when explicitly enabled", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 308,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      allowCrossOriginUnsafeRedirectReplay: true,
       init: {
         method: "POST",
         headers: {
@@ -858,5 +965,71 @@ describe("fetchWithSsrFGuard hardening", () => {
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
+  });
+
+  it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {
+    // Reproduces #61906: Telegram media downloads fail because the SSRF guard
+    // checks the proxy hostname (localhost) against a target-scoped allowlist
+    // (api.telegram.org) and rejects it.
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "localhost") {
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
+      return [{ address: "149.154.167.220", family: 4 }];
+    }) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      fetchImpl,
+      lookupFn,
+      policy: { hostnameAllowlist: ["api.telegram.org"] },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://localhost:6152",
+        allowPrivateProxy: true,
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(proxyAgentCtor).toHaveBeenCalled();
+    await result.release();
+  });
+
+  it("still blocks explicit proxy on localhost when allowPrivateProxy is false", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "localhost") {
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
+      return [{ address: "149.154.167.220", family: 4 }];
+    }) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+        fetchImpl,
+        lookupFn,
+        policy: { hostnameAllowlist: ["api.telegram.org"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://localhost:6152",
+          allowPrivateProxy: false,
+        },
+      }),
+    ).rejects.toThrow(/blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

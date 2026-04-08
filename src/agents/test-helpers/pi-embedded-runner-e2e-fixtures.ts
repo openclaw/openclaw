@@ -105,6 +105,7 @@ export function makeEmbeddedRunnerAttempt(
     timedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "session:test",
     systemPromptReport: undefined,
     messagesSnapshot: [],

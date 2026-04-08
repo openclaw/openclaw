@@ -13,6 +13,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { formatError } from "../server-utils.js";
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -437,7 +438,7 @@ function isManagedDreamingJob(
     return true;
   }
   const name = normalizeTrimmedString(job.name);
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
+  const payloadKind = normalizeOptionalLowercaseString(job.payload?.kind);
   const payloadText = normalizeTrimmedString(job.payload?.text);
   return (
     name === params.name && payloadKind === "systemevent" && payloadText === params.payloadText

@@ -693,7 +693,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               initialValue,
               placeholder: textInput.placeholder,
               validate: (value) => {
-                const trimmed = String(value ?? "").trim();
+                const trimmed = normalizeOptionalString(value) ?? "";
                 if (!trimmed && textInput.required !== false) {
                   return "Required";
                 }

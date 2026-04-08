@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
@@ -46,5 +47,26 @@ describe("channel contract api explicit fast path", () => {
     );
     expect(api?.collectUnsupportedSecretRefConfigCandidates).toBeTypeOf("function");
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps bundled channel ids aligned with their plugin directories", async () => {
+    const { loadPluginManifestRegistry } = await vi.importActual<
+      typeof import("../plugins/manifest-registry.js")
+    >("../plugins/manifest-registry.js");
+
+    const mismatches = loadPluginManifestRegistry({})
+      .plugins.filter((record) => record.origin === "bundled")
+      .filter((record) => typeof record.rootDir === "string" && record.rootDir.trim().length > 0)
+      .flatMap((record) =>
+        record.channels
+          .filter((channelId) => channelId !== basename(record.rootDir))
+          .map((channelId) => ({
+            id: record.id,
+            channelId,
+            dirName: basename(record.rootDir),
+          })),
+      );
+
+    expect(mismatches).toEqual([]);
   });
 });

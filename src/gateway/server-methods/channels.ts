@@ -14,6 +14,7 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
@@ -39,7 +40,7 @@ export async function logoutChannelAccount(params: {
   plugin: ChannelPlugin;
 }): Promise<ChannelLogoutPayload> {
   const resolvedAccountId =
-    params.accountId?.trim() ||
+    normalizeOptionalString(params.accountId) ||
     params.plugin.config.defaultAccountId?.(params.cfg) ||
     params.plugin.config.listAccountIds(params.cfg)[0] ||
     DEFAULT_ACCOUNT_ID;
@@ -270,7 +271,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const accountIdRaw = (params as { accountId?: unknown }).accountId;
-    const accountId = typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
+    const accountId = normalizeOptionalString(accountIdRaw);
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       respond(

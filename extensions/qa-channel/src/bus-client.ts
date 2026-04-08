@@ -10,6 +10,7 @@ import type {
 } from "./protocol.js";
 
 export type {
+  QaBusAttachment,
   QaBusConversation,
   QaBusConversationKind,
   QaBusCreateThreadInput,
@@ -140,6 +141,7 @@ export async function sendQaBusMessage(params: {
   senderName?: string;
   threadId?: string;
   replyToId?: string;
+  attachments?: import("./protocol.js").QaBusAttachment[];
 }) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
 }

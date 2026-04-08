@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -83,8 +84,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
-    normalizeChannelId(channel) ??
-    (typeof channel === "string" ? channel.trim().toLowerCase() : null);
+    normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
   const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
   const bundledPlugin = channelId ? getBundledChannelPlugin(channelId) : undefined;
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
