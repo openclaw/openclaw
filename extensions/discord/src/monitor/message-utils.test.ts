@@ -995,4 +995,23 @@ describe("resolveDiscordChannelInfo", () => {
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
+
+  it("negative-caches timed out channel lookups", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchChannel = vi.fn(() => new Promise(() => {}));
+      const client = { fetchChannel } as unknown as Client;
+
+      const firstPromise = resolveDiscordChannelInfo(client, "slow-channel");
+      await vi.advanceTimersByTimeAsync(1_500);
+      const first = await firstPromise;
+      const second = await resolveDiscordChannelInfo(client, "slow-channel");
+
+      expect(first).toBeNull();
+      expect(second).toBeNull();
+      expect(fetchChannel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

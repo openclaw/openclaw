@@ -45,6 +45,10 @@ export function shouldBypassAcpDispatchForCommand(
     return allowTextCommands;
   }
 
+  if (normalized.startsWith("/")) {
+    return allowTextCommands;
+  }
+
   if (isResetCommandCandidate(normalized)) {
     return true;
   }
