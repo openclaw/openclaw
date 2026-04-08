@@ -166,12 +166,22 @@ async function waitForCondition<T>(
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
-function findFailureOutboundMessage(state: QaBusState, options?: { sinceIndex?: number }) {
-  return state
-    .getSnapshot()
-    .messages.filter((message) => message.direction === "outbound")
-    .slice(options?.sinceIndex ?? 0)
-    .find((message) => Boolean(extractQaFailureReplyText(message.text)));
+function findFailureOutboundMessage(
+  state: QaBusState,
+  options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+) {
+  const cursorSpace = options?.cursorSpace ?? "outbound";
+  const observedMessages =
+    cursorSpace === "all"
+      ? state.getSnapshot().messages.slice(options?.sinceIndex ?? 0)
+      : state
+          .getSnapshot()
+          .messages.filter((message) => message.direction === "outbound")
+          .slice(options?.sinceIndex ?? 0);
+  return observedMessages.find(
+    (message) =>
+      message.direction === "outbound" && Boolean(extractQaFailureReplyText(message.text)),
+  );
 }
 
 function createScenarioWaitForCondition(state: QaBusState) {
@@ -183,7 +193,10 @@ function createScenarioWaitForCondition(state: QaBusState) {
   ): Promise<T> {
     return await waitForCondition(
       async () => {
-        const failureMessage = findFailureOutboundMessage(state, { sinceIndex });
+        const failureMessage = findFailureOutboundMessage(state, {
+          sinceIndex,
+          cursorSpace: "all",
+        });
         if (failureMessage) {
           throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
         }
