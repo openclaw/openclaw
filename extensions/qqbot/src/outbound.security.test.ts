@@ -135,6 +135,23 @@ function createAllowedMediaPath(
   return filePath;
 }
 
+function createMissingSymlinkEscapePath(ext: string): string | null {
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-symlink-outside-"));
+  createdRoots.push(outsideRoot);
+
+  const inMediaRoot = fs.mkdtempSync(path.join(getQQBotMediaDir(), "outbound-symlink-"));
+  createdRoots.push(inMediaRoot);
+
+  const linkPath = path.join(inMediaRoot, "link");
+  try {
+    fs.symlinkSync(outsideRoot, linkPath, "dir");
+  } catch {
+    return null;
+  }
+
+  return path.join(linkPath, `delayed${ext}`);
+}
+
 function expectBlocked(result: OutboundResult, expectedError: string): void {
   expect(result.channel).toBe("qqbot");
   expect(result.error).toBe(expectedError);
@@ -183,6 +200,17 @@ describe("qqbot outbound local media path security", () => {
     expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks delayed voice paths that escape via symlinked parent directories", async () => {
+    const delayedVoicePath = createMissingSymlinkEscapePath(".mp3");
+    if (!delayedVoicePath) {
+      return;
+    }
+
+    const result = await sendVoice(buildTarget(), delayedVoicePath, undefined, true);
+
+    expectBlocked(result, "Voice path must be inside QQ Bot media storage");
+  });
+
   it("blocks local video paths outside QQ Bot media storage", async () => {
     const outsidePath = createOutsideFile(".mp4");
     const result = await sendVideoMsg(buildTarget(), outsidePath);
@@ -217,6 +245,17 @@ describe("qqbot outbound local media path security", () => {
     expect(result.error).toBeUndefined();
     expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
     expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks sendMedia delayed audio paths that escape via symlinked parents", async () => {
+    const delayedVoicePath = createMissingSymlinkEscapePath(".mp3");
+    if (!delayedVoicePath) {
+      return;
+    }
+
+    const result = await sendMedia(buildMediaContext(delayedVoicePath));
+
+    expectBlocked(result, "Media path must be inside QQ Bot media storage");
   });
 
   it("blocks non-dot relative traversal paths in sendMedia", async () => {

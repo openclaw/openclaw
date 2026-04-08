@@ -302,6 +302,33 @@ function isPathWithinRoot(candidate: string, root: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function resolveMissingPathWithinMediaRoot(normalizedPath: string): string | null {
+  const resolvedCandidate = path.resolve(normalizedPath);
+  if (fs.existsSync(resolvedCandidate)) {
+    return null;
+  }
+
+  const allowedRoot = path.resolve(getQQBotMediaDir());
+  const canonicalAllowedRoot = fs.realpathSync(allowedRoot);
+
+  const missingSegments: string[] = [];
+  let cursor = resolvedCandidate;
+  while (!fs.existsSync(cursor)) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    missingSegments.unshift(path.basename(cursor));
+    cursor = parent;
+  }
+
+  const canonicalCursor = fs.realpathSync(cursor);
+  const canonicalCandidate =
+    missingSegments.length > 0 ? path.join(canonicalCursor, ...missingSegments) : canonicalCursor;
+
+  return isPathWithinRoot(canonicalCandidate, canonicalAllowedRoot) ? canonicalCandidate : null;
+}
+
 function resolveOutboundMediaPath(
   rawPath: string,
   prefix: string,
@@ -319,12 +346,9 @@ function resolveOutboundMediaPath(
   }
 
   if (options.allowMissingLocalPath) {
-    const resolvedCandidate = path.resolve(normalizedPath);
-    if (!fs.existsSync(resolvedCandidate)) {
-      const allowedRoot = path.resolve(getQQBotMediaDir());
-      if (isPathWithinRoot(resolvedCandidate, allowedRoot)) {
-        return { ok: true, mediaPath: resolvedCandidate };
-      }
+    const allowedMissingPath = resolveMissingPathWithinMediaRoot(normalizedPath);
+    if (allowedMissingPath) {
+      return { ok: true, mediaPath: allowedMissingPath };
     }
   }
 
