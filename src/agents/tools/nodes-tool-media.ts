@@ -36,6 +36,8 @@ type ExecuteNodeMediaActionParams = {
   gatewayOpts: GatewayCallOptions;
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
+  workspaceDir?: string;
+  workspaceOnly?: boolean;
 };
 
 export async function executeNodeMediaAction(
@@ -319,6 +321,8 @@ async function executeCameraClip({
 async function executeScreenRecord({
   params,
   gatewayOpts,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
   const nodeId = await resolveNodeId(gatewayOpts, node);
@@ -352,7 +356,10 @@ async function executeScreenRecord({
   const filePath =
     typeof params.outPath === "string" && params.outPath.trim()
       ? params.outPath.trim()
-      : screenRecordTempPath({ ext: payload.format || "mp4" });
+      : screenRecordTempPath({
+          ext: payload.format || "mp4",
+          ...(workspaceOnly && workspaceDir ? { tmpDir: workspaceDir } : {}),
+        });
   const written = await writeScreenRecordToFile(filePath, payload.base64);
   return {
     content: [{ type: "text", text: `FILE:${written.path}` }],

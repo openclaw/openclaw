@@ -138,6 +138,8 @@ export function createNodesTool(options?: {
   config?: OpenClawConfig;
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
+  workspaceDir?: string;
+  workspaceOnly?: boolean;
 }): AnyAgentTool {
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
@@ -222,6 +224,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir: options?.workspaceDir,
+              workspaceOnly: options?.workspaceOnly,
             });
           }
           case "photos_latest": {
@@ -231,6 +235,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir: options?.workspaceDir,
+              workspaceOnly: options?.workspaceOnly,
             });
           }
           case "camera_list":
@@ -263,6 +269,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir: options?.workspaceDir,
+              workspaceOnly: options?.workspaceOnly,
             });
           }
           case "screen_record": {
@@ -272,6 +280,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir: options?.workspaceDir,
+              workspaceOnly: options?.workspaceOnly,
             });
           }
           case "location_get": {

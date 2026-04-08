@@ -76,6 +76,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodeUtilsMocks.resolveNodeId.mockClear();
     nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
+    screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
     nodesCameraMocks.cameraTempPath.mockClear();
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
@@ -132,6 +133,28 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
     expect(screenMocks.writeScreenRecordToFile).toHaveBeenCalledWith(
       "/tmp/custom-screen-record.mp4",
+      "ZmFrZQ==",
+    );
+  });
+
+  it("defaults screen_record output into the workspace when workspaceOnly is enabled", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool({
+      workspaceDir: "/tmp/workspace",
+      workspaceOnly: true,
+    });
+
+    await tool.execute("call-workspace-default-out-path", {
+      action: "screen_record",
+      node: "macbook",
+    });
+
+    expect(screenMocks.screenRecordTempPath).toHaveBeenCalledWith({
+      ext: "mp4",
+      tmpDir: "/tmp/workspace",
+    });
+    expect(screenMocks.writeScreenRecordToFile).toHaveBeenCalledWith(
+      "/tmp/screen-record.mp4",
       "ZmFrZQ==",
     );
   });

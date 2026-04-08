@@ -228,6 +228,8 @@ export function createOpenClawTools(
     config: options?.config,
     modelHasVision: options?.modelHasVision,
     allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+    workspaceDir,
+    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
   });
   const tools: AnyAgentTool[] = [
     createCanvasTool({ config: options?.config }),
