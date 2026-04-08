@@ -38,7 +38,7 @@ const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 type DispatchInboundParams = {
   dispatcher: {
-    sendBlockReply: (payload: ReplyPayload) => false | Promise<true>;
+    sendBlockReply: (payload: ReplyPayload) => boolean | Promise<true>;
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
   };
   replyOptions?: {
