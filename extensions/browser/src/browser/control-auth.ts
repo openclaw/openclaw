@@ -78,6 +78,38 @@ async function generateAndPersistBrowserControlToken(params: {
   return { auth: { token }, generatedToken: token };
 }
 
+async function generateAndPersistBrowserControlPassword(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<{
+  auth: BrowserControlAuth;
+  generatedToken?: string;
+}> {
+  const password = generateBrowserControlToken();
+  const nextCfg: OpenClawConfig = {
+    ...params.cfg,
+    gateway: {
+      ...params.cfg.gateway,
+      auth: {
+        ...params.cfg.gateway?.auth,
+        password,
+      },
+    },
+  };
+  await writeConfigFile(nextCfg);
+
+  // Re-read to stay consistent with any concurrent config writer.
+  const persistedAuth = resolveBrowserControlAuth(loadConfig(), params.env);
+  if (persistedAuth.token || persistedAuth.password) {
+    return {
+      auth: persistedAuth,
+      generatedToken: persistedAuth.password === password ? password : undefined,
+    };
+  }
+
+  return { auth: { password }, generatedToken: password };
+}
+
 export async function ensureBrowserControlAuth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -114,8 +146,9 @@ export async function ensureBrowserControlAuth(params: {
   ) {
     if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
       // gateway.auth.mode=trusted-proxy must never be persisted with gateway.auth.token.
-      const generatedToken = generateBrowserControlToken();
-      return { auth: { token: generatedToken }, generatedToken };
+      // Persist a browser-only shared secret through gateway.auth.password instead so
+      // out-of-process loopback clients can resolve it from config/env.
+      return await generateAndPersistBrowserControlPassword({ cfg: latestCfg, env });
     }
     return await generateAndPersistBrowserControlToken({ cfg: latestCfg, env });
   }

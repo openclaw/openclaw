@@ -43,7 +43,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     const ensured = await ensureBrowserControlAuth({ cfg });
     browserAuth = ensured.auth;
     if (ensured.generatedToken) {
-      logServer.info("No browser auth configured; generated gateway.auth.token automatically.");
+      logServer.info(
+        "No browser auth configured; generated browser control auth credential automatically.",
+      );
     }
   } catch (err) {
     logServer.warn(`failed to auto-configure browser auth: ${String(err)}`);
