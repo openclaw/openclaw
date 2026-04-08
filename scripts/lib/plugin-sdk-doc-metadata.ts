@@ -83,9 +83,6 @@ export const pluginSdkDocMetadata = {
   testing: {
     category: "utilities",
   },
-  "text-runtime": {
-    category: "utilities",
-  },
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;

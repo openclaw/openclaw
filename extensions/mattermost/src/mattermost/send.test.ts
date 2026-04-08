@@ -43,15 +43,9 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveMarkdownTableMode: vi.fn(() => "off"),
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
-  );
-  return {
-    ...actual,
-    convertMarkdownTables: vi.fn((text: string) => text),
-  };
-});
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  convertMarkdownTables: vi.fn((text: string) => text),
+}));
 
 vi.mock("./accounts.js", () => ({
   resolveMattermostAccount: mockState.resolveMattermostAccount,

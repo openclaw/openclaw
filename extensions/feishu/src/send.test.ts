@@ -28,15 +28,9 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
-  );
-  return {
-    ...actual,
-    convertMarkdownTables: mockConvertMarkdownTables,
-  };
-});
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  convertMarkdownTables: mockConvertMarkdownTables,
+}));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,

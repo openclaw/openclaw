@@ -17,15 +17,9 @@ vi.mock("openclaw/plugin-sdk/core", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
-  );
-  return {
-    ...actual,
-    fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
+}));
 
 let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
 
