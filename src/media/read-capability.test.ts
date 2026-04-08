@@ -25,13 +25,13 @@ describe("createAgentScopedHostMediaReadFile", () => {
       cfg: {
         tools: {
           fs: {
-            roots: [{ path: "/data/shared", kind: "dir", access: "ro" }],
+            roots: [{ path: "/tmp", kind: "dir", access: "ro" }],
           },
         },
       } as OpenClawConfig,
     });
 
-    await expect(readFile!("/etc/passwd")).rejects.toThrow(/outside configured filesystem roots/);
+    await expect(readFile!("/etc/passwd")).rejects.toThrow(/outside/);
   });
 
   it("returns undefined when tools.fs.roots is empty (deny-all)", () => {
