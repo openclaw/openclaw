@@ -123,4 +123,56 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
+
+  it("flags mirrored root dependency version mismatches", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.9",
+        dependencies: {
+          "@slack/web-api": "^7.16.0",
+        },
+      });
+      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
+        dependencies: {
+          "@slack/web-api": "^7.15.0",
+        },
+        openclaw: {
+          releaseChecks: {
+            rootDependencyMirrorAllowlist: ["@slack/web-api"],
+          },
+        },
+      });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package mirrored dependency '@slack/web-api' version mismatch: root '^7.16.0', extension '^7.15.0'.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("flags malformed bundled extension manifests instead of silently skipping them", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.9",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist/extensions/slack/package.json"),
+        '{\n  "openclaw": { invalid json\n',
+        "utf8",
+      );
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringContaining("installed bundled extension manifest invalid: failed to parse"),
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
 });

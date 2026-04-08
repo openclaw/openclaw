@@ -25,6 +25,11 @@ type InstalledBundledExtensionPackageJson = {
   };
 };
 
+type InstalledBundledExtensionManifestRecord = {
+  manifest: InstalledBundledExtensionPackageJson;
+  path: string;
+};
+
 export type PublishedInstallScenario = {
   name: string;
   installSpecs: string[];
@@ -88,29 +93,43 @@ function collectRuntimeDependencySpecs(packageJson: InstalledPackageJson): Map<s
   ]);
 }
 
-function readBundledExtensionPackageJsons(
-  packageRoot: string,
-): InstalledBundledExtensionPackageJson[] {
+function readBundledExtensionPackageJsons(packageRoot: string): {
+  manifests: InstalledBundledExtensionManifestRecord[];
+  errors: string[];
+} {
   const extensionsDir = join(packageRoot, "dist", "extensions");
   if (!existsSync(extensionsDir)) {
-    return [];
+    return { manifests: [], errors: [] };
   }
 
-  return readdirSync(extensionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const packageJsonPath = join(extensionsDir, entry.name, "package.json");
-      if (!existsSync(packageJsonPath)) {
-        return [];
-      }
-      try {
-        return [
-          JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledBundledExtensionPackageJson,
-        ];
-      } catch {
-        return [];
-      }
-    });
+  const manifests: InstalledBundledExtensionManifestRecord[] = [];
+  const errors: string[] = [];
+
+  for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const packageJsonPath = join(extensionsDir, entry.name, "package.json");
+    if (!existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    try {
+      manifests.push({
+        manifest: JSON.parse(
+          readFileSync(packageJsonPath, "utf8"),
+        ) as InstalledBundledExtensionPackageJson,
+        path: packageJsonPath,
+      });
+    } catch (error) {
+      errors.push(
+        `installed bundled extension manifest invalid: failed to parse ${packageJsonPath}: ${formatErrorMessage(error)}.`,
+      );
+    }
+  }
+
+  return { manifests, errors };
 }
 
 export function collectInstalledMirroredRootDependencyManifestErrors(
@@ -123,9 +142,9 @@ export function collectInstalledMirroredRootDependencyManifestErrors(
 
   const rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
   const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackageJson);
-  const errors: string[] = [];
+  const { manifests, errors } = readBundledExtensionPackageJsons(packageRoot);
 
-  for (const extensionPackageJson of readBundledExtensionPackageJsons(packageRoot)) {
+  for (const { manifest: extensionPackageJson } of manifests) {
     const allowlist = extensionPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
     if (allowlist === undefined) {
       continue;
