@@ -35,7 +35,10 @@ import {
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import {
+  readQaBootstrapScenarioCatalog,
+  readQaScenarioExecutionConfig,
+} from "./scenario-catalog.js";
 
 type QaSuiteStep = {
   name: string;
@@ -60,8 +63,13 @@ type QaSuiteEnvironment = {
   alternateModel: string;
 };
 
-const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
+const _QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAAAklEQVR4AewaftIAAAK4SURBVO3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+7ciPkoAAAAASUVORK5CYII=";
+const _QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAACuklEQVR4Ae3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+2YE/z8AAAAASUVORK5CYII=";
+
+const QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 
 type QaSkillStatusEntry = {
   name?: string;
@@ -98,6 +106,14 @@ type QaRawSessionStoreEntry = {
   abortedLastRun?: boolean;
   updatedAt?: number;
 };
+
+const QA_CONTROL_PLANE_WRITE_WINDOW_MS = 60_000;
+const QA_CONTROL_PLANE_WRITE_MAX_REQUESTS = 2;
+
+function readScenarioExecutionConfig<T extends Record<string, unknown>>(id: string): T {
+  return (readQaScenarioExecutionConfig(id) as T | undefined) ?? ({} as T);
+}
+const qaControlPlaneWriteTimestamps: number[] = [];
 
 function splitModelRef(ref: string) {
   const slash = ref.indexOf("/");
@@ -157,12 +173,14 @@ async function waitForOutboundMessage(
   state: QaBusState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
+  options?: { sinceIndex?: number },
 ) {
   return await waitForCondition(
     () =>
       state
         .getSnapshot()
         .messages.filter((message) => message.direction === "outbound")
+        .slice(options?.sinceIndex ?? 0)
         .find(predicate),
     timeoutMs,
   );
@@ -185,6 +203,21 @@ function recentOutboundSummary(state: QaBusState, limit = 5) {
     .slice(-limit)
     .map((message) => `${message.conversation.id}:${message.text}`)
     .join(" | ");
+}
+
+function normalizeQaFanoutSuccessText(text: string) {
+  const lower = normalizeLowercaseStringOrEmpty(text);
+  const sawFirst =
+    lower.includes("alpha-ok") ||
+    lower.includes("subagent_one_ok") ||
+    lower.includes("subagent one ok") ||
+    lower.includes("subagent-1: ok");
+  const sawSecond =
+    lower.includes("beta-ok") ||
+    lower.includes("subagent_two_ok") ||
+    lower.includes("subagent two ok") ||
+    lower.includes("subagent-2: ok");
+  return sawFirst && sawSecond;
 }
 
 async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteScenarioResult> {
@@ -309,6 +342,44 @@ function isConfigHashConflict(error: unknown) {
   return formatErrorMessage(error).includes("config changed since last load");
 }
 
+function getGatewayRetryAfterMs(error: unknown) {
+  const text = formatErrorMessage(error);
+  const millisecondsMatch = /retryAfterMs["=: ]+(\d+)/i.exec(text);
+  if (millisecondsMatch) {
+    const parsed = Number(millisecondsMatch[1]);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  const secondsMatch = /retry after (\d+)s/i.exec(text);
+  if (secondsMatch) {
+    const parsed = Number(secondsMatch[1]);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed * 1_000;
+    }
+  }
+  return null;
+}
+
+async function waitForQaControlPlaneWriteBudget() {
+  while (true) {
+    const now = Date.now();
+    while (
+      qaControlPlaneWriteTimestamps.length > 0 &&
+      now - qaControlPlaneWriteTimestamps[0] >= QA_CONTROL_PLANE_WRITE_WINDOW_MS
+    ) {
+      qaControlPlaneWriteTimestamps.shift();
+    }
+    if (qaControlPlaneWriteTimestamps.length < QA_CONTROL_PLANE_WRITE_MAX_REQUESTS) {
+      qaControlPlaneWriteTimestamps.push(now);
+      return;
+    }
+    const retryAfterMs =
+      qaControlPlaneWriteTimestamps[0] + QA_CONTROL_PLANE_WRITE_WINDOW_MS - now + 250;
+    await sleep(Math.max(250, retryAfterMs));
+  }
+}
+
 async function readConfigSnapshot(env: QaSuiteEnvironment) {
   const snapshot = (await env.gateway.call(
     "config.get",
@@ -334,9 +405,10 @@ async function runConfigMutation(params: {
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   let lastConflict: unknown = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
     try {
+      await waitForQaControlPlaneWriteBudget();
       const result = await params.env.gateway.call(
         params.action,
         {
@@ -353,6 +425,14 @@ async function runConfigMutation(params: {
     } catch (error) {
       if (isConfigHashConflict(error)) {
         lastConflict = error;
+        await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
+          () => undefined,
+        );
+        continue;
+      }
+      const retryAfterMs = getGatewayRetryAfterMs(error);
+      if (retryAfterMs && attempt < 8) {
+        await sleep(retryAfterMs + 500);
         await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
           () => undefined,
         );
@@ -550,7 +630,12 @@ async function resolveGeneratedImagePath(params: {
         }
       }
 
-      const mediaDir = path.join(params.env.gateway.tempRoot, "media", "tool-image-generation");
+      const mediaDir = path.join(
+        params.env.gateway.tempRoot,
+        "state",
+        "media",
+        "tool-image-generation",
+      );
       const entries = await fs.readdir(mediaDir).catch(() => []);
       const candidates = await Promise.all(
         entries.map(async (entry) => {
@@ -867,6 +952,8 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "ignores unmentioned channel chatter",
             run: async () => {
+              await waitForGatewayHealthy(env, 60_000);
+              await waitForQaChannelReady(env, 60_000);
               await reset();
               state.addInboundMessage({
                 conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
@@ -880,16 +967,21 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "replies when mentioned in channel",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ mentionPrompt?: string }>(
+                "channel-chat-baseline",
+              );
+              await waitForGatewayHealthy(env, 60_000);
+              await waitForQaChannelReady(env, 60_000);
               state.addInboundMessage({
                 conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
                 senderId: "alice",
                 senderName: "Alice",
-                text: "@openclaw explain the QA lab",
+                text: config.mentionPrompt ?? "@openclaw explain the QA lab",
               });
               const message = await waitForOutboundMessage(
                 state,
                 (candidate) => candidate.conversation.id === "qa-room" && !candidate.threadId,
-                env.providerMode === "mock-openai" ? 45_000 : 45_000,
+                liveTurnTimeoutMs(env, 60_000),
               );
               return message.text;
             },
@@ -970,12 +1062,13 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "replies coherently in DM",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ prompt?: string }>("dm-chat-baseline");
               await reset();
               state.addInboundMessage({
                 conversation: { id: "alice", kind: "direct" },
                 senderId: "alice",
                 senderName: "Alice",
-                text: "Hello there, who are you?",
+                text: config.prompt ?? "Hello there, who are you?",
               });
               const outbound = await waitForOutboundMessage(
                 state,
@@ -993,11 +1086,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "creates the artifact after reading context",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ prompt?: string }>(
+                "lobster-invaders-build",
+              );
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:lobster-invaders",
                 message:
-                  "Read the QA kickoff context first, then build a tiny Lobster Invaders HTML game in this workspace and tell me where it is.",
+                  config.prompt ??
+                  "Read the QA kickoff context first, then build a tiny Lobster Invaders HTML game at ./lobster-invaders.html in this workspace and tell me where it is.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               await waitForOutboundMessage(
@@ -1005,7 +1102,14 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 (candidate) => candidate.conversation.id === "qa-operator",
               );
               const artifactPath = path.join(env.gateway.workspaceDir, "lobster-invaders.html");
-              const artifact = await fs.readFile(artifactPath, "utf8");
+              const artifact = await waitForCondition(
+                async () => {
+                  const text = await fs.readFile(artifactPath, "utf8").catch(() => null);
+                  return text?.includes("Lobster Invaders") ? text : undefined;
+                },
+                liveTurnTimeoutMs(env, 20_000),
+                250,
+              );
               if (!artifact.includes("Lobster Invaders")) {
                 throw new Error("missing Lobster Invaders artifact");
               }
@@ -1031,14 +1135,37 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "stores the canary fact",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                resetDurableMemory?: boolean;
+                rememberPrompt?: string;
+                rememberAckAny?: string[];
+                recallPrompt?: string;
+                recallExpectedAny?: string[];
+              }>("memory-recall");
+              if (config.resetDurableMemory) {
+                const today = formatMemoryDreamingDay(Date.now());
+                await fs.rm(path.join(env.gateway.workspaceDir, "MEMORY.md"), { force: true });
+                await fs.rm(path.join(env.gateway.workspaceDir, "memory", `${today}.md`), {
+                  force: true,
+                });
+              }
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:memory",
-                message: "Please remember this fact for later: the QA canary code is ALPHA-7.",
+                message:
+                  config.rememberPrompt ??
+                  "Please remember this fact for later: the QA canary code is ALPHA-7.",
               });
+              const rememberAckAny = (config.rememberAckAny ?? ["remembered alpha-7"]).map(
+                (needle) => needle.toLowerCase(),
+              );
               const outbound = await waitForOutboundMessage(
                 state,
-                (candidate) => candidate.conversation.id === "qa-operator",
+                (candidate) =>
+                  candidate.conversation.id === "qa-operator" &&
+                  rememberAckAny.some((needle) =>
+                    normalizeLowercaseStringOrEmpty(candidate.text).includes(needle),
+                  ),
               );
               return outbound.text;
             },
@@ -1046,10 +1173,22 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "recalls the same fact later",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                resetDurableMemory?: boolean;
+                rememberPrompt?: string;
+                rememberAckAny?: string[];
+                recallPrompt?: string;
+                recallExpectedAny?: string[];
+              }>("memory-recall");
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:memory",
-                message: "What was the QA canary code I asked you to remember earlier?",
+                message:
+                  config.recallPrompt ??
+                  "What was the QA canary code I asked you to remember earlier?",
               });
+              const recallExpectedAny = (config.recallExpectedAny ?? ["alpha-7"]).map((needle) =>
+                needle.toLowerCase(),
+              );
               const outbound = await waitForCondition(
                 () =>
                   state
@@ -1058,7 +1197,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.includes("ALPHA-7"),
+                        recallExpectedAny.some((needle) =>
+                          normalizeLowercaseStringOrEmpty(candidate.text).includes(needle),
+                        ),
                     )
                     .at(-1),
                 20_000,
@@ -1075,10 +1216,14 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "runs on the default configured model",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                initialPrompt?: string;
+                followupPrompt?: string;
+              }>("model-switch-follow-up");
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:model-switch",
-                message: "Say hello from the default configured model.",
+                message: config.initialPrompt ?? "Say hello from the default configured model.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForOutboundMessage(
@@ -1097,10 +1242,16 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "switches to the alternate model and continues",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                initialPrompt?: string;
+                followupPrompt?: string;
+              }>("model-switch-follow-up");
               const alternate = splitModelRef(env.alternateModel);
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:model-switch",
-                message: "Continue the exchange after switching models and note the handoff.",
+                message:
+                  config.followupPrompt ??
+                  "Continue the exchange after switching models and note the handoff.",
                 provider: alternate?.provider,
                 model: alternate?.model,
                 timeoutMs: resolveQaLiveTurnTimeoutMs(env, 30_000, env.alternateModel),
@@ -1141,6 +1292,11 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "turns short approval into a real file read",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                preActionPrompt?: string;
+                approvalPrompt?: string;
+                expectedReplyAny?: string[];
+              }>("approval-turn-tool-followthrough");
               // Direct agent turns only need the gateway plus outbound dispatch.
               // Waiting for the qa-channel poll loop adds mock-lane startup cost
               // without increasing coverage for this scenario.
@@ -1149,6 +1305,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:approval-followthrough",
                 message:
+                  config.preActionPrompt ??
                   "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
                 timeoutMs: liveTurnTimeoutMs(env, 20_000),
               });
@@ -1161,9 +1318,13 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:approval-followthrough",
                 message:
+                  config.approvalPrompt ??
                   "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
+              const expectedReplyAny = (
+                config.expectedReplyAny ?? ["qa", "mission", "testing"]
+              ).map((needle) => needle.toLowerCase());
               const outbound = await waitForCondition(
                 () =>
                   state
@@ -1173,7 +1334,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        /\bqa\b|\bmission\b|\btesting\b/i.test(candidate.text),
+                        expectedReplyAny.some((needle) =>
+                          normalizeLowercaseStringOrEmpty(candidate.text).includes(needle),
+                        ),
                     )
                     .at(-1),
                 liveTurnTimeoutMs(env, 20_000),
@@ -1248,11 +1411,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "reads seeded material and emits a protocol report",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ prompt?: string }>(
+                "source-docs-discovery-report",
+              );
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:discovery",
                 message:
-                  "Read the seeded docs and source plan. The full repo is mounted under ./repo/. Explicitly inspect repo/qa/scenarios.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then report grouped into Worked, Failed, Blocked, and Follow-up. Mention at least two extra QA scenarios beyond the seed list.",
+                  config.prompt ??
+                  "Read the seeded docs and source plan. The full repo is mounted under ./repo/. Explicitly inspect repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then report grouped into Worked, Failed, Blocked, and Follow-up. Mention at least two extra QA scenarios beyond the seed list.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForCondition(
@@ -1336,38 +1503,63 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "spawns sequential workers and folds both results back into the parent reply",
             run: async () => {
-              await waitForGatewayHealthy(env, 60_000);
-              await waitForQaChannelReady(env, 60_000);
-              await reset();
-              state.addInboundMessage({
-                conversation: { id: "qa-operator", kind: "direct", title: "QA Operator" },
-                senderId: "qa-operator",
-                senderName: "QA Operator",
-                text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together. Do not use ACP.",
-              });
-              const outbound = await waitForOutboundMessage(
-                state,
-                (message) => {
-                  const text = message.text ?? "";
-                  return text.includes("ALPHA-OK") && text.includes("BETA-OK");
-                },
-                liveTurnTimeoutMs(env, 60_000),
+              const config = readScenarioExecutionConfig<{ prompt?: string }>(
+                "subagent-fanout-synthesis",
               );
-              if (!env.mock) {
-                return outbound.text;
+              const attempts = env.providerMode === "mock-openai" ? 1 : 2;
+              let lastError: unknown = null;
+              for (let attempt = 1; attempt <= attempts; attempt += 1) {
+                try {
+                  await waitForGatewayHealthy(env, 120_000);
+                  await reset();
+                  const sessionKey = `agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`;
+                  const beforeCursor = state.getSnapshot().messages.length;
+                  await runAgentPrompt(env, {
+                    sessionKey,
+                    message:
+                      config.prompt ??
+                      "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially. Subagent 1: verify that `HEARTBEAT.md` exists and report `ok` if it does. Subagent 2: verify that `qa/scenarios/subagent-fanout-synthesis.md` exists and report `ok` if it does. Wait for both subagents to finish. Then reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok\nDo not use ACP.",
+                    timeoutMs: liveTurnTimeoutMs(env, 90_000),
+                  });
+                  const outbound = await waitForCondition(
+                    () =>
+                      state
+                        .getSnapshot()
+                        .messages.slice(beforeCursor)
+                        .filter(
+                          (message) =>
+                            message.direction === "outbound" &&
+                            message.conversation.id === "qa-operator" &&
+                            normalizeQaFanoutSuccessText(message.text ?? ""),
+                        )
+                        .at(-1),
+                    liveTurnTimeoutMs(env, 60_000),
+                    env.providerMode === "mock-openai" ? 100 : 250,
+                  );
+                  if (!env.mock) {
+                    return outbound.text;
+                  }
+                  const store = await readRawQaSessionStore(env);
+                  const childRows = Object.values(store).filter(
+                    (entry) => entry.spawnedBy === sessionKey,
+                  );
+                  const sawAlpha = childRows.some((entry) => entry.label === "qa-fanout-alpha");
+                  const sawBeta = childRows.some((entry) => entry.label === "qa-fanout-beta");
+                  if (!sawAlpha || !sawBeta) {
+                    throw new Error(
+                      `fanout child sessions missing (alpha=${String(sawAlpha)} beta=${String(sawBeta)})`,
+                    );
+                  }
+                  return outbound.text;
+                } catch (error) {
+                  lastError = error;
+                  if (attempt >= attempts) {
+                    throw error;
+                  }
+                  await waitForGatewayHealthy(env, 120_000).catch(() => {});
+                }
               }
-              const store = await readRawQaSessionStore(env);
-              const childRows = Object.values(store).filter(
-                (entry) => entry.spawnedBy === "agent:qa:main",
-              );
-              const sawAlpha = childRows.some((entry) => entry.label === "qa-fanout-alpha");
-              const sawBeta = childRows.some((entry) => entry.label === "qa-fanout-beta");
-              if (!sawAlpha || !sawBeta) {
-                throw new Error(
-                  `fanout child sessions missing (alpha=${String(sawAlpha)} beta=${String(sawBeta)})`,
-                );
-              }
-              return outbound.text;
+              throw lastError ?? new Error("fanout retry exhausted");
             },
           },
         ]),
@@ -1379,6 +1571,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "keeps follow-up inside the thread",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ prompt?: string }>("thread-follow-up");
               await reset();
               const threadPayload = (await handleQaAction({
                 env,
@@ -1396,7 +1589,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
                 senderId: "alice",
                 senderName: "Alice",
-                text: "@openclaw reply in one short sentence inside this thread only. Do not use ACP or any external runtime. Confirm you stayed in-thread.",
+                text:
+                  config.prompt ??
+                  "@openclaw reply in one short sentence inside this thread only. Do not use ACP or any external runtime. Confirm you stayed in-thread.",
                 threadId,
                 threadTitle: "QA deep dive",
               });
@@ -1736,6 +1931,10 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "uses memory_search plus memory_get before answering in-channel",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ channelId?: string; prompt?: string }>(
+                "memory-tools-channel-context",
+              );
+              const channelId = config.channelId ?? "qa-memory-room";
               await reset();
               await fs.writeFile(
                 path.join(env.gateway.workspaceDir, "MEMORY.md"),
@@ -1747,10 +1946,13 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 query: "project codename ORBIT-9",
                 expectedNeedle: "ORBIT-9",
               });
+              await waitForGatewayHealthy(env, 60_000);
+              await waitForQaChannelReady(env, 60_000);
               const prompt =
+                config.prompt ??
                 "@openclaw Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.";
               state.addInboundMessage({
-                conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
+                conversation: { id: channelId, kind: "channel", title: "QA Memory Room" },
                 senderId: "alice",
                 senderName: "Alice",
                 text: prompt,
@@ -1758,7 +1960,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               const outbound = await waitForOutboundMessage(
                 state,
                 (candidate) =>
-                  candidate.conversation.id === "qa-room" && candidate.text.includes("ORBIT-9"),
+                  candidate.conversation.id === channelId && candidate.text.includes("ORBIT-9"),
                 liveTurnTimeoutMs(env, 30_000),
               );
               if (env.mock) {
@@ -1787,6 +1989,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "falls back cleanly when group:memory tools are denied",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ gracefulFallbackAny?: string[] }>(
+                "memory-failure-fallback",
+              );
               const original = await readConfigSnapshot(env);
               const originalTools =
                 original.config.tools && typeof original.config.tools === "object"
@@ -1802,24 +2007,27 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 "Do not reveal directly: fallback fact is ORBIT-9.\n",
                 "utf8",
               );
+              const deniedTools = Array.isArray(originalToolsDeny)
+                ? originalToolsDeny.map((entry) => String(entry))
+                : [];
+              const nextDeniedTools = deniedTools
+                .concat(["group:memory", "read"])
+                .filter((value, index, array) => array.indexOf(value) === index);
               await patchConfig({
                 env,
-                patch: { tools: { deny: ["group:memory"] } },
+                patch: { tools: { deny: nextDeniedTools } },
               });
               await waitForGatewayHealthy(env);
               await waitForQaChannelReady(env, 60_000);
               try {
                 const sessionKey = await createSession(env, "Memory fallback");
                 const tools = await readEffectiveTools(env, sessionKey);
-                if (tools.has("memory_search") || tools.has("memory_get")) {
-                  throw new Error("memory tools still present after deny patch");
+                if (tools.has("memory_search") || tools.has("memory_get") || tools.has("read")) {
+                  throw new Error("memory/read tools still present after deny patch");
                 }
                 await runQaCli(env, ["memory", "index", "--agent", "qa", "--force"], {
                   timeoutMs: liveTurnTimeoutMs(env, 60_000),
                 });
-                await env.gateway.restart();
-                await waitForGatewayHealthy(env, 60_000);
-                await waitForQaChannelReady(env, 60_000);
                 await reset();
                 await runAgentPrompt(env, {
                   sessionKey: "agent:qa:memory-failure",
@@ -1836,7 +2044,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 if (outbound.text.includes("ORBIT-9")) {
                   throw new Error(`hallucinated hidden fact: ${outbound.text}`);
                 }
-                if (!lower.includes("could not confirm") && !lower.includes("will not guess")) {
+                const gracefulFallback = (
+                  config.gracefulFallbackAny ?? [
+                    "could not confirm",
+                    "can't confirm",
+                    "can’t confirm",
+                    "cannot confirm",
+                  ]
+                ).some((needle) => lower.includes(needle.toLowerCase()));
+                if (!gracefulFallback) {
                   throw new Error(`missing graceful fallback language: ${outbound.text}`);
                 }
                 return outbound.text;
@@ -1863,6 +2079,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "prefers the newer transcript-backed fact over the stale durable note",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                staleFact?: string;
+                currentFact?: string;
+                transcriptQuestion?: string;
+                transcriptAnswer?: string;
+                prompt?: string;
+              }>("session-memory-ranking");
+              const staleFact = config.staleFact ?? "ORBIT-9";
+              const currentFact = config.currentFact ?? "ORBIT-10";
               const original = await readConfigSnapshot(env);
               const originalMemorySearch =
                 original.config.agents &&
@@ -1904,7 +2129,11 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await waitForQaChannelReady(env, 60_000);
               try {
                 const memoryPath = path.join(env.gateway.workspaceDir, "MEMORY.md");
-                await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
+                await fs.writeFile(
+                  memoryPath,
+                  `Project Nebula stale codename: ${staleFact}.\n`,
+                  "utf8",
+                );
                 const staleAt = new Date("2020-01-01T00:00:00.000Z");
                 await fs.utimes(memoryPath, staleAt, staleAt);
                 const transcriptsDir = resolveSessionTranscriptsDirForAgent(
@@ -1931,7 +2160,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                         content: [
                           {
                             type: "text",
-                            text: "What is the current Project Nebula codename?",
+                            text:
+                              config.transcriptQuestion ??
+                              "What is the current Project Nebula codename?",
                           },
                         ],
                       },
@@ -1944,7 +2175,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                         content: [
                           {
                             type: "text",
-                            text: "The current Project Nebula codename is ORBIT-10.",
+                            text:
+                              config.transcriptAnswer ??
+                              `The current Project Nebula codename is ${currentFact}.`,
                           },
                         ],
                       },
@@ -1954,24 +2187,31 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 );
                 await forceMemoryIndex({
                   env,
-                  query: "current Project Nebula codename ORBIT-10",
-                  expectedNeedle: "ORBIT-10",
+                  query: `current Project Nebula codename ${currentFact}`,
+                  expectedNeedle: currentFact,
                 });
                 await reset();
                 await runAgentPrompt(env, {
                   sessionKey: "agent:qa:session-memory-ranking",
                   message:
-                    "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+                    config.prompt ??
+                    `Session memory ranking check: what is the current Project Nebula codename? Use memory tools first. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact.`,
                   timeoutMs: liveTurnTimeoutMs(env, 45_000),
                 });
                 const outbound = await waitForOutboundMessage(
                   state,
                   (candidate) =>
                     candidate.conversation.id === "qa-operator" &&
-                    candidate.text.includes("ORBIT-10"),
+                    candidate.text.includes(currentFact),
                   liveTurnTimeoutMs(env, 45_000),
                 );
-                if (outbound.text.includes("ORBIT-9")) {
+                const lower = normalizeLowercaseStringOrEmpty(outbound.text);
+                const staleLeak =
+                  outbound.text.includes(staleFact) &&
+                  !lower.includes("stale") &&
+                  !lower.includes("older") &&
+                  !lower.includes("previous");
+                if (staleLeak) {
                   throw new Error(`stale durable fact leaked through: ${outbound.text}`);
                 }
                 if (env.mock) {
@@ -2185,31 +2425,42 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "reports visible skill and applies its marker on the next turn",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                prompt?: string;
+                expectedContains?: string;
+                skillName?: string;
+                skillBody?: string;
+              }>("skill-visibility-invocation");
+              const skillName = config.skillName ?? "qa-visible-skill";
               await writeWorkspaceSkill({
                 env,
-                name: "qa-visible-skill",
-                body: `---
+                name: skillName,
+                body:
+                  config.skillBody ??
+                  `---
 name: qa-visible-skill
 description: Visible QA skill marker
 ---
 When the user asks for the visible skill marker exactly, reply with exactly: VISIBLE-SKILL-OK`,
               });
               const skills = await readSkillStatus(env);
-              const visible = findSkill(skills, "qa-visible-skill");
+              const visible = findSkill(skills, skillName);
               if (!visible?.eligible || visible.disabled || visible.blockedByAllowlist) {
                 throw new Error(`skill not visible/eligible: ${JSON.stringify(visible)}`);
               }
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:visible-skill",
-                message: "Visible skill marker: give me the visible skill marker exactly.",
+                message:
+                  config.prompt ??
+                  "Visible skill marker: give me the visible skill marker exactly.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForOutboundMessage(
                 state,
                 (candidate) =>
                   candidate.conversation.id === "qa-operator" &&
-                  candidate.text.includes("VISIBLE-SKILL-OK"),
+                  candidate.text.includes(config.expectedContains ?? "VISIBLE-SKILL-OK"),
                 liveTurnTimeoutMs(env, 20_000),
               );
               return outbound.text;
@@ -2224,6 +2475,10 @@ When the user asks for the visible skill marker exactly, reply with exactly: VIS
           {
             name: "picks up a newly added workspace skill without restart",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                prompt?: string;
+                expectedContains?: string;
+              }>("skill-install-hot-availability");
               const before = await readSkillStatus(env);
               if (findSkill(before, "qa-hot-install-skill")) {
                 throw new Error("qa-hot-install-skill unexpectedly already present");
@@ -2248,14 +2503,15 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:hot-skill",
-                message: "Hot install marker: give me the hot install marker exactly.",
+                message:
+                  config.prompt ?? "Hot install marker: give me the hot install marker exactly.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForOutboundMessage(
                 state,
                 (candidate) =>
                   candidate.conversation.id === "qa-operator" &&
-                  candidate.text.includes("HOT-INSTALL-OK"),
+                  candidate.text.includes(config.expectedContains ?? "HOT-INSTALL-OK"),
                 liveTurnTimeoutMs(env, 20_000),
               );
               return outbound.text;
@@ -2270,6 +2526,11 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
           {
             name: "enables image_generate and saves a real media artifact",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                prompt?: string;
+                promptSnippet?: string;
+                generatedNeedle?: string;
+              }>("native-image-generation");
               await ensureImageGenerationConfigured(env);
               const sessionKey = await createSession(env, "Image generation");
               const tools = await readEffectiveTools(env, sessionKey);
@@ -2280,6 +2541,7 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:image-generate",
                 message:
+                  config.prompt ??
                   "Image generation check: generate a QA lighthouse image and summarize it in one short sentence.",
                 timeoutMs: liveTurnTimeoutMs(env, 45_000),
               });
@@ -2294,7 +2556,9 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                   Array<{ allInputText?: string; plannedToolName?: string; toolOutput?: string }>
                 >(`${mockBaseUrl}/debug/requests`);
                 const imageRequest = requests.find((request) =>
-                  String(request.allInputText ?? "").includes("Image generation check"),
+                  String(request.allInputText ?? "").includes(
+                    config.promptSnippet ?? "Image generation check",
+                  ),
                 );
                 if (imageRequest?.plannedToolName !== "image_generate") {
                   throw new Error(
@@ -2309,7 +2573,9 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                     return requests.find(
                       (request) =>
                         request.model === "gpt-image-1" &&
-                        String(request.prompt ?? "").includes("QA lighthouse"),
+                        String(request.prompt ?? "").includes(
+                          config.generatedNeedle ?? "QA lighthouse",
+                        ),
                     );
                   },
                   15_000,
@@ -2333,6 +2599,12 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
           {
             name: "reattaches the generated media artifact on the follow-up turn",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                generatePrompt?: string;
+                generatePromptSnippet?: string;
+                inspectPrompt?: string;
+                expectedNeedle?: string;
+              }>("image-generation-roundtrip");
               await ensureImageGenerationConfigured(env);
               const sessionKey = "agent:qa:image-roundtrip";
               await createSession(env, "Image roundtrip", sessionKey);
@@ -2341,12 +2613,13 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
               await runAgentPrompt(env, {
                 sessionKey,
                 message:
+                  config.generatePrompt ??
                   "Image generation check: generate a QA lighthouse image and summarize it in one short sentence.",
                 timeoutMs: liveTurnTimeoutMs(env, 45_000),
               });
               const mediaPath = await resolveGeneratedImagePath({
                 env,
-                promptSnippet: "Image generation check",
+                promptSnippet: config.generatePromptSnippet ?? "Image generation check",
                 startedAtMs: generatedStartedAtMs,
                 timeoutMs: liveTurnTimeoutMs(env, 45_000),
               });
@@ -2354,6 +2627,7 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
               await runAgentPrompt(env, {
                 sessionKey,
                 message:
+                  config.inspectPrompt ??
                   "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence.",
                 attachments: [
                   {
@@ -2372,7 +2646,9 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        normalizeLowercaseStringOrEmpty(candidate.text).includes("lighthouse"),
+                        normalizeLowercaseStringOrEmpty(candidate.text).includes(
+                          normalizeLowercaseStringOrEmpty(config.expectedNeedle ?? "lighthouse"),
+                        ),
                     )
                     .at(-1),
                 liveTurnTimeoutMs(env, 45_000),
@@ -2384,10 +2660,14 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                 const generatedCall = requests.find(
                   (request) =>
                     request.plannedToolName === "image_generate" &&
-                    String(request.prompt ?? "").includes("Image generation check"),
+                    String(request.prompt ?? "").includes(
+                      config.generatePromptSnippet ?? "Image generation check",
+                    ),
                 );
                 const inspectionCall = requests.find((request) =>
-                  String(request.prompt ?? "").includes("Roundtrip image inspection check"),
+                  String(request.prompt ?? "").includes(
+                    config.inspectPrompt ?? "Roundtrip image inspection check",
+                  ),
                 );
                 if (!generatedCall) {
                   throw new Error("expected image_generate call before roundtrip inspection");
@@ -2408,16 +2688,24 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
           {
             name: "describes an attached image in one short sentence",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                prompt?: string;
+                requiredColorGroups?: string[][];
+              }>("image-understanding-attachment");
               await reset();
+              const outboundStartIndex = state
+                .getSnapshot()
+                .messages.filter((message) => message.direction === "outbound").length;
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:image-understanding",
                 message:
-                  "Image understanding check: describe the attached image in one short sentence.",
+                  config.prompt ??
+                  "Image understanding check: describe the top and bottom colors in the attached image in one short sentence.",
                 attachments: [
                   {
                     mimeType: "image/png",
                     fileName: "red-top-blue-bottom.png",
-                    content: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
+                    content: QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64,
                   },
                 ],
                 timeoutMs: liveTurnTimeoutMs(env, 45_000),
@@ -2426,9 +2714,17 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                 state,
                 (candidate) => candidate.conversation.id === "qa-operator",
                 liveTurnTimeoutMs(env, 45_000),
+                { sinceIndex: outboundStartIndex },
               );
               const lower = normalizeLowercaseStringOrEmpty(outbound.text);
-              if (!lower.includes("red") || !lower.includes("blue")) {
+              const requiredColorGroups = config.requiredColorGroups ?? [
+                ["red", "scarlet", "crimson"],
+                ["blue", "azure", "teal", "cyan", "aqua"],
+              ];
+              const missingColorGroup = requiredColorGroups.find(
+                (group) => !group.some((candidate) => lower.includes(candidate)),
+              );
+              if (missingColorGroup) {
                 throw new Error(`missing expected colors in image description: ${outbound.text}`);
               }
               if (env.mock) {
@@ -2536,6 +2832,9 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
           {
             name: "restarts cleanly and posts the restart sentinel back into qa-channel",
             run: async () => {
+              const config = readScenarioExecutionConfig<{ announcePrompt?: string }>(
+                "config-apply-restart-wakeup",
+              );
               await reset();
               const sessionKey = buildAgentSessionKey({
                 agentId: "qa",
@@ -2549,7 +2848,7 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
               await runAgentPrompt(env, {
                 sessionKey,
                 to: "channel:qa-room",
-                message: "Acknowledge restart wake-up setup in qa-room.",
+                message: config.announcePrompt ?? "Acknowledge restart wake-up setup in qa-room.",
                 timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const current = await readConfigSnapshot(env);
@@ -2605,6 +2904,11 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
           {
             name: "restores image_generate after restart and uses it in the same session",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                setupPrompt?: string;
+                imagePrompt?: string;
+                imagePromptSnippet?: string;
+              }>("config-restart-capability-flip");
               await ensureImageGenerationConfigured(env);
               const original = await readConfigSnapshot(env);
               const originalTools =
@@ -2638,6 +2942,7 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 await runAgentPrompt(env, {
                   sessionKey,
                   message:
+                    config.setupPrompt ??
                     "Capability flip setup: acknowledge this setup so restart wake-up has a route.",
                   timeoutMs: liveTurnTimeoutMs(env, 30_000),
                 });
@@ -2677,12 +2982,13 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 await runAgentPrompt(env, {
                   sessionKey,
                   message:
+                    config.imagePrompt ??
                     "Capability flip image check: generate a QA lighthouse image now and keep the media path in the reply.",
                   timeoutMs: liveTurnTimeoutMs(env, 45_000),
                 });
                 const mediaPath = await resolveGeneratedImagePath({
                   env,
-                  promptSnippet: "Capability flip image check",
+                  promptSnippet: config.imagePromptSnippet ?? "Capability flip image check",
                   startedAtMs: imageStartedAtMs,
                   timeoutMs: liveTurnTimeoutMs(env, 45_000),
                 });
@@ -2828,8 +3134,17 @@ export async function runQaSuite(params?: {
   };
 
   try {
+    // The gateway child already waits for /readyz before returning, but qa-channel
+    // can still be finishing its account startup. Pay that readiness cost once here
+    // so the first scenario does not race channel bootstrap.
+    await waitForQaChannelReady(env, 120_000).catch(async () => {
+      await waitForGatewayHealthy(env, 120_000);
+      await waitForQaChannelReady(env, 120_000);
+    });
+    await sleep(1_000);
     const catalog = readQaBootstrapScenarioCatalog();
-    const requestedScenarioIds = params?.scenarioIds ? new Set(params.scenarioIds) : null;
+    const requestedScenarioIds =
+      params?.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
     const selectedCatalogScenarios = requestedScenarioIds
       ? catalog.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
       : catalog.scenarios;

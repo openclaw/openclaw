@@ -106,7 +106,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
   const ZAI_FALLBACKS = {
     "zai-api-key": {
       baseUrl: ZAI_GLOBAL_BASE_URL,
-      modelId: "glm-5",
+      modelId: "glm-5.1",
     },
     "zai-coding-cn": {
       baseUrl: ZAI_CODING_CN_BASE_URL,
@@ -114,7 +114,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     },
     "zai-coding-global": {
       baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
-      modelId: "glm-5",
+      modelId: "glm-5.1",
     },
   } as const;
 
@@ -1064,7 +1064,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("stores Z.AI API key after probing the global endpoint", async () => {
     await withZaiProbeFetch(
       {
-        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200,
       },
       async (fetchMock) =>
         await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
@@ -1078,7 +1078,7 @@ describe("onboard (non-interactive): provider auth", () => {
           expectZaiProbeCalls(fetchMock, [
             {
               url: `${ZAI_GLOBAL_BASE_URL}/chat/completions`,
-              modelId: "glm-5",
+              modelId: "glm-5.1",
             },
           ]);
           await expectApiKeyProfile({
@@ -1093,7 +1093,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports Z.AI CN coding endpoint auth choice", async () => {
     await withZaiProbeFetch(
       {
-        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5`]: 404,
+        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5.1`]: 404,
         [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-4.7`]: 200,
       },
       async (fetchMock) =>
@@ -1108,7 +1108,7 @@ describe("onboard (non-interactive): provider auth", () => {
           expectZaiProbeCalls(fetchMock, [
             {
               url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
-              modelId: "glm-5",
+              modelId: "glm-5.1",
             },
             {
               url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
@@ -1127,7 +1127,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports Z.AI Coding Plan global endpoint detection", async () => {
     await withZaiProbeFetch(
       {
-        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200,
       },
       async (fetchMock) =>
         await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
@@ -1141,7 +1141,7 @@ describe("onboard (non-interactive): provider auth", () => {
           expectZaiProbeCalls(fetchMock, [
             {
               url: `${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions`,
-              modelId: "glm-5",
+              modelId: "glm-5.1",
             },
           ]);
           await expectApiKeyProfile({
