@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/eclaw",
+  "version": "2026.4.8",
+  "description": "OpenClaw E-Claw channel plugin (Android live wallpaper character integration)",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "eclaw",
+      "label": "E-Claw",
+      "selectionLabel": "E-Claw (AI Live Wallpaper)",
+      "detailLabel": "E-Claw",
+      "docsPath": "/channels/eclaw",
+      "docsLabel": "eclaw",
+      "blurb": "Connect OpenClaw to E-Claw — an AI chat platform for live wallpaper character entities on Android.",
+      "order": 95
+    },
+    "install": {
+      "npmSpec": "@openclaw/eclaw",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.8"
+    }
+  }
+}

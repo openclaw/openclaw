@@ -1,0 +1,88 @@
+/**
+ * Account resolution for the E-Claw channel plugin.
+ *
+ * Reads config from channels.eclaw, merges per-account overrides, and
+ * falls back to environment variables for the default account.
+ */
+
+import {
+  DEFAULT_ACCOUNT_ID,
+  listCombinedAccountIds,
+  resolveMergedAccountConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type {
+  EclawChannelConfig,
+  ResolvedEclawAccount,
+} from "./types.js";
+
+const DEFAULT_API_BASE = "https://eclawbot.com";
+const DEFAULT_BOT_NAME = "OpenClaw";
+
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+/** Extract the channel config from the full OpenClaw config object. */
+function getChannelConfig(cfg: OpenClawConfig): EclawChannelConfig | undefined {
+  return cfg?.channels?.eclaw as EclawChannelConfig | undefined;
+}
+
+function resolveImplicitAccountId(
+  channelCfg: EclawChannelConfig,
+): string | undefined {
+  return channelCfg.apiKey || process.env.ECLAW_API_KEY
+    ? DEFAULT_ACCOUNT_ID
+    : undefined;
+}
+
+/**
+ * List all configured account IDs for this channel.
+ * Returns ["default"] if there's a base config, plus any named accounts.
+ */
+export function listAccountIds(cfg: OpenClawConfig): string[] {
+  const channelCfg = getChannelConfig(cfg);
+  if (!channelCfg) {
+    return [];
+  }
+
+  return listCombinedAccountIds({
+    configuredAccountIds: Object.keys(channelCfg.accounts ?? {}),
+    implicitAccountId: resolveImplicitAccountId(channelCfg),
+  });
+}
+
+/**
+ * Resolve a specific account by ID with full defaults applied.
+ * Falls back to environment variables for the "default" account.
+ */
+export function resolveAccount(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): ResolvedEclawAccount {
+  const channelCfg = getChannelConfig(cfg) ?? {};
+  const id = accountId || DEFAULT_ACCOUNT_ID;
+  const merged = resolveMergedAccountConfig<
+    Record<string, unknown> & EclawChannelConfig
+  >({
+    channelConfig: channelCfg as Record<string, unknown> & EclawChannelConfig,
+    accounts: channelCfg.accounts as
+      | Record<string, Partial<Record<string, unknown> & EclawChannelConfig>>
+      | undefined,
+    accountId: id,
+  });
+
+  const envApiKey = process.env.ECLAW_API_KEY ?? "";
+  const envApiBase = process.env.ECLAW_API_BASE ?? DEFAULT_API_BASE;
+  const envBotName = process.env.ECLAW_BOT_NAME ?? DEFAULT_BOT_NAME;
+  const envWebhookUrl = process.env.ECLAW_WEBHOOK_URL ?? "";
+
+  return {
+    accountId: id,
+    enabled: merged.enabled ?? true,
+    apiKey: (merged.apiKey ?? envApiKey) || "",
+    apiBase: stripTrailingSlash(merged.apiBase ?? envApiBase ?? DEFAULT_API_BASE),
+    botName: merged.botName ?? envBotName,
+    webhookUrl: stripTrailingSlash(merged.webhookUrl ?? envWebhookUrl ?? ""),
+  };
+}

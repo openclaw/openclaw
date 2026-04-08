@@ -1,0 +1,17 @@
+{
+  "id": "eclaw",
+  "channels": ["eclaw"],
+  "channelEnvVars": {
+    "eclaw": [
+      "ECLAW_API_KEY",
+      "ECLAW_API_BASE",
+      "ECLAW_BOT_NAME",
+      "ECLAW_WEBHOOK_URL"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

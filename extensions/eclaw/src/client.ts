@@ -1,0 +1,179 @@
+/**
+ * HTTP client for the E-Claw Channel API.
+ *
+ * Ported from the standalone @eclaw/openclaw-channel npm package
+ * (https://github.com/HankHuang0516/openclaw-channel-eclaw).
+ *
+ * Handles all communication between the OpenClaw plugin and the E-Claw
+ * backend: callback registration, entity slot binding, outbound messages,
+ * and entity-to-entity messaging.
+ */
+
+import type {
+  EclawBindResponse,
+  EclawMessageResponse,
+  EclawRegisterResponse,
+  ResolvedEclawAccount,
+} from "./types.js";
+
+export interface EclawClientState {
+  deviceId: string | null;
+  botSecret: string | null;
+  entityId: number | undefined;
+}
+
+export class EclawClient {
+  readonly #apiBase: string;
+  readonly #apiKey: string;
+  readonly #state: EclawClientState = {
+    deviceId: null,
+    botSecret: null,
+    entityId: undefined,
+  };
+
+  constructor(account: Pick<ResolvedEclawAccount, "apiBase" | "apiKey">) {
+    this.#apiBase = account.apiBase;
+    this.#apiKey = account.apiKey;
+  }
+
+  get state(): Readonly<EclawClientState> {
+    return this.#state;
+  }
+
+  /** Register callback URL with E-Claw backend. */
+  async registerCallback(
+    callbackUrl: string,
+    callbackToken: string,
+  ): Promise<EclawRegisterResponse> {
+    const res = await fetch(`${this.#apiBase}/api/channel/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel_api_key: this.#apiKey,
+        callback_url: callbackUrl,
+        callback_token: callbackToken,
+      }),
+    });
+
+    const data = (await res.json()) as EclawRegisterResponse;
+    if (!data.success) {
+      throw new Error(data.message || `E-Claw register failed (HTTP ${res.status})`);
+    }
+
+    this.#state.deviceId = data.deviceId;
+    return data;
+  }
+
+  /**
+   * Bind an entity slot via channel API.
+   * When `entityId` is omitted, the backend auto-selects the first free slot.
+   */
+  async bindEntity(
+    entityId?: number,
+    name?: string,
+  ): Promise<EclawBindResponse> {
+    const body: Record<string, unknown> = { channel_api_key: this.#apiKey };
+    if (entityId !== undefined) {
+      body.entityId = entityId;
+    }
+    if (name) {
+      body.name = name;
+    }
+
+    const res = await fetch(`${this.#apiBase}/api/channel/bind`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = (await res.json()) as EclawBindResponse;
+    if (!data.success) {
+      if (res.status === 409 && data.entities) {
+        const list = data.entities
+          .map(
+            (e) =>
+              `  slot ${e.entityId} (${e.character})${e.name ? ` "${e.name}"` : ""}`,
+          )
+          .join("\n");
+        throw new Error(
+          `${data.message ?? "E-Claw slots full"}\nCurrent entities:\n${list}\n` +
+            "Add entityId to your channel config to target a specific slot after unbinding it.",
+        );
+      }
+      throw new Error(data.message || `E-Claw bind failed (HTTP ${res.status})`);
+    }
+
+    this.#state.botSecret = data.botSecret;
+    this.#state.deviceId = data.deviceId;
+    this.#state.entityId = data.entityId;
+    return data;
+  }
+
+  /** Send a bot message to the user that owns the current entity. */
+  async sendMessage(
+    message: string,
+    state = "IDLE",
+    mediaType?: string,
+    mediaUrl?: string,
+  ): Promise<EclawMessageResponse> {
+    const { deviceId, botSecret, entityId } = this.#state;
+    if (!deviceId || !botSecret) {
+      throw new Error("E-Claw client not bound — call bindEntity() first");
+    }
+
+    const res = await fetch(`${this.#apiBase}/api/channel/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel_api_key: this.#apiKey,
+        deviceId,
+        entityId,
+        botSecret,
+        message,
+        state,
+        ...(mediaType ? { mediaType } : {}),
+        ...(mediaUrl ? { mediaUrl } : {}),
+      }),
+    });
+
+    return (await res.json()) as EclawMessageResponse;
+  }
+
+  /** Bot-to-bot message to another entity on the same device. */
+  async speakTo(
+    toEntityId: number,
+    text: string,
+    expectsReply = false,
+  ): Promise<void> {
+    const { deviceId, botSecret, entityId } = this.#state;
+    if (!deviceId || !botSecret) {
+      throw new Error("E-Claw client not bound — call bindEntity() first");
+    }
+
+    await fetch(`${this.#apiBase}/api/entity/speak-to`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId,
+        fromEntityId: entityId,
+        toEntityId,
+        botSecret,
+        text,
+        expects_reply: expectsReply,
+      }),
+    });
+  }
+
+  /** Unregister this callback on shutdown. Best-effort. */
+  async unregisterCallback(): Promise<void> {
+    try {
+      await fetch(`${this.#apiBase}/api/channel/register`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel_api_key: this.#apiKey }),
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+}

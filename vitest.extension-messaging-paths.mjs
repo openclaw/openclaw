@@ -2,6 +2,7 @@ import { bundledPluginRoot } from "./scripts/lib/bundled-plugin-paths.mjs";
 
 export const messagingExtensionIds = [
   "bluebubbles",
+  "eclaw",
   "googlechat",
   "mattermost",
   "nextcloud-talk",
