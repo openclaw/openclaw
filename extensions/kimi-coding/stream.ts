@@ -183,6 +183,161 @@ function parseKimiXmlToolCallsInText(text: string): KimiParsedTextBlock | null {
   return { content, changed };
 }
 
+function findBalancedJsonObject(text: string): string | null {
+  const startIndex = text.indexOf("{");
+  if (startIndex < 0) {
+    return null;
+  }
+
+  let depth = 0;
+  let quoteChar: '"' | "'" | null = null;
+  let isEscaped = false;
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoteChar !== null) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        isEscaped = true;
+        continue;
+      }
+      if (char === quoteChar) {
+        quoteChar = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quoteChar = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseKimiJsonToolCalls(payload: string): KimiToolCallBlock[] | null {
+  const jsonObject = findBalancedJsonObject(payload);
+  if (!jsonObject) {
+    return null;
+  }
+
+  let parsedPayload: unknown;
+  try {
+    parsedPayload = JSON.parse(jsonObject);
+  } catch {
+    return null;
+  }
+  if (!parsedPayload || typeof parsedPayload !== "object" || Array.isArray(parsedPayload)) {
+    return null;
+  }
+
+  const toolCallsRaw = (parsedPayload as { tool_calls?: unknown }).tool_calls;
+  if (!Array.isArray(toolCallsRaw)) {
+    return null;
+  }
+
+  const toolCalls: KimiToolCallBlock[] = [];
+  for (let index = 0; index < toolCallsRaw.length; index += 1) {
+    const entry = toolCallsRaw[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return null;
+    }
+
+    const entryRecord = entry as Record<string, unknown>;
+    const functionRecord =
+      entryRecord.function &&
+      typeof entryRecord.function === "object" &&
+      !Array.isArray(entryRecord.function)
+        ? (entryRecord.function as Record<string, unknown>)
+        : undefined;
+    const nameCandidate =
+      typeof functionRecord?.name === "string"
+        ? functionRecord.name
+        : typeof entryRecord.name === "string"
+          ? entryRecord.name
+          : typeof entryRecord.type === "string"
+            ? entryRecord.type
+            : "";
+    const name = nameCandidate.trim();
+    if (!name) {
+      return null;
+    }
+
+    let parsedArgs: unknown = functionRecord?.arguments;
+    if (typeof parsedArgs === "string") {
+      try {
+        parsedArgs = JSON.parse(parsedArgs);
+      } catch {
+        return null;
+      }
+    }
+    if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+      return null;
+    }
+
+    const idCandidate =
+      typeof entryRecord.id === "string" && entryRecord.id.trim()
+        ? entryRecord.id.trim()
+        : `${name}:${index}`;
+    toolCalls.push({
+      type: "toolCall",
+      id: idCandidate,
+      name,
+      arguments: parsedArgs as Record<string, unknown>,
+    });
+  }
+
+  return toolCalls.length > 0 ? toolCalls : null;
+}
+
+function parseKimiJsonToolCallsInText(text: string): KimiParsedTextBlock | null {
+  const fencedJsonRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
+  let lastIndex = 0;
+  let changed = false;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = fencedJsonRe.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before) {
+      content.push({ type: "text", text: before });
+    }
+
+    const parsed = parseKimiJsonToolCalls(match[1] ?? "");
+    if (!parsed) {
+      return null;
+    }
+
+    content.push(...parsed);
+    changed = true;
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (!changed) {
+    return null;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after) {
+    content.push({ type: "text", text: after });
+  }
+
+  return { content, changed };
+}
+
 function parseKimiSimpleTaggedToolCallsInText(text: string): KimiParsedTextBlock | null {
   const simpleToolRe = /<exec>([\s\S]*?)<\/exec>/gi;
   const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
@@ -481,6 +636,10 @@ function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   const xml = parseKimiXmlToolCallsInText(text);
   if (xml) {
     return xml;
+  }
+  const json = parseKimiJsonToolCallsInText(text);
+  if (json) {
+    return json;
   }
   const simpleTagged = parseKimiSimpleTaggedToolCallsInText(text);
   if (simpleTagged) {

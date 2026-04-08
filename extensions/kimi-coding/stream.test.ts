@@ -53,6 +53,9 @@ const KIMI_PREFIX_FUNCTION_STYLE_TOOL_TEXT = `(read "/Users/guoshuyi/.openclaw/w
 (read "/Users/guoshuyi/.openclaw/workspace/MEMORY.md")
 (read "/Users/guoshuyi/.openclaw/workspace/SOUL.md")
 (read "/Users/guoshuyi/.openclaw/workspace/USER.md")`;
+const KIMI_JSON_TOOL_CALLS_TEXT = `I'll run my startup sequence now. Let me read the required files first.\`\`\`json
+{"tool_calls": [{"id": "read_SOUL", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/SOUL.md\\"}"}}, {"id": "read_USER", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/USER.md\\"}"}}, {"id": "read_MEMORY", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/MEMORY.md\\"}"}}, {"id": "read_memory_today", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md\\"}"}}, {"id": "read_memory_yesterday", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md\\"}"}}]}]}
+\`\`\``;
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
@@ -525,6 +528,67 @@ cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null && echo
           id: "read:4",
           name: "read",
           arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/USER.md" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("extracts fenced json tool_calls while preserving surrounding prose", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: KIMI_JSON_TOOL_CALLS_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn: StreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }) as ReturnType<StreamFn>;
+
+    const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
+    const stream = wrapped(
+      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    ) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "I'll run my startup sequence now. Let me read the required files first.",
+        },
+        {
+          type: "toolCall",
+          id: "read_SOUL",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/SOUL.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read_USER",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/USER.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read_MEMORY",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/MEMORY.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read_memory_today",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read_memory_yesterday",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md" },
         },
       ],
       stopReason: "toolUse",
