@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -272,7 +273,7 @@ function rememberPendingOutboundMessageId(entry: {
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
-    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    isMediaSnippet: normalizeLowercaseStringOrEmpty(snippetRaw).startsWith("<media:"),
     createdAt: Date.now(),
   });
   return pendingOutboundMessageIdCounter;
@@ -319,7 +320,7 @@ function consumePendingOutboundMessageId(params: {
 }): PendingOutboundMessageId | null {
   prunePendingOutboundMessageIds();
   const bodyNorm = normalizeSnippet(params.body);
-  const isMediaBody = params.body.trim().toLowerCase().startsWith("<media:");
+  const isMediaBody = normalizeLowercaseStringOrEmpty(params.body).startsWith("<media:");
 
   for (let i = 0; i < pendingOutboundMessageIds.length; i++) {
     const entry = pendingOutboundMessageIds[i];
@@ -395,7 +396,7 @@ function resolveBlueBubblesAckReaction(params: {
     normalizeBlueBubblesReactionInput(raw);
     return raw;
   } catch {
-    const key = raw.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(raw);
     if (!invalidAckReactions.has(key)) {
       invalidAckReactions.add(key);
       logVerbose(

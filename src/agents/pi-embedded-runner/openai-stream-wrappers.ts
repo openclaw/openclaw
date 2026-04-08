@@ -7,6 +7,7 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search.js";
+import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -66,11 +67,22 @@ function shouldApplyOpenAIReasoningCompatibility(model: {
   return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
 }
 
+function shouldFlattenOpenAICompletionMessages(model: {
+  api?: unknown;
+  compat?: unknown;
+}): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { requiresStringContent?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.requiresStringContent === true;
+}
+
 function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = readStringValue(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (
     normalized === "auto" ||
     normalized === "default" ||
@@ -98,7 +110,7 @@ function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | und
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = readStringValue(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -215,6 +227,21 @@ export function createOpenAIReasoningCompatibilityWrapper(
         payloadObj,
         resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "preserve" }),
       );
+    });
+  };
+}
+
+export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldFlattenOpenAICompletionMessages(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (!Array.isArray(payloadObj.messages)) {
+        return;
+      }
+      payloadObj.messages = flattenCompletionMessagesToStringContent(payloadObj.messages);
     });
   };
 }

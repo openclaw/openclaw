@@ -13,9 +13,11 @@ import {
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
+import { lineGatewayAdapter } from "./gateway.js";
 import { probeLineBot } from "./probe.js";
 import { clearLineRuntime, setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
+import { lineStatusAdapter } from "./status.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
@@ -366,7 +368,7 @@ describe("linePlugin status.probeAccount", () => {
 
     clearLineRuntime();
 
-    await expect(linePlugin.status!.probeAccount!(params)).resolves.toEqual(
+    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
       await probeLineBot("token", 50),
     );
   });
@@ -444,7 +446,7 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
-    task: linePlugin.gateway!.startAccount!(
+    task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,

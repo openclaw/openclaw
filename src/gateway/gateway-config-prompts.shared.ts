@@ -38,7 +38,7 @@ function normalizeTailnetHostForUrl(rawHost: string): string | null {
   }
   const parsed = parseCanonicalIpAddress(trimmed);
   if (parsed && isIpv6Address(parsed)) {
-    return `[${parsed.toString().toLowerCase()}]`;
+    return `[${normalizeLowercaseStringOrEmpty(parsed.toString())}]`;
   }
   return trimmed;
 }

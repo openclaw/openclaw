@@ -104,6 +104,10 @@ const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const PREFLIGHT_TEMP_PREFIX =
+  process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
+const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
+const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -150,6 +154,46 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     dirs.push(proc);
   }
   return Array.from(new Set(dirs));
+}
+
+function resolvePreflightTempRootPrefix() {
+  return path.join(os.tmpdir(), PREFLIGHT_TEMP_PREFIX);
+}
+
+function resolvePreflightWorktreeDir(preflightRoot: string) {
+  return path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
+}
+
+function shouldUseNativeWindowsTempRoot() {
+  return process.platform === "win32" && path.sep === "\\";
+}
+
+async function createPreflightRoot() {
+  if (shouldUseNativeWindowsTempRoot()) {
+    const baseDir = path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR);
+    await fs.mkdir(baseDir, { recursive: true });
+    return fs.mkdtemp(path.win32.join(baseDir, PREFLIGHT_TEMP_PREFIX));
+  }
+  return fs.mkdtemp(resolvePreflightTempRootPrefix());
+}
+
+async function removePathRecursive(target: string) {
+  await fs
+    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    .catch(() => {});
+}
+
+async function repairWindowsPreflightCleanup(worktreeDir: string, preflightRoot: string) {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  try {
+    await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readBranchName(
@@ -587,8 +631,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           durationMs: Date.now() - startedAt,
         };
       }
-      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
-      const worktreeDir = path.join(preflightRoot, "worktree");
+      const preflightRoot = await createPreflightRoot();
+      const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
       const worktreeStep = await runStep(
         step(
           "preflight worktree",
@@ -598,7 +642,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       );
       steps.push(worktreeStep);
       if (worktreeStep.exitCode !== 0) {
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await removePathRecursive(preflightRoot);
         return {
           status: "error",
           mode: "git",
@@ -697,12 +741,24 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             gitRoot,
           ),
         );
+        if (
+          removeStep.exitCode !== 0 &&
+          (await repairWindowsPreflightCleanup(worktreeDir, preflightRoot))
+        ) {
+          removeStep.exitCode = 0;
+          removeStep.stderrTail = trimLogTail(
+            [removeStep.stderrTail, "windows fallback cleanup removed preflight tree"]
+              .filter(Boolean)
+              .join("\n"),
+            MAX_LOG_CHARS,
+          );
+        }
         steps.push(removeStep);
         await runCommand(["git", "-C", gitRoot, "worktree", "prune"], {
           cwd: gitRoot,
           timeoutMs,
         }).catch(() => null);
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await removePathRecursive(preflightRoot);
         await manager.cleanup?.();
       }
 

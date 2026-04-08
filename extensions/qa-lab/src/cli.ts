@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type { QaProviderModeInput } from "./run-config.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
@@ -9,22 +10,44 @@ async function loadQaLabCliRuntime(): Promise<QaLabCliRuntime> {
   return await qaLabCliRuntimePromise;
 }
 
-async function runQaSelfCheck(opts: { output?: string }) {
+async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
 async function runQaSuite(opts: {
+  repoRoot?: string;
   outputDir?: string;
-  providerMode?: "mock-openai" | "live-openai";
+  providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
 }
 
+async function runQaManualLane(opts: {
+  repoRoot?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  message: string;
+  timeoutMs?: number;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaManualLaneCommand(opts);
+}
+
+function collectString(value: string, previous: string[]) {
+  const trimmed = value.trim();
+  return trimmed ? [...previous, trimmed] : previous;
+}
+
 async function runQaUi(opts: {
+  repoRoot?: string;
   host?: string;
   port?: number;
   advertiseHost?: string;
@@ -42,9 +65,11 @@ async function runQaUi(opts: {
 }
 
 async function runQaDockerScaffold(opts: {
+  repoRoot?: string;
   outputDir: string;
   gatewayPort?: number;
   qaLabPort?: number;
+  providerBaseUrl?: string;
   image?: string;
   usePrebuiltImage?: boolean;
   bindUiDist?: boolean;
@@ -53,12 +78,13 @@ async function runQaDockerScaffold(opts: {
   await runtime.runQaDockerScaffoldCommand(opts);
 }
 
-async function runQaDockerBuildImage(opts: { image?: string }) {
+async function runQaDockerBuildImage(opts: { repoRoot?: string; image?: string }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaDockerBuildImageCommand(opts);
 }
 
 async function runQaDockerUp(opts: {
+  repoRoot?: string;
   outputDir?: string;
   gatewayPort?: number;
   qaLabPort?: number;
@@ -84,35 +110,85 @@ export function registerQaLabCli(program: Command) {
 
   qa.command("run")
     .description("Run the bundled QA self-check and write a Markdown report")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output <path>", "Report output path")
-    .action(async (opts: { output?: string }) => {
+    .action(async (opts: { repoRoot?: string; output?: string }) => {
       await runQaSelfCheck(opts);
     });
 
   qa.command("suite")
-    .description("Run all repo-backed QA scenarios against the real QA gateway lane")
+    .description("Run repo-backed QA scenarios against the QA gateway lane")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Suite artifact directory")
-    .option("--provider-mode <mode>", "Provider mode: mock-openai or live-openai", "mock-openai")
+    .option(
+      "--provider-mode <mode>",
+      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
+      "mock-openai",
+    )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option("--fast", "Enable provider fast mode where supported", false)
     .action(
       async (opts: {
+        repoRoot?: string;
         outputDir?: string;
-        providerMode?: "mock-openai" | "live-openai";
+        providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
+        scenario?: string[];
+        fast?: boolean;
       }) => {
         await runQaSuite({
+          repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
           alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          scenarioIds: opts.scenario,
+        });
+      },
+    );
+
+  qa.command("manual")
+    .description("Run a one-off QA agent prompt against the selected provider/model lane")
+    .requiredOption("--message <text>", "Prompt to send to the QA agent")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option(
+      "--provider-mode <mode>",
+      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
+      "live-frontier",
+    )
+    .option("--model <ref>", "Primary provider/model ref (defaults by provider mode)")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .option("--timeout-ms <ms>", "Override agent.wait timeout", (value: string) => Number(value))
+    .action(
+      async (opts: {
+        message: string;
+        repoRoot?: string;
+        providerMode?: QaProviderModeInput;
+        model?: string;
+        altModel?: string;
+        fast?: boolean;
+        timeoutMs?: number;
+      }) => {
+        await runQaManualLane({
+          repoRoot: opts.repoRoot,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          message: opts.message,
+          timeoutMs: opts.timeoutMs,
         });
       },
     );
 
   qa.command("ui")
     .description("Start the private QA debugger UI and local QA bus")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
     .option("--port <port>", "Bind port", (value: string) => Number(value))
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
@@ -135,6 +211,7 @@ export function registerQaLabCli(program: Command) {
     )
     .action(
       async (opts: {
+        repoRoot?: string;
         host?: string;
         port?: number;
         advertiseHost?: string;
@@ -153,6 +230,7 @@ export function registerQaLabCli(program: Command) {
 
   qa.command("docker-scaffold")
     .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files")
     .option("--gateway-port <port>", "Gateway host port", (value: string) => Number(value))
     .option("--qa-lab-port <port>", "QA lab host port", (value: string) => Number(value))
@@ -166,6 +244,7 @@ export function registerQaLabCli(program: Command) {
     )
     .action(
       async (opts: {
+        repoRoot?: string;
         outputDir: string;
         gatewayPort?: number;
         qaLabPort?: number;
@@ -180,13 +259,15 @@ export function registerQaLabCli(program: Command) {
 
   qa.command("docker-build-image")
     .description("Build the prebaked QA Docker image with qa-channel + qa-lab bundled")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
-    .action(async (opts: { image?: string }) => {
+    .action(async (opts: { repoRoot?: string; image?: string }) => {
       await runQaDockerBuildImage(opts);
     });
 
   qa.command("up")
     .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Output directory for docker-compose + state files")
     .option("--gateway-port <port>", "Gateway host port", (value: string) => Number(value))
     .option("--qa-lab-port <port>", "QA lab host port", (value: string) => Number(value))
@@ -201,6 +282,7 @@ export function registerQaLabCli(program: Command) {
     .option("--skip-ui-build", "Skip pnpm qa:lab:build before starting Docker", false)
     .action(
       async (opts: {
+        repoRoot?: string;
         outputDir?: string;
         gatewayPort?: number;
         qaLabPort?: number;

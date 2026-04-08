@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
   isPrivateNetworkAllowedByPolicy,
@@ -46,7 +47,7 @@ export async function assertBrowserNavigationAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = String(opts.url ?? "").trim();
+  const rawUrl = normalizeOptionalString(opts.url) ?? "";
   if (!rawUrl) {
     throw new InvalidBrowserNavigationUrlError("url is required");
   }
@@ -94,7 +95,7 @@ export async function assertBrowserNavigationResultAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = String(opts.url ?? "").trim();
+  const rawUrl = normalizeOptionalString(opts.url) ?? "";
   if (!rawUrl) {
     return;
   }

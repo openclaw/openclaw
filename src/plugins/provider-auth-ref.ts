@@ -9,7 +9,10 @@ import {
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 let secretResolvePromise: Promise<typeof import("../secrets/resolve.js")> | undefined;
@@ -109,7 +112,7 @@ async function promptEnvSecretRefForSetup(params: {
       return undefined;
     },
   });
-  const envCandidate = String(envVarRaw ?? "").trim();
+  const envCandidate = normalizeStringifiedOptionalString(envVarRaw) ?? "";
   const envVar =
     envCandidate && isValidEnvSecretRefId(envCandidate) ? envCandidate : params.defaultEnvVar;
   if (!envVar) {
@@ -218,7 +221,7 @@ async function promptProviderSecretRefForSetup(params: {
       return undefined;
     },
   });
-  const id = String(idRaw ?? "").trim() || idDefault;
+  const id = normalizeStringifiedOptionalString(idRaw) || idDefault;
   const ref: SecretRef = {
     source: providerEntry.source,
     provider: selectedProvider,

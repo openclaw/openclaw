@@ -48,7 +48,10 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   if (explicit) {
     return explicit;
   }
-  const lower = filename.toLowerCase();
+  const lower = normalizeOptionalLowercaseString(filename);
+  if (!lower) {
+    return undefined;
+  }
   if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
     return "tar.gz";
   }

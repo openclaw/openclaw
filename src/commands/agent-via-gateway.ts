@@ -7,6 +7,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -119,7 +120,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   }).sessionKey;
 
   const channel = normalizeMessageChannel(opts.channel);
-  const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
+  const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
 
   const response = await withProgress(
     {
