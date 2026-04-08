@@ -1265,6 +1265,27 @@ export function renderApp(state: AppViewState) {
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
         return;
+      case "workspace": {
+        state.workspaceLoading = true;
+        const requestedAgentId = agentId;
+        void state.client
+          ?.request<import("./types.js").AgentsWorkspaceListResult>("agents.workspace.list", {
+            agentId,
+            path: "",
+          })
+          .then((result) => {
+            if (state.agentsSelectedId !== requestedAgentId) return;
+            state.workspaceEntries = result?.entries ?? null;
+            state.workspacePath = result?.path ?? "";
+            state.workspaceLoading = false;
+          })
+          .catch((err) => {
+            if (state.agentsSelectedId !== requestedAgentId) return;
+            state.workspaceError = String(err);
+            state.workspaceLoading = false;
+          });
+        return;
+      }
       case "overview":
       case "channels":
       case "cron":
@@ -1299,6 +1320,13 @@ export function renderApp(state: AppViewState) {
     state.toolsCatalogError = null;
     state.toolsCatalogLoading = false;
     resetToolsEffectiveState(state);
+    // Always clear workspace state on agent switch
+    state.workspaceSelectedFile = null;
+    state.workspaceFileContent = null;
+    state.workspaceEditedContent = null;
+    state.workspaceError = null;
+    state.workspacePath = "";
+    state.workspaceEntries = null;
   };
 
   return html`
