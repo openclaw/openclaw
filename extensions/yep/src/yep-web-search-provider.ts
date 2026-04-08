@@ -68,7 +68,9 @@ function normalizeYepDomains(value: string): string {
     .split(",")
     .map((d) => {
       const trimmed = d.trim();
-      if (!trimmed) return "";
+      if (!trimmed) {
+        return "";
+      }
       return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     })
     .filter(Boolean)
@@ -112,11 +114,15 @@ async function runYepSearch(params: {
   }
   if (params.includeDomains) {
     const normalized = normalizeYepDomains(params.includeDomains);
-    if (normalized) body.include_domains = normalized;
+    if (normalized) {
+      body.include_domains = normalized;
+    }
   }
   if (params.excludeDomains) {
     const normalized = normalizeYepDomains(params.excludeDomains);
-    if (normalized) body.exclude_domains = normalized;
+    if (normalized) {
+      body.exclude_domains = normalized;
+    }
   }
   if (params.dateAfter) {
     body.start_published_date = params.dateAfter;
@@ -269,7 +275,7 @@ function createYepToolDefinition(
         return missingYepKeyPayload();
       }
 
-      const params = args as Record<string, unknown>;
+      const params = args;
       const query = readStringParam(params, "query", { required: true });
       const count =
         readNumberParam(params, "count", { integer: true }) ??

@@ -104,7 +104,7 @@ describe("yep web search provider", () => {
       count: 3,
       language: "en",
       include_domains: "example.com",
-    })) as Record<string, unknown>;
+    }));
 
     expect(result.provider).toBe("yep");
     expect(result.query).toBe("test query");
@@ -173,7 +173,7 @@ describe("yep web search provider", () => {
     const result = (await tool.execute({
       query: "machine learning",
       result_type: "highlights",
-    })) as Record<string, unknown>;
+    }));
 
     // Verify request body uses highlights type
     const fetchInit = mockFetch.mock.calls[0]?.[1] as RequestInit;
@@ -321,7 +321,7 @@ describe("yep web search provider", () => {
       throw new Error("Expected tool definition");
     }
 
-    const result = (await tool.execute({ query: "test" })) as Record<string, unknown>;
+    const result = (await tool.execute({ query: "test" }));
     const results = result.results as Array<Record<string, unknown>>;
     expect(results).toHaveLength(3);
     // description field takes priority, snippet is fallback
