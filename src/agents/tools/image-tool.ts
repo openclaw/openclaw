@@ -6,6 +6,7 @@ import {
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
+import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
@@ -192,6 +193,12 @@ async function runImagePrompt(params: {
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
   const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
 
+  const DEFAULT_IMAGE_TIMEOUT_SECONDS = 30;
+  const timeoutMs = resolveTimeoutMs(
+    effectiveCfg?.tools?.media?.image?.timeoutSeconds,
+    DEFAULT_IMAGE_TIMEOUT_SECONDS,
+  );
+
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
@@ -216,7 +223,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
@@ -234,7 +241,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
@@ -251,7 +258,7 @@ async function runImagePrompt(params: {
           model: modelId,
           prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
           maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
+          timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
         });
