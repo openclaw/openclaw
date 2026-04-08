@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 export function createKovaRunId(now = new Date()) {
   const stamp = now
     .toISOString()
@@ -6,5 +8,6 @@ export function createKovaRunId(now = new Date()) {
     .replaceAll(".", "")
     .replace("T", "_")
     .replace("Z", "");
-  return `kova_${stamp}`;
+  const entropy = randomBytes(3).toString("hex");
+  return `kova_${stamp}_${entropy}`;
 }
