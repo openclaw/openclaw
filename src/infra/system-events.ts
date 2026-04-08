@@ -222,6 +222,13 @@ export function removeExecEventsForSession(sessionKey: string, sessionId: string
     entry.lastText = null;
     entry.lastContextKey = null;
     queues.delete(key);
+  } else if (removed > 0) {
+    // Update dedupe markers to match the remaining queue tail so future
+    // enqueues that reuse a removed event's text are not incorrectly
+    // suppressed as consecutive duplicates.
+    const tail = entry.queue[entry.queue.length - 1];
+    entry.lastText = tail.text;
+    entry.lastContextKey = tail.contextKey ?? null;
   }
   return removed;
 }
