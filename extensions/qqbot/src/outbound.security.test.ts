@@ -200,6 +200,44 @@ describe("qqbot outbound local media path security", () => {
     expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a blocked result when missing-path canonicalization cannot resolve root", async () => {
+    const originalExistsSync = fs.existsSync.bind(fs);
+    const originalRealpathSync = fs.realpathSync.bind(fs);
+
+    const existsSpy = vi.spyOn(fs, "existsSync");
+    existsSpy.mockImplementation((candidate: fs.PathLike) => {
+      const candidateText = typeof candidate === "string" ? candidate : candidate.toString();
+      const root = path.parse(candidateText).root;
+      if (candidateText === root) {
+        return false;
+      }
+      return originalExistsSync(candidate);
+    });
+
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    realpathSpy.mockImplementation(((candidate: fs.PathLike) => {
+      const candidateText = typeof candidate === "string" ? candidate : candidate.toString();
+      const root = path.parse(candidateText).root;
+      if (candidateText === root) {
+        throw new Error("missing-root");
+      }
+      return originalRealpathSync(candidate);
+    }) as typeof fs.realpathSync);
+
+    try {
+      const result = await sendVoice(
+        buildTarget(),
+        "/qqbot-missing-root/sub/path.mp3",
+        undefined,
+        true,
+      );
+      expectBlocked(result, "Voice path must be inside QQ Bot media storage");
+    } finally {
+      existsSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("blocks delayed voice paths that escape via symlinked parent directories", async () => {
     const delayedVoicePath = createMissingSymlinkEscapePath(".mp3");
     if (!delayedVoicePath) {

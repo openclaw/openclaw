@@ -309,7 +309,12 @@ function resolveMissingPathWithinMediaRoot(normalizedPath: string): string | nul
   }
 
   const allowedRoot = path.resolve(getQQBotMediaDir());
-  const canonicalAllowedRoot = fs.realpathSync(allowedRoot);
+  let canonicalAllowedRoot: string;
+  try {
+    canonicalAllowedRoot = fs.realpathSync(allowedRoot);
+  } catch {
+    return null;
+  }
 
   const missingSegments: string[] = [];
   let cursor = resolvedCandidate;
@@ -322,7 +327,16 @@ function resolveMissingPathWithinMediaRoot(normalizedPath: string): string | nul
     cursor = parent;
   }
 
-  const canonicalCursor = fs.realpathSync(cursor);
+  if (!fs.existsSync(cursor)) {
+    return null;
+  }
+
+  let canonicalCursor: string;
+  try {
+    canonicalCursor = fs.realpathSync(cursor);
+  } catch {
+    return null;
+  }
   const canonicalCandidate =
     missingSegments.length > 0 ? path.join(canonicalCursor, ...missingSegments) : canonicalCursor;
 
