@@ -233,6 +233,44 @@ describe("resolveSharedMatrixClient", () => {
     ).rejects.toThrow("Matrix shared client account mismatch");
   });
 
+  it("lets a later waiter abort while shared startup continues for the owner", async () => {
+    const mainAuth = authFor("main");
+    let resolveStartup: (() => void) | undefined;
+    const mainClient = {
+      ...createMockClient("main"),
+      start: vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            resolveStartup = resolve;
+          }),
+      ),
+    };
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock.mockResolvedValue(mainClient);
+
+    const ownerPromise = resolveSharedMatrixClient({ accountId: "main" });
+    await vi.waitFor(() => {
+      expect(mainClient.start).toHaveBeenCalledTimes(1);
+      expect(resolveStartup).toEqual(expect.any(Function));
+    });
+
+    const abortController = new AbortController();
+    const canceledWaiter = resolveSharedMatrixClient({
+      accountId: "main",
+      abortSignal: abortController.signal,
+    });
+    abortController.abort();
+
+    await expect(canceledWaiter).rejects.toMatchObject({
+      message: "Matrix startup aborted",
+      name: "AbortError",
+    });
+
+    resolveStartup?.();
+    await expect(ownerPromise).resolves.toBe(mainClient);
+  });
+
   it("recreates the shared client when dispatcherPolicy changes", async () => {
     const firstAuth = {
       ...authFor("main"),

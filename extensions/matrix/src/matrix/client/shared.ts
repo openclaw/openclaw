@@ -2,6 +2,7 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
+import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
@@ -94,11 +95,15 @@ async function ensureSharedClientStarted(params: {
   encryption?: boolean;
   abortSignal?: AbortSignal;
 }): Promise<void> {
+  const waitForStart = async (startPromise: Promise<void>) => {
+    await awaitMatrixStartupWithAbort(startPromise, params.abortSignal);
+  };
+
   if (params.state.started) {
     return;
   }
   if (params.state.startPromise) {
-    await params.state.startPromise;
+    await waitForStart(params.state.startPromise);
     return;
   }
 
@@ -123,7 +128,7 @@ async function ensureSharedClientStarted(params: {
   })();
 
   try {
-    await params.state.startPromise;
+    await waitForStart(params.state.startPromise);
   } finally {
     params.state.startPromise = null;
   }
