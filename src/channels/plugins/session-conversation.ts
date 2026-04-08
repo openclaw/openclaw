@@ -1,7 +1,4 @@
-import {
-  loadBundledPluginPublicSurfaceModuleSync,
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
-} from "../../plugin-sdk/facade-runtime.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -144,27 +141,11 @@ function resolveBundledSessionConversationFallback(params: {
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
   const dirName = normalizeResolvedChannel(params.channel);
-  let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
-  try {
-    resolveSessionConversation =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-        dirName,
-        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-      })?.resolveSessionConversation;
-  } catch {
-    return null;
-  }
-  if (typeof resolveSessionConversation !== "function") {
-    try {
-      resolveSessionConversation =
-        loadBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-          dirName,
-          artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-        })?.resolveSessionConversation;
-    } catch {
-      return null;
-    }
-  }
+  const resolveSessionConversation =
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+      dirName,
+      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+    })?.resolveSessionConversation;
   if (typeof resolveSessionConversation !== "function") {
     return null;
   }
