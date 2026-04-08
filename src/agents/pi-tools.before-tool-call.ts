@@ -31,6 +31,24 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 
+// Concurrency discipline: default mutating unless explicitly read-only.
+// Scope locking is per-run (preferred), then per-ephemeral session id, then session key.
+const READ_ONLY_TOOL_NAMES = new Set<string>([
+  "read",
+  "search_files",
+  "browser_snapshot",
+  "browser_get_images",
+  "browser_console",
+  "session_search",
+  "skills_list",
+  "skill_view",
+  "process:list",
+  "process:poll",
+  "process:log",
+  "web_search",
+]);
+const mutatingToolChainByScope = new Map<string, Promise<void>>();
+
 const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./pi-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
@@ -67,6 +85,66 @@ function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean 
     return true;
   }
   return false;
+}
+
+function resolveConcurrencyScope(ctx?: HookContext): string | undefined {
+  const runId = ctx?.runId?.trim();
+  if (runId) {
+    return `run:${runId}`;
+  }
+  const sessionId = ctx?.sessionId?.trim();
+  if (sessionId) {
+    return `session:${sessionId}`;
+  }
+  const sessionKey = ctx?.sessionKey?.trim();
+  if (sessionKey) {
+    return `sessionKey:${sessionKey}`;
+  }
+  return undefined;
+}
+
+function isReadOnlyToolName(toolName: string): boolean {
+  const normalized = normalizeToolName(toolName || "tool");
+  if (READ_ONLY_TOOL_NAMES.has(normalized)) {
+    return true;
+  }
+  if (normalized.startsWith("browser_") && normalized.includes("snapshot")) {
+    return true;
+  }
+  return false;
+}
+
+async function runWithConcurrencyDiscipline<T>(args: {
+  ctx?: HookContext;
+  toolName: string;
+  invoke: () => Promise<T>;
+}): Promise<T> {
+  if (isReadOnlyToolName(args.toolName)) {
+    return await args.invoke();
+  }
+
+  const scope = resolveConcurrencyScope(args.ctx);
+  if (!scope) {
+    return await args.invoke();
+  }
+
+  const previous = mutatingToolChainByScope.get(scope) ?? Promise.resolve();
+  const running = (async () => {
+    await previous.catch(() => undefined);
+    return await args.invoke();
+  })();
+  const chain = running.then(
+    () => undefined,
+    () => undefined,
+  );
+  mutatingToolChainByScope.set(scope, chain);
+  try {
+    return await running;
+  } finally {
+    if (mutatingToolChainByScope.get(scope) === chain) {
+      mutatingToolChainByScope.delete(scope);
+    }
+  }
 }
 
 function unwrapErrorCause(err: unknown): unknown {
@@ -411,7 +489,11 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const result = await runWithConcurrencyDiscipline({
+          ctx,
+          toolName: normalizedToolName,
+          invoke: async () => await execute(toolCallId, outcome.params, signal, onUpdate),
+        });
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -457,6 +539,9 @@ export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
+  mutatingToolChainByScope,
+  resolveConcurrencyScope,
+  isReadOnlyToolName,
   runBeforeToolCallHook,
   mergeParamsWithApprovalOverrides,
   isPlainObject,
