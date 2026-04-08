@@ -92,6 +92,7 @@ describe("gmail hook config", () => {
     expect(args).not.toContain("hook-token");
     expect(args).not.toContain("--token");
     expect(args).not.toContain("--hook-token");
+    // --token, --hook-url, and --hook-token are stripped from the log args.
     expect(args).toEqual([
       "gmail",
       "watch",

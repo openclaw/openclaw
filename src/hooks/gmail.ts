@@ -15,6 +15,7 @@ export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 export const DEFAULT_HOOKS_PATH = "/hooks";
+const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
 
 export type GmailHookOverrides = {
   account?: string;
@@ -251,26 +252,11 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
 }
 
 export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
-  const args = [
-    "gmail",
-    "watch",
-    "serve",
-    "--account",
-    cfg.account,
-    "--bind",
-    cfg.serve.bind,
-    "--port",
-    String(cfg.serve.port),
-    "--path",
-    cfg.serve.path,
-  ];
-  if (cfg.includeBody) {
-    args.push("--include-body");
-  }
-  if (cfg.maxBytes > 0) {
-    args.push("--max-bytes", String(cfg.maxBytes));
-  }
-  return args;
+  return buildGogWatchServeArgs(cfg).filter(
+    (arg, index, args) =>
+      !GMAIL_WATCH_SENSITIVE_FLAGS.has(arg) &&
+      !GMAIL_WATCH_SENSITIVE_FLAGS.has(args[index - 1] ?? ""),
+  );
 }
 
 export function buildTopicPath(projectId: string, topicName: string): string {

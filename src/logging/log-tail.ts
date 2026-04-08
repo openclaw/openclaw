@@ -159,13 +159,14 @@ export async function readConfiguredLogTail(params?: {
     limit: params?.limit ?? DEFAULT_LIMIT,
     maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,
   });
+  const redactPatterns = getDefaultRedactPatterns();
   return {
     file,
     ...result,
     lines: result.lines.map((line) =>
       redactSensitiveText(line, {
         mode: "tools",
-        patterns: getDefaultRedactPatterns(),
+        patterns: redactPatterns,
       }),
     ),
   };
