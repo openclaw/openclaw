@@ -2552,6 +2552,8 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  agentId?: string;
+  sessionKey?: string;
 };
 
 export type PluginHookInboundClaimContext = PluginHookMessageContext & {

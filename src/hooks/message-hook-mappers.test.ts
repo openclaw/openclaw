@@ -263,4 +263,27 @@ describe("message hook mappers", () => {
       groupId: "demo-chat:chat:456",
     });
   });
+
+  it("adds outbound session identity to plugin message context when provided", () => {
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: "demo-chat:chat:456",
+      content: "reply",
+      success: true,
+      channelId: "demo-chat",
+      accountId: "acc-1",
+    });
+
+    expect(
+      toPluginMessageContext(canonical, {
+        agentId: "main",
+        sessionKey: "agent:main:demo-chat:chat:456",
+      }),
+    ).toEqual({
+      channelId: "demo-chat",
+      accountId: "acc-1",
+      conversationId: "demo-chat:chat:456",
+      agentId: "main",
+      sessionKey: "agent:main:demo-chat:chat:456",
+    });
+  });
 });
