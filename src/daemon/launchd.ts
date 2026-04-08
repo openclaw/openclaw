@@ -469,10 +469,23 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
-  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  // Best-effort plist resolution: HOME/USERPROFILE may be absent in sanitized
+  // shells or service wrappers.  When unavailable we can still bootout by
+  // service-target label; we just lose the disable+bootstrap "dormant
+  // registration" benefit.
+  let plistPath: string | undefined;
+  try {
+    plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  } catch {
+    // swallow — plistPath stays undefined
+  }
   const res = await execLaunchctl(["bootout", serviceTarget]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+  }
+  if (plistPath == null) {
+    stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+    return;
   }
   // Disable the service so KeepAlive / RunAtLoad do not immediately relaunch
   // it.  If disable fails, do NOT proceed to bootstrap — the service was

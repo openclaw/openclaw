@@ -767,4 +767,28 @@ describe("stopLaunchAgent", () => {
     expect(output).toContain("Stopped LaunchAgent");
     expect(output).not.toContain("degraded");
   });
+
+  it("falls back to bootout-only when HOME is missing (sanitized shell)", async () => {
+    // Omit HOME and USERPROFILE so resolveLaunchAgentPlistPath throws
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "default",
+    };
+
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    // bootout should still be called
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout")).toBe(true);
+    // disable and bootstrap should be skipped — they need the plist path
+    expect(state.launchctlCalls.some((c) => c[0] === "disable")).toBe(false);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootstrap")).toBe(false);
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
+    expect(output).not.toContain("Warning");
+  });
 });
