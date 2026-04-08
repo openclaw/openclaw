@@ -623,7 +623,7 @@ export async function monitorWebInbox(options: {
   const selfJid = self.jid ?? sock.user?.id ?? null;
   let healthProbeInterval: ReturnType<typeof setInterval> | null = null;
   let probeClosed = false;
-  let activeProbeTimeout: ReturnType<typeof setTimeout> | null = null;
+  let _activeProbeTimeout: ReturnType<typeof setTimeout> | null = null;
   let probeInFlight = false;
 
   if (selfJid && typeof sock.fetchStatus === "function") {
@@ -642,12 +642,12 @@ export async function monitorWebInbox(options: {
             timedOut = true;
             reject(new Error("probe timeout"));
           }, HEALTH_PROBE_TIMEOUT_MS);
-          activeProbeTimeout = timeoutHandle;
+          _activeProbeTimeout = timeoutHandle;
         });
         await Promise.race([fetchPromise, timeout]);
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
-          activeProbeTimeout = null;
+          _activeProbeTimeout = null;
         }
         if (probeClosed) {
           return;
@@ -661,7 +661,7 @@ export async function monitorWebInbox(options: {
       } catch (err) {
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
-          activeProbeTimeout = null;
+          _activeProbeTimeout = null;
         }
         if (probeClosed) {
           return;
@@ -724,10 +724,10 @@ export async function monitorWebInbox(options: {
           healthProbeInterval = null;
         }
         probeClosed = true;
-        if (activeProbeTimeout) {
-          clearTimeout(activeProbeTimeout);
-          activeProbeTimeout = null;
-        }
+        // Note: Don't clear _activeProbeTimeout here. If a probe is in-flight
+        // awaiting Promise.race([fetchStatus, timeout]) and fetchStatus is hung,
+        // clearing the timeout removes the only settle path for the race.
+        // Let the timeout fire normally; probeClosed guard prevents state mutations.
         detachMessagesUpsert();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
