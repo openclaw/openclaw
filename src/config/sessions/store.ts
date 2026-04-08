@@ -349,6 +349,15 @@ async function saveSessionStoreUnlocked(
       for (const archivedDir of archivedForDeletedSessions) {
         archivedDirs.add(archivedDir);
       }
+      // Also include parent directories of active session transcript files so
+      // that compaction archives for sessions with legacy absolute paths
+      // (outside the store directory) are cleaned up.
+      for (const entry of Object.values(store)) {
+        const sf = entry?.sessionFile?.trim();
+        if (sf) {
+          archivedDirs.add(path.dirname(path.resolve(sf)));
+        }
+      }
       if (
         archivedDirs.size > 0 ||
         maintenance.resetArchiveRetentionMs != null ||
