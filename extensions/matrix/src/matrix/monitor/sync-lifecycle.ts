@@ -47,6 +47,12 @@ export function createMatrixMonitorSyncLifecycle(params: {
     if (fatalError) {
       return;
     }
+    // Operator-initiated shutdown can still emit transient sync states before
+    // the final STOPPED. Ignore that churn so intentional stops do not look
+    // like runtime failures.
+    if (params.isStopping?.() && !isMatrixTerminalSyncState(state)) {
+      return;
+    }
     params.statusController.noteSyncState(state, error);
   };
 

@@ -114,6 +114,36 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     );
   });
 
+  it("ignores non-terminal sync states emitted during intentional shutdown", async () => {
+    const client = createClientEmitter();
+    const setStatus = vi.fn();
+    let stopping = false;
+    const statusController = createMatrixMonitorStatusController({
+      accountId: "default",
+      statusSink: setStatus,
+    });
+    const lifecycle = createMatrixMonitorSyncLifecycle({
+      client: client as never,
+      statusController,
+      isStopping: () => stopping,
+    });
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    stopping = true;
+    client.emit("sync.state", "ERROR", "RECONNECTING", new Error("shutdown noise"));
+    lifecycle.dispose();
+    statusController.markStopped();
+
+    await expect(waitPromise).resolves.toBeUndefined();
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        healthState: "stopped",
+        lastError: null,
+      }),
+    );
+  });
+
   it("does not downgrade a fatal error to stopped during shutdown", async () => {
     const client = createClientEmitter();
     const setStatus = vi.fn();
