@@ -181,7 +181,7 @@ export function getDefaultRedactPatterns(): string[] {
 // line boundaries, then split back. Use this instead of mapping redactSensitiveText when
 // options are resolved once per request.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
-  if (resolved.mode === "off" || !resolved.patterns.length) {
+  if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
     return lines;
   }
   return redactText(lines.join("\n"), resolved.patterns).split("\n");

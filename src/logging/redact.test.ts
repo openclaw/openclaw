@@ -186,6 +186,11 @@ describe("redactSensitiveLines", () => {
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
+  it("returns empty array unchanged — does not produce a synthetic blank line", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: defaults });
+    expect(redactSensitiveLines([], resolved)).toEqual([]);
+  });
+
   it("redacts a PEM block spanning multiple lines in the array", () => {
     const resolved = resolveRedactOptions({ mode: "tools", patterns: defaults });
     const lines = [
