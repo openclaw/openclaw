@@ -1,185 +1,113 @@
-/**
- * OpenClaw 改进功能集成扩展
- * 
- * 将工具并发执行、Microcompact 和 Autocompact 集成到 OpenClaw 核心流程
- * 
- * 创建时间: 2026-04-06
- */
-
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-
-// 导入改进功能
-import {
-  applyMicrocompact,
-  DEFAULT_MICROCOMPACT_CONFIG,
-  type MicrocompactConfig
-} from "../improvements/microcompact.js";
-
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   applyAutocompact,
   DEFAULT_AUTOCOMPACT_CONFIG,
-  type AutocompactConfig
-} from "../improvements/autocompact.js";
+  type AutocompactRuntime,
+} from "../../improvements/autocompact.js";
+import { applyMicrocompact, DEFAULT_MICROCOMPACT_CONFIG } from "../../improvements/microcompact.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { summarizeWithFallback } from "../compaction.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 
 const log = createSubsystemLogger("improvements-integration");
 
-/**
- * 改进功能的默认配置
- */
-const IMPROVEMENTS_CONFIG = {
-  microcompact: {
-    enabled: true,
-    ...DEFAULT_MICROCOMPACT_CONFIG
-  },
-  autocompact: {
-    enabled: true,
-    ...DEFAULT_AUTOCOMPACT_CONFIG
-  }
-} as const;
+type SessionBeforeCompactPreparation = {
+  messagesToSummarize: AgentMessage[];
+  turnPrefixMessages: AgentMessage[];
+};
 
-/**
- * 将 AgentMessage 转换为改进功能需要的消息格式
- */
-function convertAgentMessageToImprovementMessage(msg: AgentMessage): any {
-  return {
-    type: msg.role,
-    role: msg.role,
-    message: {
-      content: msg.content
-    },
-    timestamp: msg.timestamp
+type SessionBeforeCompactEvent = {
+  preparation: SessionBeforeCompactPreparation;
+};
+
+type ModelAuthResult = {
+  ok: boolean;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  error?: string;
+};
+
+type ImprovementsContext = ExtensionContext & {
+  modelRegistry?: {
+    getApiKeyAndHeaders?: (
+      model: NonNullable<ExtensionContext["model"]>,
+    ) => Promise<ModelAuthResult>;
   };
-}
+};
 
-/**
- * 将改进功能的消息格式转换回 AgentMessage
- */
-function convertImprovementMessageToAgentMessage(msg: any): AgentMessage {
-  return {
-    role: msg.role,
-    content: msg.message?.content || msg.content,
-    timestamp: msg.timestamp
-  };
-}
-
-/**
- * 应用改进功能到消息列表
- */
-async function applyImprovementsToMessages(
-  messages: AgentMessage[],
-  model?: ExtensionContext["model"]
-): Promise<{
-  compactedMessages: AgentMessage[];
-  microcompactApplied: boolean;
-  autocompactApplied: boolean;
-}> {
-  log.info(`[Improvements] Applying improvements to ${messages.length} messages`);
-
-  let compactedMessages = messages.map(convertAgentMessageToImprovementMessage);
-  let microcompactApplied = false;
-  let autocompactApplied = false;
-
-  // 应用 Microcompact
-  if (IMPROVEMENTS_CONFIG.microcompact.enabled) {
-    try {
-      log.info("[Improvements] Applying Microcompact...");
-      compactedMessages = await applyMicrocompact(
-        compactedMessages,
-        IMPROVEMENTS_CONFIG.microcompact as MicrocompactConfig
-      );
-      microcompactApplied = true;
-      log.info("[Improvements] Microcompact applied successfully");
-    } catch (error) {
-      log.error("[Improvements] Microcompact failed:", error);
-    }
+async function buildAutocompactRuntime(
+  ctx: ImprovementsContext,
+): Promise<AutocompactRuntime | null> {
+  const model = ctx.model;
+  const getApiKeyAndHeaders = ctx.modelRegistry?.getApiKeyAndHeaders;
+  if (!model || !getApiKeyAndHeaders) {
+    return null;
   }
 
-  // 应用 Autocompact
-  if (IMPROVEMENTS_CONFIG.autocompact.enabled && model) {
-    try {
-      log.info("[Improvements] Applying Autocompact...");
-      compactedMessages = await applyAutocompact(
-        compactedMessages,
+  const auth = await getApiKeyAndHeaders(model);
+  if (!auth.ok || !auth.apiKey) {
+    log.warn(`Autocompact auth unavailable: ${auth.error ?? "missing api key"}`);
+    return null;
+  }
+
+  const apiKey = auth.apiKey;
+  return {
+    model,
+    summarize: async (messages: AgentMessage[]) =>
+      summarizeWithFallback({
+        messages,
         model,
-        IMPROVEMENTS_CONFIG.autocompact as AutocompactConfig
-      );
-      autocompactApplied = true;
-      log.info("[Improvements] Autocompact applied successfully");
-    } catch (error) {
-      log.error("[Improvements] Autocompact failed:", error);
-    }
-  }
-
-  const resultMessages = compactedMessages.map(convertImprovementMessageToAgentMessage);
-  log.info(
-    `[Improvements] Completed: ${messages.length} → ${resultMessages.length} messages, ` +
-    `Microcompact: ${microcompactApplied}, Autocompact: ${autocompactApplied}`
-  );
-
-  return {
-    compactedMessages: resultMessages,
-    microcompactApplied,
-    autocompactApplied
+        apiKey,
+        headers: auth.headers,
+        signal: new AbortController().signal,
+        reserveTokens: 4096,
+        maxChunkTokens: Math.max(4096, (model.contextWindow ?? DEFAULT_CONTEXT_TOKENS) / 2),
+        contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+      }),
   };
 }
 
-/**
- * OpenClaw 改进功能集成扩展
- * 
- * 监听会话事件，在适当的时机应用改进功能
- */
+async function compactMessageList(
+  messages: AgentMessage[],
+  ctx: ImprovementsContext,
+): Promise<AgentMessage[]> {
+  if (messages.length === 0) {
+    return messages;
+  }
+
+  let nextMessages = messages;
+  nextMessages = await applyMicrocompact(nextMessages, DEFAULT_MICROCOMPACT_CONFIG);
+
+  const runtime = await buildAutocompactRuntime(ctx);
+  if (!runtime) {
+    return nextMessages;
+  }
+
+  return applyAutocompact(nextMessages, runtime, {
+    ...DEFAULT_AUTOCOMPACT_CONFIG,
+    contextWindowTokens: ctx.model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+  });
+}
+
 export default function improvementsIntegrationExtension(api: ExtensionAPI): void {
-  log.info("[Improvements] Initializing improvements integration extension");
-
-  // 监听会话压缩前事件
-  api.on("session_before_compact", async (event, ctx) => {
-    const { preparation } = event;
-
-    log.info(
-      `[Improvements] session_before_compact triggered, ` +
-      `messagesToSummarize: ${preparation.messagesToSummarize.length}, ` +
-      `turnPrefixMessages: ${preparation.turnPrefixMessages.length}`
-    );
-
-    // 应用改进功能到 messagesToSummarize
-    if (preparation.messagesToSummarize.length > 0) {
-      const { compactedMessages } = await applyImprovementsToMessages(
-        preparation.messagesToSummarize,
-        ctx.model
+  api.on(
+    "session_before_compact",
+    async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
+      const typedCtx = ctx as ImprovementsContext;
+      event.preparation.messagesToSummarize = await compactMessageList(
+        event.preparation.messagesToSummarize,
+        typedCtx,
       );
-      
-      // 更新 preparation 中的消息
-      preparation.messagesToSummarize = compactedMessages;
-      log.info(`[Improvements] Updated messagesToSummarize: ${compactedMessages.length} messages`);
-    }
-
-    // 应用改进功能到 turnPrefixMessages
-    if (preparation.turnPrefixMessages.length > 0) {
-      const { compactedMessages } = await applyImprovementsToMessages(
-        preparation.turnPrefixMessages,
-        ctx.model
+      event.preparation.turnPrefixMessages = await compactMessageList(
+        event.preparation.turnPrefixMessages,
+        typedCtx,
       );
-      
-      // 更新 preparation 中的消息
-      preparation.turnPrefixMessages = compactedMessages;
-      log.info(`[Improvements] Updated turnPrefixMessages: ${compactedMessages.length} messages`);
-    }
-
-    // 返回 undefined 继续正常的压缩流程
-    return undefined;
-  });
-
-  // 监听会话创建事件
-  api.on("session_created", async (event, ctx) => {
-    log.info(`[Improvements] session_created triggered for session ${event.sessionId}`);
-  });
-
-  // 监听会话销毁事件
-  api.on("session_destroyed", async (event, ctx) => {
-    log.info(`[Improvements] session_destroyed triggered for session ${event.sessionId}`);
-  });
-
-  log.info("[Improvements] Improvements integration extension initialized");
+      log.info(
+        `[Improvements] compacted preparation to summarize=${event.preparation.messagesToSummarize.length} ` +
+          `turnPrefix=${event.preparation.turnPrefixMessages.length}`,
+      );
+      return undefined;
+    },
+  );
 }
