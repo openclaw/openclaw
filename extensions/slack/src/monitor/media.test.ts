@@ -246,6 +246,63 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("hydrates file urls via files.info when event payload only includes file id", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/from-files-info.jpg", "image/jpeg"),
+    );
+
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            file: {
+              id: "F123",
+              name: "from-files-info.jpg",
+              mimetype: "image/jpeg",
+              url_private_download: "https://files.slack.com/files-pri/T123-F123/download.jpg",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("image data"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+      );
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "from-files-info.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        path: "/tmp/from-files-info.jpg",
+        placeholder: "[Slack file: download.jpg]",
+      }),
+    ]);
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://slack.com/api/files.info?file=F123",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Authorization: "Bearer xoxb-test-token" }),
+      }),
+    );
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://files.slack.com/files-pri/T123-F123/download.jpg",
+      expect.anything(),
+    );
+  });
+
   it("rejects HTML auth pages for non-HTML files", async () => {
     const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
     mockFetch.mockResolvedValueOnce(
@@ -649,7 +706,7 @@ describe("resolveSlackAttachmentContent", () => {
     const firstCall = mockFetch.mock.calls[0];
     expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
     const firstInit = firstCall?.[1];
-    expect(firstInit?.redirect).toBe("manual");
+    expect(firstInit?.redirect).toBe("follow");
     expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });

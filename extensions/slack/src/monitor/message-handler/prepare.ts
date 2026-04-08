@@ -542,7 +542,7 @@ export async function prepareSlackMessage(params: {
     isThreadReply,
     threadStarter,
     isBotMessage,
-    botToken: ctx.botToken,
+    botToken: ctx.mediaReadToken ?? ctx.botToken,
     mediaMaxBytes: ctx.mediaMaxBytes,
   });
   if (!resolvedMessageContent) {

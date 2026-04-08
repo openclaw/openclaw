@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +52,7 @@ export async function stageSandboxMedia(params: {
 
   const usedNames = new Set<string>();
   const staged = new Map<string, string>(); // absolute source -> relative sandbox path
+  const stageNonce = randomUUID().slice(0, 8);
 
   for (const raw of rawPaths) {
     const source = resolveAbsolutePath(raw);
@@ -65,7 +67,7 @@ export async function stageSandboxMedia(params: {
     if (!allowed) {
       continue;
     }
-    const fileName = allocateStagedFileName(source, usedNames);
+    const fileName = allocateStagedFileName(source, usedNames, stageNonce);
     if (!fileName) {
       continue;
     }
@@ -219,16 +221,21 @@ async function isAllowedSourcePath(params: {
   }
 }
 
-function allocateStagedFileName(source: string, usedNames: Set<string>): string | null {
+function allocateStagedFileName(
+  source: string,
+  usedNames: Set<string>,
+  stageNonce: string,
+): string | null {
   const baseName = path.basename(source);
   if (!baseName) {
     return null;
   }
   const parsed = path.parse(baseName);
-  let fileName = baseName;
+  const baseStem = parsed.name || "media";
+  let fileName = `${baseStem}-${stageNonce}${parsed.ext}`;
   let suffix = 1;
   while (usedNames.has(fileName)) {
-    fileName = `${parsed.name}-${suffix}${parsed.ext}`;
+    fileName = `${baseStem}-${stageNonce}-${suffix}${parsed.ext}`;
     suffix += 1;
   }
   usedNames.add(fileName);
