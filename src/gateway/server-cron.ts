@@ -459,6 +459,7 @@ export function buildGatewayCronService(params: {
     runCommandJob: async ({ job, command, args, timeoutSeconds, abortSignal }) => {
       const result = await runCronCommandJob({ command, args, timeoutSeconds, abortSignal });
       const primaryPlan = resolveCronDeliveryPlan(job);
+      const deliveryBestEffort = job.delivery?.bestEffort === true;
       const summaryText =
         typeof result.summary === "string" && result.summary.trim().length > 0
           ? result.summary.trim()
@@ -473,12 +474,23 @@ export function buildGatewayCronService(params: {
       const resolvedDelivery = await resolveDeliveryTarget(runtimeConfig, agentId, {
         channel: primaryPlan.channel,
         to: primaryPlan.to,
+        threadId: primaryPlan.threadId,
         accountId: primaryPlan.accountId,
+        sessionKey: job.sessionKey,
       });
       if (!resolvedDelivery.ok) {
+        if (!deliveryBestEffort) {
+          return {
+            ...result,
+            status: "error",
+            error: resolvedDelivery.error.message,
+            deliveryAttempted: false,
+            delivered: false,
+          };
+        }
         return {
           ...result,
-          deliveryAttempted: true,
+          deliveryAttempted: false,
           delivered: false,
         };
       }
@@ -497,7 +509,7 @@ export function buildGatewayCronService(params: {
         resolvedDelivery,
         deliveryRequested: true,
         skipHeartbeatDelivery: false,
-        deliveryBestEffort: job.delivery?.bestEffort === true,
+        deliveryBestEffort,
         deliveryPayloadHasStructuredContent: false,
         deliveryPayloads: [{ text: summaryText }],
         synthesizedText: summaryText,

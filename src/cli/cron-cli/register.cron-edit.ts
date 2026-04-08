@@ -56,7 +56,7 @@ export function registerCronEditCommand(cron: Command) {
         "--arg <value>",
         "Repeatable command arg",
         (value, list: string[] = []) => {
-          list.push(String(value));
+          list.push(value);
           return list;
         },
         [],
