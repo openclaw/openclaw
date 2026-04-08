@@ -36,6 +36,8 @@ export default defineConfig({
       "test/**/*.e2e.test.ts",
       "src/**/*.e2e.test.ts",
       "src/gateway/gateway.test.ts",
+      "src/gateway/server.startup-matrix-migration.integration.test.ts",
+      "src/gateway/sessions-history-http.test.ts",
       BUNDLED_PLUGIN_E2E_TEST_GLOB,
     ],
     exclude,

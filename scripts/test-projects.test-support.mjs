@@ -281,7 +281,11 @@ function classifyTarget(arg, cwd) {
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (relative === "src/gateway/gateway.test.ts") {
+  if (
+    relative === "src/gateway/gateway.test.ts" ||
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
+    relative === "src/gateway/sessions-history-http.test.ts"
+  ) {
     return "e2e";
   }
   if (relative.startsWith("extensions/")) {
