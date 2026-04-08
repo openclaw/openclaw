@@ -194,12 +194,7 @@ async function resolveEnvProxyAgent(
   });
 }
 
-const DEFAULT_CONNECTION_TIMEOUT_MS = 60_000;
-
-export async function waitForWaConnection(
-  sock: ReturnType<typeof makeWASocket>,
-  timeoutMs: number = DEFAULT_CONNECTION_TIMEOUT_MS,
-) {
+export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>, timeoutMs = 0) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
