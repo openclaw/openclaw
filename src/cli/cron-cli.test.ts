@@ -592,6 +592,20 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.args).toBeUndefined();
   });
 
+  it("rejects timeout-only edits for existing systemEvent jobs", async () => {
+    await expect(
+      runCronCommand(["cron", "edit", "job-1", "--timeout-seconds", "45"], () =>
+        mockCronEditJobLookup(
+          { kind: "every", everyMs: 60_000 },
+          { kind: "systemEvent", text: "ping" },
+        ),
+      ),
+    ).rejects.toThrow("__exit__:1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--timeout-seconds only applies to agentTurn or command jobs"),
+    );
+  });
+
   it("does not include undefined delivery fields when updating message", async () => {
     // Update message without delivery flags - should NOT include undefined delivery fields
     await runCronCommand(["cron", "edit", "job-1", "--message", "Updated message"]);

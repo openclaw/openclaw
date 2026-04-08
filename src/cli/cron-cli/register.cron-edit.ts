@@ -227,6 +227,9 @@ export function registerCronEditCommand(cron: Command) {
               throw new Error(`unknown cron job id: ${id}`);
             }
             existingPayloadKind = existing.payload.kind;
+            if (existingPayloadKind === "systemEvent") {
+              throw new Error("--timeout-seconds only applies to agentTurn or command jobs");
+            }
           }
           if (hasSystemEventPatch) {
             patch.payload = {

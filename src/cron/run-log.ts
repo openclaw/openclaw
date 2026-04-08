@@ -27,7 +27,7 @@ export type CronRunLogEntry = {
 } & CronRunTelemetry;
 
 export type CronRunLogSortDir = "asc" | "desc";
-export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped" | "aborted";
 
 export type ReadCronRunLogPageOptions = {
   limit?: number;
