@@ -1074,6 +1074,165 @@ describe("memory cli", () => {
     });
   });
 
+  it("prefers persistence-relevant evidence over narrated operational logs in grounded what happened", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-03-30.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## OpenClaw / runtime / workflow preferences and corrections",
+          "- Mariano explicitly said that when he tells Razor there has been an error, the default interpretation should be that he wants it fixed, not merely diagnosed or acknowledged.",
+          "- Mariano clarified that the problem with cron output is overlapping, independently unreasonable crons converging into dumb sludge.",
+          "",
+          "## Versions / machine state and update work",
+          "- MB Server repo updated but the active installed runtime is still old.",
+          "- jpclawhq updated and running.",
+          "",
+          "## Other context and user preferences reinforced in this session",
+          "- Mariano prefers short, punk, high-signal copy for social posts.",
+          "- He explicitly wants the assistant to treat ADHD as a reason to reduce clutter and noise, not to produce more summaries.",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--grounded", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          files?: Array<{
+            renderedMarkdown?: string;
+          }>;
+        } | null;
+      }>(writeJson);
+      const rendered = payload?.grounded?.files?.[0]?.renderedMarkdown ?? "";
+      expect(rendered).toContain("prefers short, punk, high-signal copy");
+      expect(rendered).not.toContain(
+        "MB Server repo updated but the active installed runtime is still old",
+      );
+      expect(rendered).not.toContain("jpclawhq updated and running");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("suppresses monitoring-heavy operational days instead of promoting alert sludge", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-02-17.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Heartbeat checks",
+          "- 04:17 (Europe/Madrid) heartbeat run.",
+          "- Ariston check returned warning/error:",
+          "  - Pressure LOW: 1.1 bar",
+          "- Action: alert Mariano on this heartbeat.",
+          "",
+          "## 07:15 life-context sync (travel + now)",
+          "- mariano@tpmcap.com calendar access failed (invalid_grant: token expired/revoked).",
+          "- memory/email-tracker.json checkpoint at 2025-02-17T07:03:53+01:00.",
+          "- memory/travel.md updated.",
+          "",
+          "## Heartbeat checks (07:18)",
+          "- Ariston check again reports low pressure: 1.1 bar.",
+          "- collect-temps.sh completed OK (exit 0).",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--grounded", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          files?: Array<{
+            renderedMarkdown?: string;
+          }>;
+        } | null;
+      }>(writeJson);
+      const rendered = payload?.grounded?.files?.[0]?.renderedMarkdown ?? "";
+      expect(rendered).toContain("No grounded facts were extracted.");
+      expect(rendered).toContain("mostly as monitoring and operational state");
+      expect(rendered).not.toContain("Pressure LOW");
+      expect(rendered).not.toContain("invalid_grant");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("splits multi-fact person lines into atomic grounded candidates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-02-19.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## People mentioned with context",
+          "- Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
+          "- Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark",
+          "",
+          "## Process improvements",
+          "- Routed several inbound requests into different workflows.",
+          "- Important context was written into notes and memory surfaces.",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--grounded", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          files?: Array<{
+            renderedMarkdown?: string;
+          }>;
+        } | null;
+      }>(writeJson);
+      const file = payload?.grounded?.files?.[0];
+      const rendered = file?.renderedMarkdown ?? "";
+      expect(rendered).toContain(
+        "1. People mentioned with context: Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
+      );
+      expect(rendered).toContain("Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark");
+      expect(rendered).toContain("Bunji — partner");
+      expect(rendered).toContain("Bex — girlfriend");
+      expect(rendered).toContain("Bunji — Surrealist Ball Sat 28 Feb w/ Maga");
+      expect(rendered).not.toContain("Bex — date weekend Fri-Sun London, Chateau Denmark");
+      expect(
+        file?.reflections?.some((item) =>
+          item.text.includes("More than one active relationship thread"),
+        ),
+      ).toBe(true);
+      expect(
+        file?.reflections?.some((item) =>
+          item.text.includes("converting messy inbound information into routed workflows"),
+        ),
+      ).toBe(false);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("rolls back grounded rem backfill entries from DREAMS.md", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const dreamsPath = path.join(workspaceDir, "DREAMS.md");
