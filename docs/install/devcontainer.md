@@ -58,14 +58,14 @@ systemctl --user enable --now podman.socket
 
 ## What is included
 
-| Tool | Purpose |
-| --- | --- |
-| Node 22 (Debian bookworm) | Runtime |
-| pnpm (via corepack) | Package manager |
-| GitHub CLI (`gh`) | PR and issue workflows |
+| Tool                          | Purpose                       |
+| ----------------------------- | ----------------------------- |
+| Node 22 (Debian bookworm)     | Runtime                       |
+| pnpm (via corepack)           | Package manager               |
+| GitHub CLI (`gh`)             | PR and issue workflows        |
 | GitHub Copilot (`gh copilot`) | AI-assisted terminal commands |
-| Claude CLI (`claude`) | AI coding agent |
-| git, curl, jq, openssh-client | Standard dev utilities |
+| Claude CLI (`claude`)         | AI coding agent               |
+| git, curl, jq, openssh-client | Standard dev utilities        |
 
 ## Authentication
 
@@ -81,12 +81,12 @@ from your GitHub account when possible.
 
 Set these environment variables on your host before opening the container:
 
-| Credential | Host env var | How to set it |
-| --- | --- | --- |
-| GitHub CLI | `GH_TOKEN` | `export GH_TOKEN="$(gh auth token)"` |
-| Anthropic (Claude) | `ANTHROPIC_API_KEY` | `export ANTHROPIC_API_KEY="sk-ant-..."` |
-| SSH keys | Automatic | VS Code forwards your ssh-agent automatically |
-| Git identity | Automatic | Auto-configured from your GitHub account via `gh api user` |
+| Credential         | Host env var        | How to set it                                              |
+| ------------------ | ------------------- | ---------------------------------------------------------- |
+| GitHub CLI         | `GH_TOKEN`          | `export GH_TOKEN="$(gh auth token)"`                       |
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` | `export ANTHROPIC_API_KEY="sk-ant-..."`                    |
+| SSH keys           | Automatic           | VS Code forwards your ssh-agent automatically              |
+| Git identity       | Automatic           | Auto-configured from your GitHub account via `gh api user` |
 
 Add the exports to your shell profile (`.bashrc`, `.zshrc`, or PowerShell
 `$PROFILE`) so they persist across sessions.
