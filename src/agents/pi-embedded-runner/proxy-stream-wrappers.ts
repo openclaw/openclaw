@@ -2,7 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
@@ -76,7 +76,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
       !isAnthropicModelRef(modelId) ||
       !(
         endpointClass === "openrouter" ||
-        (endpointClass === "default" && provider?.trim().toLowerCase() === "openrouter")
+        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
       )
     ) {
       return underlying(model, context, options);

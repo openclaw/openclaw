@@ -45,4 +45,19 @@ describe("openclaw-tools update_plan gating", () => {
     expect(codexTools.map((tool) => tool.name)).toContain("update_plan");
     expect(anthropicTools.map((tool) => tool.name)).not.toContain("update_plan");
   });
+
+  it("lets config disable update_plan auto-enable", () => {
+    const tools = createOpenClawTools({
+      config: {
+        tools: {
+          experimental: {
+            planTool: false,
+          },
+        },
+      } as OpenClawConfig,
+      modelProvider: "openai",
+    });
+
+    expect(tools.map((tool) => tool.name)).not.toContain("update_plan");
+  });
 });

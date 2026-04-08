@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,7 @@ export type LiveCronProbeSpec = {
 };
 
 export function normalizeLiveAgentFamily(raw: string): LiveAgentFamily {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "claude" || normalized === "claude-cli") {
     return "claude";
   }
@@ -42,7 +43,7 @@ export function normalizeLiveAgentFamily(raw: string): LiveAgentFamily {
 }
 
 export function assertLiveImageProbeReply(text: string): void {
-  const normalized = text.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(text);
   if (normalized !== "cat") {
     throw new Error(`image probe expected 'cat', got: ${normalized}`);
   }
@@ -50,8 +51,9 @@ export function assertLiveImageProbeReply(text: string): void {
 
 export function createLiveCronProbeSpec(): LiveCronProbeSpec {
   const nonce = randomBytes(3).toString("hex").toUpperCase();
-  const name = `live-mcp-${nonce.toLowerCase()}`;
-  const message = `probe-${nonce.toLowerCase()}`;
+  const normalizedNonce = normalizeOptionalLowercaseString(nonce) ?? "";
+  const name = `live-mcp-${normalizedNonce}`;
+  const message = `probe-${normalizedNonce}`;
   const at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const argsJson = JSON.stringify({
     action: "add",

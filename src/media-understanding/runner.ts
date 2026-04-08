@@ -24,6 +24,7 @@ import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-r
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
@@ -131,7 +132,7 @@ function resolveCatalogImageModelId(params: {
   if (matches.length === 0) {
     return undefined;
   }
-  const autoEntry = matches.find((entry) => entry.id.trim().toLowerCase() === "auto");
+  const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
@@ -296,7 +297,9 @@ async function probeGeminiCli(): Promise<boolean> {
       const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
         timeoutMs: 8000,
       });
-      return Boolean(extractGeminiResponse(stdout) ?? stdout.toLowerCase().includes("ok"));
+      return Boolean(
+        extractGeminiResponse(stdout) ?? normalizeLowercaseStringOrEmpty(stdout).includes("ok"),
+      );
     } catch {
       return false;
     }

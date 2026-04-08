@@ -947,6 +947,59 @@ select {
   word-break: break-word;
 }
 
+.msg-attachments {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.msg-attachment {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.msg-attachment img,
+.msg-attachment video {
+  display: block;
+  width: min(100%, 420px);
+  max-width: 100%;
+  background: #000;
+}
+
+.msg-attachment-audio {
+  padding: 12px;
+}
+
+.msg-attachment audio {
+  width: min(100%, 360px);
+  display: block;
+}
+
+.msg-attachment figcaption,
+.msg-attachment-file {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.msg-attachment-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.msg-attachment-link:hover {
+  text-decoration: underline;
+}
+
+.msg-attachment-transcript {
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+}
+
 .msg-meta {
   display: flex;
   align-items: center;

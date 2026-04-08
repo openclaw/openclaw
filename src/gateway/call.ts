@@ -16,6 +16,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -660,7 +661,7 @@ function formatGatewayCloseError(
   reason: string,
   connectionDetails: GatewayConnectionDetails,
 ): string {
-  const reasonText = reason?.trim() || "no close reason";
+  const reasonText = normalizeOptionalString(reason) || "no close reason";
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";

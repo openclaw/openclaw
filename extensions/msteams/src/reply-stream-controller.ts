@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { ReplyPayload } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -23,7 +24,7 @@ export function createTeamsReplyStreamController(params: {
   log: MSTeamsMonitorLogger;
   random?: () => number;
 }) {
-  const isPersonal = params.conversationType?.toLowerCase() === "personal";
+  const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const stream = isPersonal
     ? new TeamsHttpStream({
         sendActivity: (activity) => params.context.sendActivity(activity),

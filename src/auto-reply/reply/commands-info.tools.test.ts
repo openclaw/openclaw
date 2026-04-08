@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -6,92 +7,106 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
-async function loadToolsHarness(options?: {
-  resolveToolsMock?: ReturnType<typeof vi.fn>;
-  resolveTools?: () => {
-    agentId: string;
-    profile: string;
-    groups: Array<{
-      id: "core" | "plugin" | "channel";
-      label: string;
-      source: "core" | "plugin" | "channel";
-      pluginId?: string;
-      channelId?: string;
-      tools: Array<{
-        id: string;
-        label: string;
-        description: string;
-        source: "core" | "plugin" | "channel";
-        pluginId?: string;
-        channelId?: string;
-      }>;
-    }>;
-  };
+function makeInventoryEntry(params: {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin" | "channel";
+  pluginId?: string;
+  channelId?: string;
 }) {
-  vi.resetModules();
-  vi.doMock("../../agents/agent-scope.js", async () => {
-    const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-      "../../agents/agent-scope.js",
-    );
-    return {
-      ...actual,
-      resolveSessionAgentId: () => "main",
-    };
-  });
-  const resolveToolsMock =
-    options?.resolveToolsMock ??
-    vi.fn(
-      options?.resolveTools ??
-        (() => ({
-          agentId: "main",
-          profile: "coding",
-          groups: [
-            {
-              id: "core" as const,
-              label: "Built-in tools",
-              source: "core" as const,
-              tools: [
-                {
-                  id: "exec",
-                  label: "Exec",
-                  description: "Run shell commands",
-                  source: "core" as const,
-                },
-              ],
-            },
-            {
-              id: "plugin" as const,
-              label: "Connected tools",
-              source: "plugin" as const,
-              tools: [
-                {
-                  id: "docs_lookup",
-                  label: "Docs Lookup",
-                  description: "Search internal documentation",
-                  source: "plugin" as const,
-                  pluginId: "docs",
-                },
-              ],
-            },
-          ],
-        })),
-    );
-  vi.doMock("../../agents/tools-effective-inventory.js", () => ({
-    resolveEffectiveToolInventory: resolveToolsMock,
-  }));
-  vi.doMock("./agent-runner-utils.js", () => ({
-    buildThreadingToolContext: () => ({
+  return {
+    ...params,
+    rawDescription: params.description,
+  };
+}
+
+function makeDefaultInventory(): EffectiveToolInventoryResult {
+  return {
+    agentId: "main",
+    profile: "coding",
+    groups: [
+      {
+        id: "core",
+        label: "Built-in tools",
+        source: "core",
+        tools: [
+          makeInventoryEntry({
+            id: "exec",
+            label: "Exec",
+            description: "Run shell commands",
+            source: "core",
+          }),
+        ],
+      },
+      {
+        id: "plugin",
+        label: "Connected tools",
+        source: "plugin",
+        tools: [
+          makeInventoryEntry({
+            id: "docs_lookup",
+            label: "Docs Lookup",
+            description: "Search internal documentation",
+            source: "plugin",
+            pluginId: "docs",
+          }),
+        ],
+      },
+    ],
+  };
+}
+
+const toolsTestState = vi.hoisted(() => {
+  const defaultResolveTools = (): EffectiveToolInventoryResult => makeDefaultInventory();
+
+  return {
+    resolveToolsImpl: defaultResolveTools,
+    resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    threadingContext: {
       currentChannelId: "channel-123",
       currentMessageId: "message-456",
-    }),
-  }));
-  vi.doMock("./reply-threading.js", () => ({
-    resolveReplyToMode: () => "all",
-  }));
+    },
+    replyToMode: "all" as const,
+  };
+});
 
-  const { buildCommandTestParams } = await import("./commands.test-harness.js");
-  const { handleToolsCommand } = await import("./commands-info.js");
-  return { buildCommandTestParams, handleToolsCommand, resolveToolsMock };
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: () => "main",
+  };
+});
+
+vi.mock("../../agents/tools-effective-inventory.js", () => ({
+  resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+}));
+
+vi.mock("./agent-runner-utils.js", () => ({
+  buildThreadingToolContext: () => toolsTestState.threadingContext,
+}));
+
+vi.mock("./reply-threading.js", () => ({
+  resolveReplyToMode: () => toolsTestState.replyToMode,
+}));
+
+let buildCommandTestParams: typeof import("./commands.test-harness.js").buildCommandTestParams;
+let handleToolsCommand: typeof import("./commands-info.js").handleToolsCommand;
+
+async function loadToolsHarness(options?: { resolveTools?: () => EffectiveToolInventoryResult }) {
+  toolsTestState.resolveToolsImpl = options?.resolveTools ?? (() => makeDefaultInventory());
+  toolsTestState.resolveToolsMock.mockImplementation((..._args: unknown[]) =>
+    toolsTestState.resolveToolsImpl(),
+  );
+
+  return {
+    buildCommandTestParams,
+    handleToolsCommand,
+    resolveToolsMock: toolsTestState.resolveToolsMock,
+  };
 }
 
 function buildConfig() {
@@ -102,6 +117,17 @@ function buildConfig() {
 }
 
 describe("handleToolsCommand", () => {
+  beforeAll(async () => {
+    ({ buildCommandTestParams } = await import("./commands.test-harness.js"));
+    ({ handleToolsCommand } = await import("./commands-info.js"));
+  });
+
+  beforeEach(() => {
+    toolsTestState.resolveToolsMock.mockReset();
+    toolsTestState.resolveToolsImpl = () => makeDefaultInventory();
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   it("renders a product-facing tool list", async () => {
     const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
       await loadToolsHarness();

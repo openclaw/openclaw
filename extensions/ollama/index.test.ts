@@ -115,13 +115,13 @@ describe("ollama plugin", () => {
 
     await provider.onModelSelected?.({
       config,
-      model: "ollama/glm-4.7-flash",
+      model: "ollama/gemma4",
       prompter,
     });
 
     expect(ensureOllamaModelPulledMock).toHaveBeenCalledWith({
       config,
-      model: "ollama/glm-4.7-flash",
+      model: "ollama/gemma4",
       prompter,
     });
   });

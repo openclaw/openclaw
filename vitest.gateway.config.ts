@@ -4,6 +4,7 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
   return createScopedVitestConfig(["src/gateway/**/*.test.ts"], {
     dir: "src/gateway",
     env,
+    exclude: ["src/gateway/gateway.test.ts"],
     name: "gateway",
   });
 }

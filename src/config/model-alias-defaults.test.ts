@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
+
+const { normalizeProviderSpecificConfigMock } = vi.hoisted(() => ({
+  normalizeProviderSpecificConfigMock: vi.fn((providerKey: string, provider: unknown) => {
+    if (providerKey !== "anthropic" || !provider || typeof provider !== "object") {
+      return provider;
+    }
+    return { ...(provider as Record<string, unknown>), api: "anthropic-messages" };
+  }),
+}));
+
+vi.mock("../agents/models-config.providers.policy.js", () => ({
+  normalizeProviderSpecificConfig: normalizeProviderSpecificConfigMock,
+}));
 
 describe("applyModelDefaults", () => {
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {

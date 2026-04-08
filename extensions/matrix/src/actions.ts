@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
@@ -287,13 +288,11 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "permissions") {
-      const operation = (
+      const operation = normalizeLowercaseStringOrEmpty(
         readStringParam(params, "operation") ??
-        readStringParam(params, "mode") ??
-        "verification-list"
-      )
-        .trim()
-        .toLowerCase();
+          readStringParam(params, "mode") ??
+          "verification-list",
+      );
       const operationToAction: Record<string, string> = {
         "encryption-status": "encryptionStatus",
         "verification-status": "verificationStatus",

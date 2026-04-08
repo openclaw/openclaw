@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
+export { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
@@ -7,7 +9,11 @@ import {
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -119,9 +125,9 @@ export function inferPlaceholder(params: {
   fileName?: string;
   fileType?: string;
 }): string {
-  const mime = params.contentType?.toLowerCase() ?? "";
-  const name = params.fileName?.toLowerCase() ?? "";
-  const fileType = params.fileType?.toLowerCase() ?? "";
+  const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
+  const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
+  const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
 
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
@@ -206,20 +212,6 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function estimateBase64DecodedBytes(value: string): number {
-  const normalized = value.replace(/\s+/g, "");
-  if (!normalized) {
-    return 0;
-  }
-  let padding = 0;
-  if (normalized.endsWith("==")) {
-    padding = 2;
-  } else if (normalized.endsWith("=")) {
-    padding = 1;
-  }
-  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
-}
-
 function isLikelyBase64Payload(value: string): boolean {
   return /^[A-Za-z0-9+/=\r\n]+$/.test(value);
 }
@@ -232,7 +224,7 @@ function decodeDataImageWithLimits(
   if (!match) {
     return { candidate: null, estimatedBytes: 0 };
   }
-  const contentType = match[1]?.toLowerCase();
+  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
   const isBase64 = Boolean(match[2]);
   if (!isBase64) {
     return { candidate: null, estimatedBytes: 0 };
@@ -319,7 +311,7 @@ export function extractInlineImageCandidates(
 
 export function safeHostForUrl(url: string): string {
   try {
-    return new URL(url).hostname.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
   } catch {
     return "invalid-url";
   }

@@ -35,7 +35,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -64,7 +67,7 @@ function resolveCronWebhookTarget(params: {
   legacyNotify?: boolean;
   legacyWebhook?: string;
 }): CronWebhookTarget | null {
-  const mode = normalizeOptionalString(params.delivery?.mode)?.toLowerCase();
+  const mode = normalizeOptionalLowercaseString(params.delivery?.mode);
   if (mode === "webhook") {
     const url = normalizeHttpWebhookUrl(params.delivery?.to);
     return url ? { url, source: "delivery" } : null;

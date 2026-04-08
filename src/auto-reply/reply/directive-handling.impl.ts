@@ -7,6 +7,7 @@ import { updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
@@ -152,7 +153,10 @@ export async function handleDirectiveOnly(
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
-    if (!directives.rawFastMode || directives.rawFastMode.toLowerCase() === "status") {
+    if (
+      !directives.rawFastMode ||
+      normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status"
+    ) {
       const sourceSuffix =
         effectiveFastModeSource === "config"
           ? " (config)"

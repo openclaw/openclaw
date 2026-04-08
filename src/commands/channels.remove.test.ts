@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
@@ -46,6 +46,7 @@ describe("channelsRemoveCommand", () => {
   });
 
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile

@@ -13,6 +13,7 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
@@ -161,14 +162,14 @@ function missingUiHtml() {
 </html>`;
 }
 
-function resolveUiDistDir(overrideDir?: string | null) {
+function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
   if (overrideDir?.trim()) {
     return overrideDir;
   }
   const candidates = [
+    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
+    path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
     fileURLToPath(new URL("../web/dist", import.meta.url)),
-    path.resolve(process.cwd(), "extensions/qa-lab/web/dist"),
-    path.resolve(process.cwd(), "dist/extensions/qa-lab/web/dist"),
   ];
   return (
     candidates.find((candidate) => {
@@ -346,7 +347,7 @@ function proxyUpgradeRequest(params: {
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
     const value = params.req.rawHeaders[index + 1] ?? "";
-    if (name.toLowerCase() === "host") {
+    if (normalizeLowercaseStringOrEmpty(name) === "host") {
       continue;
     }
     headerLines.push(`${name}: ${value}`);
@@ -387,8 +388,12 @@ function proxyUpgradeRequest(params: {
   params.socket.on("close", closeBoth);
 }
 
-function tryResolveUiAsset(pathname: string, overrideDir?: string | null): string | null {
-  const distDir = resolveUiDistDir(overrideDir);
+function tryResolveUiAsset(
+  pathname: string,
+  overrideDir?: string | null,
+  repoRoot = process.cwd(),
+): string | null {
+  const distDir = resolveUiDistDir(overrideDir, repoRoot);
   if (!fs.existsSync(distDir)) {
     return null;
   }
@@ -459,6 +464,7 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
 }
 
 export async function startQaLabServer(params?: {
+  repoRoot?: string;
   host?: string;
   port?: number;
   outputPath?: string;
@@ -472,6 +478,7 @@ export async function startQaLabServer(params?: {
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
 }) {
+  const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -509,18 +516,25 @@ export async function startQaLabServer(params?: {
   } | null = null;
 
   let publicBaseUrl = "";
-  const runnerModelCatalogPromise = (async () => {
-    try {
-      const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
-      runnerModelOptions = await loadQaRunnerModelOptions({
-        repoRoot: process.cwd(),
-      });
-      runnerModelCatalogStatus = "ready";
-    } catch {
-      runnerModelOptions = [];
-      runnerModelCatalogStatus = "failed";
+  let runnerModelCatalogPromise: Promise<void> | null = null;
+  const ensureRunnerModelCatalog = () => {
+    if (runnerModelCatalogPromise) {
+      return runnerModelCatalogPromise;
     }
-  })();
+    runnerModelCatalogPromise = (async () => {
+      try {
+        const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
+        runnerModelOptions = await loadQaRunnerModelOptions({
+          repoRoot,
+        });
+        runnerModelCatalogStatus = "ready";
+      } catch {
+        runnerModelOptions = [];
+        runnerModelCatalogStatus = "failed";
+      }
+    })();
+    return runnerModelCatalogPromise;
+  };
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -541,6 +555,7 @@ export async function startQaLabServer(params?: {
       }
 
       if (req.method === "GET" && url.pathname === "/api/bootstrap") {
+        void ensureRunnerModelCatalog();
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
@@ -645,6 +660,7 @@ export async function startQaLabServer(params?: {
           state,
           cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
           outputPath: params?.outputPath,
+          repoRoot,
         });
         latestScenarioRun = withQaLabRunCounts({
           kind: "self-check",
@@ -692,7 +708,7 @@ export async function startQaLabServer(params?: {
             const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
             const result = await runQaSuiteFromRuntime({
               lab: labHandle ?? undefined,
-              outputDir: createQaRunOutputDir(),
+              outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,
               primaryModel: selection.primaryModel,
               alternateModel: selection.alternateModel,
@@ -736,7 +752,7 @@ export async function startQaLabServer(params?: {
         return;
       }
 
-      const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir);
+      const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir, repoRoot);
       if (!asset) {
         const html = missingUiHtml();
         res.writeHead(200, {
@@ -794,7 +810,6 @@ export async function startQaLabServer(params?: {
       kickoffTask: scenarioCatalog.kickoffTask,
     });
   }
-  void runnerModelCatalogPromise;
 
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -848,6 +863,7 @@ export async function startQaLabServer(params?: {
         state,
         cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
         outputPath: params?.outputPath,
+        repoRoot,
       });
       latestScenarioRun = withQaLabRunCounts({
         kind: "self-check",

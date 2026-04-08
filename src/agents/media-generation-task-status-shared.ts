@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildSessionAsyncTaskStatusDetails,
@@ -89,7 +90,7 @@ export function buildActiveMediaGenerationTaskPromptContextForSession(params: {
   }
   const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
   const lines = [
-    `An active ${params.nounLabel.toLowerCase()} background task already exists for this session.`,
+    `An active ${normalizeLowercaseStringOrEmpty(params.nounLabel)} background task already exists for this session.`,
     `Task ${task.taskId} is currently ${task.status}${provider ? ` via ${provider}` : ""}.`,
     task.progressSummary ? `Current progress: ${task.progressSummary}.` : null,
     `Do not call \`${params.toolName}\` again for the same request while that task is queued or running.`,

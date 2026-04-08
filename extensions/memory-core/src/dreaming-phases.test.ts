@@ -26,6 +26,7 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
         config: {
           dreaming: {
             enabled: true,
+            timezone: "UTC",
             phases: {
               light: {
                 enabled: true,
@@ -55,10 +56,20 @@ function createHarness(config: OpenClawConfig, workspaceDir?: string) {
           defaults: {
             ...config.agents?.defaults,
             workspace: workspaceDir,
+            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
           },
         },
       }
-    : config;
+    : {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+          },
+        },
+      };
   const pluginConfig = resolveMemoryCorePluginConfig(resolvedConfig) ?? {};
   const beforeAgentReply = async (
     event: { cleanedBody: string },
@@ -183,6 +194,44 @@ describe("memory-core dreaming phases", () => {
       expect(dailyContent).toContain("## Light Sleep");
       expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
+    });
+  });
+
+  it("triggers light dreaming when the token is embedded in a reminder body", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      setDreamingTestTime(1);
+      await beforeAgentReply(
+        {
+          cleanedBody: [
+            "System: rotate logs",
+            "System: __openclaw_memory_core_light_sleep__",
+            "",
+            "A scheduled reminder has been triggered. The reminder content is:",
+            "",
+            "rotate logs",
+            "__openclaw_memory_core_light_sleep__",
+            "",
+            "Handle this reminder internally. Do not relay it to the user unless explicitly requested.",
+          ].join("\n"),
+        },
+        { trigger: "heartbeat", workspaceDir },
+      );
+
+      const dailyContent = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      expect(dailyContent).toContain("## Light Sleep");
+      expect(dailyContent).toContain("Move backups to S3 Glacier.");
     });
   });
 
@@ -315,10 +364,9 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
-    await beforeAgentReply(
-      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-      { trigger: "heartbeat", workspaceDir },
-    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
 
     const after = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -376,6 +424,7 @@ describe("memory-core dreaming phases", () => {
           defaults: {
             workspace: workspaceDir,
           },
+          list: [{ id: "main", workspace: workspaceDir }],
         },
         plugins: {
           entries: {
@@ -475,6 +524,7 @@ describe("memory-core dreaming phases", () => {
           defaults: {
             workspace: workspaceDir,
           },
+          list: [{ id: "main", workspace: workspaceDir }],
         },
         plugins: {
           entries: {
@@ -499,10 +549,9 @@ describe("memory-core dreaming phases", () => {
     );
 
     try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
     } finally {
       vi.unstubAllEnvs();
     }
@@ -709,10 +758,9 @@ describe("memory-core dreaming phases", () => {
     );
 
     try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1032,10 +1080,9 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
-    await beforeAgentReply(
-      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-      { trigger: "heartbeat", workspaceDir },
-    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
 
     const after = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -1093,10 +1140,9 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
-    await beforeAgentReply(
-      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-      { trigger: "heartbeat", workspaceDir },
-    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
 
     const after = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -1165,10 +1211,9 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
-    await beforeAgentReply(
-      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-      { trigger: "heartbeat", workspaceDir },
-    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
 
     const after = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -1265,10 +1310,9 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
-    await beforeAgentReply(
-      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-      { trigger: "heartbeat", workspaceDir },
-    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
     await beforeAgentReply(
       { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
       { trigger: "heartbeat", workspaceDir },

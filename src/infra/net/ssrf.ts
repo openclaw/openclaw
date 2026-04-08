@@ -120,10 +120,7 @@ function looksLikeUnsupportedIpv4Literal(address: string): boolean {
 
 // Returns true for private/internal and special-use non-global addresses.
 export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolean {
-  let normalized = address.trim().toLowerCase();
-  if (normalized.startsWith("[") && normalized.endsWith("]")) {
-    normalized = normalized.slice(1, -1);
-  }
+  const normalized = normalizeHostname(address);
   if (!normalized) {
     return false;
   }

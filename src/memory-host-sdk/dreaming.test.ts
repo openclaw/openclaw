@@ -14,7 +14,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
-  resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
@@ -156,8 +157,74 @@ describe("memory dreaming host helpers", () => {
       ),
     ).toBe(true);
     expect(
-      resolveMemoryCorePluginConfig({
+      resolveMemoryDreamingPluginId({
         plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memos-local-openclaw-plugin");
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+  });
+
+  it('falls back to memory-core when memory slot is "none" or blank', () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-core");
+
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
           entries: {
             "memory-core": {
               config: {
