@@ -199,11 +199,13 @@ export async function truncateSessionAfterCompaction(params: {
   }
 
   // Archive original file if requested
+  let archived = false;
   if (params.archivePath) {
     try {
       const archiveDir = path.dirname(params.archivePath);
       await fs.mkdir(archiveDir, { recursive: true });
       await fs.copyFile(sessionFile, params.archivePath);
+      archived = true;
       log.info(`[session-truncation] Archived pre-truncation file to ${params.archivePath}`);
     } catch (err) {
       const reason = formatErrorMessage(err);
@@ -240,12 +242,13 @@ export async function truncateSessionAfterCompaction(params: {
       `reduction=${bytesBefore > 0 ? ((1 - bytesAfter / bytesBefore) * 100).toFixed(1) : "?"}%`,
   );
 
-  return { truncated: true, entriesRemoved, bytesBefore, bytesAfter };
+  return { truncated: true, entriesRemoved, archived, bytesBefore, bytesAfter };
 }
 
 export type TruncationResult = {
   truncated: boolean;
   entriesRemoved: number;
+  archived?: boolean;
   bytesBefore?: number;
   bytesAfter?: number;
   reason?: string;

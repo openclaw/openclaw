@@ -91,11 +91,12 @@ function resolveCompactionArchiveRetentionMs(
   if (raw === false) {
     return null;
   }
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return DEFAULT_COMPACTION_ARCHIVE_RETENTION_MS;
   }
   try {
-    return parseDurationMs(String(raw).trim(), { defaultUnit: "d" });
+    return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_COMPACTION_ARCHIVE_RETENTION_MS;
   }

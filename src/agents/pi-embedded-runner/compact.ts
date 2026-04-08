@@ -1149,7 +1149,7 @@ export async function compactEmbeddedPiSessionDirect(
                 log.info(
                   `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
                     `(sessionKey=${params.sessionKey ?? params.sessionId})` +
-                    (archivePath ? ` archived=${archivePath}` : ""),
+                    (truncResult.archived ? ` archived=${archivePath}` : ""),
                 );
               }
             } catch (err) {

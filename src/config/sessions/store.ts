@@ -379,6 +379,13 @@ async function saveSessionStoreUnlocked(
         }
       }
 
+      // Eagerly clean up compaction archives for pruned/capped sessions.
+      // Once a session is removed from the store its directory is no longer
+      // tracked, so future retention sweeps would never find its archives.
+      // Deleting them now (regardless of age) avoids the need to persist
+      // removed-session directories across saves.
+      await cleanupCompactionArchivesForRemovedSessions(removedSessionFiles, referencedSessionIds);
+
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
 
@@ -523,6 +530,44 @@ function rememberRemovedSessionFile(
 ): void {
   if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
     removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  }
+}
+
+/**
+ * Eagerly delete `.compaction.*` archive files for sessions that have been
+ * pruned or capped out of the store.  Once a session entry is gone, its
+ * directory is no longer visited by the periodic retention sweep, so any
+ * compaction archives younger than retention would leak indefinitely.
+ * Cleaning them up at prune time sidesteps the problem entirely.
+ */
+async function cleanupCompactionArchivesForRemovedSessions(
+  removedSessionFiles: ReadonlyMap<string, string | undefined>,
+  referencedSessionIds: ReadonlySet<string>,
+): Promise<void> {
+  for (const [sessionId, sessionFile] of removedSessionFiles) {
+    if (!sessionFile || referencedSessionIds.has(sessionId)) {
+      continue;
+    }
+    const resolvedFile = path.resolve(sessionFile);
+    const dir = path.dirname(resolvedFile);
+    const baseName = path.basename(resolvedFile);
+    const prefix = `${baseName}.compaction.`;
+    let entries: string[];
+    try {
+      entries = await fs.promises.readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix)) {
+        continue;
+      }
+      try {
+        await fs.promises.rm(path.join(dir, entry));
+      } catch {
+        // Best-effort: the file may already have been removed.
+      }
+    }
   }
 }
 
