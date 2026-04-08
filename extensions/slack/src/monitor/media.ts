@@ -77,11 +77,12 @@ function createSlackMediaFetch(): FetchLike {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
     const parsed = assertSlackFileUrl(url);
+    const { dispatcher: _dispatcher, redirect: _redirect, ...rest } = init ?? {};
     const fetchImpl =
-      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
+      _dispatcher !== undefined && !isMockedFetch(globalThis.fetch)
         ? fetchWithRuntimeDispatcher
         : globalThis.fetch;
-    return fetchImpl(parsed.href, { ...init, redirect: "manual" });
+    return fetchImpl(parsed.href, { ...rest, redirect: "manual" });
   };
 }
 
