@@ -1408,4 +1408,28 @@ describe("runAgentTurnWithFallback", () => {
       authProfileOverrideSource: "user",
     });
   });
+
+  it("preserves openrouter provider prefix when falling back to nested model path", async () => {
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+    } as SessionEntry;
+
+    const { updated } = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run: {
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      } as FollowupRun["run"],
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      now: 200,
+    });
+
+    expect(updated).toBe(true);
+    expect(entry.providerOverride).toBe("openrouter");
+    expect(entry.modelOverride).toBe("minimax/minimax-m2.7");
+  });
 });

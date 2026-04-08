@@ -237,6 +237,12 @@ describe("model-selection", () => {
         expected: { provider: "openrouter", model: "anthropic/claude-sonnet-4-6" },
       },
       {
+        name: "preserves openrouter minimax fallback with nested model path",
+        variants: ["openrouter/minimax/minimax-m2.7"],
+        defaultProvider: "openai-codex",
+        expected: { provider: "openrouter", model: "minimax/minimax-m2.7" },
+      },
+      {
         name: "strips duplicate Hugging Face provider prefixes",
         variants: ["huggingface/deepseek-ai/DeepSeek-R1"],
         defaultProvider: "huggingface",

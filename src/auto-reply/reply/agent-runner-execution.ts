@@ -737,85 +737,405 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          if (isCliProvider(provider, runtimeConfig)) {
-            const startedAt = Date.now();
-            notifyAgentRunStart();
-            emitAgentEvent({
-              runId,
-              stream: "lifecycle",
-              data: {
-                phase: "start",
-                startedAt,
-              },
-            });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              provider,
-            );
-            const authProfileId =
-              provider === params.followupRun.run.provider
-                ? params.followupRun.run.authProfileId
-                : undefined;
+          // Top-level safety net: if anything throws after persist and escapes
+          // the inner try/catch blocks, roll back the fallback override so the
+          // session is never left permanently on a model that failed.
+          try {
+            if (isCliProvider(provider, runtimeConfig)) {
+              const startedAt = Date.now();
+              notifyAgentRunStart();
+              emitAgentEvent({
+                runId,
+                stream: "lifecycle",
+                data: {
+                  phase: "start",
+                  startedAt,
+                },
+              });
+              const cliSessionBinding = getCliSessionBinding(
+                params.getActiveSessionEntry(),
+                provider,
+              );
+              const authProfileId =
+                provider === params.followupRun.run.provider
+                  ? params.followupRun.run.authProfileId
+                  : undefined;
+              return (async () => {
+                let lifecycleTerminalEmitted = false;
+                try {
+                  const result = await runCliAgent({
+                    sessionId: params.followupRun.run.sessionId,
+                    sessionKey: params.sessionKey,
+                    agentId: params.followupRun.run.agentId,
+                    sessionFile: params.followupRun.run.sessionFile,
+                    workspaceDir: params.followupRun.run.workspaceDir,
+                    config: runtimeConfig,
+                    prompt: params.commandBody,
+                    provider,
+                    model,
+                    thinkLevel: params.followupRun.run.thinkLevel,
+                    timeoutMs: params.followupRun.run.timeoutMs,
+                    runId,
+                    extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                    ownerNumbers: params.followupRun.run.ownerNumbers,
+                    cliSessionId: cliSessionBinding?.sessionId,
+                    cliSessionBinding,
+                    authProfileId,
+                    bootstrapPromptWarningSignaturesSeen,
+                    bootstrapPromptWarningSignature:
+                      bootstrapPromptWarningSignaturesSeen[
+                        bootstrapPromptWarningSignaturesSeen.length - 1
+                      ],
+                    images: params.opts?.images,
+                    imageOrder: params.opts?.imageOrder,
+                    messageProvider: params.followupRun.run.messageProvider,
+                    agentAccountId: params.followupRun.run.agentAccountId,
+                    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                    replyOperation: params.replyOperation,
+                  });
+                  bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                    result.meta?.systemPromptReport,
+                  );
+
+                  // CLI backends don't emit streaming assistant events, so we need to
+                  // emit one with the final text so server-chat can populate its buffer
+                  // and send the response to TUI/WebSocket clients.
+                  const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
+                  if (cliText) {
+                    emitAgentEvent({
+                      runId,
+                      stream: "assistant",
+                      data: { text: cliText },
+                    });
+                  }
+
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "end",
+                      startedAt,
+                      endedAt: Date.now(),
+                    },
+                  });
+                  lifecycleTerminalEmitted = true;
+
+                  return result;
+                } catch (err) {
+                  if (rollbackFallbackCandidateSelection) {
+                    try {
+                      await rollbackFallbackCandidateSelection();
+                    } catch (rollbackError) {
+                      logVerbose(
+                        `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                      );
+                    }
+                  }
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "error",
+                      startedAt,
+                      endedAt: Date.now(),
+                      error: String(err),
+                    },
+                  });
+                  lifecycleTerminalEmitted = true;
+                  throw err;
+                } finally {
+                  // Defensive backstop: never let a CLI run complete without a terminal
+                  // lifecycle event, otherwise downstream consumers can hang.
+                  if (!lifecycleTerminalEmitted) {
+                    emitAgentEvent({
+                      runId,
+                      stream: "lifecycle",
+                      data: {
+                        phase: "error",
+                        startedAt,
+                        endedAt: Date.now(),
+                        error: "CLI run completed without lifecycle terminal event",
+                      },
+                    });
+                  }
+                }
+              })();
+            }
+            const { embeddedContext, senderContext, runBaseParams } =
+              buildEmbeddedRunExecutionParams({
+                run: effectiveRun,
+                sessionCtx: params.sessionCtx,
+                hasRepliedRef: params.opts?.hasRepliedRef,
+                provider,
+                runId,
+                allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+                model,
+              });
             return (async () => {
-              let lifecycleTerminalEmitted = false;
+              let attemptCompactionCount = 0;
               try {
-                const result = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: runtimeConfig,
+                const result = await runEmbeddedPiAgent({
+                  ...embeddedContext,
+                  allowGatewaySubagentBinding: true,
+                  trigger: params.isHeartbeat ? "heartbeat" : "user",
+                  groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+                  groupChannel:
+                    normalizeOptionalString(params.sessionCtx.GroupChannel) ??
+                    normalizeOptionalString(params.sessionCtx.GroupSubject),
+                  groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
+                  ...senderContext,
+                  ...runBaseParams,
                   prompt: params.commandBody,
-                  provider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId: cliSessionBinding?.sessionId,
-                  cliSessionBinding,
-                  authProfileId,
+                  toolResultFormat: (() => {
+                    const channel = resolveMessageChannel(
+                      params.sessionCtx.Surface,
+                      params.sessionCtx.Provider,
+                    );
+                    if (!channel) {
+                      return "markdown";
+                    }
+                    return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+                  })(),
+                  suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                  bootstrapContextMode: params.opts?.bootstrapContextMode,
+                  bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                  images: params.opts?.images,
+                  imageOrder: params.opts?.imageOrder,
+                  abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                  replyOperation: params.replyOperation,
+                  blockReplyBreak: params.resolvedBlockStreamingBreak,
+                  blockReplyChunking: params.blockReplyChunking,
+                  onPartialReply: async (payload) => {
+                    const textForTyping = await handlePartialForTyping(payload);
+                    if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                      return;
+                    }
+                    await params.opts.onPartialReply({
+                      text: textForTyping,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  },
+                  onAssistantMessageStart: async () => {
+                    await params.typingSignals.signalMessageStart();
+                    await params.opts?.onAssistantMessageStart?.();
+                  },
+                  onReasoningStream:
+                    params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+                      ? async (payload) => {
+                          if (params.followupRun.run.silentExpected) {
+                            return;
+                          }
+                          await params.typingSignals.signalReasoningDelta();
+                          await params.opts?.onReasoningStream?.({
+                            text: payload.text,
+                            mediaUrls: payload.mediaUrls,
+                          });
+                        }
+                      : undefined,
+                  onReasoningEnd: params.opts?.onReasoningEnd,
+                  onAgentEvent: async (evt) => {
+                    // Signal run start only after the embedded agent emits real activity.
+                    const hasLifecyclePhase =
+                      evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+                    if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                      notifyAgentRunStart();
+                    }
+                    // Trigger typing when tools start executing.
+                    // Must await to ensure typing indicator starts before tool summaries are emitted.
+                    if (evt.stream === "tool") {
+                      const phase = readStringValue(evt.data.phase) ?? "";
+                      const name = readStringValue(evt.data.name);
+                      if (phase === "start" || phase === "update") {
+                        await params.typingSignals.signalToolStart();
+                        await params.opts?.onToolStart?.({ name, phase });
+                      }
+                    }
+                    if (evt.stream === "item") {
+                      await params.opts?.onItemEvent?.({
+                        itemId: readStringValue(evt.data.itemId),
+                        kind: readStringValue(evt.data.kind),
+                        title: readStringValue(evt.data.title),
+                        name: readStringValue(evt.data.name),
+                        phase: readStringValue(evt.data.phase),
+                        status: readStringValue(evt.data.status),
+                        summary: readStringValue(evt.data.summary),
+                        progressText: readStringValue(evt.data.progressText),
+                        approvalId: readStringValue(evt.data.approvalId),
+                        approvalSlug: readStringValue(evt.data.approvalSlug),
+                      });
+                    }
+                    if (evt.stream === "plan") {
+                      await params.opts?.onPlanUpdate?.({
+                        phase: readStringValue(evt.data.phase),
+                        title: readStringValue(evt.data.title),
+                        explanation: readStringValue(evt.data.explanation),
+                        steps: Array.isArray(evt.data.steps)
+                          ? evt.data.steps.filter(
+                              (step): step is string => typeof step === "string",
+                            )
+                          : undefined,
+                        source: readStringValue(evt.data.source),
+                      });
+                    }
+                    if (evt.stream === "approval") {
+                      await params.opts?.onApprovalEvent?.({
+                        phase: readStringValue(evt.data.phase),
+                        kind: readStringValue(evt.data.kind),
+                        status: readStringValue(evt.data.status),
+                        title: readStringValue(evt.data.title),
+                        itemId: readStringValue(evt.data.itemId),
+                        toolCallId: readStringValue(evt.data.toolCallId),
+                        approvalId: readStringValue(evt.data.approvalId),
+                        approvalSlug: readStringValue(evt.data.approvalSlug),
+                        command: readStringValue(evt.data.command),
+                        host: readStringValue(evt.data.host),
+                        reason: readStringValue(evt.data.reason),
+                        message: readStringValue(evt.data.message),
+                      });
+                    }
+                    if (evt.stream === "command_output") {
+                      await params.opts?.onCommandOutput?.({
+                        itemId: readStringValue(evt.data.itemId),
+                        phase: readStringValue(evt.data.phase),
+                        title: readStringValue(evt.data.title),
+                        toolCallId: readStringValue(evt.data.toolCallId),
+                        name: readStringValue(evt.data.name),
+                        output: readStringValue(evt.data.output),
+                        status: readStringValue(evt.data.status),
+                        exitCode:
+                          typeof evt.data.exitCode === "number" || evt.data.exitCode === null
+                            ? evt.data.exitCode
+                            : undefined,
+                        durationMs:
+                          typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
+                        cwd: readStringValue(evt.data.cwd),
+                      });
+                    }
+                    if (evt.stream === "patch") {
+                      await params.opts?.onPatchSummary?.({
+                        itemId: readStringValue(evt.data.itemId),
+                        phase: readStringValue(evt.data.phase),
+                        title: readStringValue(evt.data.title),
+                        toolCallId: readStringValue(evt.data.toolCallId),
+                        name: readStringValue(evt.data.name),
+                        added: Array.isArray(evt.data.added)
+                          ? evt.data.added.filter(
+                              (entry): entry is string => typeof entry === "string",
+                            )
+                          : undefined,
+                        modified: Array.isArray(evt.data.modified)
+                          ? evt.data.modified.filter(
+                              (entry): entry is string => typeof entry === "string",
+                            )
+                          : undefined,
+                        deleted: Array.isArray(evt.data.deleted)
+                          ? evt.data.deleted.filter(
+                              (entry): entry is string => typeof entry === "string",
+                            )
+                          : undefined,
+                        summary: readStringValue(evt.data.summary),
+                      });
+                    }
+                    // Track auto-compaction and notify higher layers.
+                    if (evt.stream === "compaction") {
+                      const phase = readStringValue(evt.data.phase) ?? "";
+                      if (phase === "start") {
+                        // Keep custom compaction callbacks active, but gate the
+                        // fallback user-facing notice behind explicit opt-in.
+                        const notifyUser =
+                          runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
+                        if (params.opts?.onCompactionStart) {
+                          await params.opts.onCompactionStart();
+                        } else if (notifyUser && params.opts?.onBlockReply) {
+                          // Send directly via opts.onBlockReply (bypassing the
+                          // pipeline) so the notice does not cause final payloads
+                          // to be discarded on non-streaming model paths.
+                          const currentMessageId =
+                            params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+                          const noticePayload = params.applyReplyToMode({
+                            text: "🧹 Compacting context...",
+                            replyToId: currentMessageId,
+                            replyToCurrent: true,
+                            isCompactionNotice: true,
+                          });
+                          try {
+                            await params.opts.onBlockReply(noticePayload);
+                          } catch (err) {
+                            // Non-critical notice delivery failure should not
+                            // bubble out of the fire-and-forget event handler.
+                            logVerbose(
+                              `compaction start notice delivery failed (non-fatal): ${String(err)}`,
+                            );
+                          }
+                        }
+                      }
+                      const completed = evt.data?.completed === true;
+                      if (phase === "end" && completed) {
+                        attemptCompactionCount += 1;
+                        await params.opts?.onCompactionEnd?.();
+                      }
+                    }
+                  },
+                  // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
+                  // even when regular block streaming is disabled. The handler sends directly
+                  // via opts.onBlockReply when the pipeline isn't available.
+                  onBlockReply: blockReplyHandler,
+                  onBlockReplyFlush:
+                    params.blockStreamingEnabled && blockReplyPipeline
+                      ? async () => {
+                          await blockReplyPipeline.flush({ force: true });
+                        }
+                      : undefined,
+                  shouldEmitToolResult: params.shouldEmitToolResult,
+                  shouldEmitToolOutput: params.shouldEmitToolOutput,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
-                  images: params.opts?.images,
-                  imageOrder: params.opts?.imageOrder,
-                  messageProvider: params.followupRun.run.messageProvider,
-                  agentAccountId: params.followupRun.run.agentAccountId,
-                  abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-                  replyOperation: params.replyOperation,
+                  onToolResult: onToolResult
+                    ? (() => {
+                        // Serialize tool result delivery to preserve message ordering.
+                        // Without this, concurrent tool callbacks race through typing signals
+                        // and message sends, causing out-of-order delivery to the user.
+                        // See: https://github.com/openclaw/openclaw/issues/11044
+                        let toolResultChain: Promise<void> = Promise.resolve();
+                        return (payload: ReplyPayload) => {
+                          toolResultChain = toolResultChain
+                            .then(async () => {
+                              const { text, skip } = normalizeStreamingText(payload);
+                              if (skip) {
+                                return;
+                              }
+                              if (text !== undefined) {
+                                await params.typingSignals.signalTextDelta(text);
+                              }
+                              await onToolResult({
+                                ...payload,
+                                text,
+                              });
+                            })
+                            .catch((err) => {
+                              // Keep chain healthy after an error so later tool results still deliver.
+                              logVerbose(`tool result delivery failed: ${String(err)}`);
+                            });
+                          const task = toolResultChain.finally(() => {
+                            params.pendingToolTasks.delete(task);
+                          });
+                          params.pendingToolTasks.add(task);
+                        };
+                      })()
+                    : undefined,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
-
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
-                const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
-                if (cliText) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "assistant",
-                    data: { text: cliText },
-                  });
-                }
-
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "end",
-                    startedAt,
-                    endedAt: Date.now(),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-
+                const resultCompactionCount = Math.max(
+                  0,
+                  result.meta?.agentMeta?.compactionCount ?? 0,
+                );
+                attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
                 return result;
               } catch (err) {
                 if (rollbackFallbackCandidateSelection) {
@@ -827,326 +1147,26 @@ export async function runAgentTurnWithFallback(params: {
                     );
                   }
                 }
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
+                autoCompactionCount += attemptCompactionCount;
               }
             })();
-          }
-          const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
-            {
-              run: effectiveRun,
-              sessionCtx: params.sessionCtx,
-              hasRepliedRef: params.opts?.hasRepliedRef,
-              provider,
-              runId,
-              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-              model,
-            },
-          );
-          return (async () => {
-            let attemptCompactionCount = 0;
-            try {
-              const result = await runEmbeddedPiAgent({
-                ...embeddedContext,
-                allowGatewaySubagentBinding: true,
-                trigger: params.isHeartbeat ? "heartbeat" : "user",
-                groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-                groupChannel:
-                  normalizeOptionalString(params.sessionCtx.GroupChannel) ??
-                  normalizeOptionalString(params.sessionCtx.GroupSubject),
-                groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
-                ...senderContext,
-                ...runBaseParams,
-                prompt: params.commandBody,
-                extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                toolResultFormat: (() => {
-                  const channel = resolveMessageChannel(
-                    params.sessionCtx.Surface,
-                    params.sessionCtx.Provider,
-                  );
-                  if (!channel) {
-                    return "markdown";
-                  }
-                  return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
-                })(),
-                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
-                bootstrapContextMode: params.opts?.bootstrapContextMode,
-                bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
-                images: params.opts?.images,
-                imageOrder: params.opts?.imageOrder,
-                abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-                replyOperation: params.replyOperation,
-                blockReplyBreak: params.resolvedBlockStreamingBreak,
-                blockReplyChunking: params.blockReplyChunking,
-                onPartialReply: async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                },
-                onAssistantMessageStart: async () => {
-                  await params.typingSignals.signalMessageStart();
-                  await params.opts?.onAssistantMessageStart?.();
-                },
-                onReasoningStream:
-                  params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
-                    ? async (payload) => {
-                        if (params.followupRun.run.silentExpected) {
-                          return;
-                        }
-                        await params.typingSignals.signalReasoningDelta();
-                        await params.opts?.onReasoningStream?.({
-                          text: payload.text,
-                          mediaUrls: payload.mediaUrls,
-                        });
-                      }
-                    : undefined,
-                onReasoningEnd: params.opts?.onReasoningEnd,
-                onAgentEvent: async (evt) => {
-                  // Signal run start only after the embedded agent emits real activity.
-                  const hasLifecyclePhase =
-                    evt.stream === "lifecycle" && typeof evt.data.phase === "string";
-                  if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-                    notifyAgentRunStart();
-                  }
-                  // Trigger typing when tools start executing.
-                  // Must await to ensure typing indicator starts before tool summaries are emitted.
-                  if (evt.stream === "tool") {
-                    const phase = readStringValue(evt.data.phase) ?? "";
-                    const name = readStringValue(evt.data.name);
-                    if (phase === "start" || phase === "update") {
-                      await params.typingSignals.signalToolStart();
-                      await params.opts?.onToolStart?.({ name, phase });
-                    }
-                  }
-                  if (evt.stream === "item") {
-                    await params.opts?.onItemEvent?.({
-                      itemId: readStringValue(evt.data.itemId),
-                      kind: readStringValue(evt.data.kind),
-                      title: readStringValue(evt.data.title),
-                      name: readStringValue(evt.data.name),
-                      phase: readStringValue(evt.data.phase),
-                      status: readStringValue(evt.data.status),
-                      summary: readStringValue(evt.data.summary),
-                      progressText: readStringValue(evt.data.progressText),
-                      approvalId: readStringValue(evt.data.approvalId),
-                      approvalSlug: readStringValue(evt.data.approvalSlug),
-                    });
-                  }
-                  if (evt.stream === "plan") {
-                    await params.opts?.onPlanUpdate?.({
-                      phase: readStringValue(evt.data.phase),
-                      title: readStringValue(evt.data.title),
-                      explanation: readStringValue(evt.data.explanation),
-                      steps: Array.isArray(evt.data.steps)
-                        ? evt.data.steps.filter((step): step is string => typeof step === "string")
-                        : undefined,
-                      source: readStringValue(evt.data.source),
-                    });
-                  }
-                  if (evt.stream === "approval") {
-                    await params.opts?.onApprovalEvent?.({
-                      phase: readStringValue(evt.data.phase),
-                      kind: readStringValue(evt.data.kind),
-                      status: readStringValue(evt.data.status),
-                      title: readStringValue(evt.data.title),
-                      itemId: readStringValue(evt.data.itemId),
-                      toolCallId: readStringValue(evt.data.toolCallId),
-                      approvalId: readStringValue(evt.data.approvalId),
-                      approvalSlug: readStringValue(evt.data.approvalSlug),
-                      command: readStringValue(evt.data.command),
-                      host: readStringValue(evt.data.host),
-                      reason: readStringValue(evt.data.reason),
-                      message: readStringValue(evt.data.message),
-                    });
-                  }
-                  if (evt.stream === "command_output") {
-                    await params.opts?.onCommandOutput?.({
-                      itemId: readStringValue(evt.data.itemId),
-                      phase: readStringValue(evt.data.phase),
-                      title: readStringValue(evt.data.title),
-                      toolCallId: readStringValue(evt.data.toolCallId),
-                      name: readStringValue(evt.data.name),
-                      output: readStringValue(evt.data.output),
-                      status: readStringValue(evt.data.status),
-                      exitCode:
-                        typeof evt.data.exitCode === "number" || evt.data.exitCode === null
-                          ? evt.data.exitCode
-                          : undefined,
-                      durationMs:
-                        typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
-                      cwd: readStringValue(evt.data.cwd),
-                    });
-                  }
-                  if (evt.stream === "patch") {
-                    await params.opts?.onPatchSummary?.({
-                      itemId: readStringValue(evt.data.itemId),
-                      phase: readStringValue(evt.data.phase),
-                      title: readStringValue(evt.data.title),
-                      toolCallId: readStringValue(evt.data.toolCallId),
-                      name: readStringValue(evt.data.name),
-                      added: Array.isArray(evt.data.added)
-                        ? evt.data.added.filter(
-                            (entry): entry is string => typeof entry === "string",
-                          )
-                        : undefined,
-                      modified: Array.isArray(evt.data.modified)
-                        ? evt.data.modified.filter(
-                            (entry): entry is string => typeof entry === "string",
-                          )
-                        : undefined,
-                      deleted: Array.isArray(evt.data.deleted)
-                        ? evt.data.deleted.filter(
-                            (entry): entry is string => typeof entry === "string",
-                          )
-                        : undefined,
-                      summary: readStringValue(evt.data.summary),
-                    });
-                  }
-                  // Track auto-compaction and notify higher layers.
-                  if (evt.stream === "compaction") {
-                    const phase = readStringValue(evt.data.phase) ?? "";
-                    if (phase === "start") {
-                      // Keep custom compaction callbacks active, but gate the
-                      // fallback user-facing notice behind explicit opt-in.
-                      const notifyUser =
-                        runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
-                      if (params.opts?.onCompactionStart) {
-                        await params.opts.onCompactionStart();
-                      } else if (notifyUser && params.opts?.onBlockReply) {
-                        // Send directly via opts.onBlockReply (bypassing the
-                        // pipeline) so the notice does not cause final payloads
-                        // to be discarded on non-streaming model paths.
-                        const currentMessageId =
-                          params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                        const noticePayload = params.applyReplyToMode({
-                          text: "🧹 Compacting context...",
-                          replyToId: currentMessageId,
-                          replyToCurrent: true,
-                          isCompactionNotice: true,
-                        });
-                        try {
-                          await params.opts.onBlockReply(noticePayload);
-                        } catch (err) {
-                          // Non-critical notice delivery failure should not
-                          // bubble out of the fire-and-forget event handler.
-                          logVerbose(
-                            `compaction start notice delivery failed (non-fatal): ${String(err)}`,
-                          );
-                        }
-                      }
-                    }
-                    const completed = evt.data?.completed === true;
-                    if (phase === "end" && completed) {
-                      attemptCompactionCount += 1;
-                      await params.opts?.onCompactionEnd?.();
-                    }
-                  }
-                },
-                // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
-                // even when regular block streaming is disabled. The handler sends directly
-                // via opts.onBlockReply when the pipeline isn't available.
-                onBlockReply: blockReplyHandler,
-                onBlockReplyFlush:
-                  params.blockStreamingEnabled && blockReplyPipeline
-                    ? async () => {
-                        await blockReplyPipeline.flush({ force: true });
-                      }
-                    : undefined,
-                shouldEmitToolResult: params.shouldEmitToolResult,
-                shouldEmitToolOutput: params.shouldEmitToolOutput,
-                bootstrapPromptWarningSignaturesSeen,
-                bootstrapPromptWarningSignature:
-                  bootstrapPromptWarningSignaturesSeen[
-                    bootstrapPromptWarningSignaturesSeen.length - 1
-                  ],
-                onToolResult: onToolResult
-                  ? (() => {
-                      // Serialize tool result delivery to preserve message ordering.
-                      // Without this, concurrent tool callbacks race through typing signals
-                      // and message sends, causing out-of-order delivery to the user.
-                      // See: https://github.com/openclaw/openclaw/issues/11044
-                      let toolResultChain: Promise<void> = Promise.resolve();
-                      return (payload: ReplyPayload) => {
-                        toolResultChain = toolResultChain
-                          .then(async () => {
-                            const { text, skip } = normalizeStreamingText(payload);
-                            if (skip) {
-                              return;
-                            }
-                            if (text !== undefined) {
-                              await params.typingSignals.signalTextDelta(text);
-                            }
-                            await onToolResult({
-                              ...payload,
-                              text,
-                            });
-                          })
-                          .catch((err) => {
-                            // Keep chain healthy after an error so later tool results still deliver.
-                            logVerbose(`tool result delivery failed: ${String(err)}`);
-                          });
-                        const task = toolResultChain.finally(() => {
-                          params.pendingToolTasks.delete(task);
-                        });
-                        params.pendingToolTasks.add(task);
-                      };
-                    })()
-                  : undefined,
-              });
-              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                result.meta?.systemPromptReport,
-              );
-              const resultCompactionCount = Math.max(
-                0,
-                result.meta?.agentMeta?.compactionCount ?? 0,
-              );
-              attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
-              return result;
-            } catch (err) {
-              if (rollbackFallbackCandidateSelection) {
-                try {
-                  await rollbackFallbackCandidateSelection();
-                } catch (rollbackError) {
-                  logVerbose(
-                    `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                  );
-                }
+          } catch (err) {
+            // Safety net: roll back fallback override if an error escaped the
+            // inner try/catch blocks (covers any path between persist and the
+            // inner catches, including unexpected throws during setup).
+            if (rollbackFallbackCandidateSelection) {
+              try {
+                await rollbackFallbackCandidateSelection();
+              } catch (rollbackError) {
+                logVerbose(
+                  `failed to roll back fallback candidate selection in safety net (non-fatal): ${String(rollbackError)}`,
+                );
               }
-              throw err;
-            } finally {
-              autoCompactionCount += attemptCompactionCount;
             }
-          })();
+            throw err;
+          }
         },
       });
       runResult = fallbackResult.result;
