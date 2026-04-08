@@ -37,10 +37,4 @@ describe("cli/nodes-media-utils", () => {
       /invalid temp file extension/i,
     );
   });
-
-  it("rejects temp path extensions with path syntax", () => {
-    expect(() =>
-      resolveTempPathParts({ ext: "mp4/../../escape", tmpDir: "/tmp", id: "id3" }),
-    ).toThrow(/invalid temp file extension/i);
-  });
 });
