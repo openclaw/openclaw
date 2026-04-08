@@ -1,13 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import path, { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../bundled-plugin-metadata.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-const CORE_PLUGIN_ENTRY_IMPORT_RE =
-  /import\s*\{[^}]*\bdefinePluginEntry\b[^}]*\}\s*from\s*"openclaw\/plugin-sdk\/core"/;
 const RUNTIME_ENTRY_HELPER_RE = /(^|\/)plugin-entry\.runtime\.[cm]?[jt]s$/;
 const GUARDED_CONTRACT_ARTIFACT_BASENAMES = new Set([
   "channel-config-api.js",
@@ -16,13 +15,13 @@ const GUARDED_CONTRACT_ARTIFACT_BASENAMES = new Set([
   "security-contract-api.js",
 ]);
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
-const FORBIDDEN_CONTRACT_MODULE_SOURCE_PATTERNS = [
-  /["']vitest["']/u,
-  /["']openclaw\/plugin-sdk\/testing["']/u,
-  /["'](?:\.{1,2}\/)+[^"']*test-api(?:\.[cm]?[jt]s)?["']/u,
-  /["'](?:\.{1,2}\/)+[^"']*__tests__\/[^"']*["']/u,
-  /["'](?:\.{1,2}\/)+[^"']*\.test(?:[-.][^"']*)?(?:\.[cm]?[jt]s)?["']/u,
-  /["'](?:\.{1,2}\/)+[^"']*(?:test-harness|test-plugin|test-helper|harness)[^"']*["']/u,
+const FORBIDDEN_CONTRACT_MODULE_SPECIFIER_PATTERNS = [
+  /^vitest$/u,
+  /^openclaw\/plugin-sdk\/testing$/u,
+  /(^|\/)test-api(?:\.[cm]?[jt]s)?$/u,
+  /(^|\/)__tests__(\/|$)/u,
+  /(^|\/)[^/]*\.test(?:[-.][^/]*)?(?:\.[cm]?[jt]s)?$/u,
+  /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*(?:\.[cm]?[jt]s)?$/u,
 ] as const;
 const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
   /(^|\/)__tests__(\/|$)/u,
@@ -30,10 +29,6 @@ const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
   /(^|\/)[^/]*\.test(?:[-.][^/]*)?\.[cm]?[jt]s$/u,
   /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*\.[cm]?[jt]s$/u,
 ] as const;
-const EXPORT_FROM_RE = /\bexport\b[\s\S]*?\bfrom\s*["']([^"']+)["']/gu;
-const IMPORT_FROM_RE = /\bimport\b[\s\S]*?\bfrom\s*["']([^"']+)["']/gu;
-const IMPORT_ONLY_RE = /\bimport\s*["']([^"']+)["']/gu;
-
 function listBundledPluginRoots() {
   return loadPluginManifestRegistry({})
     .plugins.filter((plugin) => plugin.origin === "bundled")
@@ -90,18 +85,79 @@ function formatRepoRelativePath(filePath: string): string {
   return relative(REPO_ROOT, filePath).replaceAll(path.sep, "/");
 }
 
-function collectRelativeDependencySpecifiers(source: string): string[] {
+function collectSourceModuleSpecifiers(params: { filePath: string; source: string }): string[] {
+  const sourceFile = ts.createSourceFile(
+    params.filePath,
+    params.source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
   const specifiers = new Set<string>();
-  for (const pattern of [EXPORT_FROM_RE, IMPORT_FROM_RE, IMPORT_ONLY_RE]) {
-    pattern.lastIndex = 0;
-    for (const match of source.matchAll(pattern)) {
-      const specifier = match[1];
-      if (specifier?.startsWith(".")) {
-        specifiers.add(specifier);
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      if (ts.isStringLiteral(statement.moduleSpecifier)) {
+        specifiers.add(statement.moduleSpecifier.text);
       }
+      continue;
+    }
+
+    if (!ts.isExportDeclaration(statement)) {
+      continue;
+    }
+
+    if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+      specifiers.add(statement.moduleSpecifier.text);
     }
   }
   return [...specifiers];
+}
+
+function matchesForbiddenContractSpecifier(specifier: string): boolean {
+  for (const pattern of FORBIDDEN_CONTRACT_MODULE_SPECIFIER_PATTERNS) {
+    if (pattern.test(specifier)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectRelativeDependencySpecifiers(params: { filePath: string; source: string }): string[] {
+  return collectSourceModuleSpecifiers(params).filter((specifier) => specifier.startsWith("."));
+}
+
+function importsDefinePluginEntryFromCore(source: string, filePath: string): boolean {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) {
+      continue;
+    }
+    if (
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== "openclaw/plugin-sdk/core"
+    ) {
+      continue;
+    }
+    if (
+      statement.importClause?.namedBindings &&
+      ts.isNamedImports(statement.importClause.namedBindings) &&
+      statement.importClause.namedBindings.elements.some(
+        (element) => (element.propertyName?.text ?? element.name.text) === "definePluginEntry",
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectForbiddenContractSpecifiers(params: { filePath: string; source: string }): string[] {
+  const failures: string[] = [];
+  for (const specifier of collectSourceModuleSpecifiers(params)) {
+    if (matchesForbiddenContractSpecifier(specifier)) {
+      failures.push(specifier);
+    }
+  }
+  return failures;
 }
 
 function resolveRelativeSourceModulePath(fromPath: string, specifier: string): string | null {
@@ -153,13 +209,11 @@ function findForbiddenContractModuleGraphPaths(params: {
     }
 
     const source = readFileSync(currentPath, "utf8");
-    for (const pattern of FORBIDDEN_CONTRACT_MODULE_SOURCE_PATTERNS) {
-      if (pattern.test(source)) {
-        failures.push(`${repoRelativePath} matched ${pattern}`);
-      }
+    for (const specifier of collectForbiddenContractSpecifiers({ filePath: currentPath, source })) {
+      failures.push(`${repoRelativePath} imported ${specifier}`);
     }
 
-    for (const specifier of collectRelativeDependencySpecifiers(source)) {
+    for (const specifier of collectRelativeDependencySpecifiers({ filePath: currentPath, source })) {
       const resolvedModulePath = resolveRelativeSourceModulePath(currentPath, specifier);
       if (!resolvedModulePath) {
         continue;
@@ -185,7 +239,7 @@ describe("plugin entry guardrails", () => {
       const indexPath = resolve(plugin.rootDir, "index.ts");
       try {
         const source = readFileSync(indexPath, "utf8");
-        if (CORE_PLUGIN_ENTRY_IMPORT_RE.test(source)) {
+        if (importsDefinePluginEntryFromCore(source, indexPath)) {
           failures.push(`extensions/${plugin.pluginId}/index.ts`);
         }
       } catch {
@@ -235,13 +289,28 @@ describe("plugin entry guardrails", () => {
 
   it("follows relative import edges while scanning guarded contract graphs", () => {
     expect(
-      collectRelativeDependencySpecifiers(`
+      collectRelativeDependencySpecifiers({
+        filePath: "guardrail-fixture.ts",
+        source: `
         import { x } from "./safe.js";
         import "./setup.js";
         export { x };
         export * from "./barrel.js";
         import { y } from "openclaw/plugin-sdk/testing";
-      `).toSorted(),
+      `,
+      }).toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);
+  });
+
+  it("detects aliased definePluginEntry imports from core", () => {
+    expect(
+      importsDefinePluginEntryFromCore(
+        `
+          import { definePluginEntry as dpe } from "openclaw/plugin-sdk/core";
+          import { somethingElse } from "openclaw/plugin-sdk/core";
+        `,
+        "aliased-plugin-entry.ts",
+      ),
+    ).toBe(true);
   });
 });
