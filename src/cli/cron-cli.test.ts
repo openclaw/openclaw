@@ -108,8 +108,11 @@ function resetGatewayMock() {
   defaultRuntime.exit.mockClear();
 }
 
-async function runCronCommand(args: string[]): Promise<void> {
+async function runCronCommand(args: string[], setupGatewayMock?: () => void): Promise<void> {
   resetGatewayMock();
+  if (setupGatewayMock) {
+    setupGatewayMock();
+  }
   const program = buildProgram();
   await program.parseAsync(args, { from: "user" });
 }
@@ -118,8 +121,11 @@ async function expectCronCommandExit(args: string[]): Promise<void> {
   await expect(runCronCommand(args)).rejects.toThrow("__exit__:1");
 }
 
-async function runCronEditAndGetPatch(editArgs: string[]): Promise<CronUpdatePatch> {
-  await runCronCommand(["cron", "edit", "job-1", ...editArgs]);
+async function runCronEditAndGetPatch(
+  editArgs: string[],
+  setupGatewayMock?: () => void,
+): Promise<CronUpdatePatch> {
+  await runCronCommand(["cron", "edit", "job-1", ...editArgs], setupGatewayMock);
   const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
   return (updateCall?.[2] ?? {}) as CronUpdatePatch;
 }
@@ -140,7 +146,10 @@ async function runCronSimpleAndGetUpdatePatch(
   };
 }
 
-function mockCronEditJobLookup(schedule: unknown): void {
+function mockCronEditJobLookup(
+  schedule: unknown,
+  payload: { kind: string; [key: string]: unknown } = { kind: "agentTurn" },
+): void {
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: unknown) => {
       if (method === "cron.status") {
@@ -150,7 +159,7 @@ function mockCronEditJobLookup(schedule: unknown): void {
         return {
           ok: true,
           params: {},
-          jobs: [{ id: "job-1", schedule }],
+          jobs: [{ id: "job-1", schedule, payload }],
         };
       }
       return { ok: true, params };
@@ -568,6 +577,19 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.accountId).toBe("coordinator");
     expect(patch?.patch?.delivery?.mode).toBeUndefined();
+  });
+
+  it("applies timeout-only edits to existing command jobs", async () => {
+    const patch = await runCronEditAndGetPatch(["--timeout-seconds", "45"], () =>
+      mockCronEditJobLookup(
+        { kind: "every", everyMs: 60_000 },
+        { kind: "command", command: "echo", args: ["hi"] },
+      ),
+    );
+    expect(patch?.patch?.payload?.kind).toBe("command");
+    expect(patch?.patch?.payload?.timeoutSeconds).toBe(45);
+    expect(patch?.patch?.payload?.command).toBeUndefined();
+    expect(patch?.patch?.payload?.args).toBeUndefined();
   });
 
   it("does not include undefined delivery fields when updating message", async () => {

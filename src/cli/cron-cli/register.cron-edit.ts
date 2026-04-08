@@ -206,6 +206,8 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             opts.clearTools;
+          const needsExistingPayloadForTimeout =
+            hasTimeoutSeconds && !hasSystemEventPatch && !hasAgentTurnPatch && !hasCommandPayload;
           const payloadChangeKinds = [
             hasSystemEventPatch,
             hasAgentTurnPatch,
@@ -214,12 +216,24 @@ export function registerCronEditCommand(cron: Command) {
           if (payloadChangeKinds > 1) {
             throw new Error("Choose at most one payload change");
           }
+
+          let existingPayloadKind: CronJob["payload"]["kind"] | undefined;
+          if (needsExistingPayloadForTimeout) {
+            const listed = (await callGatewayFromCli("cron.list", opts, {
+              includeDisabled: true,
+            })) as { jobs?: CronJob[] } | null;
+            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            if (!existing) {
+              throw new Error(`unknown cron job id: ${id}`);
+            }
+            existingPayloadKind = existing.payload.kind;
+          }
           if (hasSystemEventPatch) {
             patch.payload = {
               kind: "systemEvent",
               text: String(opts.systemEvent),
             };
-          } else if (hasAgentTurnPatch) {
+          } else if (hasAgentTurnPatch || existingPayloadKind === "agentTurn") {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
             assignIf(payload, "model", model, Boolean(model));
@@ -240,7 +254,7 @@ export function registerCronEditCommand(cron: Command) {
                 .filter(Boolean);
             }
             patch.payload = payload;
-          } else if (hasCommandPayload) {
+          } else if (hasCommandPayload || existingPayloadKind === "command") {
             if (
               model ||
               thinking ||

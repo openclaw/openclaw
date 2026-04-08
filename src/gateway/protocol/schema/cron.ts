@@ -41,6 +41,7 @@ const CronRunStatusSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
   Type.Literal("skipped"),
+  Type.Literal("aborted"),
 ]);
 const CronSortDirSchema = Type.Union([Type.Literal("asc"), Type.Literal("desc")]);
 const CronJobsEnabledFilterSchema = Type.Union([
@@ -58,11 +59,13 @@ const CronRunsStatusFilterSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
   Type.Literal("skipped"),
+  Type.Literal("aborted"),
 ]);
 const CronRunsStatusValueSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
   Type.Literal("skipped"),
+  Type.Literal("aborted"),
 ]);
 const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("delivered"),
