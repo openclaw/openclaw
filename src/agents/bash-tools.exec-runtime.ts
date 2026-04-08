@@ -592,19 +592,59 @@ export async function runExecProcess(opts: {
     if (session.backgrounded || session.exited) {
       return;
     }
+    if (updateSuppressed) {
+      return;
+    }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
-      details: {
-        status: "running",
-        sessionId,
-        pid: session.pid ?? undefined,
-        startedAt,
-        cwd: session.cwd,
-        tail: session.tail,
-      },
-    });
+
+    // NEW: Wrap in try-catch
+    try {
+      opts.onUpdate({
+        content: [{ type: "text", text: warningText + (tailText || "") }],
+        details: {
+          status: "running",
+          sessionId,
+          pid: session.pid ?? undefined,
+          startedAt,
+          cwd: session.cwd,
+          tail: session.tail,
+        },
+      });
+    } catch (err) {
+      // RACE CONDITION CONTEXT:
+      // When an agent run completes (finishRun() clears activeRun), any subprocess
+      // still producing stdout will trigger opts.onUpdate(). The pi-agent-core
+      // Agent.processEvents() throws "Agent listener invoked outside active run"
+      // because activeRun is undefined. This is expected behavior for:
+      // - Background exec processes (tsc, npm build, etc.)
+      // - Subagent completion timing
+      // - Tool call timeouts (agent.wait)
+      // - Cross-agent communication (sessions_send replies)
+      //
+      // The exec process itself continues normally and its output is captured.
+      // Only the streaming updates to the (now-ended) agent run are suppressed.
+      //
+      // ROOT CAUSE: Lifecycle mismatch between agent runs (pi-agent-core) and
+      // subprocess lifecycle (exec-runtime). Long-term fix requires coordination
+      // between these systems, possibly via cancellation signals or detach hooks.
+      //
+      // See: https://github.com/openclaw/openclaw/issues/62746
+
+      disableUpdates();
+
+      // Log first error as warning (visible in standard logs)
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (errorMsg.includes("Agent listener invoked outside active run")) {
+        logWarn(
+          `[exec] Live updates disabled for session ${sessionId}: agent run ended while process still active. ` +
+          `This is expected for background tasks. Process will continue and complete normally.`
+        );
+      } else {
+        // Unexpected error - log with full details
+        logWarn(`[exec] Live updates disabled for session ${sessionId}: ${errorMsg}`);
+      }
+    }
   };
 
   const handleStdout = (data: string) => {
