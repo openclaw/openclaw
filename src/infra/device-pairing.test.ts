@@ -911,4 +911,42 @@ describe("device pairing tokens", () => {
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
     await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
   });
+
+  test("recovers from array-typed pending.json and paired.json (#63035)", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
+    const { mkdir } = await import("node:fs/promises");
+    const path = await import("node:path");
+    await mkdir(path.dirname(pendingPath), { recursive: true });
+
+    // Seed both state files with JSON arrays — the exact corruption from #63035
+    await writeFile(pendingPath, "[]\n");
+    await writeFile(pairedPath, "[]\n");
+
+    // A normal pairing request must succeed despite the corrupted files
+    const result = await requestDevicePairing(
+      { deviceId: "device-1", publicKey: "pk-1", role: "operator", scopes: ["operator.read"] },
+      baseDir,
+    );
+    expect(result.created).toBe(true);
+
+    // The pending request must survive a JSON round-trip (the core symptom of #63035)
+    const rawPending = JSON.parse(await readFile(pendingPath, "utf8"));
+    expect(Array.isArray(rawPending)).toBe(false);
+    expect(rawPending[result.request.requestId]).toBeDefined();
+
+    // Approve and verify the paired device persists correctly
+    await approveDevicePairing(
+      result.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired).not.toBeNull();
+    expect(paired?.deviceId).toBe("device-1");
+
+    const rawPaired = JSON.parse(await readFile(pairedPath, "utf8"));
+    expect(Array.isArray(rawPaired)).toBe(false);
+    expect(rawPaired["device-1"]).toBeDefined();
+  });
 });

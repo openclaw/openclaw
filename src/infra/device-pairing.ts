@@ -6,6 +6,7 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
+  coerceToRecord,
   createAsyncLock,
   pruneExpiredPending,
   readJsonFile,
@@ -108,8 +109,8 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
     readJsonFile<Record<string, PairedDevice>>(pairedPath),
   ]);
   const state: DevicePairingStateFile = {
-    pendingById: pending ?? {},
-    pairedByDeviceId: paired ?? {},
+    pendingById: coerceToRecord<DevicePairingPendingRequest>(pending),
+    pairedByDeviceId: coerceToRecord<PairedDevice>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;

@@ -3,6 +3,7 @@ import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js
 import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import {
+  coerceToRecord,
   createAsyncLock,
   pruneExpiredPending,
   readJsonFile,
@@ -138,8 +139,8 @@ async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
     readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
-    pendingById: pending ?? {},
-    pairedByNodeId: paired ?? {},
+    pendingById: coerceToRecord<NodePairingPendingRequest>(pending),
+    pairedByNodeId: coerceToRecord<NodePairingPairedNode>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;

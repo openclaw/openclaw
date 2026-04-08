@@ -3,6 +3,22 @@ import { resolveStateDir } from "../config/paths.js";
 
 export { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
+/**
+ * Coerce a value read from a JSON state file into a plain object map.
+ *
+ * `readJsonFile` may return any valid JSON value – including arrays – when the
+ * persisted file was corrupted or written by an incompatible version.  Callers
+ * that expect `Record<string, T>` must guard against non-object / array inputs
+ * so that subsequent property assignments are not silently dropped by
+ * `JSON.stringify` (which only serialises numeric-index entries for arrays).
+ */
+export function coerceToRecord<T>(value: unknown): Record<string, T> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, T>;
+}
+
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
   const root = baseDir ?? resolveStateDir();
   const dir = path.join(root, subdir);

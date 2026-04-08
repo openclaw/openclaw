@@ -1,10 +1,53 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  coerceToRecord,
   pruneExpiredPending,
   reconcilePendingPairingRequests,
   resolvePairingPaths,
 } from "./pairing-files.js";
+
+describe("coerceToRecord", () => {
+  it("returns an empty object for null", () => {
+    expect(coerceToRecord(null)).toEqual({});
+  });
+
+  it("returns an empty object for undefined", () => {
+    expect(coerceToRecord(undefined)).toEqual({});
+  });
+
+  it("returns an empty object for an array (the #63035 root cause)", () => {
+    const result = coerceToRecord<{ id: string }>([]);
+    expect(result).toEqual({});
+    expect(Array.isArray(result)).toBe(false);
+
+    // Verify the fix: UUID keys survive JSON round-trip on the coerced object
+    const uuid = "4bf6458c-631f-44b2-ba9e-d27f3aa96e09";
+    result[uuid] = { id: uuid };
+    const roundTripped = JSON.parse(JSON.stringify(result));
+    expect(roundTripped[uuid]).toEqual({ id: uuid });
+  });
+
+  it("returns an empty object for a non-empty array", () => {
+    expect(coerceToRecord([1, 2, 3])).toEqual({});
+  });
+
+  it("returns an empty object for primitive values", () => {
+    expect(coerceToRecord("string")).toEqual({});
+    expect(coerceToRecord(42)).toEqual({});
+    expect(coerceToRecord(true)).toEqual({});
+  });
+
+  it("passes through a plain object unchanged", () => {
+    const obj = { key: { name: "value" } };
+    expect(coerceToRecord(obj)).toBe(obj);
+  });
+
+  it("passes through an empty object unchanged", () => {
+    const obj = {};
+    expect(coerceToRecord(obj)).toBe(obj);
+  });
+});
 
 describe("pairing file helpers", () => {
   it("resolves pairing file paths from explicit base dirs", () => {
