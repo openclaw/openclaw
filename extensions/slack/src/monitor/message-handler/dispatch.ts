@@ -517,7 +517,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       if (canFinalizeViaPreviewEdit) {
         const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
-        const previewLastText = draftStream?.lastText();
         if (deliveryTracker.hasDelivered({ payload, threadTs: finalThreadTs })) {
           observedReplyDelivery = true;
           return;
@@ -538,20 +537,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           deliveryTracker.markDelivered({ payload, threadTs: finalThreadTs });
           return;
         } catch (err) {
-          const normalizedPreviewText = normalizeSlackOutboundText((previewLastText ?? "").trim());
-          if (
-            !reply.hasMedia &&
-            !slackBlocks?.length &&
-            normalizedPreviewText &&
-            normalizedPreviewText === normalizeSlackOutboundText(trimmedFinalText)
-          ) {
-            logVerbose(
-              "slack: preview already matched final text; suppressing duplicate fallback send",
-            );
-            observedReplyDelivery = true;
-            deliveryTracker.markDelivered({ payload, threadTs: finalThreadTs });
-            return;
-          }
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
           );

@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Browser/security: block browser-control module override and skip-server env vars from untrusted workspace `.env` files, and reject unsafe URL-style browser control override specifiers before lazy loading, so repo-local dotenv state cannot steer browser control module loading. (#62663) Thanks @eleqtrizit.
 - Security/dependency audit: force `basic-ftp` to `5.2.1` to pick up the CRLF command-injection fix from GHSA-chqc-8p9q-pq6q.
 - Security/dependency audit: bump Hono to `4.12.12` and `@hono/node-server` to `1.19.13` in production resolution paths.
+- Slack/partial streaming: keep the final fallback reply path active when preview finalization fails so stale preview text cannot suppress the actual final answer. (#62859) Thanks @gumadeiras.
 
 ## 2026.4.8
 
@@ -59,7 +60,6 @@ Docs: https://docs.openclaw.ai
 - Network/fetch guard: skip target DNS pinning when trusted env-proxy mode is active so proxy-only sandboxes can let the trusted proxy resolve outbound hosts. (#59007) Thanks @cluster2600.
 
 ## 2026.4.7-1
-
 ## 2026.4.7
 
 ### Changes
