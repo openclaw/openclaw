@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -29,6 +29,7 @@ let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 beforeAll(async () => {
   ({
@@ -50,17 +51,29 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requestJsonlSocketMock.mockReset();
+  delete process.env.OPENCLAW_HOME;
+  delete process.env.OPENCLAW_STATE_DIR;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  delete process.env.OPENCLAW_HOME;
+  delete process.env.OPENCLAW_STATE_DIR;
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+afterAll(() => {
   if (originalOpenClawHome === undefined) {
     delete process.env.OPENCLAW_HOME;
   } else {
     process.env.OPENCLAW_HOME = originalOpenClawHome;
   }
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   }
 });
 
@@ -68,6 +81,13 @@ function createHomeDir(): string {
   const dir = makeTempDir();
   tempDirs.push(dir);
   process.env.OPENCLAW_HOME = dir;
+  return dir;
+}
+
+function createStateDir(): string {
+  const dir = makeTempDir();
+  tempDirs.push(dir);
+  process.env.OPENCLAW_STATE_DIR = dir;
   return dir;
 }
 
@@ -88,6 +108,18 @@ describe("exec approvals store helpers", () => {
     );
     expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
       path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
+    );
+  });
+
+  it("prefers OPENCLAW_STATE_DIR over OPENCLAW_HOME for file and socket paths", () => {
+    createHomeDir();
+    const stateDir = createStateDir();
+
+    expect(path.normalize(resolveExecApprovalsPath())).toBe(
+      path.normalize(path.join(stateDir, "exec-approvals.json")),
+    );
+    expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
+      path.normalize(path.join(stateDir, "exec-approvals.sock")),
     );
   });
 
@@ -156,6 +188,20 @@ describe("exec approvals store helpers", () => {
     expect(ensured.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(raw.endsWith("\n")).toBe(true);
     expect(readApprovalsFile(dir).socket).toEqual(ensured.socket);
+  });
+
+  it("writes approvals files directly under OPENCLAW_STATE_DIR", () => {
+    createHomeDir();
+    const stateDir = createStateDir();
+    const approvalsPath = path.join(stateDir, "exec-approvals.json");
+
+    const ensured = ensureExecApprovals();
+    const raw = fs.readFileSync(approvalsPath, "utf8");
+
+    expect(ensured.socket?.path).toBe(path.join(stateDir, "exec-approvals.sock"));
+    expect(raw.endsWith("\n")).toBe(true);
+    expect(JSON.parse(raw) as ExecApprovalsFile).toEqual(ensured);
+    expect(fs.existsSync(path.join(stateDir, ".openclaw", "exec-approvals.json"))).toBe(false);
   });
 
   it("atomically replaces existing approvals files instead of mutating linked inodes", () => {
