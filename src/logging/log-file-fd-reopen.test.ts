@@ -5,7 +5,7 @@ import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-fd-reopen-");
 
-describe("fd reopen after external file deletion", () => {
+describe("fd reopen after external file replacement", () => {
   let logPath = "";
 
   beforeAll(async () => {
@@ -25,6 +25,7 @@ describe("fd reopen after external file deletion", () => {
     vi.restoreAllMocks();
     try {
       fs.rmSync(logPath, { force: true });
+      fs.rmSync(`${logPath}.1`, { force: true });
     } catch {
       // ignore cleanup errors
     }
@@ -34,32 +35,52 @@ describe("fd reopen after external file deletion", () => {
     await logPathTracker.cleanup();
   });
 
-  it("reopens the fd and writes to the new file when the log path is deleted externally", () => {
+  it("reopens the fd immediately when the log file is unlinked (nlink drops to 0)", () => {
+    // No fake timers needed: nlink=0 is detected on every write via fstatSync,
+    // bypassing the rename+replace interval gate entirely.
+    setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 1024 * 1024 });
+    const logger = getLogger();
+
+    logger.error("before-deletion");
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    fs.rmSync(logPath, { force: true });
+    expect(fs.existsSync(logPath)).toBe(false);
+
+    logger.error("after-deletion-sentinel");
+
+    expect(fs.existsSync(logPath)).toBe(true);
+    const content = fs.readFileSync(logPath, "utf8");
+    expect(content).toContain("after-deletion-sentinel");
+    // Pre-deletion entry went to the old (now-unlinked) inode, not the new file.
+    expect(content).not.toContain("before-deletion");
+  });
+
+  it("reopens the fd after rename+replace rotation once the inode-check interval elapses", () => {
     vi.useFakeTimers();
 
     setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 1024 * 1024 });
     const logger = getLogger();
 
-    // First write: establishes the file and triggers the initial inode check
-    // (lastInodeCheckMs starts at 0 and Date.now() is far above the 5 s threshold).
-    logger.error("before-deletion");
+    // First write: seeds lastInodeCheckMs so the interval gate is active.
+    logger.error("before-rotation");
     expect(fs.existsSync(logPath)).toBe(true);
 
-    // Delete the file to simulate tmp cleanup or an external logrotate.
-    fs.rmSync(logPath, { force: true });
-    expect(fs.existsSync(logPath)).toBe(false);
+    // Simulate logrotate: rename the active file and create a fresh one at the same path.
+    fs.renameSync(logPath, `${logPath}.1`);
+    fs.writeFileSync(logPath, ""); // new file — different inode, nlink=1
 
-    // Advance past the 5 s inode-check interval so the next write triggers a reopen.
-    vi.advanceTimersByTime(6_000);
+    // Within the 5 s window the throttled path-stat check is suppressed.
+    vi.advanceTimersByTime(4_000);
+    logger.error("within-window"); // still goes to old inode via fd
 
-    // Write after deletion — the transport should detect the stale fd and reopen.
-    logger.error("after-deletion-sentinel");
+    // Advance past the interval; the next write must detect the inode mismatch.
+    vi.advanceTimersByTime(2_000); // total 6 s elapsed
+    logger.error("after-rotation-sentinel");
 
-    // The file must have been recreated and contain the new entry.
-    expect(fs.existsSync(logPath)).toBe(true);
     const content = fs.readFileSync(logPath, "utf8");
-    expect(content).toContain("after-deletion-sentinel");
-    // The pre-deletion entry must NOT be in the new file (it went to the old inode).
-    expect(content).not.toContain("before-deletion");
+    expect(content).toContain("after-rotation-sentinel");
+    expect(content).not.toContain("before-rotation");
+    expect(content).not.toContain("within-window");
   });
 });

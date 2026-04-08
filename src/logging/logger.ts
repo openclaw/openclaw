@@ -354,35 +354,50 @@ const INODE_CHECK_INTERVAL_MS = 5_000;
  * If the file was deleted or externally rotated the fd is released and reopened
  * to the current path.  Returns true when a reopen occurred so the caller can
  * re-read currentFileBytes.
+ *
+ * Two-tier detection:
+ *  • Unlink (nlink=0): checked on every write via fstatSync — one in-kernel
+ *    lookup with no path resolution, so it is effectively free.
+ *  • Rename+replace (logrotate): requires statSync(path), which is throttled
+ *    to at most once per INODE_CHECK_INTERVAL_MS to avoid per-write path lookups.
  */
 function checkAndReopenFd(file: string, fdState: LogFileFd): boolean {
   if (fdState.fd === null || file !== fdState.path) {
     return false;
   }
-  const now = Date.now();
-  if (now - fdState.lastInodeCheckMs < INODE_CHECK_INTERVAL_MS) {
-    return false;
-  }
-  fdState.lastInodeCheckMs = now;
 
-  let pathIno: number | null = null;
+  // Fast unlink detection: fstatSync on an open fd is an in-kernel metadata
+  // lookup that needs no path resolution and is safe to call on every write.
+  let fdStat: fs.Stats | null = null;
   try {
-    pathIno = fs.statSync(file).ino;
+    fdStat = fs.fstatSync(fdState.fd);
   } catch {
-    // path gone or inaccessible
+    // fd invalid — fall through to reopen
   }
-  let fdIno: number | null = null;
-  try {
-    fdIno = fs.fstatSync(fdState.fd).ino;
-  } catch {
-    // fd invalid
+  const unlinked = fdStat === null || fdStat.nlink === 0;
+
+  if (!unlinked) {
+    // Throttled rename+replace detection: statSync requires a path lookup so it
+    // is gated behind the interval to avoid per-write filesystem overhead.
+    const now = Date.now();
+    if (now - fdState.lastInodeCheckMs < INODE_CHECK_INTERVAL_MS) {
+      return false;
+    }
+    fdState.lastInodeCheckMs = now;
+
+    let pathIno: number | null = null;
+    try {
+      pathIno = fs.statSync(file).ino;
+    } catch {
+      // path gone or inaccessible
+    }
+
+    if (pathIno !== null && fdStat !== null && pathIno === fdStat.ino) {
+      return false; // same inode — still the right file
+    }
   }
 
-  if (pathIno !== null && fdIno !== null && pathIno === fdIno) {
-    return false; // same inode — no reopen needed
-  }
-
-  // Inode mismatch or path/fd inaccessible: reopen to the current path.
+  // Unlinked, inode mismatch, or fd/path inaccessible: reopen to current path.
   releaseLogFileFd(fdState);
   try {
     fdState.fd = fs.openSync(file, "a");
