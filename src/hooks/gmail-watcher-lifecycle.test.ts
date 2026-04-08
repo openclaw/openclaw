@@ -32,6 +32,7 @@ describe('gmail-watcher-lifecycle', () => {
       log,
     });
 
+    // The test now correctly expects NO suffix for generic errors
     expect(log.warn).toHaveBeenCalledWith("gmail watcher not started: auth failed");
   });
 
