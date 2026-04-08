@@ -10,7 +10,11 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import {
+  CRITICAL_THRESHOLD,
+  GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  UNKNOWN_TOOL_REPEAT_THRESHOLD,
+} from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -149,7 +153,7 @@ describe("before_tool_call loop detection behavior", () => {
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
-      detector: "ping_pong" | "known_poll_no_progress";
+      detector: "ping_pong" | "known_poll_no_progress" | "unknown_tool_repeat";
       toolName: string;
       count?: number;
     },
@@ -187,6 +191,39 @@ describe("before_tool_call loop detection behavior", () => {
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
+  });
+
+  it("blocks repeated unknown tool failures even when generic loop detection is disabled", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const execute = vi.fn(async () => {
+        throw new Error("Tool some_non_existent_tool not found");
+      });
+      const tool = wrapToolWithBeforeToolCallHook(
+        { name: "some_non_existent_tool", execute } as unknown as AnyAgentTool,
+        {
+          ...disabledLoopDetectionContext,
+        },
+      );
+      const params = { query: "test" };
+
+      for (let i = 0; i < UNKNOWN_TOOL_REPEAT_THRESHOLD; i += 1) {
+        await expect(tool.execute(`unknown-${i}`, params, undefined, undefined)).rejects.toThrow(
+          "Tool some_non_existent_tool not found",
+        );
+      }
+
+      await expect(
+        tool.execute(`unknown-${UNKNOWN_TOOL_REPEAT_THRESHOLD}`, params, undefined, undefined),
+      ).rejects.toThrow("not an available tool");
+
+      const loopEvent = emitted.at(-1);
+      expectCriticalLoopEvent(loopEvent, {
+        detector: "unknown_tool_repeat",
+        toolName: "some_non_existent_tool",
+        count: UNKNOWN_TOOL_REPEAT_THRESHOLD,
+      });
+      expect(execute).toHaveBeenCalledTimes(UNKNOWN_TOOL_REPEAT_THRESHOLD);
+    });
   });
 
   it("does not block known poll loops when output progresses", async () => {

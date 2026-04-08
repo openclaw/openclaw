@@ -5,7 +5,9 @@ import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
+  UNKNOWN_TOOL_REPEAT_THRESHOLD,
   WARNING_THRESHOLD,
+  detectRepeatedUnknownToolCall,
   detectToolCallLoop,
   getToolCallStats,
   hashToolCall,
@@ -42,6 +44,23 @@ function recordSuccessfulCall(
     toolParams: params,
     toolCallId,
     result,
+  });
+}
+
+function recordFailedCall(
+  state: SessionState,
+  toolName: string,
+  params: unknown,
+  error: unknown,
+  index: number,
+): void {
+  const toolCallId = `${toolName}-err-${index}`;
+  recordToolCall(state, toolName, params, toolCallId);
+  recordToolCallOutcome(state, {
+    toolName,
+    toolParams: params,
+    toolCallId,
+    error,
   });
 }
 
@@ -311,6 +330,48 @@ describe("tool-loop-detection", () => {
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
       }
+    });
+
+    it("blocks repeated unknown tool failures after two consecutive misses", () => {
+      const state = createState();
+      const toolName = "some_non_existent_tool";
+      const params = { query: "test" };
+      const error = new Error("Tool some_non_existent_tool not found");
+
+      recordFailedCall(state, toolName, params, error, 0);
+      expect(detectRepeatedUnknownToolCall(state, toolName, params)).toEqual({ stuck: false });
+
+      recordFailedCall(state, toolName, params, error, 1);
+      const loopResult = detectRepeatedUnknownToolCall(state, toolName, params);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("unknown_tool_repeat");
+        expect(loopResult.count).toBe(UNKNOWN_TOOL_REPEAT_THRESHOLD);
+        expect(loopResult.message).toContain("not an available tool");
+      }
+    });
+
+    it("does not block unknown tool failures for a different tool name", () => {
+      const state = createState();
+      const params = { query: "test" };
+
+      recordFailedCall(
+        state,
+        "read",
+        params,
+        new Error("Tool some_non_existent_tool not found"),
+        0,
+      );
+      recordFailedCall(
+        state,
+        "read",
+        params,
+        new Error("Tool some_non_existent_tool not found"),
+        1,
+      );
+
+      expect(detectRepeatedUnknownToolCall(state, "read", params)).toEqual({ stuck: false });
     });
 
     it("applies custom thresholds when detection is enabled", () => {

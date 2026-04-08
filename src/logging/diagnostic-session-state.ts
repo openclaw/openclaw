@@ -16,6 +16,8 @@ export type ToolCallRecord = {
   argsHash: string;
   toolCallId?: string;
   resultHash?: string;
+  outcomeKind?: "unknown_tool";
+  outcomeDetail?: string;
   timestamp: number;
 };
 
