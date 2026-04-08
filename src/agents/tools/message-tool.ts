@@ -3,6 +3,7 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
+  type ChannelMessageActionDiscoveryInput,
   resolveChannelMessageToolSchemaProperties,
 } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
@@ -413,7 +414,7 @@ type MessageToolOptions = {
   senderIsOwner?: boolean;
 };
 
-function resolveMessageToolSchemaActions(params: {
+type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
   currentChannelId?: string;
@@ -425,22 +426,33 @@ function resolveMessageToolSchemaActions(params: {
   agentId?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
-}): string[] {
+};
+
+function buildMessageActionDiscoveryInput(
+  params: MessageToolDiscoveryParams,
+  channel?: string,
+): ChannelMessageActionDiscoveryInput {
+  return {
+    cfg: params.cfg,
+    ...(channel ? { channel } : {}),
+    currentChannelId: params.currentChannelId,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
+    accountId: params.currentAccountId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
+  };
+}
+
+function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): string[] {
   const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
   if (currentChannel) {
-    const scopedActions = listChannelSupportedActions({
-      cfg: params.cfg,
-      channel: currentChannel,
-      currentChannelId: params.currentChannelId,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
-      accountId: params.currentAccountId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-      requesterSenderId: params.requesterSenderId,
-      senderIsOwner: params.senderIsOwner,
-    });
+    const scopedActions = listChannelSupportedActions(
+      buildMessageActionDiscoveryInput(params, currentChannel),
+    );
     const allActions = new Set<string>(["send", ...scopedActions]);
     // Include actions from other configured channels so isolated/cron agents
     // can invoke cross-channel actions without validation errors.
@@ -448,145 +460,49 @@ function resolveMessageToolSchemaActions(params: {
       if (plugin.id === currentChannel) {
         continue;
       }
-      for (const action of listChannelSupportedActions({
-        cfg: params.cfg,
-        channel: plugin.id,
-        currentChannelId: params.currentChannelId,
-        currentThreadTs: params.currentThreadTs,
-        currentMessageId: params.currentMessageId,
-        accountId: params.currentAccountId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        requesterSenderId: params.requesterSenderId,
-        senderIsOwner: params.senderIsOwner,
-      })) {
+      for (const action of listChannelSupportedActions(
+        buildMessageActionDiscoveryInput(params, plugin.id),
+      )) {
         allActions.add(action);
       }
     }
     return Array.from(allActions);
   }
-  return listAllMessageToolActions({
-    cfg: params.cfg,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    currentAccountId: params.currentAccountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
-  });
+  return listAllMessageToolActions(params);
 }
 
-function listAllMessageToolActions(params: {
-  cfg: OpenClawConfig;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentAccountId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  requesterSenderId?: string;
-  senderIsOwner?: boolean;
-}): ChannelMessageActionName[] {
-  const pluginActions = listAllChannelSupportedActions({
-    cfg: params.cfg,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    accountId: params.currentAccountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
-  });
+function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {
+  const pluginActions = listAllChannelSupportedActions(buildMessageActionDiscoveryInput(params));
   return Array.from(new Set<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]));
 }
 
 function resolveIncludeCapability(
-  params: {
-    cfg: OpenClawConfig;
-    currentChannelProvider?: string;
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    currentMessageId?: string | number;
-    currentAccountId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    agentId?: string;
-    requesterSenderId?: string;
-  },
+  params: MessageToolDiscoveryParams,
   capability: ChannelMessageCapability,
 ): boolean {
   const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
   if (currentChannel) {
     return channelSupportsMessageCapabilityForChannel(
-      {
-        cfg: params.cfg,
-        channel: currentChannel,
-        currentChannelId: params.currentChannelId,
-        currentThreadTs: params.currentThreadTs,
-        currentMessageId: params.currentMessageId,
-        accountId: params.currentAccountId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        requesterSenderId: params.requesterSenderId,
-      },
+      buildMessageActionDiscoveryInput(params, currentChannel),
       capability,
     );
   }
   return channelSupportsMessageCapability(params.cfg, capability);
 }
 
-function resolveIncludeInteractive(params: {
-  cfg: OpenClawConfig;
-  currentChannelProvider?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentAccountId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  requesterSenderId?: string;
-  senderIsOwner?: boolean;
-}): boolean {
+function resolveIncludeInteractive(params: MessageToolDiscoveryParams): boolean {
   return resolveIncludeCapability(params, "interactive");
 }
 
-function buildMessageToolSchema(params: {
-  cfg: OpenClawConfig;
-  currentChannelProvider?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentAccountId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  requesterSenderId?: string;
-  senderIsOwner?: boolean;
-}) {
+function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
   const actions = resolveMessageToolSchemaActions(params);
   const includeInteractive = resolveIncludeInteractive(params);
-  const extraProperties = resolveChannelMessageToolSchemaProperties({
-    cfg: params.cfg,
-    channel: normalizeMessageChannel(params.currentChannelProvider),
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    accountId: params.currentAccountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
-  });
+  const extraProperties = resolveChannelMessageToolSchemaProperties(
+    buildMessageActionDiscoveryInput(
+      params,
+      normalizeMessageChannel(params.currentChannelProvider),
+    ),
+  );
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeInteractive,
     extraProperties,
@@ -617,22 +533,27 @@ function buildMessageToolDescription(options?: {
   const baseDescription = "Send, delete, and manage messages via channel plugins.";
   const resolvedOptions = options ?? {};
   const currentChannel = normalizeMessageChannel(resolvedOptions.currentChannel);
+  const messageToolDiscoveryParams = resolvedOptions.config
+    ? {
+        cfg: resolvedOptions.config,
+        currentChannelProvider: resolvedOptions.currentChannel,
+        currentChannelId: resolvedOptions.currentChannelId,
+        currentThreadTs: resolvedOptions.currentThreadTs,
+        currentMessageId: resolvedOptions.currentMessageId,
+        currentAccountId: resolvedOptions.currentAccountId,
+        sessionKey: resolvedOptions.sessionKey,
+        sessionId: resolvedOptions.sessionId,
+        agentId: resolvedOptions.agentId,
+        requesterSenderId: resolvedOptions.requesterSenderId,
+        senderIsOwner: resolvedOptions.senderIsOwner,
+      }
+    : undefined;
 
   // If we have a current channel, show its actions and list other configured channels
-  if (currentChannel) {
-    const channelActions = listChannelSupportedActions({
-      cfg: resolvedOptions.config,
-      channel: currentChannel,
-      currentChannelId: resolvedOptions.currentChannelId,
-      currentThreadTs: resolvedOptions.currentThreadTs,
-      currentMessageId: resolvedOptions.currentMessageId,
-      accountId: resolvedOptions.currentAccountId,
-      sessionKey: resolvedOptions.sessionKey,
-      sessionId: resolvedOptions.sessionId,
-      agentId: resolvedOptions.agentId,
-      requesterSenderId: resolvedOptions.requesterSenderId,
-      senderIsOwner: resolvedOptions.senderIsOwner,
-    });
+  if (currentChannel && messageToolDiscoveryParams) {
+    const channelActions = listChannelSupportedActions(
+      buildMessageActionDiscoveryInput(messageToolDiscoveryParams, currentChannel),
+    );
     if (channelActions.length > 0) {
       // Always include "send" as a base action
       const allActions = new Set<ChannelMessageActionName | "send">(["send", ...channelActions]);
@@ -645,19 +566,9 @@ function buildMessageToolDescription(options?: {
         if (plugin.id === currentChannel) {
           continue;
         }
-        const actions = listChannelSupportedActions({
-          cfg: resolvedOptions.config,
-          channel: plugin.id,
-          currentChannelId: resolvedOptions.currentChannelId,
-          currentThreadTs: resolvedOptions.currentThreadTs,
-          currentMessageId: resolvedOptions.currentMessageId,
-          accountId: resolvedOptions.currentAccountId,
-          sessionKey: resolvedOptions.sessionKey,
-          sessionId: resolvedOptions.sessionId,
-          agentId: resolvedOptions.agentId,
-          requesterSenderId: resolvedOptions.requesterSenderId,
-          senderIsOwner: resolvedOptions.senderIsOwner,
-        });
+        const actions = listChannelSupportedActions(
+          buildMessageActionDiscoveryInput(messageToolDiscoveryParams, plugin.id),
+        );
         if (actions.length > 0) {
           const all = new Set<ChannelMessageActionName | "send">(["send", ...actions]);
           otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
@@ -675,19 +586,8 @@ function buildMessageToolDescription(options?: {
   }
 
   // Fallback to generic description with all configured actions
-  if (resolvedOptions.config) {
-    const actions = listAllMessageToolActions({
-      cfg: resolvedOptions.config,
-      currentChannelId: resolvedOptions.currentChannelId,
-      currentThreadTs: resolvedOptions.currentThreadTs,
-      currentMessageId: resolvedOptions.currentMessageId,
-      currentAccountId: resolvedOptions.currentAccountId,
-      sessionKey: resolvedOptions.sessionKey,
-      sessionId: resolvedOptions.sessionId,
-      agentId: resolvedOptions.agentId,
-      requesterSenderId: resolvedOptions.requesterSenderId,
-      senderIsOwner: resolvedOptions.senderIsOwner,
-    });
+  if (messageToolDiscoveryParams) {
+    const actions = listAllMessageToolActions(messageToolDiscoveryParams);
     if (actions.length > 0) {
       return appendMessageToolReadHint(
         `${baseDescription} Supports actions: ${actions.join(", ")}.`,
