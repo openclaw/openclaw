@@ -63,7 +63,7 @@ CDP_READY=0
 echo "[sandbox] Waiting for CDP on port ${CHROME_CDP_PORT}..."
 
 for ((i=1; i<=MAX_RETRIES; i++)); do
-  if curl -s "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" > /dev/null; then
+  if curl -s --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" > /dev/null; then
     CDP_READY=1
     break
   fi
