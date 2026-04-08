@@ -6,7 +6,6 @@ import {
   createQueuedWizardPrompter,
   runSetupWizardFinalize,
 } from "../../../test/helpers/plugins/setup-wizard.js";
-import { whatsappSetupPlugin } from "./channel.setup.js";
 import { whatsappSetupWizard } from "./setup-surface.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -57,7 +56,11 @@ function createRuntime(): RuntimeEnv {
 }
 
 const whatsappGetStatus = createPluginSetupWizardStatus({
-  ...whatsappSetupPlugin,
+  id: "whatsapp",
+  meta: {
+    label: "WhatsApp",
+  },
+  setupWizard: whatsappSetupWizard,
 } as never);
 
 async function runFinalizeWithHarness(params: {

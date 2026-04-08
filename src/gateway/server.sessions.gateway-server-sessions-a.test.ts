@@ -2169,6 +2169,7 @@ describe("gateway server sessions", () => {
     expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
       allowBackendUnavailable: true,
       cfg: expect.any(Object),
+      discardPersistentState: true,
       requireAcpSession: false,
       reason: "session-delete",
       sessionKey: "agent:main:discord:group:dev",
@@ -2411,6 +2412,13 @@ describe("gateway server sessions", () => {
   test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
+    const prepareFreshSession = vi.fn(async () => {});
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: {
+        prepareFreshSession,
+      },
+    });
 
     await writeSessionStore({
       entries: {
@@ -2421,6 +2429,13 @@ describe("gateway server sessions", () => {
             backend: "acpx",
             agent: "codex",
             runtimeSessionName: "runtime:reset",
+            identity: {
+              state: "resolved",
+              acpxRecordId: "agent:main:main",
+              acpxSessionId: "backend-session-1",
+              source: "status",
+              lastUpdatedAt: Date.now(),
+            },
             mode: "persistent",
             runtimeOptions: {
               runtimeMode: "auto",
@@ -2442,6 +2457,11 @@ describe("gateway server sessions", () => {
           backend?: string;
           agent?: string;
           runtimeSessionName?: string;
+          identity?: {
+            state?: string;
+            acpxRecordId?: string;
+            acpxSessionId?: string;
+          };
           mode?: string;
           runtimeOptions?: {
             runtimeMode?: string;
@@ -2459,6 +2479,10 @@ describe("gateway server sessions", () => {
       backend: "acpx",
       agent: "codex",
       runtimeSessionName: "runtime:reset",
+      identity: {
+        state: "pending",
+        acpxRecordId: "agent:main:main",
+      },
       mode: "persistent",
       runtimeOptions: {
         runtimeMode: "auto",
@@ -2467,11 +2491,16 @@ describe("gateway server sessions", () => {
       cwd: "/tmp/acp-session",
       state: "idle",
     });
+    expect(reset.payload?.entry.acp?.identity?.acpxSessionId).toBeUndefined();
     expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
       allowBackendUnavailable: true,
       cfg: expect.any(Object),
+      discardPersistentState: true,
       requireAcpSession: false,
       reason: "session-reset",
+      sessionKey: "agent:main:main",
+    });
+    expect(prepareFreshSession).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
     });
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
@@ -2481,6 +2510,11 @@ describe("gateway server sessions", () => {
           backend?: string;
           agent?: string;
           runtimeSessionName?: string;
+          identity?: {
+            state?: string;
+            acpxRecordId?: string;
+            acpxSessionId?: string;
+          };
           mode?: string;
           runtimeOptions?: {
             runtimeMode?: string;
@@ -2495,6 +2529,10 @@ describe("gateway server sessions", () => {
       backend: "acpx",
       agent: "codex",
       runtimeSessionName: "runtime:reset",
+      identity: {
+        state: "pending",
+        acpxRecordId: "agent:main:main",
+      },
       mode: "persistent",
       runtimeOptions: {
         runtimeMode: "auto",
@@ -2503,6 +2541,7 @@ describe("gateway server sessions", () => {
       cwd: "/tmp/acp-session",
       state: "idle",
     });
+    expect(store["agent:main:main"]?.acp?.identity?.acpxSessionId).toBeUndefined();
 
     ws.close();
   });

@@ -37,6 +37,7 @@ const backendLiveTest =
     ? {
         defaultModelRef: fallbackBackend.liveTest?.defaultModelRef,
         defaultImageProbe: fallbackBackend.liveTest?.defaultImageProbe === true,
+        defaultMcpProbe: fallbackBackend.liveTest?.defaultMcpProbe === true,
         dockerNpmPackage: fallbackBackend.liveTest?.docker?.npmPackage,
         dockerBinaryName: fallbackBackend.liveTest?.docker?.binaryName,
       }
@@ -53,8 +54,10 @@ process.stdout.write(
       imageMode: backendConfig?.imageMode,
       systemPromptWhen: backendConfig?.systemPromptWhen ?? "never",
       bundleMcp: resolved?.bundleMcp === true || fallbackBackend?.bundleMcp === true,
+      bundleMcpMode: resolved?.bundleMcpMode ?? fallbackBackend?.bundleMcpMode,
       defaultModelRef: backendLiveTest?.defaultModelRef,
       defaultImageProbe: backendLiveTest?.defaultImageProbe === true,
+      defaultMcpProbe: backendLiveTest?.defaultMcpProbe === true,
       dockerNpmPackage: backendLiveTest?.dockerNpmPackage,
       dockerBinaryName: backendLiveTest?.dockerBinaryName,
     },

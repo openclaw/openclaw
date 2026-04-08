@@ -101,6 +101,7 @@ export function registerBrowserAgentActHookRoutes(
               cdpUrl,
               targetId: tab.targetId,
               ref,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
           }
         }

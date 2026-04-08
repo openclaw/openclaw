@@ -15,7 +15,7 @@ export {
   setProviderWebSearchPluginConfigValue,
   setTopLevelCredentialValue,
 } from "../agents/tools/web-search-provider-config.js";
-export { enablePluginInConfig } from "../plugins/enable.js";
+export { enablePluginInConfig } from "./provider-enable-config.js";
 export type {
   WebSearchCredentialResolutionSource,
   WebSearchProviderSetupContext,

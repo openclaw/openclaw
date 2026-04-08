@@ -41,6 +41,44 @@ type CreateClientFn = (
   plugins: ConstructorParameters<typeof Client>[2],
 ) => Client;
 
+type ListenerCompatClient = Client & {
+  plugins?: Array<{ id: string; plugin: Plugin }>;
+  registerListener?: (listener: object) => object;
+  unregisterListener?: (listener: object) => boolean;
+};
+
+function withLegacyListenerCompat(client: Client): ListenerCompatClient {
+  const compatClient = client as ListenerCompatClient;
+  if (!compatClient.registerListener) {
+    compatClient.registerListener = (listener: object) => {
+      if (!compatClient.listeners.includes(listener as never)) {
+        compatClient.listeners.push(listener as never);
+      }
+      return listener;
+    };
+  }
+  if (!compatClient.unregisterListener) {
+    compatClient.unregisterListener = (listener: object) => {
+      const index = compatClient.listeners.indexOf(listener as never);
+      if (index < 0) {
+        return false;
+      }
+      compatClient.listeners.splice(index, 1);
+      return true;
+    };
+  }
+  return compatClient;
+}
+
+function registerLatePlugin(client: Client, plugin: Plugin) {
+  const compatClient = withLegacyListenerCompat(client);
+  void plugin.registerClient?.(compatClient);
+  void plugin.registerRoutes?.(compatClient);
+  if (!compatClient.plugins?.some((entry) => entry.id === plugin.id)) {
+    compatClient.plugins?.push({ id: plugin.id, plugin });
+  }
+}
+
 export function createDiscordStatusReadyListener(params: {
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0];
   getAutoPresenceController: () => DiscordAutoPresenceController | null;
@@ -97,6 +135,10 @@ export function createDiscordMonitorClient(params: {
   if (params.voiceEnabled) {
     clientPlugins.push(new VoicePlugin());
   }
+  const voicePlugin = clientPlugins.find((plugin) => plugin.id === "voice");
+  const constructorPlugins = voicePlugin
+    ? clientPlugins.filter((plugin) => plugin !== voicePlugin)
+    : clientPlugins;
 
   // Pass eventQueue config to Carbon so the gateway listener budget can be tuned.
   // Default listenerTimeout is 120s (Carbon defaults to 30s, which is too short for some
@@ -125,8 +167,11 @@ export function createDiscordMonitorClient(params: {
       components: params.components,
       modals: params.modals,
     },
-    clientPlugins,
+    constructorPlugins,
   );
+  if (voicePlugin) {
+    registerLatePlugin(client, voicePlugin);
+  }
   if (params.proxyFetch) {
     client.rest = createDiscordRequestClient(params.token, {
       fetch: params.proxyFetch,

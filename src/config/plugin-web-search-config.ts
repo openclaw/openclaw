@@ -1,8 +1,18 @@
 import { isRecord } from "../utils.js";
-import type { OpenClawConfig } from "./config.js";
+
+type PluginWebSearchConfigCarrier = {
+  plugins?: {
+    entries?: Record<
+      string,
+      {
+        config?: unknown;
+      }
+    >;
+  };
+};
 
 export function resolvePluginWebSearchConfig(
-  config: OpenClawConfig | undefined,
+  config: PluginWebSearchConfigCarrier | undefined,
   pluginId: string,
 ): Record<string, unknown> | undefined {
   const pluginConfig = config?.plugins?.entries?.[pluginId]?.config;

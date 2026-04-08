@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 /**
  * Template interpolation for response prefix.
  *
@@ -44,7 +46,7 @@ export function resolveResponsePrefixTemplate(
   }
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
-    const normalizedVar = varName.toLowerCase();
+    const normalizedVar = normalizeLowercaseStringOrEmpty(varName);
 
     switch (normalizedVar) {
       case "model":

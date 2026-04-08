@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
@@ -80,8 +80,7 @@ export default definePluginEntry({
             PROVIDER_ID,
           );
           const builtInProvider = buildKimiCodingProvider();
-          const explicitBaseUrl =
-            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
+          const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
           const explicitHeaders = isRecord(explicitProvider?.headers)
             ? (explicitProvider.headers as Record<string, SecretInput>)
             : undefined;

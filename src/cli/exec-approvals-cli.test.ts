@@ -419,31 +419,50 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get", "--json"]);
 
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectivePolicy: expect.objectContaining({
-          scopes: expect.arrayContaining([
-            expect.objectContaining({
-              scopeLabel: "agent:runner",
-              security: expect.objectContaining({
-                requested: "full",
-                requestedSource: "tools.exec.security",
-                effective: "allowlist",
-              }),
-              ask: expect.objectContaining({
-                requested: "off",
-                requestedSource: "tools.exec.ask",
-                effective: "always",
-              }),
-              askFallback: expect.objectContaining({
-                effective: "full",
-                source: "OpenClaw default (full)",
-              }),
-            }),
-          ]),
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.anything(), 0);
+
+    const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0] as {
+      effectivePolicy: { scopes: unknown[] };
+    };
+
+    expect(output.effectivePolicy.scopes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scopeLabel: "tools.exec",
+          security: expect.objectContaining({
+            requested: "full",
+            requestedSource: "tools.exec.security",
+            effective: "full",
+          }),
+          ask: expect.objectContaining({
+            requested: "off",
+            requestedSource: "tools.exec.ask",
+            effective: "off",
+          }),
+          askFallback: expect.objectContaining({
+            effective: "full",
+            source: "OpenClaw default (full)",
+          }),
         }),
-      }),
-      0,
+        expect.objectContaining({
+          scopeLabel: "agent:runner",
+          security: expect.objectContaining({
+            requested: "full",
+            requestedSource: "tools.exec.security",
+            effective: "allowlist",
+          }),
+          ask: expect.objectContaining({
+            requested: "off",
+            requestedSource: "tools.exec.ask",
+            effective: "always",
+          }),
+          askFallback: expect.objectContaining({
+            effective: "allowlist",
+            source: "OpenClaw default (full)",
+          }),
+        }),
+      ]),
     );
   });
 

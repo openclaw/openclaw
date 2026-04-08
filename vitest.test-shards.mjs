@@ -8,6 +8,11 @@ export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test
 
 export const fullSuiteVitestShards = [
   {
+    config: "vitest.full-core-unit-fast.config.ts",
+    name: "core-unit-fast",
+    projects: ["vitest.unit-fast.config.ts"],
+  },
+  {
     config: "vitest.full-core-unit-src.config.ts",
     name: "core-unit-src",
     projects: ["vitest.unit-src.config.ts"],

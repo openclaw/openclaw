@@ -11,7 +11,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
 export {
@@ -57,20 +57,6 @@ function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
     return { modelRef: entry };
   }
   return entry;
-}
-
-function resolveCurrentPrimaryModel(model: unknown): string | undefined {
-  if (typeof model === "string") {
-    return normalizeOptionalString(model);
-  }
-  if (
-    model &&
-    typeof model === "object" &&
-    typeof (model as { primary?: unknown }).primary === "string"
-  ) {
-    return normalizeOptionalString((model as { primary: string }).primary);
-  }
-  return undefined;
 }
 
 type ProviderModelMergeState = {
@@ -237,7 +223,7 @@ export function applyOpencodeZenModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
-  const current = resolveCurrentPrimaryModel(cfg.agents?.defaults?.model);
+  const current = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
   const normalizedCurrent =
     current && LEGACY_OPENCODE_ZEN_DEFAULT_MODELS.has(current)
       ? OPENCODE_ZEN_DEFAULT_MODEL

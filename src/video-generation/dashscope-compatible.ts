@@ -1,4 +1,5 @@
 import { assertOkOrThrowHttpError, fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationRequest,
@@ -139,7 +140,7 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
       throw new Error(
         payload.output?.message?.trim() ||
           payload.message?.trim() ||
-          `${params.providerLabel} video generation task ${params.taskId} ${status.toLowerCase()}`,
+          `${params.providerLabel} video generation task ${params.taskId} ${normalizeLowercaseStringOrEmpty(status)}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, DEFAULT_VIDEO_GENERATION_POLL_INTERVAL_MS));

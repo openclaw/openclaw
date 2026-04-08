@@ -1,5 +1,10 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../shared/string-coerce.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
@@ -14,39 +19,19 @@ export type CronDeliveryPlan = {
 };
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
   return trimmed as CronMessageChannel;
 }
 
-function normalizeTo(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
-function normalizeAccountId(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
-function normalizeThreadId(value: unknown): string | number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return normalizeOptionalString(value);
-}
-
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
-  const normalizedMode = typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
+  const normalizedMode =
+    typeof rawMode === "string" ? normalizeLowercaseStringOrEmpty(rawMode) : rawMode;
   const mode =
     normalizedMode === "announce"
       ? "announce"
@@ -61,13 +46,13 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryChannel = normalizeChannel(
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
-  const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
-  const deliveryThreadId = normalizeThreadId(
+  const deliveryTo = normalizeOptionalString((delivery as { to?: unknown } | undefined)?.to);
+  const deliveryThreadId = normalizeOptionalThreadValue(
     (delivery as { threadId?: unknown } | undefined)?.threadId,
   );
   const channel = deliveryChannel ?? "last";
   const to = deliveryTo;
-  const deliveryAccountId = normalizeAccountId(
+  const deliveryAccountId = normalizeOptionalString(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
   if (hasDelivery) {
@@ -115,10 +100,7 @@ export type CronFailureDestinationInput = {
 };
 
 function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   if (trimmed === "announce" || trimmed === "webhook") {
     return trimmed;
   }
@@ -140,15 +122,15 @@ export function resolveFailureDestination(
 
   if (globalConfig) {
     channel = normalizeChannel(globalConfig.channel);
-    to = normalizeTo(globalConfig.to);
-    accountId = normalizeAccountId(globalConfig.accountId);
+    to = normalizeOptionalString(globalConfig.to);
+    accountId = normalizeOptionalString(globalConfig.accountId);
     mode = normalizeFailureMode(globalConfig.mode);
   }
 
   if (hasJobFailureDest) {
     const jobChannel = normalizeChannel(jobFailureDest.channel);
-    const jobTo = normalizeTo(jobFailureDest.to);
-    const jobAccountId = normalizeAccountId(jobFailureDest.accountId);
+    const jobTo = normalizeOptionalString(jobFailureDest.to);
+    const jobAccountId = normalizeOptionalString(jobFailureDest.accountId);
     const jobMode = normalizeFailureMode(jobFailureDest.mode);
     const hasJobChannelField = "channel" in jobFailureDest;
     const hasJobToField = "to" in jobFailureDest;

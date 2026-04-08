@@ -67,12 +67,6 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
   return { token: fallbackToken, source: "shared-token-fallback" };
 }
 
-function resolveBootstrapTokenCandidate(
-  connectAuth: HandshakeConnectAuth | null | undefined,
-): string | undefined {
-  return normalizeOptionalString(connectAuth?.bootstrapToken);
-}
-
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: HandshakeConnectAuth | null | undefined;
@@ -86,7 +80,7 @@ export async function resolveConnectAuthState(params: {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
   const bootstrapTokenCandidate = params.hasDeviceIdentity
-    ? resolveBootstrapTokenCandidate(params.connectAuth)
+    ? normalizeOptionalString(params.connectAuth?.bootstrapToken)
     : undefined;
   const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
     params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};

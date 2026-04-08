@@ -17,6 +17,15 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import {
+  assertCronJobMatches,
+  assertCronJobVisibleViaCli,
+  assertLiveImageProbeReply,
+  buildLiveCronProbeMessage,
+  createLiveCronProbeSpec,
+  runOpenClawCliJson,
+} from "./live-agent-probes.js";
+import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -330,6 +339,11 @@ async function sendChatAndWait(params: {
   originatingChannel: string;
   originatingTo: string;
   originatingAccountId: string;
+  attachments?: Array<{
+    mimeType: string;
+    fileName: string;
+    content: string;
+  }>;
 }) {
   const started = await params.client.request<{ runId?: string; status?: string }>("chat.send", {
     sessionKey: params.sessionKey,
@@ -338,6 +352,7 @@ async function sendChatAndWait(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
+    attachments: params.attachments,
   });
   if (started?.status !== "started" || typeof started.runId !== "string") {
     throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
@@ -383,6 +398,40 @@ async function waitForAssistantText(params: {
   );
 }
 
+async function waitForAssistantTurn(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  minAssistantCount: number;
+  timeoutMs?: number;
+}): Promise<{ messages: unknown[]; lastAssistantText: string }> {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const history = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 16,
+    });
+    const messages = history.messages ?? [];
+    const assistantTexts = extractAssistantTexts(messages);
+    const lastAssistantText = assistantTexts.at(-1) ?? null;
+    if (assistantTexts.length >= params.minAssistantCount && lastAssistantText) {
+      return { messages, lastAssistantText };
+    }
+    await sleep(500);
+  }
+
+  const finalHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 16,
+  });
+  throw new Error(
+    `timed out waiting for assistant turn ${String(params.minAssistantCount)}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
+}
+
 describeLive("gateway live (ACP bind)", () => {
   it(
     "binds a synthetic Slack DM conversation to a live ACP session and reroutes the next turn",
@@ -416,7 +465,7 @@ describeLive("gateway live (ACP bind)", () => {
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
+      process.env.OPENCLAW_SKIP_CRON = "0";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -473,6 +522,11 @@ describeLive("gateway live (ACP bind)", () => {
               },
             },
           },
+        },
+        cron: {
+          ...cfg.cron,
+          enabled: true,
+          store: path.join(tempRoot, "cron.json"),
         },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
@@ -572,6 +626,98 @@ describeLive("gateway live (ACP bind)", () => {
         expect(assistantTexts.join("\n\n")).toContain(`ACP-BIND-${followupNonce}`);
         expect(lastAssistantText).toContain(`ACP-BIND-MEMORY-${memoryNonce}`);
         logLiveStep("bound session transcript contains the final marker token");
+
+        const markerAssistantCount = assistantTexts.length;
+        await sendChatAndWait({
+          client,
+          sessionKey: originalSessionKey,
+          idempotencyKey: `idem-image-${randomUUID()}`,
+          message:
+            "Best match for the attached image: lobster, mouse, cat, horse. " +
+            "Reply with one lowercase word only.",
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+          attachments: [
+            {
+              mimeType: "image/png",
+              fileName: `probe-${randomUUID()}.png`,
+              content: renderCatFacePngBase64(),
+            },
+          ],
+        });
+        logLiveStep("image turn completed");
+
+        const imageHistory = await waitForAssistantTurn({
+          client,
+          sessionKey: spawnedSessionKey,
+          minAssistantCount: markerAssistantCount + 1,
+          timeoutMs: 60_000,
+        });
+        assertLiveImageProbeReply(imageHistory.lastAssistantText);
+        logLiveStep("bound session classified the probe image");
+
+        const imageAssistantCount = extractAssistantTexts(imageHistory.messages).length;
+        const cronProbe = createLiveCronProbeSpec();
+        let cronJobId: string | undefined;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await sendChatAndWait({
+            client,
+            sessionKey: originalSessionKey,
+            idempotencyKey: `idem-cron-${attempt}-${randomUUID()}`,
+            message: buildLiveCronProbeMessage({
+              agent: liveAgent,
+              argsJson: cronProbe.argsJson,
+              attempt,
+              exactReply: cronProbe.name,
+            }),
+            originatingChannel: "slack",
+            originatingTo: conversationId,
+            originatingAccountId: accountId,
+          });
+          logLiveStep(`cron mcp turn completed (attempt ${String(attempt + 1)})`);
+
+          const cronHistory = await waitForAssistantTurn({
+            client,
+            sessionKey: spawnedSessionKey,
+            minAssistantCount: imageAssistantCount + attempt + 1,
+            timeoutMs: 90_000,
+          });
+          const createdJob = await assertCronJobVisibleViaCli({
+            port,
+            token,
+            env: process.env,
+            expectedName: cronProbe.name,
+            expectedMessage: cronProbe.message,
+          });
+          if (createdJob) {
+            assertCronJobMatches({
+              job: createdJob,
+              expectedName: cronProbe.name,
+              expectedMessage: cronProbe.message,
+              expectedSessionKey: spawnedSessionKey,
+              expectedAgentId: liveAgent,
+            });
+            cronJobId = createdJob.id;
+            expect(cronHistory.lastAssistantText.trim().length).toBeGreaterThan(0);
+            break;
+          }
+          if (attempt === 1) {
+            throw new Error(
+              `acp cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(
+                cronHistory.lastAssistantText,
+              )}`,
+            );
+          }
+        }
+        if (!cronJobId) {
+          throw new Error(`acp cron cli verify did not create job ${cronProbe.name}`);
+        }
+        await runOpenClawCliJson(
+          ["cron", "rm", cronJobId, "--json", "--url", `ws://127.0.0.1:${port}`, "--token", token],
+          process.env,
+        );
+        logLiveStep("bound session created cron via MCP and CLI verification passed");
       } finally {
         releasePinnedPluginChannelRegistry(channelRegistry);
         clearRuntimeConfigSnapshot();

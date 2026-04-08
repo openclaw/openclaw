@@ -243,10 +243,6 @@ function resolveInstallInfo(params: {
   };
 }
 
-function resolveCatalogPluginId(params: { pluginId?: string }): string | undefined {
-  return normalizeOptionalString(params.pluginId);
-}
-
 function buildCatalogEntryFromManifest(params: {
   pluginId?: string;
   packageName?: string;
@@ -276,9 +272,7 @@ function buildCatalogEntryFromManifest(params: {
   if (!install) {
     return null;
   }
-  const pluginId = resolveCatalogPluginId({
-    pluginId: params.pluginId,
-  });
+  const pluginId = normalizeOptionalString(params.pluginId);
   return {
     id,
     ...(pluginId ? { pluginId } : {}),

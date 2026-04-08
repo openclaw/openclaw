@@ -15,6 +15,7 @@ import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
+import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
@@ -141,6 +142,8 @@ export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
+  /** Effective filesystem policy for the active tool run. */
+  fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -375,6 +378,14 @@ export type ProviderResolveDynamicModelContext = {
  * metadata over the network.
  */
 export type ProviderPrepareDynamicModelContext = ProviderResolveDynamicModelContext;
+
+export type ProviderPreferRuntimeResolvedModelContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+};
 
 /**
  * Last-chance rewrite hook for provider-owned transport normalization.
@@ -1135,6 +1146,12 @@ export type ProviderPlugin = {
    * completes, `resolveDynamicModel` is called again.
    */
   prepareDynamicModel?: (ctx: ProviderPrepareDynamicModelContext) => Promise<void>;
+  /**
+   * Lets a provider plugin opt exact configured models into a runtime
+   * metadata comparison pass before the embedded runner returns the explicit
+   * entry unchanged.
+   */
+  preferRuntimeResolvedModel?: (ctx: ProviderPreferRuntimeResolvedModelContext) => boolean;
   /**
    * Provider-owned transport normalization.
    *
@@ -2017,6 +2034,11 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+export type CliBundleMcpMode =
+  | "claude-config-file"
+  | "codex-config-overrides"
+  | "gemini-system-settings";
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
@@ -2032,6 +2054,7 @@ export type CliBackendPlugin = {
   liveTest?: {
     defaultModelRef?: string;
     defaultImageProbe?: boolean;
+    defaultMcpProbe?: boolean;
     docker?: {
       npmPackage?: string;
       binaryName?: string;
@@ -2040,10 +2063,19 @@ export type CliBackendPlugin = {
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *
-   * Keep this opt-in. Only backends that explicitly consume an MCP config file
-   * should enable it.
+   * Keep this opt-in. Only backends that explicitly consume OpenClaw's bundle
+   * MCP bridge should enable it.
    */
   bundleMcp?: boolean;
+  /**
+   * Provider-owned bundle MCP integration strategy.
+   *
+   * Different CLIs wire MCP through different surfaces:
+   * - Claude: `--strict-mcp-config --mcp-config`
+   * - Codex: `-c mcp_servers=...`
+   * - Gemini: system-level `settings.json`
+   */
+  bundleMcpMode?: CliBundleMcpMode;
   /**
    * Optional config normalizer applied after user overrides merge.
    *
@@ -2197,6 +2229,10 @@ export type OpenClawPluginApi = {
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
+  /** Register a compaction provider (pluggable summarization backend). */
+  registerCompactionProvider: (
+    provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (

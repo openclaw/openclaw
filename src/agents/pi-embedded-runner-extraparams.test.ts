@@ -132,6 +132,7 @@ import {
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
@@ -170,6 +171,7 @@ function createTestOpenAIProviderWrapper(
     config: params.context.config,
     agentDir: params.context.agentDir,
   });
+  streamFn = createOpenAIStringContentWrapper(streamFn);
   return createOpenAIResponsesContextManagementWrapper(
     createOpenAIReasoningCompatibilityWrapper(streamFn),
     params.context.extraParams,
@@ -560,6 +562,54 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "inferrs",
+      applyModelId: "gg-hf-gg/gemma-4-E2B-it",
+      model: {
+        api: "openai-completions",
+        provider: "inferrs",
+        id: "gg-hf-gg/gemma-4-E2B-it",
+        name: "Gemma 4 E2B (inferrs)",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 4096,
+        compat: {
+          requiresStringContent: true,
+        } as Record<string, unknown>,
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "system",
+            content: [{ type: "text", text: "System text" }],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Line one" },
+              { type: "text", text: "Line two" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: "System text",
+      },
+      {
+        role: "user",
+        content: "Line one\nLine two",
+      },
+    ]);
   });
 
   it("injects parallel_tool_calls for openai-responses payloads when configured", () => {
@@ -1101,6 +1151,109 @@ describe("applyExtraParamsToAgent", () => {
       thinkingConfig: {
         includeThoughts: true,
         thinkingBudget: 2048,
+      },
+    });
+  });
+
+  it("rewrites Gemma 4 thinkingBudget to a supported Google thinkingLevel", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: 24576,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google", "gemma-4-26b-a4b-it", undefined, "high");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      reasoning: true,
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        includeThoughts: true,
+        thinkingLevel: "HIGH",
+      },
+    });
+  });
+
+  it("preserves Gemma 4 thinking off instead of rewriting thinkingBudget=0 to MINIMAL", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google", "gemma-4-26b-a4b-it", undefined, "off");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      reasoning: true,
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({});
+  });
+
+  it("preserves explicit Gemma 4 thinking level when thinkingBudget=0", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google", "gemma-4-26b-a4b-it", undefined, "high");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      reasoning: true,
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        thinkingLevel: "HIGH",
       },
     });
   });

@@ -6,6 +6,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -58,14 +59,14 @@ function resolveSize(params: {
   aspectRatio?: string;
   resolution?: string;
 }): (typeof OPENAI_VIDEO_SIZES)[number] | undefined {
-  const explicitSize = params.size?.trim();
+  const explicitSize = normalizeOptionalString(params.size);
   if (
     explicitSize &&
     OPENAI_VIDEO_SIZES.includes(explicitSize as (typeof OPENAI_VIDEO_SIZES)[number])
   ) {
     return explicitSize as (typeof OPENAI_VIDEO_SIZES)[number];
   }
-  switch (params.aspectRatio?.trim()) {
+  switch (normalizeOptionalString(params.aspectRatio)) {
     case "9:16":
       return "720x1280";
     case "16:9":
@@ -98,7 +99,8 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
     );
   }
   const mimeType =
-    asset.mimeType?.trim() || ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
+    normalizeOptionalString(asset.mimeType) ||
+    ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
   const extension = mimeType.includes("video")
     ? "mp4"
     : mimeType.includes("jpeg")
@@ -107,7 +109,7 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
         ? "webp"
         : "png";
   const fileName =
-    asset.fileName?.trim() ||
+    normalizeOptionalString(asset.fileName) ||
     `${(req.inputVideos?.length ?? 0) > 0 ? "reference-video" : "reference-image"}.${extension}`;
   return new File([toBlobBytes(asset.buffer)], fileName, { type: mimeType });
 }
@@ -135,7 +137,9 @@ async function pollOpenAIVideo(params: {
       return payload;
     }
     if (payload.status === "failed") {
-      throw new Error(payload.error?.message?.trim() || "OpenAI video generation failed");
+      throw new Error(
+        normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed",
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
@@ -164,7 +168,7 @@ async function downloadOpenAIVideo(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "OpenAI video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
@@ -236,7 +240,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           transport: "http",
         });
 
-      const model = req.model?.trim() || DEFAULT_OPENAI_VIDEO_MODEL;
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENAI_VIDEO_MODEL;
       const seconds = resolveDurationSeconds(req.durationSeconds);
       const size = resolveSize({
         size: req.size,
@@ -262,7 +266,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   input_reference: {
                     image_url: toOpenAIDataUrl(
                       inputImage.buffer,
-                      inputImage.mimeType?.trim() || "image/png",
+                      normalizeOptionalString(inputImage.mimeType) ?? "image/png",
                     ),
                   },
                 },
@@ -322,7 +326,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
         const submitted = (await response.json()) as OpenAIVideoResponse;
-        const videoId = submitted.id?.trim();
+        const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("OpenAI video generation response missing video id");
         }

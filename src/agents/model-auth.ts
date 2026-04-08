@@ -12,6 +12,10 @@ import {
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
@@ -140,7 +144,7 @@ function resolveProviderAuthOverride(
 
 function isLocalBaseUrl(baseUrl: string): boolean {
   try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
     return (
       host === "localhost" ||
       host === "127.0.0.1" ||
@@ -717,7 +721,7 @@ export function applyAuthHeaderOverride<T extends Model<Api>>(
   const headers: Record<string, string> = {};
   if (model.headers) {
     for (const [key, value] of Object.entries(model.headers)) {
-      if (key.toLowerCase() !== "authorization") {
+      if (normalizeOptionalLowercaseString(key) !== "authorization") {
         headers[key] = value;
       }
     }

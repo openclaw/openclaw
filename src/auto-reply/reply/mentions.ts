@@ -4,7 +4,11 @@ import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 
@@ -130,7 +134,9 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
 }
 
 export function normalizeMentionText(text: string): string {
-  return (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+  );
 }
 
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
@@ -201,7 +207,7 @@ export function stripMentions(
   let result = text;
   const providerId =
     (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
-    (normalizeOptionalString(ctx.Provider)?.toLowerCase() as ChannelId | undefined) ??
+    (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
     null;
   const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
   const configRegexes = compileMentionPatternsCached({

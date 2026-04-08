@@ -1,7 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { LineConfig, LineGroupConfig } from "./types.js";
 
 export function resolveLineGroupLookupIds(groupId?: string | null): string[] {
@@ -63,11 +62,4 @@ export function resolveExactLineGroupConfigKey(params: {
   return resolveLineGroupLookupIds(params.groupId).find((candidate) =>
     Object.hasOwn(groups, candidate),
   );
-}
-
-export function resolveLineGroupHistoryKey(params: {
-  groupId?: string | null;
-  roomId?: string | null;
-}): string | undefined {
-  return normalizeOptionalString(params.groupId) ?? normalizeOptionalString(params.roomId);
 }

@@ -91,10 +91,6 @@ function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
 }
 
-function normalizeScopedChannelId(value?: string | null): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function selectChannelTargetIds(channel?: string): Set<string> {
   const commandSecretTargets = getCommandSecretTargets();
   if (!channel) {
@@ -128,7 +124,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
 } {
-  const channel = normalizeScopedChannelId(params.channel);
+  const channel = normalizeOptionalString(params.channel);
   const targetIds = selectChannelTargetIds(channel);
   const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
   if (!channel || !normalizedAccountId) {

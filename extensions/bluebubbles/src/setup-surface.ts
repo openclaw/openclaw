@@ -108,14 +108,6 @@ function applyBlueBubblesSetupPatch(
   });
 }
 
-function resolveBlueBubblesServerUrl(cfg: OpenClawConfig, accountId: string): string | undefined {
-  return normalizeOptionalString(resolveBlueBubblesAccount({ cfg, accountId }).config.serverUrl);
-}
-
-function resolveBlueBubblesWebhookPath(cfg: OpenClawConfig, accountId: string): string | undefined {
-  return normalizeOptionalString(resolveBlueBubblesAccount({ cfg, accountId }).config.webhookPath);
-}
-
 function validateBlueBubblesWebhookPath(value: string): string | undefined {
   const trimmed = String(value ?? "").trim();
   if (!trimmed) {
@@ -172,7 +164,9 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       configured ? "configured" : "iMessage via BlueBubbles app",
   },
   prepare: async ({ cfg, accountId, prompter, credentialValues }) => {
-    const existingWebhookPath = resolveBlueBubblesWebhookPath(cfg, accountId);
+    const existingWebhookPath = normalizeOptionalString(
+      resolveBlueBubblesAccount({ cfg, accountId }).config.webhookPath,
+    );
     const wantsCustomWebhook = await prompter.confirm({
       message: `Configure a custom webhook path? (default: ${DEFAULT_WEBHOOK_PATH})`,
       initialValue: Boolean(existingWebhookPath && existingWebhookPath !== DEFAULT_WEBHOOK_PATH),
@@ -225,7 +219,8 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
         "Find this in the BlueBubbles Server app under Connection.",
         `Docs: ${formatDocsLink("/channels/bluebubbles", "bluebubbles")}`,
       ],
-      currentValue: ({ cfg, accountId }) => resolveBlueBubblesServerUrl(cfg, accountId),
+      currentValue: ({ cfg, accountId }) =>
+        normalizeOptionalString(resolveBlueBubblesAccount({ cfg, accountId }).config.serverUrl),
       validate: ({ value }) => validateBlueBubblesServerUrlInput(value),
       normalizeValue: ({ value }) => String(value).trim(),
       applySet: async ({ cfg, accountId, value }) =>
@@ -238,7 +233,9 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       message: "Webhook path",
       placeholder: DEFAULT_WEBHOOK_PATH,
       currentValue: ({ cfg, accountId }) => {
-        const value = resolveBlueBubblesWebhookPath(cfg, accountId);
+        const value = normalizeOptionalString(
+          resolveBlueBubblesAccount({ cfg, accountId }).config.webhookPath,
+        );
         return value && value !== DEFAULT_WEBHOOK_PATH ? value : undefined;
       },
       shouldPrompt: ({ credentialValues }) =>
