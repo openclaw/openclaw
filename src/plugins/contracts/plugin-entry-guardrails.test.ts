@@ -20,7 +20,7 @@ const FORBIDDEN_CONTRACT_BARREL_PATTERNS = [
   /["']vitest["']/u,
   /["']openclaw\/plugin-sdk\/testing["']/u,
   /["']\.\/test-api\.js["']/u,
-  /["'][^"']*(?:^|\/)__tests__(?:\/|$)[^"']*["']/u,
+  /["'](?:__tests__\/|[^"']*\/__tests__\/)[^"']*["']/u,
   /["'][^"']*\.test-[^"']*["']/u,
   /["'][^"']*(?:test-harness|test-plugin|test-helper|harness)[^"']*["']/u,
 ] as const;
