@@ -472,10 +472,10 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun composeGatewayManualUrlDefaultsPortTo18789WhenNoTlsAndPortBlank() {
+  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
     val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
 
-    assertEquals("http://127.0.0.1:18789", url)
+    assertNull(url)
   }
 
   @Test
