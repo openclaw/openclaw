@@ -1287,3 +1287,48 @@ describe("eclaw missing webhookUrl fails fast (round 11)", () => {
     expect(getEclawClient("default")).toBeUndefined();
   });
 });
+
+describe("eclaw env fallback restricted to default account (round 12)", () => {
+  const savedEnv = { ...process.env };
+  afterEach(() => {
+    process.env = { ...savedEnv };
+  });
+
+  it("does not apply ECLAW_API_KEY env var to a named account", () => {
+    process.env.ECLAW_API_KEY = "env-key";
+    // Named account with no apiKey set in config
+    const account = resolveAccount(
+      { channels: { eclaw: { accounts: { work: {} } } } } as never,
+      "work",
+    );
+    expect(account.apiKey).toBe("");
+  });
+
+  it("does not apply ECLAW_WEBHOOK_URL env var to a named account", () => {
+    process.env.ECLAW_WEBHOOK_URL = "https://env-webhook.example.com";
+    const account = resolveAccount(
+      { channels: { eclaw: { accounts: { work: {} } } } } as never,
+      "work",
+    );
+    expect(account.webhookUrl).toBe("");
+  });
+
+  it("still applies ECLAW_API_KEY env var to the default account", () => {
+    process.env.ECLAW_API_KEY = "env-key-for-default";
+    const account = resolveAccount({} as never, "default");
+    expect(account.apiKey).toBe("env-key-for-default");
+  });
+
+  it("named account explicit config is not affected by env restriction", () => {
+    process.env.ECLAW_API_KEY = "env-key";
+    const account = resolveAccount(
+      {
+        channels: {
+          eclaw: { accounts: { work: { apiKey: "work-explicit-key" } } },
+        },
+      } as never,
+      "work",
+    );
+    expect(account.apiKey).toBe("work-explicit-key");
+  });
+});

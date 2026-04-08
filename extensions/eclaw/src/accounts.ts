@@ -72,7 +72,11 @@ export function listAccountIds(cfg: OpenClawConfig): string[] {
 
 /**
  * Resolve a specific account by ID with full defaults applied.
- * Falls back to environment variables for the "default" account.
+ * Falls back to environment variables for the "default" account only.
+ * Named accounts must have their credentials set explicitly in config;
+ * env fallback is intentionally restricted to avoid silently wiring a
+ * named account to the wrong API key (callback collision risk in
+ * multi-account setups — see PR #62934 round 12 codex P2).
  */
 export function resolveAccount(
   cfg: OpenClawConfig,
@@ -90,10 +94,15 @@ export function resolveAccount(
     accountId: id,
   });
 
-  const envApiKey = process.env.ECLAW_API_KEY ?? "";
-  const envApiBase = process.env.ECLAW_API_BASE ?? DEFAULT_API_BASE;
-  const envBotName = process.env.ECLAW_BOT_NAME ?? DEFAULT_BOT_NAME;
-  const envWebhookUrl = process.env.ECLAW_WEBHOOK_URL ?? "";
+  // Gate env fallback to the default account only.
+  // Named accounts get explicit config values or built-in defaults.
+  const isDefault = id === DEFAULT_ACCOUNT_ID;
+  const envApiKey = isDefault ? (process.env.ECLAW_API_KEY ?? "") : "";
+  const envApiBase = isDefault
+    ? (process.env.ECLAW_API_BASE ?? DEFAULT_API_BASE)
+    : DEFAULT_API_BASE;
+  const envBotName = isDefault ? (process.env.ECLAW_BOT_NAME ?? DEFAULT_BOT_NAME) : DEFAULT_BOT_NAME;
+  const envWebhookUrl = isDefault ? (process.env.ECLAW_WEBHOOK_URL ?? "") : "";
 
   return {
     accountId: id,
@@ -101,6 +110,6 @@ export function resolveAccount(
     apiKey: (merged.apiKey ?? envApiKey) || "",
     apiBase: stripTrailingSlash(merged.apiBase ?? envApiBase),
     botName: merged.botName ?? envBotName,
-    webhookUrl: stripTrailingSlash(merged.webhookUrl ?? envWebhookUrl ?? ""),
+    webhookUrl: stripTrailingSlash(merged.webhookUrl ?? envWebhookUrl),
   };
 }
