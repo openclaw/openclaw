@@ -311,21 +311,41 @@ function normalizeEnvProxyValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+export type WhatsAppConnectionWaitOptions =
+  | {
+      timeout: "none";
+    }
+  | {
+      timeoutMs: number;
+    };
+
+export async function waitForWaConnection(
+  sock: ReturnType<typeof makeWASocket>,
+  options: WhatsAppConnectionWaitOptions,
+) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
     };
     const evWithOff = sock.ev as unknown as OffCapable;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      evWithOff.off?.("connection.update", handler);
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
 
     const handler = (...args: unknown[]) => {
       const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
       if (update.connection === "open") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         resolve();
       }
       if (update.connection === "close") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         reject(
           toLintErrorObject(
             update.lastDisconnect ?? new Error("Connection closed"),
@@ -336,6 +356,15 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     };
 
     sock.ev.on("connection.update", handler);
+
+    if ("timeoutMs" in options) {
+      const timeoutMs = options.timeoutMs;
+      timer = setTimeout(() => {
+        cleanup();
+        reject(createConnectionTimeoutError(timeoutMs));
+      }, timeoutMs);
+      timer.unref?.();
+    }
   });
 }
 
@@ -354,5 +383,15 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if ((typeof value === "object" && value !== null) || typeof value === "function") {
     Object.assign(error, value);
   }
+  return error;
+}
+
+function createConnectionTimeoutError(timeoutMs: number): Error {
+  const error = new Error(`WhatsApp connection timed out after ${timeoutMs}ms`);
+  Object.assign(error, {
+    output: {
+      statusCode: DisconnectReason?.timedOut ?? 408,
+    },
+  });
   return error;
 }
