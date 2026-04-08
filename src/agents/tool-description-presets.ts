@@ -33,10 +33,11 @@ export function describeSessionsSendTool(): string {
 
 export function describeSessionsSpawnTool(): string {
   return [
-    'Spawn an isolated session with `runtime="subagent"` or `runtime="acp"`.',
+    'Spawn an isolated session with `runtime="subagent"` (default) or `runtime="acp"`.',
     '`mode="run"` is one-shot and `mode="session"` is persistent or thread-bound.',
     "Subagents inherit the parent workspace directory automatically.",
     "Use this when the work should happen in a fresh child session instead of the current one.",
+    'For subagent spawns, only pass task, agentId, and runTimeoutSeconds. Do not set streamTo or resumeSessionId — those require runtime="acp".',
   ].join(" ");
 }
 

@@ -96,7 +96,10 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
+    description:
+      'Stream progress updates back to the parent session. Only supported for runtime="acp". Do not set this parameter when using runtime="subagent".',
+  }),
   lightContext: Type.Optional(
     Type.Boolean({
       description:

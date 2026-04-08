@@ -325,4 +325,19 @@ describe("sessions_spawn tool", () => {
     expect(contentSchema?.type).toBe("string");
     expect(contentSchema?.maxLength).toBeUndefined();
   });
+
+  it("includes acp-only guidance in streamTo schema description", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        streamTo?: {
+          description?: string;
+        };
+      };
+    };
+
+    const description = schema.properties?.streamTo?.description ?? "";
+    expect(description).toContain("acp");
+    expect(description).toContain("subagent");
+  });
 });
