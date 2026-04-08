@@ -1132,7 +1132,7 @@ export async function handleFeishuMessage(params: {
           delete (agentCtx as Record<string, unknown>).CommandAuthorized;
           const noopDispatcher = {
             sendToolResult: () => false,
-            sendBlockReply: () => false,
+            sendBlockReply: () => false as const,
             sendFinalReply: () => false,
             waitForIdle: async () => {},
             getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),

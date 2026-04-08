@@ -738,7 +738,10 @@ describe("gateway server chat", () => {
         const [params] = args as [
           {
             dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              sendBlockReply: (payload: {
+                text: string;
+                btw: { question: string };
+              }) => false | Promise<void>;
               markComplete: () => void;
               waitForIdle: () => Promise<void>;
               getQueuedCounts: () => { final: number; block: number; tool: number };

@@ -63,7 +63,7 @@ export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDisp
   return {
     dispatcher: {
       sendToolResult: vi.fn(() => false),
-      sendBlockReply: vi.fn(() => false),
+      sendBlockReply: vi.fn((): false => false),
       sendFinalReply: vi.fn(async () => true),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),

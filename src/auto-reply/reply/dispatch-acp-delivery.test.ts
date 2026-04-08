@@ -63,7 +63,7 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 function createDispatcher(): ReplyDispatcher {
   return {
     sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
+    sendBlockReply: vi.fn(() => Promise.resolve(true as const)),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
@@ -236,7 +236,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   it("tracks failed visible telegram block delivery separately", async () => {
     const dispatcher: ReplyDispatcher = {
       sendToolResult: vi.fn(() => true),
-      sendBlockReply: vi.fn(() => false),
+      sendBlockReply: vi.fn((): false => false),
       sendFinalReply: vi.fn(() => true),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
