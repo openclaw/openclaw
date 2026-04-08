@@ -501,6 +501,7 @@ export async function resolveRuntimeWebTools(params: {
   }
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
+  const hasCustomWebSearchRisk = hasCustomWebSearchPluginRisk(params.sourceConfig);
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
     return {
       search: {
@@ -516,7 +517,7 @@ export async function resolveRuntimeWebTools(params: {
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   const configuredBundledWebSearchPluginIdHint =
-    rawProvider && hasPluginWebSearchConfig && !hasCustomWebSearchPluginRisk(params.sourceConfig)
+    rawProvider && hasPluginWebSearchConfig && !hasCustomWebSearchRisk
       ? inferSingleBundledPluginScopedWebToolConfigOwner(params.sourceConfig, "webSearch")
       : undefined;
   const searchMetadata: RuntimeWebSearchMetadata = {
@@ -556,10 +557,10 @@ export async function resolveRuntimeWebTools(params: {
           onlyPluginIds:
             configuredBundledPluginId === undefined &&
             searchCompatibilityOnlyPluginIds.length > 0 &&
-            !hasCustomWebSearchPluginRisk(params.sourceConfig)
+            !hasCustomWebSearchRisk
               ? searchCompatibilityOnlyPluginIds
               : undefined,
-          hasCustomWebSearchPluginRisk: hasCustomWebSearchPluginRisk(params.sourceConfig),
+          hasCustomWebSearchPluginRisk: hasCustomWebSearchRisk,
         }),
       sortProviders: sortWebSearchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
