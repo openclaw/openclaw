@@ -315,6 +315,72 @@ describe("config io write prepare", () => {
     expect(channels?.bluebubbles?.password).toBe("test-password");
   });
 
+  it("drops synthesized empty config for disabled plugins that were never explicitly configured", () => {
+    const sourceConfig: OpenClawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+        entries: {
+          "memory-core": {
+            enabled: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const runtimeConfig: OpenClawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+        entries: {
+          "memory-core": {
+            enabled: false,
+            config: {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const nextConfig: OpenClawConfig = {
+      plugins: {
+        slots: {
+          memory: "libravdb-memory",
+        },
+        entries: {
+          "memory-core": {
+            enabled: false,
+            config: {},
+          },
+          "memory-lancedb": {
+            enabled: false,
+            config: {},
+          },
+          "libravdb-memory": {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig,
+    }) as {
+      plugins?: {
+        slots?: { memory?: string };
+        entries?: Record<string, Record<string, unknown>>;
+      };
+    };
+
+    expect(persisted.plugins?.slots?.memory).toBe("libravdb-memory");
+    expect(persisted.plugins?.entries?.["libravdb-memory"]).toEqual({ enabled: true });
+    expect(persisted.plugins?.entries?.["memory-core"]).toEqual({ enabled: false });
+    expect(persisted.plugins?.entries?.["memory-lancedb"]).toEqual({ enabled: false });
+  });
+
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
     const sourceConfig: OpenClawConfig = {
       channels: {

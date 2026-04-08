@@ -68,7 +68,70 @@ export function resolvePersistCandidateForWrite(params: {
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
-  return applyMergePatch(projectedSource, patch);
+  return stripSynthesizedDisabledPluginConfig({
+    candidate: applyMergePatch(projectedSource, patch),
+    sourceConfig: params.sourceConfig,
+  });
+}
+
+function stripSynthesizedDisabledPluginConfig(params: {
+  candidate: unknown;
+  sourceConfig: unknown;
+}): unknown {
+  if (!isRecord(params.candidate)) {
+    return params.candidate;
+  }
+
+  const candidatePlugins = params.candidate.plugins;
+  if (!isRecord(candidatePlugins) || !isRecord(candidatePlugins.entries)) {
+    return params.candidate;
+  }
+
+  const sourceEntries =
+    isRecord(params.sourceConfig) &&
+    isRecord(params.sourceConfig.plugins) &&
+    isRecord(params.sourceConfig.plugins.entries)
+      ? params.sourceConfig.plugins.entries
+      : null;
+
+  let changed = false;
+  let nextEntries = candidatePlugins.entries;
+
+  for (const [pluginId, entry] of Object.entries(candidatePlugins.entries)) {
+    if (!isRecord(entry) || entry.enabled !== false || !("config" in entry)) {
+      continue;
+    }
+    if (!isRecord(entry.config) || Object.keys(entry.config).length > 0) {
+      continue;
+    }
+
+    const sourceEntry =
+      sourceEntries && isRecord(sourceEntries[pluginId]) ? sourceEntries[pluginId] : null;
+    if (sourceEntry && Object.prototype.hasOwnProperty.call(sourceEntry, "config")) {
+      continue;
+    }
+
+    if (!changed) {
+      nextEntries = { ...nextEntries };
+      changed = true;
+    }
+
+    const nextEntry = { ...entry };
+    delete nextEntry.config;
+    nextEntries[pluginId] = nextEntry;
+  }
+
+  if (!changed) {
+    return params.candidate;
+  }
+
+  return {
+    ...params.candidate,
+    plugins: {
+      ...candidatePlugins,
+      entries: nextEntries,
+    },
+  };
 }
 
 export function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
