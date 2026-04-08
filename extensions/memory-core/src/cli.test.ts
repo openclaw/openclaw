@@ -1212,7 +1212,7 @@ describe("memory cli", () => {
       const file = payload?.grounded?.files?.[0];
       const rendered = file?.renderedMarkdown ?? "";
       expect(rendered).toContain(
-        "1. People mentioned with context: Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
+        "People mentioned with context: Bunji — partner, Surrealist Ball Sat 28 Feb w/ Maga",
       );
       expect(rendered).toContain("Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark");
       expect(rendered).toContain("Bunji — partner");
