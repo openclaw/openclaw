@@ -1038,6 +1038,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const scrollContainerRef = useRef<HTMLDivElement>(null);
 		const userScrolledAwayRef = useRef(false);
 		const scrollRafRef = useRef(0);
+		const [showScrollButton, setShowScrollButton] = useState(false);
 
 		// Detect when the user scrolls away from the bottom.
 		useEffect(() => {
@@ -1047,12 +1048,17 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			const onScroll = () => {
 				const distanceFromBottom =
 					el.scrollHeight - el.scrollTop - el.clientHeight;
-				// Threshold: if within 80px of the bottom, consider "at bottom"
-				userScrolledAwayRef.current = distanceFromBottom > 80;
+				const away = distanceFromBottom > 80;
+				userScrolledAwayRef.current = away;
+				setShowScrollButton(away);
 			};
 
 			el.addEventListener("scroll", onScroll, { passive: true });
 			return () => el.removeEventListener("scroll", onScroll);
+		}, []);
+
+		const scrollToBottom = useCallback(() => {
+			messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 		}, []);
 
 		// Auto-scroll effect — skips when user has scrolled away.
@@ -2624,6 +2630,28 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					</div>
 				)}
 				</div>
+
+				{/* Scroll to bottom button */}
+				{showScrollButton && !showHeroState && (
+					<div className="flex justify-center pointer-events-none" style={{ marginTop: -44, position: "relative", zIndex: 20 }}>
+						<button
+							type="button"
+							onClick={scrollToBottom}
+							className="pointer-events-auto w-8 h-8 rounded-full flex items-center justify-center shadow-md border transition-opacity hover:opacity-80"
+							style={{
+								background: "var(--color-surface)",
+								borderColor: "var(--color-border)",
+								color: "var(--color-text-muted)",
+							}}
+							title="Scroll to bottom"
+						>
+							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+								<path d="M12 5v14" />
+								<path d="m19 12-7 7-7-7" />
+							</svg>
+						</button>
+					</div>
+				)}
 
 				{/* Input bar at bottom (hidden when hero state is active) */}
 				{!showHeroState && (
