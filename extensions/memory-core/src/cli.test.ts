@@ -1217,7 +1217,7 @@ describe("memory cli", () => {
       expect(rendered).toContain("Bex — girlfriend, date weekend Fri-Sun London, Chateau Denmark");
       expect(rendered).toContain("Bunji — partner");
       expect(rendered).toContain("Bex — girlfriend");
-      expect(rendered).toContain("Bunji — Surrealist Ball Sat 28 Feb w/ Maga");
+      expect(rendered).not.toContain("Bunji — Surrealist Ball Sat 28 Feb w/ Maga [");
       expect(rendered).not.toContain("Bex — date weekend Fri-Sun London, Chateau Denmark");
       expect(
         file?.reflections?.some((item) =>
