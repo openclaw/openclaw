@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FUZZY_MEDIA_TAG_REGEX, SELF_CLOSING_TAG_REGEX } from './media-tags';
+import { FUZZY_MEDIA_TAG_REGEX, SELF_CLOSING_TAG_REGEX } from './media-tags.js';
 
 describe('media-tags with HTML entities', () => {
   it('extracts URL from entity-encoded fuzzy tag', () => {
