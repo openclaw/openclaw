@@ -14,6 +14,7 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
+  toSafeImportPath,
 } from "./sdk-alias.js";
 import type {
   CliBackendPlugin,
@@ -80,6 +81,7 @@ export function clearPluginSetupRegistryCache(): void {
 }
 
 function getJiti(modulePath: string) {
+  const safeModulePath = toSafeImportPath(modulePath);
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
   const tryNative = shouldPreferNativeJiti(modulePath);
   const cacheKey = JSON.stringify({
@@ -90,7 +92,7 @@ function getJiti(modulePath: string) {
   if (cached) {
     return cached;
   }
-  const loader = createJiti(modulePath, {
+  const loader = createJiti(safeModulePath, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
@@ -293,7 +295,8 @@ export function resolvePluginSetupRegistry(params?: {
 
     let mod: OpenClawPluginModule;
     try {
-      mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+      const safeSetupSource = toSafeImportPath(setupSource);
+      mod = getJiti(setupSource)(safeSetupSource) as OpenClawPluginModule;
     } catch {
       continue;
     }
@@ -416,7 +419,8 @@ export function resolvePluginSetupProvider(params: {
 
   let mod: OpenClawPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    const safeSetupSource = toSafeImportPath(setupSource);
+    mod = getJiti(setupSource)(safeSetupSource) as OpenClawPluginModule;
   } catch {
     setupProviderCache.set(cacheKey, null);
     return undefined;
@@ -516,7 +520,8 @@ export function resolvePluginSetupCliBackend(params: {
 
   let mod: OpenClawPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    const safeSetupSource = toSafeImportPath(setupSource);
+    mod = getJiti(setupSource)(safeSetupSource) as OpenClawPluginModule;
   } catch {
     return undefined;
   }

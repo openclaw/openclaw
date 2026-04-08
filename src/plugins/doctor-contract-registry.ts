@@ -12,6 +12,7 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
+  toSafeImportPath,
 } from "./sdk-alias.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -44,6 +45,7 @@ const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const doctorContractCache = new Map<string, PluginDoctorContractEntry[]>();
 
 function getJiti(modulePath: string) {
+  const safeModulePath = toSafeImportPath(modulePath);
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
   const tryNative = shouldPreferNativeJiti(modulePath);
   const cacheKey = JSON.stringify({
@@ -54,7 +56,7 @@ function getJiti(modulePath: string) {
   if (cached) {
     return cached;
   }
-  const loader = createJiti(modulePath, {
+  const loader = createJiti(safeModulePath, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
@@ -207,7 +209,8 @@ function resolvePluginDoctorContracts(params?: {
     }
     let mod: PluginDoctorContractModule;
     try {
-      mod = getJiti(contractSource)(contractSource) as PluginDoctorContractModule;
+      const safeContractSource = toSafeImportPath(contractSource);
+      mod = getJiti(contractSource)(safeContractSource) as PluginDoctorContractModule;
     } catch {
       continue;
     }

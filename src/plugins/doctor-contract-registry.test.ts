@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -75,7 +76,9 @@ describe("doctor-contract-registry getJiti", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "contract-api.js"));
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(path.join(pluginRoot, "contract-api.js")).href,
+    );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         tryNative: false,
