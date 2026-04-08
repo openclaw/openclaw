@@ -480,7 +480,7 @@ function DraggableNode({
   // Workspace root in browse mode: non-expandable entry point back to workspace
   const isWorkspaceRoot = !!workspaceRoot && node.path === workspaceRoot;
   const hasChildren = node.children && node.children.length > 0;
-  const isExpandable = isWorkspaceRoot ? false : node.type === "app" ? !!hasChildren : (hasChildren || node.type === "folder" || node.type === "object");
+  const isExpandable = isWorkspaceRoot ? false : !!hasChildren;
   const isExpanded = isWorkspaceRoot ? false : expandedPaths.has(node.path);
   const isActive = activePath === node.path;
   const isSelected = selectedPath === node.path;
@@ -562,7 +562,7 @@ function DraggableNode({
         onContextMenu={handleContextMenu}
         className="w-full flex items-center gap-1.5 py-1 px-2 rounded-md text-left text-sm transition-all duration-100 cursor-pointer select-none"
         style={{
-          paddingLeft: `${depth * 16 + 8}px`,
+          paddingLeft: `${depth * 10 + 8}px`,
           background: isWorkspaceRoot
             ? "var(--color-accent-light)"
             : showDropHighlight
@@ -659,7 +659,7 @@ function DraggableNode({
       {isExpanded && hasChildren && (
         <div className="relative" style={{
           borderLeft: depth > 0 ? "1px solid var(--color-border)" : "none",
-          marginLeft: `${depth * 16 + 16}px`,
+          marginLeft: `${depth * 10 + 14}px`,
         }}>
           {node.children!.map((child) => (
             <DraggableNode

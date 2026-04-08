@@ -496,11 +496,12 @@ export function WorkspaceSidebar({
 										type="button"
 										onClick={onClick}
 										disabled={switching}
-										className="text-[12px] flex items-center gap-1.5 truncate w-full transition-colors font-medium rounded-md px-1.5 py-1 -mx-1.5 hover:bg-stone-200/60 dark:hover:bg-stone-700/60"
+										className="group/ws text-[12px] flex items-center gap-1.5 truncate w-full transition-colors font-medium rounded-md px-1.5 py-1 -mx-1.5 hover:bg-stone-200/60 dark:hover:bg-stone-700/60"
 										style={{ color: "var(--color-text)" }}
 										title="Switch workspace"
 									>
 										<span className="truncate">{orgName || "Workspace"}</span>
+										<span className="flex-1" />
 										<span className="px-1 py-px rounded text-[10px] leading-tight shrink-0 bg-stone-200 text-stone-600 dark:bg-stone-700 dark:text-stone-300">
 											{workspaceName || "-"}
 										</span>
