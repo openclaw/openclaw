@@ -28,6 +28,23 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when a queued command exceeds its per-task
+ * execution budget (`maxExecutionMs`). The lane slot is freed immediately so
+ * queued work behind it is not blocked.
+ *
+ * Used by nested lane to cap a single stalled LLM call at 5 minutes instead
+ * of the previous unbounded wait (root cause of AGE-724 / 60-min stall).
+ */
+export class CommandLaneTimeoutError extends Error {
+  constructor(lane: string, maxExecutionMs: number) {
+    super(
+      `Command lane "${lane}" task timed out after ${maxExecutionMs}ms and was aborted to free the lane slot`,
+    );
+    this.name = "CommandLaneTimeoutError";
+  }
+}
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -39,6 +56,7 @@ type QueueEntry = {
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
   warnAfterMs: number;
+  maxExecutionMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -185,8 +203,24 @@ function drainLane(lane: string) {
         state.activeTaskIds.add(taskId);
         void (async () => {
           const startTime = Date.now();
+          // Per-task execution timeout (AGE-728): when maxExecutionMs is set, race
+          // the task against a deadline. On timeout the lane slot is freed immediately
+          // so queued tasks behind it are not blocked.
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          const taskWithTimeout: Promise<unknown> =
+            entry.maxExecutionMs != null
+              ? new Promise<unknown>((res, rej) => {
+                  timeoutHandle = setTimeout(() => {
+                    rej(new CommandLaneTimeoutError(lane, entry.maxExecutionMs!));
+                  }, entry.maxExecutionMs);
+                  void entry.task().then(res, rej);
+                })
+              : entry.task();
           try {
-            const result = await entry.task();
+            const result = await taskWithTimeout;
+            if (timeoutHandle != null) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
@@ -197,9 +231,16 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
+            if (timeoutHandle != null) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+            if (err instanceof CommandLaneTimeoutError) {
+              diag.error(
+                `lane task timeout: lane=${lane} maxExecutionMs=${entry.maxExecutionMs} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+              );
+            } else if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
               );
@@ -244,6 +285,17 @@ export function enqueueCommandInLane<T>(
   task: () => Promise<T>,
   opts?: {
     warnAfterMs?: number;
+    /**
+     * Maximum wall-clock milliseconds a task may execute before it is
+     * rejected with `CommandLaneTimeoutError` and the lane slot is freed.
+     *
+     * Set to `300_000` (5 minutes) for the nested lane to prevent a single
+     * stalled LLM call from blocking all nested agent operations indefinitely
+     * (root cause of AGE-724 / 60-min stall recurrence).
+     *
+     * Omit (default) for lanes where no cap is desired.
+     */
+    maxExecutionMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
@@ -261,6 +313,7 @@ export function enqueueCommandInLane<T>(
       reject,
       enqueuedAt: Date.now(),
       warnAfterMs,
+      maxExecutionMs: opts?.maxExecutionMs,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
