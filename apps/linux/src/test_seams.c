@@ -8,6 +8,7 @@
  */
 
 #include "test_seams.h"
+#include "json_access.h"
 #include <string.h>
 
 /* ── Cron sessionTarget mapping (from section_cron.c) ───────────────
@@ -69,7 +70,7 @@ int web_login_start_payload_has_qr(JsonObject *payload_obj,
      */
     const gchar *qr_data_url = NULL;
     if (json_object_has_member(payload_obj, "qrDataUrl")) {
-        qr_data_url = json_object_get_string_member(payload_obj, "qrDataUrl");
+        qr_data_url = oc_json_string_member(payload_obj, "qrDataUrl");
     }
 
     if (out_qr_data_url) *out_qr_data_url = qr_data_url;

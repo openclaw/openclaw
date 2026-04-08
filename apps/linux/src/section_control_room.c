@@ -10,6 +10,7 @@
 
 #include "gateway_mutations.h"
 #include "gateway_rpc.h"
+#include "json_access.h"
 #include "readiness.h"
 #include "state.h"
 
@@ -19,24 +20,6 @@ static GtkWidget *control_nodes_box = NULL;
 static GtkWidget *control_details_label = NULL;
 static GtkWidget *control_cron_job_entry = NULL;
 static GtkWidget *control_abort_session_entry = NULL;
-
-static const gchar* control_json_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) {
-        return NULL;
-    }
-    return json_node_get_string(node);
-}
-
-static gboolean control_json_bool_member(JsonObject *obj, const gchar *member, gboolean fallback) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return fallback;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_BOOLEAN) {
-        return fallback;
-    }
-    return json_node_get_boolean(node);
-}
 
 static gboolean control_fetch_in_flight = FALSE;
 static gint64 control_last_fetch_us = 0;
@@ -183,16 +166,16 @@ static void on_control_nodes_response(const GatewayRpcResponse *response, gpoint
             JsonNode *n = json_array_get_element(nodes, i);
             if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
             JsonObject *node = json_node_get_object(n);
-            const gchar *node_id = control_json_string_member(node, "nodeId");
+            const gchar *node_id = oc_json_string_member(node, "nodeId");
             if (!node_id) node_id = "unknown";
-            const gchar *name = control_json_string_member(node, "displayName");
+            const gchar *name = oc_json_string_member(node, "displayName");
             if (!name) name = node_id;
-            gboolean connected = control_json_bool_member(node, "connected", FALSE);
-            const gchar *platform = control_json_string_member(node, "platform");
+            gboolean connected = oc_json_bool_member(node, "connected", FALSE);
+            const gchar *platform = oc_json_string_member(node, "platform");
             if (!platform) platform = "?";
-            const gchar *version = control_json_string_member(node, "version");
+            const gchar *version = oc_json_string_member(node, "version");
             if (!version) version = "?";
-            gboolean paired = control_json_bool_member(node, "paired", FALSE);
+            gboolean paired = oc_json_bool_member(node, "paired", FALSE);
             g_autofree gchar *line = g_strdup_printf("%s (%s) — %s | %s %s | %s",
                                                      name,
                                                      node_id,

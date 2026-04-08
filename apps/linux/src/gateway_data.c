@@ -12,17 +12,22 @@
  */
 
 #include "gateway_data.h"
+#include "json_access.h"
 #include <string.h>
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 static gchar* json_get_string_or_null(JsonObject *obj, const gchar *member) {
-    if (!obj || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || json_node_is_null(node)) return NULL;
-    if (json_node_get_value_type(node) != G_TYPE_STRING) return NULL;
-    const gchar *val = json_node_get_string(node);
+    const gchar *val = oc_json_string_member(obj, member);
     return val ? g_strdup(val) : NULL;
+}
+
+static const gchar* json_array_get_string_element_typed(JsonArray *arr, guint index) {
+    if (!arr) return NULL;
+    JsonNode *node = json_array_get_element(arr, index);
+    if (!node || !JSON_NODE_HOLDS_VALUE(node)) return NULL;
+    if (json_node_get_value_type(node) != G_TYPE_STRING) return NULL;
+    return json_node_get_string(node);
 }
 
 static gint64 json_get_int64_or_zero(JsonObject *obj, const gchar *member) {
@@ -134,22 +139,29 @@ GatewayChannelsData* gateway_data_parse_channels(JsonNode *payload) {
     data->ts = json_get_int64_or_zero(root, "ts");
 
     /* channelOrder: string[] */
-    JsonArray *order_arr = NULL;
-    if (json_object_has_member(root, "channelOrder")) {
-        JsonNode *n = json_object_get_member(root, "channelOrder");
-        if (n && JSON_NODE_HOLDS_ARRAY(n))
-            order_arr = json_node_get_array(n);
-    }
+    JsonArray *order_arr = oc_json_array_member(root, "channelOrder");
 
     if (order_arr) {
         guint len = json_array_get_length(order_arr);
-        data->n_channel_order = (gint)len;
-        data->channel_order = g_new0(gchar*, len + 1);
+        guint valid_len = 0;
+
         for (guint i = 0; i < len; i++) {
-            const gchar *s = json_array_get_string_element(order_arr, i);
-            data->channel_order[i] = g_strdup(s ? s : "");
+            if (json_array_get_string_element_typed(order_arr, i)) {
+                valid_len++;
+            }
         }
-        data->channel_order[len] = NULL;
+
+        if (valid_len > 0) {
+            data->n_channel_order = (gint)valid_len;
+            data->channel_order = g_new0(gchar*, valid_len + 1);
+            guint out_i = 0;
+            for (guint i = 0; i < len; i++) {
+                const gchar *s = json_array_get_string_element_typed(order_arr, i);
+                if (!s) continue;
+                data->channel_order[out_i++] = g_strdup(s);
+            }
+            data->channel_order[valid_len] = NULL;
+        }
     }
 
     /* channelLabels: Record<string, string> */

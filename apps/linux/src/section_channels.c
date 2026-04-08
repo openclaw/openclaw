@@ -15,6 +15,7 @@
 #include "gateway_data.h"
 #include "gateway_mutations.h"
 #include "gateway_config.h"
+#include "json_access.h"
 #include "section_controller.h"
 #include "test_seams.h"
 #include <adwaita.h>
@@ -276,7 +277,7 @@ static void on_config_get_done(const GatewayRpcResponse *response, gpointer user
         g_free(channel_id);
         return;
     }
-    const gchar *hash = json_object_get_string_member(root_obj, "hash");
+    const gchar *hash = oc_json_string_member(root_obj, "hash");
 
     /* Extract the full config object - config.get returns {hash, config: {...}} */
     JsonObject *full_config_obj = NULL;
@@ -428,9 +429,7 @@ static void on_web_login_wait_done(const GatewayRpcResponse *response, gpointer 
             gtk_label_set_text(GTK_LABEL(channels_status_label), "Login successful!");
         } else {
             const gchar *msg = "Login incomplete or timed out";
-            if (json_object_has_member(payload_obj, "message")) {
-                msg = json_object_get_string_member(payload_obj, "message");
-            }
+            msg = oc_json_string_member(payload_obj, "message");
             g_autofree gchar *status_msg = g_strdup_printf("Login status: %s", msg ? msg : "unknown");
             gtk_label_set_text(GTK_LABEL(channels_status_label), status_msg);
         }

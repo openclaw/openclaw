@@ -9,21 +9,13 @@
 #include <adwaita.h>
 
 #include "gateway_rpc.h"
+#include "json_access.h"
 
 static GtkWidget *logs_status_label = NULL;
 static GtkWidget *logs_text_view = NULL;
 static GtkWidget *logs_filter_entry = NULL;
 static gboolean logs_fetch_in_flight = FALSE;
 static gint64 logs_last_fetch_us = 0;
-
-static const gchar* logs_json_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) {
-        return NULL;
-    }
-    return json_node_get_string(node);
-}
 
 static void logs_trigger_fetch(gboolean force);
 
@@ -85,7 +77,7 @@ static void on_logs_tail_response(const GatewayRpcResponse *response, gpointer u
             }
         }
     } else {
-        const gchar *text = logs_json_string_member(obj, "text");
+        const gchar *text = oc_json_string_member(obj, "text");
         if (text) {
             g_string_append(out, text);
             shown = 1;

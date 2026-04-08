@@ -12,6 +12,7 @@
 #include "gateway_data.h"
 #include "gateway_rpc.h"
 #include "gateway_ws.h"
+#include "json_access.h"
 #include "markdown_render.h"
 #include "session_filter.h"
 
@@ -72,20 +73,6 @@ static gboolean chat_guard_agent_change = FALSE;
 static gboolean chat_guard_model_change = FALSE;
 static gboolean chat_guard_session_change = FALSE;
 
-static const gchar* chat_json_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) return NULL;
-    return json_node_get_string(node);
-}
-
-static JsonObject* chat_json_object_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_OBJECT(node)) return NULL;
-    return json_node_get_object(node);
-}
-
 static void chat_agent_choice_free(ChatAgentChoice *a) {
     if (!a) return;
     g_free(a->id);
@@ -119,7 +106,7 @@ static void chat_clear_messages_ui(void) {
 static gchar* chat_text_from_chat_event_message(JsonNode *message_node) {
     if (!message_node || !JSON_NODE_HOLDS_OBJECT(message_node)) return NULL;
     JsonObject *message = json_node_get_object(message_node);
-    const gchar *text = chat_json_string_member(message, "text");
+    const gchar *text = oc_json_string_member(message, "text");
     return text ? g_strdup(text) : NULL;
 }
 
@@ -160,7 +147,7 @@ static void chat_append_line(const gchar *text, const gchar *css_class) {
 }
 
 static void chat_render_message_object(JsonObject *msg_obj, gboolean is_pending) {
-    const gchar *role = chat_json_string_member(msg_obj, "role");
+    const gchar *role = oc_json_string_member(msg_obj, "role");
     if (!role || role[0] == '\0') {
         role = "assistant";
     }
@@ -589,8 +576,8 @@ static void on_models_response(const GatewayRpcResponse *response, gpointer user
                         m->id = g_strdup(json_node_get_string(idn));
                     }
                 }
-                const gchar *provider = chat_json_string_member(mo, "provider");
-                const gchar *name = chat_json_string_member(mo, "name");
+                const gchar *provider = oc_json_string_member(mo, "provider");
+                const gchar *name = oc_json_string_member(mo, "name");
                 m->label = g_strdup_printf("%s (%s)",
                                            name ? name : m->id,
                                            provider ? provider : "provider");
@@ -624,7 +611,7 @@ static void on_agents_response(const GatewayRpcResponse *response, gpointer user
     }
 
     JsonObject *obj = json_node_get_object(response->payload);
-    default_id = chat_json_string_member(obj, "defaultId");
+    default_id = oc_json_string_member(obj, "defaultId");
     JsonNode *an = json_object_get_member(obj, "agents");
     if (an && JSON_NODE_HOLDS_ARRAY(an)) {
         JsonArray *arr = json_node_get_array(an);
@@ -633,18 +620,18 @@ static void on_agents_response(const GatewayRpcResponse *response, gpointer user
             if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
             JsonObject *ao = json_node_get_object(n);
             ChatAgentChoice *a = g_new0(ChatAgentChoice, 1);
-            const gchar *id = chat_json_string_member(ao, "id");
+            const gchar *id = oc_json_string_member(ao, "id");
             if (!id || id[0] == '\0') {
                 chat_agent_choice_free(a);
                 continue;
             }
             a->id = g_strdup(id);
-            const gchar *name = chat_json_string_member(ao, "name");
+            const gchar *name = oc_json_string_member(ao, "name");
             if (!name && json_object_has_member(ao, "identity")) {
                 JsonNode *identity_node = json_object_get_member(ao, "identity");
                 if (identity_node && JSON_NODE_HOLDS_OBJECT(identity_node)) {
                     JsonObject *identity = json_node_get_object(identity_node);
-                    name = chat_json_string_member(identity, "name");
+                    name = oc_json_string_member(identity, "name");
                 }
             }
             a->name = g_strdup(name ? name : a->id);
@@ -762,14 +749,14 @@ static void on_chat_event(const gchar *event_type, const JsonNode *payload, gpoi
     if (!payload || json_node_get_node_type((JsonNode *)payload) != JSON_NODE_OBJECT) return;
 
     JsonObject *obj = json_node_get_object((JsonNode *)payload);
-    const gchar *session_key = chat_json_string_member(obj, "sessionKey");
-    const gchar *run_id = chat_json_string_member(obj, "runId");
+    const gchar *session_key = oc_json_string_member(obj, "sessionKey");
+    const gchar *run_id = oc_json_string_member(obj, "runId");
     if (!session_key || session_key[0] == '\0') return;
 
     if (g_strcmp0(event_type, "chat") == 0) {
         if (!chat_stream_claim_or_match_owner(session_key, run_id)) return;
 
-        const gchar *state = chat_json_string_member(obj, "state");
+        const gchar *state = oc_json_string_member(obj, "state");
         JsonNode *message_node = json_object_get_member(obj, "message");
         if (g_strcmp0(state, "delta") == 0) {
             g_autofree gchar *delta = chat_text_from_chat_event_message(message_node);
@@ -807,8 +794,8 @@ static void on_chat_event(const gchar *event_type, const JsonNode *payload, gpoi
         return;
     }
 
-    const gchar *stream = chat_json_string_member(obj, "stream");
-    JsonObject *data_obj = chat_json_object_member(obj, "data");
+    const gchar *stream = oc_json_string_member(obj, "stream");
+    JsonObject *data_obj = oc_json_object_member(obj, "data");
     if (!stream) return;
 
     if (g_strcmp0(stream, "assistant") == 0 ||
@@ -819,7 +806,7 @@ static void on_chat_event(const gchar *event_type, const JsonNode *payload, gpoi
 
     if (g_strcmp0(stream, "assistant") == 0) {
         if (!data_obj) return;
-        const gchar *full_text = chat_json_string_member(data_obj, "text");
+        const gchar *full_text = oc_json_string_member(data_obj, "text");
         if (full_text) {
             g_free(chat_pending_assistant_text);
             chat_pending_assistant_text = g_strdup(full_text);
@@ -842,7 +829,7 @@ static void on_chat_event(const gchar *event_type, const JsonNode *payload, gpoi
 
     if (g_strcmp0(stream, "lifecycle") == 0) {
         if (!data_obj) return;
-        const gchar *phase = chat_json_string_member(data_obj, "phase");
+        const gchar *phase = oc_json_string_member(data_obj, "phase");
         if (g_strcmp0(phase, "start") == 0) {
             if (chat_pending_is_for_selected_session()) {
                 gtk_label_set_text(GTK_LABEL(chat_status_label), "Assistant started");

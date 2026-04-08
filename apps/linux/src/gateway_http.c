@@ -10,6 +10,7 @@
  */
 
 #include "gateway_http.h"
+#include "json_access.h"
 #include "log.h"
 #include <libsoup/soup.h>
 #include <json-glib/json-glib.h>
@@ -192,9 +193,7 @@ static void on_health_response(GObject *source_object, GAsyncResult *res, gpoint
     result.probe_result = HTTP_PROBE_OK;
     result.healthy = json_node_get_boolean(ok_node);
 
-    if (json_object_has_member(obj, "version")) {
-        result.version = g_strdup(json_object_get_string_member(obj, "version"));
-    }
+    result.version = g_strdup(oc_json_string_member(obj, "version"));
 
     g_bytes_unref(body);
 

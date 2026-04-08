@@ -5,16 +5,9 @@
  */
 
 #include "chat_blocks.h"
+#include "json_access.h"
 
 #include <string.h>
-
-static const gchar* chat_blocks_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node)) return NULL;
-    if (json_node_get_value_type(node) != G_TYPE_STRING) return NULL;
-    return json_node_get_string(node);
-}
 
 void chat_block_free(ChatBlock *block) {
     if (!block) return;
@@ -33,22 +26,22 @@ static ChatBlock* chat_block_new(ChatBlockType type, const gchar *text) {
 
 static void append_block_from_object(GPtrArray *out, JsonObject *obj) {
     g_autofree gchar *type = NULL;
-    type = g_strdup(chat_blocks_string_member(obj, "type"));
+    type = g_strdup(oc_json_string_member(obj, "type"));
 
     if (!type) {
         return;
     }
 
     if (g_strcmp0(type, "text") == 0 || g_strcmp0(type, "output_text") == 0) {
-        const gchar *text = chat_blocks_string_member(obj, "text");
+        const gchar *text = oc_json_string_member(obj, "text");
         g_ptr_array_add(out, chat_block_new(CHAT_BLOCK_TEXT, text ? text : ""));
         return;
     }
 
     if (g_strcmp0(type, "thinking") == 0 || g_strcmp0(type, "reasoning") == 0) {
-        const gchar *text = chat_blocks_string_member(obj, "text");
+        const gchar *text = oc_json_string_member(obj, "text");
         if (!text) {
-            text = chat_blocks_string_member(obj, "thinking");
+            text = oc_json_string_member(obj, "thinking");
         }
         g_ptr_array_add(out, chat_block_new(CHAT_BLOCK_THINKING, text ? text : ""));
         return;
@@ -56,7 +49,7 @@ static void append_block_from_object(GPtrArray *out, JsonObject *obj) {
 
     if (g_strcmp0(type, "tool_use") == 0) {
         ChatBlock *b = chat_block_new(CHAT_BLOCK_TOOL_USE, "");
-        b->tool_name = g_strdup(chat_blocks_string_member(obj, "name"));
+        b->tool_name = g_strdup(oc_json_string_member(obj, "name"));
         if (json_object_has_member(obj, "input")) {
             JsonNode *input = json_object_get_member(obj, "input");
             if (JSON_NODE_HOLDS_VALUE(input) && json_node_get_value_type(input) == G_TYPE_STRING) {

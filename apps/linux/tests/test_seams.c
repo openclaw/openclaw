@@ -8,6 +8,7 @@
 
 #include <glib.h>
 #include <string.h>
+#include <json-glib/json-glib.h>
 #include "../src/test_seams.h"
 
 /* ── Ancestor Walk Tests (Task 10) ── */
@@ -58,6 +59,38 @@ static void test_monitor_skip_dir_changed(void) {
     g_assert_false(skip);
 }
 
+/* ── QR Payload Typed Access Tests ── */
+
+static JsonNode* parse_json_node(const gchar *json_str) {
+    g_autoptr(JsonParser) parser = json_parser_new();
+    g_assert_true(json_parser_load_from_data(parser, json_str, -1, NULL));
+    JsonNode *root = json_parser_get_root(parser);
+    g_assert_nonnull(root);
+    g_assert_true(JSON_NODE_HOLDS_OBJECT(root));
+    return json_node_copy(root);
+}
+
+static void test_web_login_start_payload_has_qr_valid_string(void) {
+    JsonNode *node = parse_json_node("{\"qrDataUrl\":\"data:image/png;base64,abc\"}");
+    JsonObject *obj = json_node_get_object(node);
+    const gchar *out_qr = NULL;
+    int has_qr = web_login_start_payload_has_qr(obj, &out_qr);
+    g_assert_cmpint(has_qr, ==, 1);
+    g_assert_nonnull(out_qr);
+    g_assert_cmpstr(out_qr, ==, "data:image/png;base64,abc");
+    json_node_unref(node);
+}
+
+static void test_web_login_start_payload_has_qr_wrong_type(void) {
+    JsonNode *node = parse_json_node("{\"qrDataUrl\": 123}");
+    JsonObject *obj = json_node_get_object(node);
+    const gchar *out_qr = (const gchar *)0x1;
+    int has_qr = web_login_start_payload_has_qr(obj, &out_qr);
+    g_assert_cmpint(has_qr, ==, 0);
+    g_assert_null(out_qr);
+    json_node_unref(node);
+}
+
 static void test_monitor_skip_file_monitor_needed_but_missing(void) {
     gboolean skip = config_monitor_can_skip_rearm(
         "/etc/openclaw", "/etc/openclaw",
@@ -88,6 +121,10 @@ int main(int argc, char **argv) {
     g_test_add_func("/seams/monitor_skip/dir_changed", test_monitor_skip_dir_changed);
     g_test_add_func("/seams/monitor_skip/file_monitor_needed_but_missing", test_monitor_skip_file_monitor_needed_but_missing);
     g_test_add_func("/seams/monitor_skip/file_monitor_not_needed_but_exists", test_monitor_skip_file_monitor_not_needed_but_exists);
+
+    /* QR payload typed-access tests */
+    g_test_add_func("/seams/web_login_start_payload_has_qr/valid_string", test_web_login_start_payload_has_qr_valid_string);
+    g_test_add_func("/seams/web_login_start_payload_has_qr/wrong_type", test_web_login_start_payload_has_qr_wrong_type);
 
     return g_test_run();
 }
