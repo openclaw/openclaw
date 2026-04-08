@@ -16,6 +16,7 @@ import {
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
   appendCronRunLog,
@@ -23,6 +24,7 @@ import {
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
+import { resolveCronJobTimeoutMs } from "../cron/service/timeout-policy.js";
 import { assertSafeCronSessionTargetId } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
@@ -454,8 +456,71 @@ export function buildGatewayCronService(params: {
         });
       }
     },
-    runCommandJob: async ({ command, args, timeoutSeconds, abortSignal }) =>
-      await runCronCommandJob({ command, args, timeoutSeconds, abortSignal }),
+    runCommandJob: async ({ job, command, args, timeoutSeconds, abortSignal }) => {
+      const result = await runCronCommandJob({ command, args, timeoutSeconds, abortSignal });
+      const primaryPlan = resolveCronDeliveryPlan(job);
+      const summaryText =
+        typeof result.summary === "string" && result.summary.trim().length > 0
+          ? result.summary.trim()
+          : typeof result.outputText === "string" && result.outputText.trim().length > 0
+            ? result.outputText.trim()
+            : undefined;
+      if (!primaryPlan.requested || !summaryText) {
+        return result;
+      }
+
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      const resolvedDelivery = await resolveDeliveryTarget(runtimeConfig, agentId, {
+        channel: primaryPlan.channel,
+        to: primaryPlan.to,
+        accountId: primaryPlan.accountId,
+      });
+      if (!resolvedDelivery.ok) {
+        return {
+          ...result,
+          deliveryAttempted: true,
+          delivered: false,
+        };
+      }
+
+      const runSessionId = `cron-command:${job.id}`;
+      const agentSessionKey = `cron-command:${job.id}`;
+      const deliveryResult = await dispatchCronDelivery({
+        cfg: runtimeConfig,
+        cfgWithAgentDefaults: runtimeConfig,
+        deps: params.deps,
+        job,
+        timeoutMs: resolveCronJobTimeoutMs(job) ?? 0,
+        agentId,
+        agentSessionKey,
+        runSessionId,
+        resolvedDelivery,
+        deliveryRequested: true,
+        skipHeartbeatDelivery: false,
+        deliveryBestEffort: job.delivery?.bestEffort === true,
+        deliveryPayloadHasStructuredContent: false,
+        deliveryPayloads: [{ text: summaryText }],
+        synthesizedText: summaryText,
+        runStartedAt: Date.now(),
+        runEndedAt: Date.now(),
+        summary: summaryText,
+        outputText: result.outputText,
+        telemetry: {},
+        abortSignal,
+        isAborted: () => abortSignal?.aborted === true,
+        abortReason: () => "aborted",
+        withRunSession: (wrapped) => ({
+          ...wrapped,
+          sessionId: runSessionId,
+          sessionKey: agentSessionKey,
+        }),
+      });
+      return {
+        ...result,
+        delivered: deliveryResult.delivered,
+        deliveryAttempted: deliveryResult.deliveryAttempted,
+      };
+    },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const webhookToken = normalizeOptionalString(params.cfg.cron?.webhookToken);
