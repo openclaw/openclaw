@@ -1,7 +1,8 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type CreateIMessageTestPlugin =
-  typeof import("../../../extensions/imessage/src/test-plugin.js").createIMessageTestPlugin;
+type CreateIMessageTestPlugin = (params?: { outbound?: ChannelOutboundAdapter }) => ChannelPlugin;
 
 let createIMessageTestPluginCache: CreateIMessageTestPlugin | undefined;
 

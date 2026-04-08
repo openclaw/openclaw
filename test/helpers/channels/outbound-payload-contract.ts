@@ -1,20 +1,45 @@
 import { beforeEach, expect, it, type Mock, vi } from "vitest";
-import { whatsappOutbound } from "../../../extensions/whatsapp/test-api.js";
-import {
-  chunkTextForOutbound as chunkZaloTextForOutbound,
-  sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
-} from "../../../extensions/zalo/runtime-api.js";
-import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../extensions/zalouser/runtime-api.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { resetGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
 import {
+  loadBundledPluginPublicSurfaceSync,
   loadBundledPluginTestApiSync,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
+type CreateSlackOutboundPayloadHarness = (params: PayloadHarnessParams) => {
+  run: () => Promise<Record<string, unknown>>;
+  sendMock: Mock;
+  to: string;
+};
+type ChunkZaloTextForOutbound = (text: string, maxLength?: number) => string[];
+type SendPayloadWithChunkedTextAndMedia = (params: {
+  ctx: {
+    cfg: unknown;
+    to: string;
+    text: string;
+    payload: ReplyPayload;
+  };
+  sendText: (ctx: {
+    cfg: unknown;
+    to: string;
+    text: string;
+    payload: ReplyPayload;
+  }) => Promise<{ channel: string; messageId: string }>;
+  sendMedia: (ctx: {
+    cfg: unknown;
+    to: string;
+    text: string;
+    payload: ReplyPayload;
+    mediaUrl?: string;
+  }) => Promise<{ channel: string; messageId: string }>;
+  emptyResult: { channel: string; messageId: string };
+  textChunkLimit?: number;
+  chunker?: ChunkZaloTextForOutbound | null;
+}) => Promise<{ channel: string; messageId: string }>;
 
 const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
@@ -24,9 +49,11 @@ const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleI
 
 let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
 let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
-let createSlackOutboundPayloadHarnessCache:
-  | typeof import("../../../extensions/slack/src/outbound-payload-harness.js").createSlackOutboundPayloadHarness
-  | undefined;
+let createSlackOutboundPayloadHarnessCache: CreateSlackOutboundPayloadHarness | undefined;
+let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
+let chunkZaloTextForOutboundCache: ChunkZaloTextForOutbound | undefined;
+let sendZaloPayloadWithChunkedTextAndMediaCache: SendPayloadWithChunkedTextAndMedia | undefined;
+let sendZalouserPayloadWithChunkedTextAndMediaCache: SendPayloadWithChunkedTextAndMedia | undefined;
 
 async function getDiscordOutbound(): Promise<ChannelOutboundAdapter> {
   discordOutboundCache ??= (async () => {
@@ -42,10 +69,44 @@ function getCreateSlackOutboundPayloadHarness() {
   if (!createSlackOutboundPayloadHarnessCache) {
     ({ createSlackOutboundPayloadHarness: createSlackOutboundPayloadHarnessCache } =
       loadBundledPluginTestApiSync<{
-        createSlackOutboundPayloadHarness: typeof import("../../../extensions/slack/src/outbound-payload-harness.js").createSlackOutboundPayloadHarness;
+        createSlackOutboundPayloadHarness: CreateSlackOutboundPayloadHarness;
       }>("slack"));
   }
   return createSlackOutboundPayloadHarnessCache;
+}
+
+function getWhatsAppOutbound(): ChannelOutboundAdapter {
+  if (!whatsappOutboundCache) {
+    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
+      whatsappOutbound: ChannelOutboundAdapter;
+    }>("whatsapp"));
+  }
+  return whatsappOutboundCache;
+}
+
+function getChunkZaloTextForOutbound(): ChunkZaloTextForOutbound {
+  if (!chunkZaloTextForOutboundCache) {
+    ({ chunkTextForOutbound: chunkZaloTextForOutboundCache } = loadBundledPluginPublicSurfaceSync<{
+      chunkTextForOutbound: ChunkZaloTextForOutbound;
+    }>({
+      pluginId: "zalo",
+      artifactBasename: "runtime-api.js",
+    }));
+  }
+  return chunkZaloTextForOutboundCache;
+}
+
+function getSendZaloPayloadWithChunkedTextAndMedia(): SendPayloadWithChunkedTextAndMedia {
+  if (!sendZaloPayloadWithChunkedTextAndMediaCache) {
+    ({ sendPayloadWithChunkedTextAndMedia: sendZaloPayloadWithChunkedTextAndMediaCache } =
+      loadBundledPluginPublicSurfaceSync<{
+        sendPayloadWithChunkedTextAndMedia: SendPayloadWithChunkedTextAndMedia;
+      }>({
+        pluginId: "zalo",
+        artifactBasename: "runtime-api.js",
+      }));
+  }
+  return sendZaloPayloadWithChunkedTextAndMediaCache;
 }
 
 function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
@@ -56,6 +117,19 @@ function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
       }>("zalouser"));
   }
   return parseZalouserOutboundTargetCache;
+}
+
+function getSendZalouserPayloadWithChunkedTextAndMedia(): SendPayloadWithChunkedTextAndMedia {
+  if (!sendZalouserPayloadWithChunkedTextAndMediaCache) {
+    ({ sendPayloadWithChunkedTextAndMedia: sendZalouserPayloadWithChunkedTextAndMediaCache } =
+      loadBundledPluginPublicSurfaceSync<{
+        sendPayloadWithChunkedTextAndMedia: SendPayloadWithChunkedTextAndMedia;
+      }>({
+        pluginId: "zalouser",
+        artifactBasename: "runtime-api.js",
+      }));
+  }
+  return sendZalouserPayloadWithChunkedTextAndMediaCache;
 }
 
 type PayloadHarnessParams = {
@@ -232,7 +306,7 @@ function createWhatsAppHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await whatsappOutbound.sendPayload!(ctx),
+    run: async () => await getWhatsAppOutbound().sendPayload!(ctx),
     sendMock: sendWhatsApp,
     to: ctx.to,
   };
@@ -272,10 +346,10 @@ function createZaloHarness(params: PayloadHarnessParams) {
   };
   return {
     run: async () =>
-      await sendZaloPayloadWithChunkedTextAndMedia({
+      await getSendZaloPayloadWithChunkedTextAndMedia()({
         ctx,
         textChunkLimit: 2000,
-        chunker: chunkZaloTextForOutbound,
+        chunker: getChunkZaloTextForOutbound(),
         sendText: async (nextCtx) =>
           buildChannelSendResult(
             "zalo",
@@ -311,7 +385,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
   };
   return {
     run: async () =>
-      await sendZalouserPayloadWithChunkedTextAndMedia({
+      await getSendZalouserPayloadWithChunkedTextAndMedia()({
         ctx,
         sendText: async (nextCtx) => {
           const target = getParseZalouserOutboundTarget()(nextCtx.to);
