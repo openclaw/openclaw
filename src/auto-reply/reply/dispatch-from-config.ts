@@ -924,18 +924,27 @@ export async function dispatchReplyFromConfig(
               const deliveryPromise = dispatcher.sendBlockReply(ttsPayload);
               if (deliveryPromise !== false) {
                 if (context?.abortSignal) {
-                  await Promise.race([
-                    deliveryPromise,
-                    new Promise<void>((_, reject) => {
-                      if (context.abortSignal!.aborted) {
-                        reject(new Error("block reply aborted before delivery"));
-                      } else {
-                        context.abortSignal!.addEventListener("abort", () => {
-                          reject(new Error("block reply aborted during delivery"));
-                        });
-                      }
-                    }),
-                  ]);
+                  let abortHandler: (() => void) | undefined;
+                  try {
+                    await Promise.race([
+                      deliveryPromise,
+                      new Promise<void>((_, reject) => {
+                        if (context.abortSignal!.aborted) {
+                          reject(new Error("block reply aborted before delivery"));
+                        } else {
+                          abortHandler = () => {
+                            reject(new Error("block reply aborted during delivery"));
+                          };
+                          context.abortSignal!.addEventListener("abort", abortHandler);
+                        }
+                      }),
+                    ]);
+                  } finally {
+                    // Clean up abort listener to prevent memory leaks
+                    if (abortHandler) {
+                      context.abortSignal.removeEventListener("abort", abortHandler);
+                    }
+                  }
                 } else {
                   // Fallback timeout protection when no abort signal is available
                   // (e.g., compaction notice path). Use 10s timeout to match MAX_HUMAN_DELAY_MS.
