@@ -72,10 +72,19 @@ const SERVICE_CLOUD_PROVIDER_ENV_KEYS = [
   "AWS_PROFILE",
   "AWS_REGION",
   "AWS_DEFAULT_REGION",
+  // NOTE: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN are
+  // ephemeral when sourced from STS assume-role or aws-vault sessions.
+  // If captured during `gateway install`, they will be frozen in the service
+  // file and expire. Prefer AWS_PROFILE=default on EC2 (uses IMDS) or
+  // ~/.openclaw/.env for durable credential configuration.
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
   "AWS_BEARER_TOKEN_BEDROCK",
+  // EKS IRSA (IAM Roles for Service Accounts) — pod-identity webhook injects these
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "AWS_ROLE_ARN",
+  "AWS_ROLE_SESSION_NAME",
   // Azure OpenAI
   "AZURE_OPENAI_API_KEY",
   "AZURE_OPENAI_BASE_URL",
