@@ -152,6 +152,7 @@ export function prependInternalEventContext(
 export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";
+  let rawVisibleText = "";
   const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
 
   const resolveNextCandidate = (base: string, chunk: string): string => {
@@ -171,16 +172,16 @@ export function createAcpVisibleTextAccumulator() {
     return `${base}${chunk}`;
   };
 
-  const mergeVisibleChunk = (base: string, chunk: string): { text: string; delta: string } => {
+  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
     if (!base) {
-      return { text: chunk, delta: chunk };
+      return { rawText: chunk, delta: chunk };
     }
     if (chunk.startsWith(base) && chunk.length > base.length) {
       const delta = chunk.slice(base.length);
-      return { text: chunk, delta };
+      return { rawText: chunk, delta };
     }
     return {
-      text: `${base}${chunk}`,
+      rawText: `${base}${chunk}`,
       delta: chunk,
     };
   };
@@ -207,6 +208,7 @@ export function createAcpVisibleTextAccumulator() {
           const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
           if (stripped) {
             pendingSilentPrefix = "";
+            rawVisibleText = leadCandidate;
             visibleText = stripped;
             return { text: stripped, delta: stripped };
           }
@@ -215,6 +217,7 @@ export function createAcpVisibleTextAccumulator() {
         }
         if (pendingSilentPrefix) {
           pendingSilentPrefix = "";
+          rawVisibleText = leadCandidate;
           visibleText = leadCandidate;
           return {
             text: visibleText,
@@ -223,9 +226,13 @@ export function createAcpVisibleTextAccumulator() {
         }
       }
 
-      const nextVisible = mergeVisibleChunk(visibleText, chunk);
-      visibleText = nextVisible.text;
-      return nextVisible.delta ? nextVisible : null;
+      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
+      rawVisibleText = nextVisible.rawText;
+      if (!nextVisible.delta) {
+        return null;
+      }
+      visibleText = `${visibleText}${nextVisible.delta}`;
+      return { text: visibleText, delta: nextVisible.delta };
     },
     finalize(): string {
       return visibleText.trim();
