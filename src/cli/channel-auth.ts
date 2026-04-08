@@ -5,10 +5,17 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { loadConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+  type OpenClawConfig,
+} from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setVerbose } from "../globals.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 
 type ChannelAuthOptions = {
@@ -25,17 +32,17 @@ function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): 
 }
 
 function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
   const key = plugin.id;
-  if (
-    !channels ||
-    isBlockedObjectKey(key) ||
-    !Object.prototype.hasOwnProperty.call(channels, key)
-  ) {
+  if (isBlockedObjectKey(key)) {
     return false;
   }
-  const channelCfg = channels[key];
-  if (!channelCfg || typeof channelCfg !== "object") {
+  const channelCfg = (cfg.channels as Record<string, unknown> | undefined)?.[key];
+  if (
+    channelCfg &&
+    typeof channelCfg === "object" &&
+    "enabled" in channelCfg &&
+    (channelCfg as { enabled?: unknown }).enabled === false
+  ) {
     return false;
   }
 
@@ -122,7 +129,8 @@ function resolveAccountContext(
   opts: ChannelAuthOptions,
   cfg: OpenClawConfig,
 ) {
-  const accountId = opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
+  const accountId =
+    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
   return { accountId };
 }
 
@@ -130,15 +138,23 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = loadConfig();
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+  const autoEnabled = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  });
+  const loadedCfg = autoEnabled.config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "login",
     loadedCfg,
     runtime,
   );
-  if (configChanged) {
-    await writeConfigFile(cfg);
+  if (autoEnabled.changes.length > 0 || configChanged) {
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
   }
   const login = plugin.auth?.login;
   if (!login) {
@@ -160,15 +176,23 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = loadConfig();
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+  const autoEnabled = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  });
+  const loadedCfg = autoEnabled.config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "logout",
     loadedCfg,
     runtime,
   );
-  if (configChanged) {
-    await writeConfigFile(cfg);
+  if (autoEnabled.changes.length > 0 || configChanged) {
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
   }
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {

@@ -7,13 +7,15 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
+import { resolveExtraParams } from "../agents/pi-embedded-runner/extra-params.js";
+import { resolveOpenAITextVerbosity } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -23,19 +25,18 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  getTtsMaxLength,
-  getTtsProvider,
-  isSummarizationEnabled,
-  resolveTtsAutoMode,
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-} from "../tts/tts.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
@@ -93,6 +94,7 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
+  taskLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -100,7 +102,7 @@ type StatusArgs = {
 type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
 
 function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
   }
@@ -123,6 +125,27 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
     return "unknown";
   }
   return undefined;
+}
+
+function resolveConfiguredTextVerbosity(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider?: string | null;
+  model?: string | null;
+}): "low" | "medium" | "high" | undefined {
+  const provider = params.provider?.trim();
+  const model = params.model?.trim();
+  if (!provider || !model || (provider !== "openai" && provider !== "openai-codex")) {
+    return undefined;
+  }
+  return resolveOpenAITextVerbosity(
+    resolveExtraParams({
+      cfg: params.config,
+      provider,
+      modelId: model,
+      agentId: params.agentId,
+    }),
+  );
 }
 
 function resolveRuntimeLabel(
@@ -223,6 +246,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      cacheRead: number;
+      cacheWrite: number;
       promptTokens: number;
       total: number;
       model?: string;
@@ -249,61 +274,40 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    // Read the tail only; we only need the most recent usage entries.
-    const TAIL_BYTES = 8192;
-    const stat = fs.statSync(logPath);
-    const offset = Math.max(0, stat.size - TAIL_BYTES);
-    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
-    const fd = fs.openSync(logPath, "r");
-    try {
-      fs.readSync(fd, buf, 0, buf.length, offset);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const tail = buf.toString("utf-8");
-    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
-
-    let input = 0;
-    let output = 0;
-    let promptTokens = 0;
-    let model: string | undefined;
-    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          message?: {
-            usage?: UsageLike;
-            model?: string;
-          };
-          usage?: UsageLike;
-          model?: string;
-        };
-        const usageRaw = parsed.message?.usage ?? parsed.usage;
-        const usage = normalizeUsage(usageRaw);
-        if (usage) {
-          lastUsage = usage;
-        }
-        model = parsed.message?.model ?? parsed.model ?? model;
-      } catch {
-        // ignore bad lines (including a truncated first tail line)
-      }
-    }
-
-    if (!lastUsage) {
+    const snapshot = readLatestSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      sessionEntry?.sessionFile,
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+    );
+    if (!snapshot) {
       return undefined;
     }
-    input = lastUsage.input ?? 0;
-    output = lastUsage.output ?? 0;
-    promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
-    const total = lastUsage.total ?? promptTokens + output;
+
+    const input = snapshot.inputTokens ?? 0;
+    const output = snapshot.outputTokens ?? 0;
+    const cacheRead = snapshot.cacheRead ?? 0;
+    const cacheWrite = snapshot.cacheWrite ?? 0;
+    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
+    const total = promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    const model = snapshot.modelProvider
+      ? snapshot.model
+        ? `${snapshot.modelProvider}/${snapshot.model}`
+        : snapshot.modelProvider
+      : snapshot.model;
+
+    return {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      promptTokens,
+      total,
+      model,
+    };
   } catch {
     return undefined;
   }
@@ -398,20 +402,14 @@ const formatVoiceModeLine = (
   if (!config) {
     return null;
   }
-  const ttsConfig = resolveTtsConfig(config);
-  const prefsPath = resolveTtsPrefsPath(ttsConfig);
-  const autoMode = resolveTtsAutoMode({
-    config: ttsConfig,
-    prefsPath,
+  const snapshot = resolveStatusTtsSnapshot({
+    cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
   });
-  if (autoMode === "off") {
+  if (!snapshot) {
     return null;
   }
-  const provider = getTtsProvider(ttsConfig, prefsPath);
-  const maxLength = getTtsMaxLength(prefsPath);
-  const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
-  return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -442,6 +440,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
@@ -459,21 +458,22 @@ export function buildStatusMessage(args: StatusArgs): string {
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
-  const runtimeModelRaw = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const runtimeProviderRaw =
-    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
+  const runtimeProviderRaw = normalizeOptionalString(entry?.modelProvider) ?? "";
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
-    const embeddedProvider = runtimeModelRaw.slice(0, slashIndex).trim().toLowerCase();
+    const embeddedProvider =
+      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
-      runtimeModelRaw.toLowerCase() ===
-        String(entry?.fallbackNoticeActiveModel ?? "")
-          .trim()
-          .toLowerCase();
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+        normalizeLowercaseStringOrEmpty(
+          normalizeOptionalString(String(entry?.fallbackNoticeActiveModel ?? "")) ?? "",
+        );
     const runtimeMatchesSelectedModel =
-      runtimeModelRaw.toLowerCase() === (modelRefs.selected.label || "unknown").toLowerCase();
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
     // Legacy fallback sessions can persist provider-qualified runtime ids
     // without a separate modelProvider field. Preserve provider-aware lookup
     // when the stored slash id is the selected model or the active fallback
@@ -481,7 +481,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     // slash ids.
     if (
       (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
-      embeddedProvider === activeProvider.toLowerCase()
+      embeddedProvider === normalizeLowercaseStringOrEmpty(activeProvider)
     ) {
       contextLookupProvider = activeProvider;
       contextLookupModel = activeModel;
@@ -541,6 +541,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (!outputTokens || outputTokens === 0) {
         outputTokens = logUsage.output;
       }
+      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        cacheRead = logUsage.cacheRead;
+      }
+      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        cacheWrite = logUsage.cacheWrite;
+      }
     }
   }
 
@@ -550,11 +556,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: contextConfig,
     provider: selectedProvider,
     model: selectedModel,
+    allowAsyncLoad: false,
   });
   const activeContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
     model: contextLookupModel,
+    allowAsyncLoad: false,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
@@ -623,6 +631,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         model: contextLookupModel,
         contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
@@ -673,10 +682,17 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
+  const textVerbosity = resolveConfiguredTextVerbosity({
+    config: args.config,
+    agentId: args.agentId,
+    provider: activeProvider,
+    model: activeModel,
+  });
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
+    textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
@@ -713,6 +729,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         provider: activeProvider,
         model: activeModel,
         config: args.config,
+        allowPluginNormalization: false,
       })
     : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
@@ -733,13 +750,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     if (!args.config || !entry) {
       return undefined;
     }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+    if (
+      normalizeOptionalString(entry.modelOverride) ||
+      normalizeOptionalString(entry.providerOverride)
+    ) {
       return undefined;
     }
     const channelOverride = resolveChannelModelOverride({
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
@@ -750,11 +771,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     const aliasIndex = buildModelAliasIndex({
       cfg: args.config,
       defaultProvider: DEFAULT_PROVIDER,
+      allowPluginNormalization: false,
     });
     const resolvedOverride = resolveModelRefFromString({
       raw: channelOverride.model,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      allowPluginNormalization: false,
     });
     if (!resolvedOverride) {
       return undefined;
@@ -797,6 +820,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.usageLine,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
+    args.taskLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
     activationLine,
@@ -848,7 +872,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
+  const optionParts = ["/think <level>", "/model <id>", "/fast status|on|off", "/verbose on|off"];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }
@@ -860,7 +884,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
+  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
   lines.push("");
 
   lines.push("Skills");
@@ -877,6 +901,7 @@ const COMMANDS_PER_PAGE = 8;
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
+  forcePaginatedList?: boolean;
 };
 
 export type CommandsMessageResult = {
@@ -975,14 +1000,17 @@ export function buildToolsMessage(
 function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
     ? `/${command.nativeName}`
-    : command.textAliases[0]?.trim() || `/${command.key}`;
+    : normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
   const seen = new Set<string>();
   const aliases = command.textAliases
     .map((alias) => alias.trim())
     .filter(Boolean)
-    .filter((alias) => alias.toLowerCase() !== primary.toLowerCase())
+    .filter(
+      (alias) =>
+        normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
+    )
     .filter((alias) => {
-      const key = alias.toLowerCase();
+      const key = normalizeLowercaseStringOrEmpty(alias);
       if (seen.has(key)) {
         return false;
       }
@@ -1061,8 +1089,10 @@ export function buildCommandsMessagePaginated(
   options?: CommandsMessageOptions,
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
-  const surface = options?.surface?.toLowerCase();
-  const isTelegram = surface === "telegram";
+  const surface = normalizeOptionalLowercaseString(options?.surface);
+  const prefersPaginatedList =
+    options?.forcePaginatedList === true ||
+    Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);
 
   const commands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })
@@ -1070,7 +1100,7 @@ export function buildCommandsMessagePaginated(
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 
-  if (!isTelegram) {
+  if (!prefersPaginatedList) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
     lines.push("", "More: /tools for available capabilities");

@@ -5,6 +5,7 @@ import type { AssistantIdentity } from "../assistant-identity.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
@@ -21,6 +22,10 @@ import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 type ImageBlock = {
   url: string;
   alt?: string;
+};
+
+type AudioClip = {
+  url: string;
 };
 
 function extractImages(message: unknown): ImageBlock[] {
@@ -58,6 +63,32 @@ function extractImages(message: unknown): ImageBlock[] {
   }
 
   return images;
+}
+
+function extractAudioClips(message: unknown): AudioClip[] {
+  const m = message as Record<string, unknown>;
+  const content = m.content;
+  const clips: AudioClip[] = [];
+  if (!Array.isArray(content)) {
+    return clips;
+  }
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    if (b.type !== "audio") {
+      continue;
+    }
+    const source = b.source as Record<string, unknown> | undefined;
+    if (source?.type === "base64" && typeof source.data === "string") {
+      const data = source.data;
+      const mediaType = (source.media_type as string) || "audio/mpeg";
+      const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+      clips.push({ url });
+    }
+  }
+  return clips;
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
@@ -315,9 +346,15 @@ function extractGroupText(group: MessageGroup): string {
   return parts.join("\n\n");
 }
 
-const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
+export const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
+type DeleteConfirmPopover = {
+  popover: HTMLDivElement;
+  cancel: HTMLButtonElement;
+  yes: HTMLButtonElement;
+  check: HTMLInputElement;
+};
 
 function shouldSkipDeleteConfirm(): boolean {
   try {
@@ -325,6 +362,45 @@ function shouldSkipDeleteConfirm(): boolean {
   } catch {
     return false;
   }
+}
+
+function createDeleteConfirmPopover(side: DeleteConfirmSide): DeleteConfirmPopover {
+  const popover = document.createElement("div");
+  popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
+
+  const text = document.createElement("p");
+  text.className = "chat-delete-confirm__text";
+  text.textContent = "Delete this message?";
+
+  const remember = document.createElement("label");
+  remember.className = "chat-delete-confirm__remember";
+
+  const check = document.createElement("input");
+  check.className = "chat-delete-confirm__check";
+  check.type = "checkbox";
+
+  const rememberText = document.createElement("span");
+  rememberText.textContent = "Don't ask again";
+
+  remember.append(check, rememberText);
+
+  const actions = document.createElement("div");
+  actions.className = "chat-delete-confirm__actions";
+
+  const cancel = document.createElement("button");
+  cancel.className = "chat-delete-confirm__cancel";
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+
+  const yes = document.createElement("button");
+  yes.className = "chat-delete-confirm__yes";
+  yes.type = "button";
+  yes.textContent = "Delete";
+
+  actions.append(cancel, yes);
+  popover.append(text, remember, actions);
+
+  return { popover, cancel, yes, check };
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -346,43 +422,31 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             existing.remove();
             return;
           }
-          const popover = document.createElement("div");
-          popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
-          popover.innerHTML = `
-            <p class="chat-delete-confirm__text">Delete this message?</p>
-            <label class="chat-delete-confirm__remember">
-              <input type="checkbox" class="chat-delete-confirm__check" />
-              <span>Don't ask again</span>
-            </label>
-            <div class="chat-delete-confirm__actions">
-              <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
-              <button class="chat-delete-confirm__yes" type="button">Delete</button>
-            </div>
-          `;
+          const { popover, cancel, yes, check } = createDeleteConfirmPopover(side);
           wrap.appendChild(popover);
 
-          const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
-          const yes = popover.querySelector(".chat-delete-confirm__yes")!;
-          const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
+          const removePopover = () => {
+            popover.remove();
+            document.removeEventListener("click", closeOnOutside, true);
+          };
 
-          cancel.addEventListener("click", () => popover.remove());
+          // Close on click outside.
+          const closeOnOutside = (evt: MouseEvent) => {
+            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
+              removePopover();
+            }
+          };
+
+          cancel.addEventListener("click", removePopover);
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
                 getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
-            popover.remove();
+            removePopover();
             onDelete();
           });
-
-          // Close on click outside
-          const closeOnOutside = (evt: MouseEvent) => {
-            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
-              popover.remove();
-              document.removeEventListener("click", closeOnOutside, true);
-            }
-          };
           requestAnimationFrame(() => document.addEventListener("click", closeOnOutside, true));
         }}
       >
@@ -547,6 +611,25 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
+function renderMessageAudio(clips: AudioClip[]) {
+  if (clips.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-message-audio">
+      ${clips.map(
+        (clip) =>
+          html`<audio
+            class="chat-message-audio-el"
+            controls
+            preload="metadata"
+            src=${clip.url}
+          ></audio>`,
+      )}
+    </div>
+  `;
+}
+
 /** Render tool cards inside a collapsed `<details>` element. */
 function renderCollapsedToolCards(
   toolCards: ToolCard[],
@@ -644,10 +727,11 @@ function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const normalizedRole = normalizeRoleForGrouping(role);
+  const normalizedRawRole = normalizeLowercaseStringOrEmpty(role);
   const isToolResult =
     isToolResultMessage(message) ||
-    role.toLowerCase() === "toolresult" ||
-    role.toLowerCase() === "tool_result" ||
+    normalizedRawRole === "toolresult" ||
+    normalizedRawRole === "tool_result" ||
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
@@ -655,6 +739,8 @@ function renderGroupedMessage(
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
+  const audioClips = extractAudioClips(message);
+  const hasAudio = audioClips.length > 0;
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
@@ -668,7 +754,12 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const bubbleClasses = [
+    "chat-bubble",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+    canCopyMarkdown ? "has-copy" : "",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -678,7 +769,7 @@ function renderGroupedMessage(
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages) {
+  if (!markdown && !visibleToolCards && !hasImages && !hasAudio) {
     return nothing;
   }
 
@@ -714,7 +805,7 @@ function renderGroupedMessage(
                     : nothing}
               </summary>
               <div class="chat-tool-msg-body">
-                ${renderMessageImages(images)}
+                ${renderMessageImages(images)} ${renderMessageAudio(audioClips)}
                 ${reasoningMarkdown
                   ? html`<div class="chat-thinking">
                       ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
@@ -738,7 +829,7 @@ function renderGroupedMessage(
             </details>
           `
         : html`
-            ${renderMessageImages(images)}
+            ${renderMessageImages(images)} ${renderMessageAudio(audioClips)}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}

@@ -8,6 +8,7 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const replyCommentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -29,6 +30,14 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+vi.mock("./client.js", () => ({
+  createFeishuClient: vi.fn(() => ({ request: vi.fn() })),
+}));
+
+vi.mock("./drive.js", () => ({
+  replyComment: replyCommentMock,
+}));
+
 import { feishuOutbound } from "./outbound.js";
 const sendText = feishuOutbound.sendText!;
 const emptyConfig: ClawdbotConfig = {};
@@ -46,11 +55,22 @@ function resetOutboundMocks() {
   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+  replyCommentMock.mockResolvedValue({ reply_id: "reply_msg" });
 }
 
 describe("feishuOutbound.sendText local-image auto-convert", () => {
   beforeEach(() => {
     resetOutboundMocks();
+  });
+
+  it("chunks outbound text without requiring Feishu runtime initialization", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    expect(() => chunker("hello world", 5)).not.toThrow();
+    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
@@ -186,6 +206,96 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         accountId: "main",
       }),
     );
+  });
+});
+
+describe("feishuOutbound comment-thread routing", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("routes comment-thread text through replyComment", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "handled in thread",
+      accountId: "main",
+    });
+
+    expect(replyCommentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "handled in thread",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("routes comment-thread code-block replies through replyComment instead of IM cards", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "```ts\nconst x = 1\n```",
+      accountId: "main",
+    });
+
+    expect(replyCommentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "```ts\nconst x = 1\n```",
+      }),
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("routes comment-thread replies through replyComment even when renderMode=card", async () => {
+    const result = await sendText({
+      cfg: cardRenderConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "handled in thread",
+      accountId: "main",
+    });
+
+    expect(replyCommentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        file_token: "doxcn123",
+        file_type: "docx",
+        comment_id: "7623358762119646411",
+        content: "handled in thread",
+      }),
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
+  });
+
+  it("falls back to a text-only comment reply for media payloads", async () => {
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      mediaUrl: "https://example.com/file.png",
+      accountId: "main",
+    });
+
+    expect(replyCommentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        content: "see attachment\n\nhttps://example.com/file.png",
+      }),
+    );
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "reply_msg" }));
   });
 });
 

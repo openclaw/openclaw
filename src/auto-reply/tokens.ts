@@ -12,7 +12,7 @@ function getSilentExactRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`^\\s*${escaped}\\s*$`);
+  const regex = new RegExp(`^\\s*${escaped}\\s*$`, "i");
   silentExactRegexByToken.set(token, regex);
   return regex;
 }
@@ -38,6 +38,43 @@ export function isSilentReplyText(
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
   return getSilentExactRegex(token).test(text);
+}
+
+type SilentReplyActionEnvelope = { action?: unknown };
+
+export function isSilentReplyEnvelopeText(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}") || !trimmed.includes(token)) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as SilentReplyActionEnvelope;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    const keys = Object.keys(parsed);
+    return (
+      keys.length === 1 &&
+      keys[0] === "action" &&
+      typeof parsed.action === "string" &&
+      parsed.action.trim() === token
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isSilentReplyPayloadText(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  return isSilentReplyText(text, token) || isSilentReplyEnvelopeText(text, token);
 }
 
 /**

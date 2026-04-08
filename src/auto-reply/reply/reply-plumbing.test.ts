@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
@@ -14,6 +17,20 @@ import {
   resolveSubagentLabel,
   sortSubagentRuns,
 } from "./subagents-utils.js";
+
+function createSlackThreadingPlugin(): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+    threading: {
+      buildToolContext: ({ context }) => ({
+        currentChannelId: context.To?.replace(/^channel:/, ""),
+        currentThreadTs:
+          context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        replyToMode: "all",
+      }),
+    },
+  } as ChannelPlugin;
+}
 
 describe("buildThreadingToolContext", () => {
   const cfg = {} as OpenClawConfig;
@@ -157,7 +174,9 @@ describe("buildThreadingToolContext", () => {
 
   it("uses Slack plugin threading context when the plugin registry is active", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
+      createTestRegistry([
+        { pluginId: "slack", plugin: createSlackThreadingPlugin(), source: "test" },
+      ]),
     );
     const sessionCtx = {
       Provider: "slack",
@@ -198,6 +217,43 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result).toHaveLength(2);
     expect(result[0].replyToId).toBe("42");
     expect(result[1].replyToId).toBeUndefined();
+  });
+
+  it("threads only first payload when mode is 'batched' and the turn is batched", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "A" }, { text: "B" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "allow" },
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].replyToId).toBe("42");
+    expect(result[1].replyToId).toBeUndefined();
+  });
+
+  it("can disable implicit reply threading for the current turn", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "deny" },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBeUndefined();
+  });
+
+  it("still honors explicit reply tags when implicit reply threading is disabled", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello [[reply_to_current]]" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "deny" },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
   });
 
   it("threads all payloads when mode is 'all'", () => {
@@ -245,6 +301,7 @@ describe("applyReplyThreading auto-threading", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToTag).toBe(true);
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
@@ -327,6 +384,21 @@ describe("subagents utils", () => {
     const formatted = formatRunLabel(run, { maxLength: 10 });
     expect(formatted.startsWith("x".repeat(10))).toBe(true);
     expect(formatted.endsWith("…")).toBe(true);
+  });
+
+  it("sanitizes leaked internal runtime context from formatted run labels", () => {
+    const run = {
+      ...baseRun,
+      label: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    };
+
+    expect(formatRunLabel(run)).toBe("subagent");
   });
 
   it("sorts subagent runs by newest start/created time", () => {

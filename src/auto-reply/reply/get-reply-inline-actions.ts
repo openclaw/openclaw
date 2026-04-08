@@ -6,7 +6,12 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
@@ -24,6 +29,8 @@ import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
+import { extractExplicitGroupId } from "./group-id.js";
+import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -54,12 +61,12 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
     return null;
   }
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const name = match?.[1]?.trim().toLowerCase() ?? "";
+  const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
   return name ? name : null;
 }
 
 function expandBundleCommandPromptTemplate(template: string, args?: string): string {
-  const normalizedArgs = args?.trim() || "";
+  const normalizedArgs = normalizeOptionalString(args) || "";
   const rendered = template.includes("$ARGUMENTS")
     ? template.replaceAll("$ARGUMENTS", normalizedArgs)
     : template;
@@ -77,8 +84,7 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-function extractTextFromToolResult(result: any): string | null {
+function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
     return null;
   }
@@ -191,6 +197,7 @@ export async function handleInlineActions(params: {
         ? (await import("../skill-commands.runtime.js")).listSkillCommandsForWorkspace({
             workspaceDir,
             cfg,
+            agentId,
             skillFilter,
           })
         : [];
@@ -226,6 +233,8 @@ export async function handleInlineActions(params: {
         agentAccountId: (ctx as { AccountId?: string }).AccountId,
         agentTo: ctx.OriginatingTo ?? ctx.To,
         agentThreadId: ctx.MessageThreadId ?? undefined,
+        agentGroupId: extractExplicitGroupId(ctx.From),
+        requesterAgentIdOverride: agentId,
         agentDir,
         workspaceDir,
         config: cfg,
@@ -241,17 +250,17 @@ export async function handleInlineActions(params: {
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
       try {
-        const result = await tool.execute(toolCallId, {
+        const toolArgs: Parameters<NonNullable<typeof tool.execute>>[1] = {
           command: rawArgs,
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
+        };
+        const result = await tool.execute(toolCallId, toolArgs);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ ${message}` } };
       }
@@ -334,6 +343,7 @@ export async function handleInlineActions(params: {
       agentId,
       isGroup,
     }) && inlineStatusRequested;
+  let didSendInlineStatus = false;
   if (handleInlineStatus) {
     const { buildStatusReply } = await import("./commands.runtime.js");
     const inlineStatusReply = await buildStatusReply({
@@ -356,6 +366,7 @@ export async function handleInlineActions(params: {
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
     await sendInlineReply(inlineStatusReply);
+    didSendInlineStatus = true;
     directives = { ...directives, hasStatusDirective: false };
   }
 
@@ -452,6 +463,17 @@ export async function handleInlineActions(params: {
       directives,
       abortedLastRun,
     };
+  }
+  const remainingBodyAfterInlineStatus = (() => {
+    const stripped = stripStructuralPrefixes(cleanedBody);
+    if (!isGroup) {
+      return stripped.trim();
+    }
+    return stripMentions(stripped, ctx, cfg, agentId).trim();
+  })();
+  if (didSendInlineStatus && remainingBodyAfterInlineStatus.length === 0) {
+    typing.cleanup();
+    return { kind: "reply", reply: undefined };
   }
 
   const commandResult = await runCommands(command);

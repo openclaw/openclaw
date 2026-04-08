@@ -5,210 +5,143 @@ import {
 } from "../agents/auth-health.js";
 import {
   type AuthCredentialReasonCode,
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   repairOAuthProfileIdMismatch,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import { formatCliCommand } from "../cli/command-format.js";
+import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
+import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import {
-  buildProviderAuthRecoveryHint,
-  resolveProviderAuthLoginCommand,
-} from "./provider-auth-guidance.js";
+import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
-export async function maybeRepairAnthropicOAuthProfileId(
+const CODEX_PROVIDER_ID = "openai-codex";
+const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
+
+export async function maybeRepairLegacyOAuthProfileIds(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
   const store = ensureAuthProfileStore();
-  const repair = repairOAuthProfileIdMismatch({
-    cfg,
-    store,
-    provider: "anthropic",
-    legacyProfileId: "anthropic:default",
-  });
-  if (!repair.migrated || repair.changes.length === 0) {
-    return cfg;
-  }
-
-  note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-  const apply = await prompter.confirm({
-    message: "Update Anthropic OAuth profile id in config now?",
-    initialValue: true,
-  });
-  if (!apply) {
-    return cfg;
-  }
-  return repair.config;
-}
-
-function pruneAuthOrder(
-  order: Record<string, string[]> | undefined,
-  profileIds: Set<string>,
-): { next: Record<string, string[]> | undefined; changed: boolean } {
-  if (!order) {
-    return { next: order, changed: false };
-  }
-  let changed = false;
-  const next: Record<string, string[]> = {};
-  for (const [provider, list] of Object.entries(order)) {
-    const filtered = list.filter((id) => !profileIds.has(id));
-    if (filtered.length !== list.length) {
-      changed = true;
-    }
-    if (filtered.length > 0) {
-      next[provider] = filtered;
-    }
-  }
-  return { next: Object.keys(next).length > 0 ? next : undefined, changed };
-}
-
-function pruneAuthProfiles(
-  cfg: OpenClawConfig,
-  profileIds: Set<string>,
-): { next: OpenClawConfig; changed: boolean } {
-  const profiles = cfg.auth?.profiles;
-  const order = cfg.auth?.order;
-  const nextProfiles = profiles ? { ...profiles } : undefined;
-  let changed = false;
-
-  if (nextProfiles) {
-    for (const id of profileIds) {
-      if (id in nextProfiles) {
-        delete nextProfiles[id];
-        changed = true;
-      }
-    }
-  }
-
-  const prunedOrder = pruneAuthOrder(order, profileIds);
-  if (prunedOrder.changed) {
-    changed = true;
-  }
-
-  if (!changed) {
-    return { next: cfg, changed: false };
-  }
-
-  const nextAuth =
-    nextProfiles || prunedOrder.next
-      ? {
-          ...cfg.auth,
-          profiles: nextProfiles && Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined,
-          order: prunedOrder.next,
-        }
-      : undefined;
-
-  return {
-    next: {
-      ...cfg,
-      auth: nextAuth,
-    },
-    changed: true,
-  };
-}
-
-export async function maybeRemoveDeprecatedCliAuthProfiles(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  let nextCfg = cfg;
   const providers = resolvePluginProviders({
     config: cfg,
     env: process.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
-  const deprecatedEntries = providers.flatMap((provider) =>
-    (provider.deprecatedProfileIds ?? [])
-      .filter((profileId) => store.profiles[profileId] || cfg.auth?.profiles?.[profileId])
-      .map((profileId) => ({
-        profileId,
-        providerId: provider.id,
-        providerLabel: provider.label,
-      })),
+  for (const provider of providers) {
+    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
+      const repair = repairOAuthProfileIdMismatch({
+        cfg: nextCfg,
+        store,
+        provider: provider.id,
+        legacyProfileId: repairSpec.legacyProfileId,
+      });
+      if (!repair.migrated || repair.changes.length === 0) {
+        continue;
+      }
+
+      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
+      const apply = await prompter.confirm({
+        message: `Update ${repairSpec.promptLabel ?? provider.label} OAuth profile id in config now?`,
+        initialValue: true,
+      });
+      if (!apply) {
+        continue;
+      }
+      nextCfg = repair.config;
+    }
+  }
+  return nextCfg;
+}
+
+function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
+  return Object.values(cfg.auth?.profiles ?? {}).some(
+    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.mode === "oauth",
   );
-  const deprecated = new Set(deprecatedEntries.map((entry) => entry.profileId));
+}
 
-  if (deprecated.size === 0) {
-    return cfg;
+function hasStoredCodexOAuthProfile(): boolean {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  return Object.values(store.profiles).some(
+    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.type === "oauth",
+  );
+}
+
+function normalizeCodexOverrideBaseUrl(baseUrl: unknown): string | undefined {
+  if (typeof baseUrl !== "string") {
+    return undefined;
   }
+  return baseUrl.trim().replace(/\/+$/, "");
+}
 
-  const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
-  for (const entry of deprecatedEntries) {
-    const authCommand =
-      resolveProviderAuthLoginCommand({
-        provider: entry.providerId,
-        config: cfg,
-        env: process.env,
-      }) ?? formatCliCommand("openclaw configure");
-    lines.push(`- ${entry.profileId} (${entry.providerLabel}): use ${authCommand}`);
+function isLegacyCodexTransportShape(value: unknown, inheritedBaseUrl?: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
   }
-  note(lines.join("\n"), "Auth profiles");
-
-  const shouldRemove = await prompter.confirmAutoFix({
-    message: "Remove deprecated CLI auth profiles now?",
-    initialValue: true,
-  });
-  if (!shouldRemove) {
-    return cfg;
+  const api = typeof value.api === "string" ? value.api : undefined;
+  if (!api || !LEGACY_CODEX_APIS.has(api)) {
+    return false;
   }
+  const baseUrl = normalizeCodexOverrideBaseUrl(value.baseUrl ?? inheritedBaseUrl);
+  return !baseUrl || baseUrl === OPENAI_BASE_URL;
+}
 
-  await updateAuthProfileStoreWithLock({
-    updater: (nextStore) => {
-      let mutated = false;
-      for (const id of deprecated) {
-        if (nextStore.profiles[id]) {
-          delete nextStore.profiles[id];
-          mutated = true;
-        }
-        if (nextStore.usageStats?.[id]) {
-          delete nextStore.usageStats[id];
-          mutated = true;
-        }
-      }
-      if (nextStore.order) {
-        for (const [provider, list] of Object.entries(nextStore.order)) {
-          const filtered = list.filter((id) => !deprecated.has(id));
-          if (filtered.length !== list.length) {
-            mutated = true;
-            if (filtered.length > 0) {
-              nextStore.order[provider] = filtered;
-            } else {
-              delete nextStore.order[provider];
-            }
-          }
-        }
-      }
-      if (nextStore.lastGood) {
-        for (const [provider, profileId] of Object.entries(nextStore.lastGood)) {
-          if (deprecated.has(profileId)) {
-            delete nextStore.lastGood[provider];
-            mutated = true;
-          }
-        }
-      }
-      return mutated;
-    },
-  });
-
-  const pruned = pruneAuthProfiles(cfg, deprecated);
-  if (pruned.changed) {
-    note(
-      Array.from(deprecated.values())
-        .map((id) => `- removed ${id} from config`)
-        .join("\n"),
-      "Doctor changes",
-    );
+function hasLegacyCodexTransportOverride(providerOverride: unknown): boolean {
+  if (!isRecord(providerOverride)) {
+    return false;
   }
-  return pruned.next;
+  if (isLegacyCodexTransportShape(providerOverride)) {
+    return true;
+  }
+  const models = providerOverride.models;
+  if (!Array.isArray(models)) {
+    return false;
+  }
+  return models.some((model) => isLegacyCodexTransportShape(model, providerOverride.baseUrl));
+}
+
+function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
+  const lines = [
+    `- models.providers.${CODEX_PROVIDER_ID} contains a legacy transport override while Codex OAuth is configured.`,
+    "- Older OpenAI transport settings can shadow the built-in Codex OAuth provider path.",
+  ];
+  if (isRecord(providerOverride)) {
+    const record = providerOverride;
+    if (typeof record.api === "string") {
+      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.api=${record.api}`);
+    }
+    if (typeof record.baseUrl === "string") {
+      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.baseUrl=${record.baseUrl}`);
+    }
+  }
+  lines.push(
+    `- Remove or rewrite the legacy transport override to restore the built-in Codex OAuth provider path after recent fixes.`,
+  );
+  lines.push(
+    "- Custom proxies and header-only overrides can stay; this warning only targets old OpenAI transport settings.",
+  );
+  return lines.join("\n");
+}
+
+export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
+  const providerOverride = cfg.models?.providers?.[CODEX_PROVIDER_ID];
+  if (!providerOverride) {
+    return;
+  }
+  if (!hasLegacyCodexTransportOverride(providerOverride)) {
+    return;
+  }
+  if (!hasConfiguredCodexOAuthProfile(cfg) && !hasStoredCodexOAuthProfile()) {
+    return;
+  }
+  note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
 type AuthIssue = {
@@ -234,29 +167,36 @@ export function resolveUnusableProfileHint(params: {
   return "Wait for cooldown or switch provider.";
 }
 
-function formatAuthIssueHint(issue: AuthIssue): string | null {
+export async function resolveAuthIssueHint(
+  issue: AuthIssue,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): Promise<string | null> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
-  if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
-      provider: "anthropic",
-    })}`;
-  }
-  if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
-    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
-      provider: "openai-codex",
-    })}`;
+  const providerHint = await formatAuthDoctorHint({
+    cfg,
+    store,
+    provider: issue.provider,
+    profileId: issue.profileId,
+  });
+  if (providerHint.trim()) {
+    return providerHint;
   }
   return buildProviderAuthRecoveryHint({
     provider: issue.provider,
   }).replace(/^Run /, "Re-auth via ");
 }
 
-function formatAuthIssueLine(issue: AuthIssue): string {
+async function formatAuthIssueLine(
+  issue: AuthIssue,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): Promise<string> {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
-  const hint = formatAuthIssueHint(issue);
+  const hint = await resolveAuthIssueHint(issue, cfg, store);
   const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
@@ -335,7 +275,7 @@ export async function noteAuthProfileHealth(params: {
           profileId: profile.profileId,
         });
       } catch (err) {
-        errors.push(`- ${profile.profileId}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`- ${profile.profileId}: ${formatErrorMessage(err)}`);
       }
     }
     if (errors.length > 0) {
@@ -352,19 +292,21 @@ export async function noteAuthProfileHealth(params: {
   }
 
   if (issues.length > 0) {
-    note(
-      issues
-        .map((issue) =>
-          formatAuthIssueLine({
+    const issueLines = await Promise.all(
+      issues.map((issue) =>
+        formatAuthIssueLine(
+          {
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
             reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
-          }),
-        )
-        .join("\n"),
-      "Model auth",
+          },
+          params.cfg,
+          store,
+        ),
+      ),
     );
+    note(issueLines.join("\n"), "Model auth");
   }
 }

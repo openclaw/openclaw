@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { PluginLogger } from "../api.js";
+import { resolveRequestClientIp } from "../runtime-api.js";
 import type { DiffArtifactStore } from "./store.js";
 import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
 import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
@@ -25,6 +27,8 @@ export function createDiffsHttpHandler(params: {
   store: DiffArtifactStore;
   logger?: PluginLogger;
   allowRemoteViewer?: boolean;
+  trustedProxies?: readonly string[];
+  allowRealIpFallback?: boolean;
 }) {
   const viewerFailureLimiter = new ViewerFailureLimiter();
 
@@ -42,7 +46,10 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const access = resolveViewerAccess(req);
+    const access = resolveViewerAccess(req, {
+      trustedProxies: params.trustedProxies,
+      allowRealIpFallback: params.allowRealIpFallback,
+    });
     if (!access.localRequest && params.allowRemoteViewer !== true) {
       respondText(res, 404, "Diff not found");
       return true;
@@ -164,7 +171,7 @@ function setSharedHeaders(res: ServerResponse, contentType: string): void {
 }
 
 function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
-  const normalized = remoteAddress?.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(remoteAddress);
   if (!normalized) {
     return "unknown";
   }
@@ -186,12 +193,30 @@ function hasProxyForwardingHints(req: IncomingMessage): boolean {
   );
 }
 
-function resolveViewerAccess(req: IncomingMessage): {
+function resolveViewerAccess(
+  req: IncomingMessage,
+  params: {
+    trustedProxies?: readonly string[];
+    allowRealIpFallback?: boolean;
+  },
+): {
   remoteKey: string;
   localRequest: boolean;
 } {
-  const remoteKey = normalizeRemoteClientKey(req.socket?.remoteAddress);
-  const localRequest = isLoopbackClientIp(remoteKey) && !hasProxyForwardingHints(req);
+  const proxyHintsPresent = hasProxyForwardingHints(req);
+  const clientIp =
+    proxyHintsPresent || (params.trustedProxies?.length ?? 0) > 0
+      ? // Reuse gateway proxy trust rules and fail closed when a trusted proxy hop
+        // does not provide usable client-origin headers.
+        resolveRequestClientIp(
+          req,
+          params.trustedProxies ? [...params.trustedProxies] : undefined,
+          params.allowRealIpFallback === true,
+        )
+      : req.socket?.remoteAddress;
+  const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
+  const localRequest =
+    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(remoteKey);
   return { remoteKey, localRequest };
 }
 

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -11,7 +11,6 @@ setupAccessControlTestHarness();
 let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ checkInboundAccessControl } = await import("./access-control.js"));
 });
 

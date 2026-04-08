@@ -31,11 +31,12 @@ async function pollSession(
   sessionId: string,
   timeout?: number | string,
 ) {
-  return processTool.execute(callId, {
+  const args = {
     action: "poll",
     sessionId,
     ...(timeout === undefined ? {} : { timeout }),
-  });
+  } as unknown as Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
+  return processTool.execute(callId, args);
 }
 
 function retryMs(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {

@@ -5,16 +5,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { formatErrorMessage } from "../src/infra/errors.ts";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-
-const REQUIRED_RUNTIME_SIDECARS = [
-  "dist/extensions/whatsapp/light-runtime-api.js",
-  "dist/extensions/whatsapp/runtime-api.js",
-  "dist/extensions/matrix/helper-api.js",
-  "dist/extensions/matrix/runtime-api.js",
-  "dist/extensions/matrix/thread-bindings-runtime.js",
-  "dist/extensions/msteams/runtime-api.js",
-] as const;
 
 type InstalledPackageJson = {
   version?: string;
@@ -65,7 +58,7 @@ export function collectInstalledPackageErrors(params: {
     );
   }
 
-  for (const relativePath of REQUIRED_RUNTIME_SIDECARS) {
+  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
     if (!existsSync(join(params.packageRoot, relativePath))) {
       errors.push(`installed package is missing required bundled runtime sidecar: ${relativePath}`);
     }
@@ -149,9 +142,7 @@ if (entrypoint !== null && import.meta.url === entrypoint) {
   try {
     main();
   } catch (error) {
-    console.error(
-      `openclaw-npm-postpublish-verify: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    console.error(`openclaw-npm-postpublish-verify: ${formatErrorMessage(error)}`);
     process.exitCode = 1;
   }
 }

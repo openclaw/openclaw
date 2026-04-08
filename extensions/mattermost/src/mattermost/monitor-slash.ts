@@ -1,15 +1,15 @@
-import {
-  listSkillCommandsForAgents,
-  parseStrictPositiveInteger,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   type MattermostClient,
 } from "./client.js";
+import {
+  listSkillCommandsForAgents,
+  parseStrictPositiveInteger,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import {
   DEFAULT_COMMAND_SPECS,
   isSlashCommandsEnabled,
@@ -39,7 +39,9 @@ function buildSlashCommands(params: {
     const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg });
     for (const spec of skillCommands) {
       const name = typeof spec.name === "string" ? spec.name.trim() : "";
-      if (!name) continue;
+      if (!name) {
+        continue;
+      }
       const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
       commandsToRegister.push({
         trigger,

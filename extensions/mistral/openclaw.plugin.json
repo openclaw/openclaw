@@ -1,5 +1,6 @@
 {
   "id": "mistral",
+  "enabledByDefault": true,
   "providers": ["mistral"],
   "providerAuthEnvVars": {
     "mistral": ["MISTRAL_API_KEY"]

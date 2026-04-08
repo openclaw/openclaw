@@ -12,10 +12,6 @@ vi.mock("../../agents/bootstrap-files.js", () => ({
   })),
 }));
 
-vi.mock("../../agents/pi-tools.js", () => ({
-  createOpenClawCodingTools: createOpenClawCodingToolsMock,
-}));
-
 vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false, mode: "off" })),
 }));
@@ -29,6 +25,7 @@ vi.mock("../../agents/skills/refresh.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  resolveAgentConfig: vi.fn(() => undefined),
   resolveSessionAgentIds: vi.fn(() => ({ sessionAgentId: "main" })),
 }));
 
@@ -49,19 +46,9 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
-vi.mock("../../agents/tool-summaries.js", () => ({
-  buildToolSummaryMap: vi.fn(() => ({})),
-}));
-
 vi.mock("../../infra/skills-remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => false),
 }));
-
-vi.mock("../../tts/tts.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-}));
-
-import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 
 function makeParams(): HandleCommandsParams {
   return {
@@ -107,12 +94,21 @@ function makeParams(): HandleCommandsParams {
 }
 
 describe("resolveCommandsSystemPromptBundle", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.resetModules();
     createOpenClawCodingToolsMock.mockClear();
     createOpenClawCodingToolsMock.mockReturnValue([]);
+    const piTools = await import("../../agents/pi-tools.js");
+    vi.spyOn(piTools, "createOpenClawCodingTools").mockImplementation(
+      createOpenClawCodingToolsMock,
+    );
+    const ttsRuntime = await import("../../tts/tts.js");
+    vi.spyOn(ttsRuntime, "buildTtsSystemPromptHint").mockReturnValue(undefined);
   });
 
   it("opts command tool builds into gateway subagent binding", async () => {
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
     await resolveCommandsSystemPromptBundle(makeParams());
 
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(

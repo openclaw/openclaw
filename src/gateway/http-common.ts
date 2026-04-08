@@ -106,3 +106,35 @@ export function setSseHeaders(res: ServerResponse) {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 }
+
+export function watchClientDisconnect(
+  req: IncomingMessage,
+  res: ServerResponse,
+  abortController: AbortController,
+  onDisconnect?: () => void,
+) {
+  const sockets = Array.from(
+    new Set(
+      [req.socket, res.socket].filter(
+        (socket): socket is NonNullable<typeof socket> => socket !== null,
+      ),
+    ),
+  );
+  if (sockets.length === 0) {
+    return () => {};
+  }
+  const handleClose = () => {
+    onDisconnect?.();
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
+  };
+  for (const socket of sockets) {
+    socket.on("close", handleClose);
+  }
+  return () => {
+    for (const socket of sockets) {
+      socket.off("close", handleClose);
+    }
+  };
+}

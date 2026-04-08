@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { initSessionState } from "./session.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -12,7 +13,14 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
 }));
 
-let initSessionState: typeof import("./session.js").initSessionState;
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () =>
+    ({
+      hasHooks: hookRunnerMocks.hasHooks,
+      runSessionStart: hookRunnerMocks.runSessionStart,
+      runSessionEnd: hookRunnerMocks.runSessionEnd,
+    }) as unknown as HookRunner,
+}));
 
 async function createStorePath(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
@@ -27,17 +35,26 @@ async function writeStore(
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
 
+async function writeTranscript(
+  storePath: string,
+  sessionId: string,
+  text = "hello",
+): Promise<string> {
+  const transcriptPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({
+      type: "message",
+      id: `${sessionId}-m1`,
+      message: { role: "user", content: text },
+    })}\n`,
+    "utf-8",
+  );
+  return transcriptPath;
+}
+
 describe("session hook context wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../plugins/hook-runner-global.js", () => ({
-      getGlobalHookRunner: () =>
-        ({
-          hasHooks: hookRunnerMocks.hasHooks,
-          runSessionStart: hookRunnerMocks.runSessionStart,
-          runSessionEnd: hookRunnerMocks.runSessionEnd,
-        }) as unknown as HookRunner,
-    }));
+  beforeEach(() => {
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
@@ -46,7 +63,6 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.hasHooks.mockImplementation(
       (hookName) => hookName === "session_start" || hookName === "session_end",
     );
-    ({ initSessionState } = await import("./session.js"));
   });
 
   afterEach(() => {
@@ -65,7 +81,7 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
@@ -75,9 +91,11 @@ describe("session hook context wiring", () => {
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
     const storePath = await createStorePath("openclaw-session-hook-end");
+    const transcriptPath = await writeTranscript(storePath, "old-session");
     await writeStore(storePath, {
       [sessionKey]: {
         sessionId: "old-session",
+        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     });
@@ -89,14 +107,182 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(event).toMatchObject({ sessionKey });
+    expect(event).toMatchObject({
+      sessionKey,
+      reason: "new",
+      transcriptArchived: true,
+    });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
     expect(context).toMatchObject({ sessionId: event?.sessionId });
+    expect(event?.sessionFile).toContain(".jsonl.reset.");
 
-    const [startEvent] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(startEvent).toMatchObject({ resumedFrom: "old-session" });
+    expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+    expect(startContext).toMatchObject({ sessionId: startEvent?.sessionId });
+  });
+
+  it("marks explicit /reset rollovers with reason reset", async () => {
+    const sessionKey = "agent:main:telegram:direct:456";
+    const storePath = await createStorePath("openclaw-session-hook-explicit-reset");
+    const transcriptPath = await writeTranscript(storePath, "reset-session", "reset me");
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId: "reset-session",
+        sessionFile: transcriptPath,
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: { Body: "/reset", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+    expect(event).toMatchObject({ reason: "reset" });
+  });
+
+  it("maps custom reset trigger aliases to the new-session reason", async () => {
+    const sessionKey = "agent:main:telegram:direct:alias";
+    const storePath = await createStorePath("openclaw-session-hook-reset-alias");
+    const transcriptPath = await writeTranscript(storePath, "alias-session", "alias me");
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId: "alias-session",
+        sessionFile: transcriptPath,
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/fresh"],
+      },
+    } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: { Body: "/fresh", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+    expect(event).toMatchObject({ reason: "new" });
+  });
+
+  it("marks daily stale rollovers and exposes the archived transcript path", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const sessionKey = "agent:main:telegram:direct:daily";
+      const storePath = await createStorePath("openclaw-session-hook-daily");
+      const transcriptPath = await writeTranscript(storePath, "daily-session", "daily");
+      await writeStore(storePath, {
+        [sessionKey]: {
+          sessionId: "daily-session",
+          sessionFile: transcriptPath,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+      const [startEvent] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+      expect(event).toMatchObject({
+        reason: "daily",
+        transcriptArchived: true,
+      });
+      expect(event?.sessionFile).toContain(".jsonl.reset.");
+      expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks idle stale rollovers with reason idle", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const sessionKey = "agent:main:telegram:direct:idle";
+      const storePath = await createStorePath("openclaw-session-hook-idle");
+      const transcriptPath = await writeTranscript(storePath, "idle-session", "idle");
+      await writeStore(storePath, {
+        [sessionKey]: {
+          sessionId: "idle-session",
+          sessionFile: transcriptPath,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: {
+            mode: "idle",
+            idleMinutes: 30,
+          },
+        },
+      } as OpenClawConfig;
+
+      await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+      expect(event).toMatchObject({ reason: "idle" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefers idle over daily when both rollover conditions are true", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+      const sessionKey = "agent:main:telegram:direct:overlap";
+      const storePath = await createStorePath("openclaw-session-hook-overlap");
+      const transcriptPath = await writeTranscript(storePath, "overlap-session", "overlap");
+      await writeStore(storePath, {
+        [sessionKey]: {
+          sessionId: "overlap-session",
+          sessionFile: transcriptPath,
+          updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+        },
+      });
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: {
+            mode: "daily",
+            atHour: 4,
+            idleMinutes: 30,
+          },
+        },
+      } as OpenClawConfig;
+
+      await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+      expect(event).toMatchObject({ reason: "idle" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
