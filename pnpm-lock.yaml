@@ -51,6 +51,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.6
         version: 1.3.6
+      '@larksuiteoapi/node-sdk':
+        specifier: ^1.60.0
+        version: 1.60.0
       '@line/bot-sdk':
         specifier: ^11.0.0
         version: 11.0.0
