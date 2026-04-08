@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DiffCard } from "./diff-viewer";
+import { denchIntegrationsBrand } from "@/lib/dench-integrations-brand";
 
 /* ─── Diff synthesis from edit tool args ─── */
 
@@ -219,9 +220,133 @@ function formatArgs(args: Record<string, unknown>): string {
 	return joined.length > 2000 ? joined.slice(0, 2000) + "\n..." : joined;
 }
 
+function asRecordValue(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function asRecordArrayValue(value: unknown): Record<string, unknown>[] {
+	return Array.isArray(value)
+		? value.filter(
+				(item): item is Record<string, unknown> =>
+					Boolean(item) && typeof item === "object" && !Array.isArray(item),
+			)
+		: [];
+}
+
+function readStringValue(value: unknown): string | null {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readStringArrayValue(value: unknown): string[] {
+	return Array.isArray(value)
+		? value
+				.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+				.map((item) => item.trim())
+		: [];
+}
+
+function buildComposioSearchCardData(output?: Record<string, unknown>) {
+	if (!output) {return null;}
+	const recommended = asRecordValue(output.recommended_result);
+	const topTools = asRecordArrayValue(output.results)
+		.slice(0, 3)
+		.map((result) => readStringValue(result.tool))
+		.filter((tool): tool is string => Boolean(tool));
+	const selectedAccount = asRecordValue(recommended?.selected_account);
+	const accountCandidates = asRecordArrayValue(recommended?.account_candidates);
+	const inputSchema = asRecordValue(recommended?.input_schema);
+	const schemaProperties = asRecordValue(inputSchema?.properties);
+	const schemaPropertyNames = schemaProperties ? Object.keys(schemaProperties) : [];
+	const requiredFields = readStringArrayValue(inputSchema?.required);
+	const planSteps = readStringArrayValue(recommended?.recommended_plan_steps ?? output.next_steps_guidance).slice(0, 3);
+	const pitfalls = readStringArrayValue(recommended?.known_pitfalls).slice(0, 2);
+	return {
+		topTools,
+		sessionId: readStringValue(output.search_session_id),
+		accountSummary:
+			readStringValue(selectedAccount?.display_label) ??
+			(accountCandidates.length > 0
+				? `${accountCandidates.length} connected account${accountCandidates.length === 1 ? "" : "s"}`
+				: null),
+		schemaSummary:
+			schemaPropertyNames.length > 0
+				? `${schemaPropertyNames.length} input fields${requiredFields.length > 0 ? `, ${requiredFields.length} required` : ""}`
+				: null,
+		schemaText: inputSchema ? JSON.stringify(inputSchema, null, 2) : null,
+		planSteps,
+		pitfalls,
+	};
+}
+
+function buildComposioCallCardData(
+	args?: Record<string, unknown>,
+	output?: Record<string, unknown>,
+) {
+	const toolName = readStringValue(args?.tool_name);
+	if (!toolName) {return null;}
+	const toolArgs = asRecordValue(args?.arguments);
+	const keyArgs = toolArgs
+		? Object.entries(toolArgs)
+				.slice(0, 3)
+				.map(([key, value]) => {
+					const formatted =
+						typeof value === "string" ? value : JSON.stringify(value);
+					return `${key}: ${formatted}`;
+				})
+		: [];
+	const items =
+		Array.isArray(output?.data) ? output.data :
+		Array.isArray(output?.items) ? output.items :
+		undefined;
+	const resultSummary =
+		items
+			? `${items.length} result${items.length === 1 ? "" : "s"}`
+			: readStringValue(output?.status) ?? null;
+	const paginationBits = [
+		Object.hasOwn(output ?? {}, "has_more")
+			? `has_more: ${String(output?.has_more)}`
+			: null,
+		readStringValue(output?.next_cursor)
+			? `next_cursor: ${readStringValue(output?.next_cursor)}`
+			: null,
+		readStringValue(output?.starting_after)
+			? `starting_after: ${readStringValue(output?.starting_after)}`
+			: null,
+	].filter((value): value is string => Boolean(value));
+	return {
+		app: readStringValue(args?.app),
+		toolName,
+		account:
+			readStringValue(args?.account) ??
+			readStringValue(args?.connected_account_id) ??
+			readStringValue(args?.account_identity),
+		keyArgs,
+		pagination: paginationBits.length > 0 ? paginationBits.join(" | ") : null,
+		resultSummary,
+	};
+}
+
+function SummaryRow({
+	label,
+	value,
+}: {
+	label: string;
+	value: string;
+}) {
+	return (
+		<div className="text-[11px] leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
+			<span style={{ color: "var(--color-text-muted)" }}>{label}: </span>
+			<span>{value}</span>
+		</div>
+	);
+}
+
 /* ─── Classify tool steps ─── */
 
 type StepKind =
+	| "composio"
 	| "search"
 	| "fetch"
 	| "read"
@@ -235,6 +360,9 @@ function classifyTool(
 	args?: Record<string, unknown>,
 	output?: Record<string, unknown>,
 ): StepKind {
+	if (name === "composio_search_tools" || name === "composio_call_tool") {
+		return "composio";
+	}
 	const n = name.toLowerCase().replace(/[_-]/g, "");
 	if (
 		[
@@ -335,6 +463,12 @@ function buildStepLabel(
 	};
 
 	switch (kind) {
+		case "composio":
+			return toolName === "composio_search_tools"
+				? denchIntegrationsBrand.searchLabel
+				: toolName === "composio_call_tool"
+					? denchIntegrationsBrand.callLabel
+					: denchIntegrationsBrand.genericToolLabel;
 		case "search": {
 			const q =
 				strVal("query") ??
@@ -1209,12 +1343,23 @@ function ToolStep({
 	errorText?: string;
 }) {
 	const kind = classifyTool(toolName, args, output);
+	const isComposioSearch = toolName === "composio_search_tools";
+	const isComposioCall = toolName === "composio_call_tool";
+	const isComposioTool = isComposioSearch || isComposioCall;
 	// Show output by default for exec/command tools — these are the most
 	// useful to see inline.  Other tools default to collapsed.
-	const [showOutput, setShowOutput] = useState(kind === "exec" || kind === "generic");
+	const [showOutput, setShowOutput] = useState(
+		!isComposioTool && (kind === "exec" || kind === "generic"),
+	);
 	// Auto-expand diffs for write tool steps
 	const [showDiff, setShowDiff] = useState(true);
 	const label = buildStepLabel(kind, toolName, args, output);
+	const composioSearchCard = isComposioSearch
+		? buildComposioSearchCardData(output)
+		: null;
+	const composioCallCard = isComposioCall
+		? buildComposioCallCardData(args, output)
+		: null;
 	const domains =
 		kind === "search"
 			? getSearchDomains(output)
@@ -1452,6 +1597,111 @@ function ToolStep({
 					</div>
 				)}
 
+				{composioSearchCard && status !== "error" && (
+					<div
+						className="mt-1.5 rounded-lg px-2.5 py-2"
+						style={{
+							background: "var(--color-bg)",
+							border: "1px solid var(--color-border)",
+						}}
+					>
+						{composioSearchCard.topTools.length > 0 && (
+							<SummaryRow
+								label="Top matches"
+								value={composioSearchCard.topTools.join(", ")}
+							/>
+						)}
+						{composioSearchCard.accountSummary && (
+							<SummaryRow
+								label="Accounts"
+								value={composioSearchCard.accountSummary}
+							/>
+						)}
+						{composioSearchCard.schemaSummary && (
+							<SummaryRow
+								label="Schema"
+								value={composioSearchCard.schemaSummary}
+							/>
+						)}
+						{composioSearchCard.planSteps.length > 0 && (
+							<SummaryRow
+								label="Plan"
+								value={composioSearchCard.planSteps.join(" -> ")}
+							/>
+						)}
+						{composioSearchCard.pitfalls.length > 0 && (
+							<SummaryRow
+								label="Pitfalls"
+								value={composioSearchCard.pitfalls.join(" | ")}
+							/>
+						)}
+						{composioSearchCard.sessionId && (
+							<SummaryRow
+								label="Session"
+								value={composioSearchCard.sessionId}
+							/>
+						)}
+						{composioSearchCard.schemaText && (
+							<details className="mt-2">
+								<summary
+									className="text-[11px] cursor-pointer"
+									style={{ color: "var(--color-text-secondary)" }}
+								>
+									Schema details
+								</summary>
+								<pre
+									className="mt-2 text-[11px] font-mono rounded-lg px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-all max-h-56 overflow-y-auto leading-relaxed"
+									style={{
+										color: "var(--color-text-muted)",
+										background: "var(--color-surface-hover)",
+									}}
+								>
+									{composioSearchCard.schemaText}
+								</pre>
+							</details>
+						)}
+					</div>
+				)}
+
+				{composioCallCard && status !== "error" && (
+					<div
+						className="mt-1.5 rounded-lg px-2.5 py-2"
+						style={{
+							background: "var(--color-bg)",
+							border: "1px solid var(--color-border)",
+						}}
+					>
+						<SummaryRow
+							label="Tool"
+							value={`${composioCallCard.app ?? "app"} / ${composioCallCard.toolName}`}
+						/>
+						{composioCallCard.account && (
+							<SummaryRow
+								label="Account"
+								value={composioCallCard.account}
+							/>
+						)}
+						{composioCallCard.keyArgs.length > 0 && (
+							<SummaryRow
+								label="Args"
+								value={composioCallCard.keyArgs.join(" | ")}
+							/>
+						)}
+						{composioCallCard.pagination && (
+							<SummaryRow
+								label="Pagination"
+								value={composioCallCard.pagination}
+							/>
+						)}
+						{composioCallCard.resultSummary && (
+							<SummaryRow
+								label="Result"
+								value={composioCallCard.resultSummary}
+							/>
+						)}
+					</div>
+				)}
+
 				{/* Args summary — show for tools with no output/diff so they're never opaque */}
 				{!outputText &&
 					!diffText &&
@@ -1530,6 +1780,24 @@ function StepIcon({ kind }: { kind: StepKind }) {
 	const size = 16;
 
 	switch (kind) {
+		case "composio":
+			return (
+				<svg
+					width={size}
+					height={size}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke={color}
+					strokeWidth="2"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				>
+					<path d="M9 12a3 3 0 0 1 3-3h3" />
+					<path d="M15 12a3 3 0 0 1-3 3H9" />
+					<path d="M7 9l-2 2 2 2" />
+					<path d="M17 15l2-2-2-2" />
+				</svg>
+			);
 		case "search":
 			return (
 				<svg

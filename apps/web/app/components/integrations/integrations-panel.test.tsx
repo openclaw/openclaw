@@ -36,7 +36,7 @@ const toolkitsPayload = {
 const connectionsPayload = { connections: [] };
 
 const statusPayload = {
-  summary: { level: "healthy", verified: true, message: "Composio MCP is healthy." },
+  summary: { level: "healthy", verified: true, message: "Dench Integrations is healthy." },
   config: { status: "pass", detail: "OK." },
   gatewayTools: { status: "pass", detail: "OK.", toolCount: 4 },
   liveAgent: { status: "pass", detail: "OK.", evidence: [] },
@@ -71,6 +71,7 @@ describe("IntegrationsPanel", () => {
     render(<IntegrationsPanel />);
 
     expect(screen.getByRole("heading", { name: "Integrations" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Composio" })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText("Discover")).toBeInTheDocument();

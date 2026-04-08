@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import type { ComposioToolkit } from "@/lib/composio";
+import { resolveComposioToolkitLogo } from "@/lib/composio-toolkit-brand";
 
-function AppIcon({ logo, name }: { logo: string | null; name: string }) {
+function AppIcon({ logo, name, slug }: { logo: string | null; name: string; slug: string }) {
   const [failed, setFailed] = useState(false);
-  const showImg = logo && !failed;
+  const resolvedLogo = resolveComposioToolkitLogo(logo, slug);
+  const showImg = resolvedLogo && !failed;
   return (
     <div
       className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden"
@@ -17,7 +19,7 @@ function AppIcon({ logo, name }: { logo: string | null; name: string }) {
     >
       {showImg ? (
         <img
-          src={logo}
+          src={resolvedLogo}
           alt=""
           className="h-7 w-7 object-contain"
           loading="lazy"
@@ -65,7 +67,7 @@ export function ComposioAppCard({
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}
       aria-label={`${connected ? "Manage" : "Get"} ${toolkit.name}`}
     >
-      <AppIcon logo={toolkit.logo} name={toolkit.name} />
+      <AppIcon logo={toolkit.logo} name={toolkit.name} slug={toolkit.slug} />
 
       <div className="flex-1 min-w-0 pt-0.5">
         <div className="flex items-start justify-between gap-2">

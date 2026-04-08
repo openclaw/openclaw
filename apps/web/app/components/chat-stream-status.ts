@@ -27,6 +27,62 @@ function humanizeToolName(toolName: string): string {
 	return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function hasNonEmptyTextPart(part: MessagePart): boolean {
+	return (
+		part.type === "text" &&
+		typeof (part as { text?: unknown }).text === "string" &&
+		collapseWhitespace((part as { text: string }).text).length > 0
+	);
+}
+
+function isToolLikePart(part: MessagePart): boolean {
+	return (
+		part.type === "dynamic-tool" ||
+		part.type === "tool-invocation" ||
+		part.type.startsWith("tool-")
+	);
+}
+
+function getLastToolLikePart(parts: UIMessage["parts"]): MessagePart | null {
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const part = parts[i];
+		if (isToolLikePart(part)) {
+			return part;
+		}
+	}
+	return null;
+}
+
+function getLastToolLikePartIndex(parts: UIMessage["parts"]): number {
+	for (let i = parts.length - 1; i >= 0; i--) {
+		if (isToolLikePart(parts[i])) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+function didToolPartEndInError(part: MessagePart | null): boolean {
+	if (!part) {
+		return false;
+	}
+	const state = resolveToolState(part);
+	if (state === "error") {
+		return true;
+	}
+	if (part.type === "tool-invocation") {
+		const result = (part as { result?: unknown }).result;
+		if (result && typeof result === "object") {
+			const record = result as Record<string, unknown>;
+			const status = typeof record.status === "string" ? record.status.toLowerCase() : null;
+			if (status === "error" || status === "failed") {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 function resolveToolName(part: MessagePart): string | null {
 	if (part.type === "dynamic-tool") {
 		return typeof part.toolName === "string" ? part.toolName : null;
@@ -86,13 +142,57 @@ function resolveToolState(part: MessagePart): string | null {
 export function hasAssistantText(message: UIMessage | null): boolean {
 	return Boolean(
 		message?.role === "assistant" &&
+		message.parts.some((part) => hasNonEmptyTextPart(part)),
+	);
+}
+
+export function hasAssistantToolActivity(message: UIMessage | null): boolean {
+	return Boolean(
+		message?.role === "assistant" &&
 		message.parts.some(
 			(part) =>
-				part.type === "text" &&
-				typeof (part as { text?: unknown }).text === "string" &&
-				(part as { text: string }).text.length > 0,
+				part.type === "reasoning" ||
+				part.type === "dynamic-tool" ||
+				part.type.startsWith("tool-") ||
+				part.type === "tool-invocation",
 		),
 	);
+}
+
+export function hasAssistantPostToolText(message: UIMessage | null): boolean {
+	if (!message || message.role !== "assistant") {
+		return false;
+	}
+	const lastToolIndex = getLastToolLikePartIndex(message.parts);
+	if (lastToolIndex === -1) {
+		return hasAssistantText(message);
+	}
+	return message.parts.slice(lastToolIndex + 1).some((part) => hasNonEmptyTextPart(part));
+}
+
+export function getIncompleteAssistantReplyReason(message: UIMessage | null): string | null {
+	if (!message || message.role !== "assistant") {
+		return null;
+	}
+	const lastToolIndex = getLastToolLikePartIndex(message.parts);
+	if (lastToolIndex === -1 || hasAssistantPostToolText(message)) {
+		return null;
+	}
+	const lastTool = getLastToolLikePart(message.parts);
+	if (didToolPartEndInError(lastTool)) {
+		return "Tool execution failed and the agent stopped without summarizing the failure.";
+	}
+	const toolNames = message.parts
+		.filter((part) => isToolLikePart(part))
+		.map((part) => resolveToolName(part))
+		.filter((toolName): toolName is string => Boolean(toolName));
+	if (
+		toolNames.includes("composio_search_tools") &&
+		!toolNames.includes("composio_call_tool")
+	) {
+		return "Search completed but the agent never followed through with the tool call.";
+	}
+	return "Agent finished tool activity but did not send a final text reply.";
 }
 
 export function isStatusReasoningText(text: string): boolean {

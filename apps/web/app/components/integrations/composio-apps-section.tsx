@@ -16,6 +16,10 @@ import {
   normalizeComposioConnections,
   normalizeComposioToolkitSlug,
 } from "@/lib/composio-client";
+import {
+  denchIntegrationsBrand,
+  formatDenchIntegrationsStatusError,
+} from "@/lib/dench-integrations-brand";
 
 const FEATURED_SLUGS = [
   "gmail",
@@ -241,11 +245,14 @@ export function ComposioAppsSection({
       setMcpStatus(null);
       const err = await statusRes.json().catch(() => ({}));
       setStatusError(
-        (err as { error?: string }).error ?? `Failed to load Composio MCP status (${statusRes.status})`,
+        (err as { error?: string }).error
+          ?? formatDenchIntegrationsStatusError("load", statusRes.status),
       );
     } catch (err) {
       setMcpStatus(null);
-      setStatusError(err instanceof Error ? err.message : "Failed to load Composio MCP status.");
+      setStatusError(
+        err instanceof Error ? err.message : formatDenchIntegrationsStatusError("load"),
+      );
     }
   }, []);
 
@@ -609,13 +616,16 @@ export function ComposioAppsSection({
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         setStatusError(
-          (payload as { error?: string }).error ?? "Failed to update Composio MCP status.",
+          (payload as { error?: string }).error
+            ?? formatDenchIntegrationsStatusError("update"),
         );
         return;
       }
       setMcpStatus(payload as ComposioMcpStatus);
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Failed to update Composio MCP status.");
+      setStatusError(
+        err instanceof Error ? err.message : formatDenchIntegrationsStatusError("update"),
+      );
     } finally {
       setRepairingMcp(false);
     }
@@ -701,7 +711,7 @@ export function ComposioAppsSection({
         >
           <div className="min-w-0">
             <p className="truncate">
-              {statusError ?? mcpStatus?.summary.message ?? "MCP needs attention"}
+              {statusError ?? mcpStatus?.summary.message ?? denchIntegrationsBrand.attentionLabel}
             </p>
             {!statusError && mcpStatus?.liveAgent.detail && mcpStatus.summary.level !== "healthy" && (
               <p className="mt-1 text-[11px] opacity-80">

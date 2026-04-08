@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import type { UIMessage } from "ai";
 import posthog from "posthog-js";
 import { useThumbSurvey } from "posthog-js/react/surveys";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Components } from "react-markdown";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -21,6 +21,7 @@ import {
 	type ComposioChatAction,
 	parseComposioChatAction,
 } from "@/lib/composio-chat-actions";
+import { resolveComposioToolkitLogo } from "@/lib/composio-toolkit-brand";
 
 // Lazy-load ReportCard (uses Recharts which is heavy)
 const ReportCard = dynamic(
@@ -270,6 +271,81 @@ function extractSpeechText(segments: MessageSegment[]): string {
 			.map((segment) => segment.text)
 			.join("\n\n"),
 	);
+}
+
+function getCopyableMessageText(
+	role: UIMessage["role"],
+	segments: MessageSegment[],
+): string {
+	if (role === "user") {
+		const textContent = segments
+			.filter(
+				(segment): segment is { type: "text"; text: string } =>
+					segment.type === "text",
+			)
+			.map((segment) => segment.text)
+			.join("\n")
+			.trim();
+
+		const attachmentInfo = parseAttachments(textContent);
+		if (!attachmentInfo) {
+			return textContent;
+		}
+
+		return [
+			attachmentInfo.message,
+			attachmentInfo.paths.length > 0
+				? `Attached files:\n${attachmentInfo.paths.join("\n")}`
+				: "",
+		]
+			.filter(Boolean)
+			.join("\n\n")
+			.trim();
+	}
+
+	return segments
+		.map((segment) => {
+			switch (segment.type) {
+				case "text":
+					return segment.text.trim();
+				case "diff-artifact":
+					return segment.diff.trim();
+				case "subagent-card":
+					return (segment.label || segment.task).trim();
+				default:
+					return "";
+			}
+		})
+		.filter(Boolean)
+		.join("\n\n")
+		.trim();
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+	if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+		await navigator.clipboard.writeText(text);
+		return;
+	}
+
+	if (typeof document === "undefined") {
+		throw new Error("Clipboard is unavailable");
+	}
+
+	const textarea = document.createElement("textarea");
+	textarea.value = text;
+	textarea.setAttribute("readonly", "true");
+	textarea.style.position = "fixed";
+	textarea.style.opacity = "0";
+	document.body.appendChild(textarea);
+	textarea.focus();
+	textarea.select();
+
+	const didCopy = document.execCommand("copy");
+	document.body.removeChild(textarea);
+
+	if (!didCopy) {
+		throw new Error("Clipboard copy failed");
+	}
 }
 
 function getCategoryFromPath(
@@ -595,6 +671,77 @@ function FilePathCode({
 
 /* ─── Markdown component overrides for chat ─── */
 
+function ComposioActionButton({
+	action,
+	children,
+	onPress,
+}: {
+	action: ComposioChatAction;
+	children: ReactNode;
+	onPress?: (action: ComposioChatAction) => void;
+}) {
+	const toolkitName = action.toolkitName?.trim()
+		|| action.toolkitSlug?.trim().replace(/-/g, " ")
+		|| "app";
+	const logo = resolveComposioToolkitLogo(null, action.toolkitSlug ?? null);
+	const initials = toolkitName
+		.split(/\s+/)
+		.filter(Boolean)
+		.slice(0, 2)
+		.map((token) => token.charAt(0))
+		.join("")
+		.toUpperCase() || "AP";
+	const isConnectAction = action.action === "connect";
+
+	return (
+		<button
+			type="button"
+			className="not-prose my-1 inline-flex items-center gap-2 rounded-full px-1 py-1 pr-3 text-sm font-semibold whitespace-nowrap transition-all duration-150 hover:-translate-y-px active:translate-y-0"
+			style={isConnectAction
+				? {
+					background: "var(--color-accent)",
+					color: "#fff",
+					border: "1px solid color-mix(in srgb, var(--color-accent) 78%, black 22%)",
+					boxShadow: "var(--shadow-sm)",
+				}
+				: {
+					background: "var(--color-surface)",
+					color: "var(--color-text)",
+					border: "1px solid var(--color-border)",
+					boxShadow: "var(--shadow-sm)",
+				}}
+			onClick={() => onPress?.(action)}
+		>
+			<span
+				className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full"
+				aria-hidden="true"
+				style={isConnectAction
+					? {
+						background: "rgba(255, 255, 255, 0.16)",
+						color: "#fff",
+					}
+					: {
+						background: "var(--color-surface-hover)",
+						color: "var(--color-text-muted)",
+					}}
+			>
+				{logo ? (
+					<img
+						src={logo}
+						alt=""
+						className="h-4 w-4 object-contain"
+						loading="lazy"
+						decoding="async"
+					/>
+				) : (
+					<span className="text-[10px] font-bold uppercase">{initials}</span>
+				)}
+			</span>
+			<span className="leading-none">{children}</span>
+		</button>
+	);
+}
+
 function createMarkdownComponents(
 	onFilePathClick?: FilePathClickHandler,
 	onComposioAction?: (action: ComposioChatAction) => void,
@@ -614,18 +761,12 @@ function createMarkdownComponents(
 					looksLikeFilePath(normalizedHref));
 			if (composioAction) {
 				return (
-					<button
-						type="button"
-						className="inline-flex items-center rounded-md px-2 py-0.5 text-sm font-medium no-underline transition-colors hover:opacity-90"
-						style={{
-							color: "rgb(147 197 253)",
-							background: "rgba(59, 130, 246, 0.12)",
-							border: "1px solid rgba(59, 130, 246, 0.2)",
-						}}
-						onClick={() => onComposioAction?.(composioAction)}
+					<ComposioActionButton
+						action={composioAction}
+						onPress={onComposioAction}
 					>
 						{children}
-					</button>
+					</ComposioActionButton>
 				);
 			}
 			return (
@@ -809,12 +950,82 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 	);
 }
 
+function CopyMessageButton({ text }: { text: string }) {
+	const [copied, setCopied] = useState(false);
+	const resetTimerRef = useRef<number | null>(null);
+
+	useEffect(() => {
+		return () => {
+			if (resetTimerRef.current !== null) {
+				window.clearTimeout(resetTimerRef.current);
+			}
+		};
+	}, []);
+
+	const handleCopy = useCallback(async () => {
+		try {
+			await copyTextToClipboard(text);
+			setCopied(true);
+			if (resetTimerRef.current !== null) {
+				window.clearTimeout(resetTimerRef.current);
+			}
+			resetTimerRef.current = window.setTimeout(() => {
+				setCopied(false);
+				resetTimerRef.current = null;
+			}, 1500);
+		} catch {
+			setCopied(false);
+		}
+	}, [text]);
+
+	return (
+		<button
+			type="button"
+			onClick={() => { void handleCopy(); }}
+			className="p-1 rounded-md transition-colors"
+			style={{
+				color: copied ? "var(--color-accent)" : "var(--color-text-muted)",
+			}}
+			title={copied ? "Copied" : "Copy message"}
+			aria-label={copied ? "Copied" : "Copy message"}
+		>
+			{copied ? (
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+					<path d="m20 6-11 11-5-5" />
+				</svg>
+			) : (
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+					<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+					<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+				</svg>
+			)}
+		</button>
+	);
+}
+
 /* ─── Chat message ─── */
 
-export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, onComposioAction, sessionId, voicePlaybackEnabled = false, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; onComposioAction?: (action: ComposioChatAction) => void; sessionId?: string | null; voicePlaybackEnabled?: boolean; userHtmlMap?: Map<string, string> }) {
+type ChatMessageProps = {
+	message: UIMessage;
+	isStreaming?: boolean;
+	onSubagentClick?: (task: string) => void;
+	onFilePathClick?: FilePathClickHandler;
+	onComposioAction?: (action: ComposioChatAction) => void;
+	sessionId?: string | null;
+	voicePlaybackEnabled?: boolean;
+	userHtmlMap?: Map<string, string>;
+	copyable?: boolean;
+};
+
+export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, onComposioAction, sessionId, voicePlaybackEnabled = false, userHtmlMap, copyable = false }: ChatMessageProps) {
 	const isUser = message.role === "user";
-	const segments = groupParts(message.parts);
+	const segments = useMemo(() => groupParts(message.parts), [message.parts]);
 	const speechText = useMemo(() => extractSpeechText(segments), [segments]);
+	const copyText = useMemo(
+		() => getCopyableMessageText(message.role, segments),
+		[message.role, segments],
+	);
+	const showCopyAction = copyable && !!copyText;
 	const markdownComponents = useMemo(
 		() => createMarkdownComponents(onFilePathClick, onComposioAction),
 		[onComposioAction, onFilePathClick],
@@ -838,7 +1049,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 
 		if (attachmentInfo) {
 			return (
-				<div className="flex flex-col items-end gap-1.5 py-2">
+				<div className="flex flex-col items-end gap-1.5 py-2 group">
 					<AttachedFilesCard paths={attachmentInfo.paths} />
 					{(attachmentInfo.message || richHtml) && (
 						<div
@@ -851,12 +1062,17 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 							{bubbleContent}
 						</div>
 					)}
+					{showCopyAction && (
+						<div className="flex items-center gap-1 self-end md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+							<CopyMessageButton text={copyText} />
+						</div>
+					)}
 				</div>
 			);
 		}
 
 		return (
-			<div className="flex justify-end py-2">
+			<div className="flex flex-col items-end gap-1 py-2 group">
 				<div
 					className="max-w-[80%] min-w-0 rounded-2xl rounded-br-sm px-3 py-2 text-sm leading-6 overflow-hidden break-words chat-message-font"
 					style={{
@@ -866,6 +1082,11 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 				>
 					{bubbleContent}
 				</div>
+				{showCopyAction && (
+					<div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+						<CopyMessageButton text={copyText} />
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -1041,8 +1262,9 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 			);
 			})}
 			</AnimatePresence>
-			{!isStreaming && (POSTHOG_KEY || (voicePlaybackEnabled && speechText)) && (
+			{!isStreaming && (showCopyAction || POSTHOG_KEY || (voicePlaybackEnabled && speechText)) && (
 				<div className="flex items-center gap-1 mt-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+					{showCopyAction && <CopyMessageButton text={copyText} />}
 					{voicePlaybackEnabled && speechText && <MessageVoiceButton text={speechText} />}
 					{POSTHOG_KEY && <FeedbackButtons messageId={message.id} sessionId={sessionId} />}
 				</div>

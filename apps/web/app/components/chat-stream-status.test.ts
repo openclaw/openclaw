@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import {
 	getStreamActivityLabel,
+	hasAssistantToolActivity,
 	hasAssistantText,
 	isStatusReasoningText,
 } from "./chat-stream-status";
@@ -95,5 +97,14 @@ describe("chat stream status helpers", () => {
 		});
 
 		expect(label).toBe("Waiting for subagents...");
+	});
+
+	it("detects tool-only assistant completions from the Composio regression fixture", () => {
+		const fixturePath = new URL("./__fixtures__/composio-empty-final-reply.jsonl", import.meta.url);
+		const lines = readFileSync(fixturePath, "utf-8").trim().split("\n");
+		const assistant = JSON.parse(lines[1] ?? "{}") as UIMessage;
+
+		expect(hasAssistantText(assistant)).toBe(false);
+		expect(hasAssistantToolActivity(assistant)).toBe(true);
 	});
 });

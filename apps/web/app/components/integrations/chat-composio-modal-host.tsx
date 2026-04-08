@@ -13,39 +13,13 @@ import {
   extractComposioToolkits,
 } from "@/lib/composio-client";
 import {
-  normalizeComposioToolkitName,
   normalizeComposioToolkitSlug,
-  resolveComposioConnectToolkitSlug,
 } from "@/lib/composio-normalization";
 import type { ComposioChatAction } from "@/lib/composio-chat-actions";
-
-function createToolkitPlaceholder(slug: string, name?: string | null): ComposioToolkit {
-  const fallbackName = normalizeComposioToolkitName(undefined, slug);
-  return {
-    slug: normalizeComposioToolkitSlug(slug),
-    connect_slug: resolveComposioConnectToolkitSlug(slug),
-    name: typeof name === "string" && name.trim().length > 0
-      ? name.trim()
-      : fallbackName.includes("-")
-        ? fallbackName.split("-").map((token) => token.charAt(0).toUpperCase() + token.slice(1)).join(" ")
-        : fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1),
-    description: "",
-    logo: null,
-    categories: [],
-    auth_schemes: [],
-    tools_count: 0,
-  };
-}
-
-function pickToolkitMatch(toolkits: ComposioToolkit[], slug: string, name?: string | null): ComposioToolkit | null {
-  const normalizedSlug = normalizeComposioToolkitSlug(slug);
-  const normalizedName = name?.trim().toLowerCase() ?? "";
-
-  return toolkits.find((toolkit) =>
-    normalizeComposioToolkitSlug(toolkit.slug) === normalizedSlug
-    || (normalizedName.length > 0 && toolkit.name.trim().toLowerCase() === normalizedName),
-  ) ?? null;
-}
+import {
+  createComposioToolkitPlaceholder,
+  pickComposioToolkitMatch,
+} from "@/lib/composio-toolkit-brand";
 
 async function resolveModalData(toolkitSlug: string, toolkitName?: string | null): Promise<{
   toolkit: ComposioToolkit | null;
@@ -63,7 +37,7 @@ async function resolveModalData(toolkitSlug: string, toolkitName?: string | null
     connections = extractComposioConnections(connectionsPayload).filter((connection) =>
       normalizeComposioToolkitSlug(connection.toolkit_slug) === normalizedSlug,
     );
-    toolkit = pickToolkitMatch(
+    toolkit = pickComposioToolkitMatch(
       Array.isArray(connectionsPayload.toolkits) ? connectionsPayload.toolkits : [],
       normalizedSlug,
       toolkitName,
@@ -78,7 +52,7 @@ async function resolveModalData(toolkitSlug: string, toolkitName?: string | null
     const toolkitResponse = await fetch(`/api/composio/toolkits?${search.toString()}`);
     if (toolkitResponse.ok) {
       const toolkitPayload = await toolkitResponse.json() as ComposioToolkitsResponse;
-      toolkit = pickToolkitMatch(
+      toolkit = pickComposioToolkitMatch(
         extractComposioToolkits(toolkitPayload).items,
         normalizedSlug,
         toolkitName,
@@ -116,7 +90,7 @@ export function ChatComposioModalHost({
     }
 
     const normalizedSlug = normalizeComposioToolkitSlug(rawToolkitSlug);
-    const placeholder = createToolkitPlaceholder(normalizedSlug, nextRequest.toolkitName);
+    const placeholder = createComposioToolkitPlaceholder(normalizedSlug, nextRequest.toolkitName);
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
     setPreferredAction(nextRequest.action);

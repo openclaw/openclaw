@@ -25,7 +25,10 @@ import { UnicodeSpinner } from "./unicode-spinner";
 import type { ChatPanelRuntimeState } from "@/lib/chat-session-registry";
 import {
 	getStreamActivityLabel,
+	getIncompleteAssistantReplyReason,
+	hasAssistantPostToolText,
 	hasAssistantText,
+	hasAssistantToolActivity,
 } from "./chat-stream-status";
 import type { ComposioChatAction } from "@/lib/composio-chat-actions";
 import type { ChatModelOption } from "@/lib/chat-models";
@@ -607,6 +610,20 @@ export function createStreamParser() {
 				currentTextIdx = -1;
 				break;
 			case "tool-input-start":
+				for (let i = parts.length - 1; i >= 0; i--) {
+					const p = parts[i];
+					if (
+						p.type === "dynamic-tool" &&
+						p.toolCallId === event.toolCallId
+					) {
+						p.toolName = event.toolName as string;
+						p.state = "input-available";
+						if (!p.input) {
+							p.input = {};
+						}
+						return;
+					}
+				}
 				parts.push({
 					type: "dynamic-tool",
 					toolCallId: event.toolCallId as string,
@@ -1586,17 +1603,17 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				emptyStreamTimerRef.current = setTimeout(() => {
 					emptyStreamTimerRef.current = null;
 					const lastMsg = messages[messages.length - 1];
-					const hasAssistantContent =
-						lastMsg?.role === "assistant" &&
-						lastMsg.parts.some(
-							(p) =>
-								(p.type === "text" && (p as { text: string }).text.trim().length > 0) ||
-								p.type === "tool-invocation" ||
-								p.type === "reasoning" ||
-								(p.type as string) === "dynamic-tool",
-						);
-					if (!hasAssistantContent && !error) {
+					const hasToolOnlyActivity = hasAssistantToolActivity(lastMsg ?? null);
+					const hasVisibleReply = hasToolOnlyActivity
+						? hasAssistantPostToolText(lastMsg ?? null)
+						: hasAssistantText(lastMsg ?? null);
+					const incompleteReplyReason = getIncompleteAssistantReplyReason(lastMsg ?? null);
+					if (!hasVisibleReply && !hasToolOnlyActivity && !error) {
 						setStreamError("No response received from agent.");
+					} else if (!hasVisibleReply && hasToolOnlyActivity && !error) {
+						setStreamError(
+							incompleteReplyReason ?? "Agent finished tool activity but did not send a final text reply.",
+						);
 					} else {
 						setStreamError(null);
 					}
@@ -2538,6 +2555,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								sessionId={currentSessionId}
 								voicePlaybackEnabled={voicePlaybackEnabled}
 								userHtmlMap={userHtmlMapRef.current}
+								copyable
 							/>
 						))}
 						{showStreamActivity && (

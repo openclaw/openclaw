@@ -141,7 +141,7 @@ const statusPayload: {
   summary: {
     level: "healthy" as const,
     verified: true,
-    message: "Composio MCP is healthy.",
+    message: "Dench Integrations is healthy.",
   },
   config: {
     status: "pass" as const,
@@ -307,7 +307,7 @@ describe("ComposioAppsSection", () => {
       summary: {
         level: "error" as const,
         verified: false,
-        message: "Composio MCP is configured, but a live agent session could not see the tools directly.",
+        message: "Dench Integrations is configured, but a live agent session could not see the tools directly.",
       },
       liveAgent: {
         status: "fail" as const,
@@ -320,9 +320,10 @@ describe("ComposioAppsSection", () => {
     render(<ComposioAppsSection eligible lockBadge={null} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Composio MCP is configured, but a live agent session could not see the tools directly.")).toBeInTheDocument();
+      expect(screen.getByText("Dench Integrations is configured, but a live agent session could not see the tools directly.")).toBeInTheDocument();
     });
 
+    expect(screen.queryByText(/Composio MCP/i)).not.toBeInTheDocument();
     expect(screen.getAllByText("A live agent session could not see the tools directly.").length).toBeGreaterThan(0);
     expect(screen.getByText("Evidence: GMAIL_FETCH_EMAILS")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair" })).toBeInTheDocument();
@@ -334,7 +335,7 @@ describe("ComposioAppsSection", () => {
       summary: {
         level: "healthy" as const,
         verified: false,
-        message: "Composio MCP is configured and the gateway is reachable. Live-agent verification is pending.",
+        message: "Dench Integrations is configured and the gateway is reachable. Live-agent verification is pending.",
       },
       liveAgent: {
         status: "unknown" as const,
