@@ -154,6 +154,7 @@ export function detectToolResultReplayPolicyMeta(params: {
     return {
       transient: true,
       diagnosticType,
+      diagnosticTarget: path,
       taggedAt,
       sourceTool: toolName,
     };

@@ -276,6 +276,68 @@ describe("resolveAssistantConclusionFreshnessGate", () => {
     });
   });
 
+  it("does not treat mismatched config-target evidence as fresh", () => {
+    const now = 2_500_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What is the value of plugins.installs.openclaw-qqbot in config?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_target",
+          toolName: "gateway",
+          content: "gateway.mode=true",
+          timestamp: now - 5_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.config_snapshot",
+            diagnosticTarget: "gateway.mode",
+            taggedAt: now - 5_000,
+            sourceTool: "gateway",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "missing",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("allows broad openclaw.json snapshots for config-target freshness", () => {
+    const now = 2_600_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What is the value of plugins.installs.openclaw-qqbot in config?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_full",
+          toolName: "read",
+          content: "{...}",
+          timestamp: now - 5_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.config_snapshot",
+            diagnosticTarget: "/repo/openclaw.json",
+            taggedAt: now - 5_000,
+            sourceTool: "read",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "fresh",
+      matchedTimestamp: now - 5_000,
+    });
+  });
+
   it("treats recent gateway config.get history as fresh evidence via toolCall fallback", () => {
     const now = 4_000_000;
     const result = resolveAssistantConclusionFreshnessGate({

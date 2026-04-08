@@ -61,12 +61,17 @@ export function isAssistantConclusionFreshnessGateEnabled(
 
 export function detectAssistantConclusionQuestionType(
   prompt: string,
-): { questionType: AssistantConclusionQuestionType; diagnosticType: string } | null {
+): {
+  questionType: AssistantConclusionQuestionType;
+  diagnosticType: string;
+  diagnosticTargetHint?: string;
+} | null {
   const normalized = normalizePrompt(prompt);
   if (detectConfigPresenceQuestion(normalized)) {
     return {
       questionType: "config_key_presence",
       diagnosticType: "openclaw.config_snapshot",
+      diagnosticTargetHint: extractConfigTargetHint(normalized),
     };
   }
   if (detectPluginInstallQuestion(normalized)) {
@@ -180,12 +185,69 @@ function inferReplayDiagnosticType(params: {
   messages: AgentMessage[];
   toolResultIndex: number;
   toolResult: AgentMessage;
-}): string | undefined {
+}): { diagnosticType?: string; diagnosticTarget?: string } | undefined {
   const replayMeta = getToolResultReplayMetadata(params.toolResult);
   if (replayMeta?.diagnosticType) {
-    return replayMeta.diagnosticType;
+    return {
+      diagnosticType: replayMeta.diagnosticType,
+      diagnosticTarget: replayMeta.diagnosticTarget,
+    };
   }
-  return inferDiagnosticTypeFromHistoricalToolCall(params);
+  const diagnosticType = inferDiagnosticTypeFromHistoricalToolCall(params);
+  if (!diagnosticType) {
+    return undefined;
+  }
+  return { diagnosticType };
+}
+
+function extractConfigTargetHint(normalizedPrompt: string): string | undefined {
+  if (/plugins\.entries/iu.test(normalizedPrompt)) {
+    return "plugins.entries";
+  }
+  if (/plugins\.installs/iu.test(normalizedPrompt)) {
+    return "plugins.installs";
+  }
+  const dottedPathMatches = normalizedPrompt.match(/\b[a-z_][a-z0-9_-]*(?:\.[a-z0-9_-]+)+\b/giu);
+  return dottedPathMatches?.[0];
+}
+
+function extractConfigPathFromDiagnosticTarget(diagnosticTarget?: string): string | undefined {
+  const target = trimToDefinedString(diagnosticTarget)?.toLowerCase();
+  if (!target) {
+    return undefined;
+  }
+  if (/openclaw\.json/iu.test(target)) {
+    return "__full_config_snapshot__";
+  }
+  const gatewayPath = target.match(/^[a-z_][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$/iu);
+  if (gatewayPath?.[0]) {
+    return gatewayPath[0].toLowerCase();
+  }
+  const cliPath = target.match(/openclaw\s+config\s+get(?:\s+--\S+)*\s+["']?([^"'`\s]+)["']?/iu);
+  return cliPath?.[1]?.toLowerCase();
+}
+
+function isSameOrNestedConfigPath(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+}
+
+function matchesDiagnosticTarget(params: {
+  questionType: AssistantConclusionQuestionType;
+  diagnosticTargetHint?: string;
+  evidenceDiagnosticTarget?: string;
+}): boolean {
+  if (params.questionType !== "config_key_presence") {
+    return true;
+  }
+  const hint = trimToDefinedString(params.diagnosticTargetHint)?.toLowerCase();
+  if (!hint) {
+    return true;
+  }
+  const evidencePath = extractConfigPathFromDiagnosticTarget(params.evidenceDiagnosticTarget);
+  if (!evidencePath || evidencePath === "__full_config_snapshot__") {
+    return true;
+  }
+  return isSameOrNestedConfigPath(hint, evidencePath);
 }
 
 export function resolveAssistantConclusionFreshnessGate(params: {
@@ -212,12 +274,21 @@ export function resolveAssistantConclusionFreshnessGate(params: {
     if ((message as { role?: unknown }).role !== "toolResult") {
       continue;
     }
-    const diagnosticType = inferReplayDiagnosticType({
+    const diagnostic = inferReplayDiagnosticType({
       messages: recentMessages,
       toolResultIndex: index,
       toolResult: message,
     });
-    if (diagnosticType !== detected.diagnosticType) {
+    if (diagnostic?.diagnosticType !== detected.diagnosticType) {
+      continue;
+    }
+    if (
+      !matchesDiagnosticTarget({
+        questionType: detected.questionType,
+        diagnosticTargetHint: detected.diagnosticTargetHint,
+        evidenceDiagnosticTarget: diagnostic.diagnosticTarget,
+      })
+    ) {
       continue;
     }
     sawMatchingEvidence = true;

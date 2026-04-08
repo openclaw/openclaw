@@ -945,6 +945,20 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
+  it("preserves gateway config.get path as diagnostic target", () => {
+    expect(
+      detectToolResultReplayPolicyMeta({
+        toolName: "gateway",
+        args: { action: "config.get", path: "plugins.installs.openclaw-qqbot" },
+      }),
+    ).toMatchObject({
+      transient: true,
+      diagnosticType: "openclaw.config_snapshot",
+      diagnosticTarget: "plugins.installs.openclaw-qqbot",
+      sourceTool: "gateway",
+    });
+  });
+
   it("applies before_message_write to synthetic tool-result flushes", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
