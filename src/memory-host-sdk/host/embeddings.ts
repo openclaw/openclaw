@@ -131,8 +131,41 @@ export async function createLocalEmbeddingProvider(
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
   let initPromise: Promise<LlamaEmbeddingContext> | null = null;
+  let resolvedModelPathPromise: Promise<string> | null = null;
+  let vramRecoveryPromise: Promise<LlamaEmbeddingContext> | null = null;
 
-  const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
+  const getResolvedModelPath = async (): Promise<string> => {
+    if (!resolvedModelPathPromise) {
+      resolvedModelPathPromise = resolveModelFile(modelPath, modelCacheDir || undefined).catch(
+        (err) => {
+          resolvedModelPathPromise = null;
+          throw err;
+        },
+      );
+    }
+    return resolvedModelPathPromise;
+  };
+
+  const isVramError = (err: unknown): boolean => formatErrorMessage(err).includes("available VRAM");
+
+  const disposeGpuResources = async (): Promise<void> => {
+    const oldContext = embeddingContext;
+    const oldModel = embeddingModel;
+    embeddingContext = null;
+    embeddingModel = null;
+    if (oldContext) {
+      try {
+        await oldContext.dispose();
+      } catch {}
+    }
+    if (oldModel) {
+      try {
+        await oldModel.dispose();
+      } catch {}
+    }
+  };
+
+  const ensureGpuContext = async (): Promise<LlamaEmbeddingContext> => {
     if (embeddingContext) {
       return embeddingContext;
     }
@@ -145,8 +178,16 @@ export async function createLocalEmbeddingProvider(
           llama = await getLlama({ logLevel: LlamaLogLevel.error });
         }
         if (!embeddingModel) {
-          const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-          embeddingModel = await llama.loadModel({ modelPath: resolved });
+          const resolved = await getResolvedModelPath();
+          embeddingModel = await llama.loadModel({
+            modelPath: resolved,
+            gpuLayers: {
+              fitContext: {
+                contextSize: 24,
+                embeddingContext: true,
+              },
+            },
+          });
         }
         if (!embeddingContext) {
           embeddingContext = await embeddingModel.createEmbeddingContext();
@@ -160,21 +201,101 @@ export async function createLocalEmbeddingProvider(
     return initPromise;
   };
 
+  const createTemporaryCpuContext = async (): Promise<{
+    context: LlamaEmbeddingContext;
+    dispose: () => Promise<void>;
+  }> => {
+    const cpuLlama = await getLlama({ logLevel: LlamaLogLevel.error, gpu: false });
+    const cpuModel = await cpuLlama.loadModel({
+      modelPath: await getResolvedModelPath(),
+      gpuLayers: 0,
+    });
+    const cpuContext = await cpuModel.createEmbeddingContext();
+    return {
+      context: cpuContext,
+      dispose: async () => {
+        try {
+          await cpuContext.dispose();
+        } catch {}
+        try {
+          await cpuModel.dispose();
+        } catch {}
+        try {
+          await cpuLlama.dispose();
+        } catch {}
+      },
+    };
+  };
+
+  const retryGpuContextAfterVramFailure = async (): Promise<LlamaEmbeddingContext> => {
+    if (!vramRecoveryPromise) {
+      vramRecoveryPromise = (async () => {
+        console.warn(
+          "[openclaw] local memory embeddings hit VRAM limits during GPU-fit init; retrying once with a fresh GPU-fit calculation.",
+        );
+        await disposeGpuResources();
+        initPromise = null;
+        try {
+          return await ensureGpuContext();
+        } catch (err) {
+          if (isVramError(err)) {
+            await disposeGpuResources();
+            initPromise = null;
+          }
+          throw err;
+        }
+      })().finally(() => {
+        vramRecoveryPromise = null;
+      });
+    }
+    return vramRecoveryPromise;
+  };
+
+  const withEmbeddingContext = async <T>(
+    run: (context: LlamaEmbeddingContext) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await run(await ensureGpuContext());
+    } catch (firstError) {
+      if (!isVramError(firstError)) {
+        throw firstError;
+      }
+      try {
+        return await run(await retryGpuContextAfterVramFailure());
+      } catch (secondError) {
+        if (!isVramError(secondError)) {
+          throw secondError;
+        }
+        console.warn(
+          "[openclaw] local memory embeddings hit VRAM limits again; falling back to CPU-only for this operation.",
+        );
+        const temporary = await createTemporaryCpuContext();
+        try {
+          return await run(temporary.context);
+        } finally {
+          await temporary.dispose();
+        }
+      }
+    }
+  };
+
   return {
     id: "local",
     model: modelPath,
     embedQuery: async (text) => {
-      const ctx = await ensureContext();
-      const embedding = await ctx.getEmbeddingFor(text);
+      const embedding = await withEmbeddingContext(async (context) =>
+        context.getEmbeddingFor(text),
+      );
       return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
     },
     embedBatch: async (texts) => {
-      const ctx = await ensureContext();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
+      const embeddings = await withEmbeddingContext(async (context) =>
+        Promise.all(
+          texts.map(async (text) => {
+            const embedding = await context.getEmbeddingFor(text);
+            return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
+          }),
+        ),
       );
       return embeddings;
     },

@@ -1,31 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readLoggingConfig } from "./config.js";
-
-const loadConfigMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => loadConfigMock(),
-  };
-});
+import { readLoggingConfig, setLoggingConfigLoaderForTests } from "./config.js";
 
 const originalArgv = process.argv;
+const loadLoggingConfigMock = vi.fn();
 
 describe("readLoggingConfig", () => {
   afterEach(() => {
     process.argv = originalArgv;
-    loadConfigMock.mockReset();
+    loadLoggingConfigMock.mockReset();
+    setLoggingConfigLoaderForTests();
   });
 
   it("skips mutating config loads for config schema", async () => {
     process.argv = ["node", "openclaw", "config", "schema"];
-    loadConfigMock.mockImplementation(() => {
-      throw new Error("loadConfig should not be called");
+    setLoggingConfigLoaderForTests(() => {
+      throw new Error("loadLoggingConfig should not be called");
     });
 
     expect(readLoggingConfig()).toBeUndefined();
-    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(loadLoggingConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("loads logging config lazily when reads are allowed", () => {
+    setLoggingConfigLoaderForTests(() => {
+      loadLoggingConfigMock();
+      return {
+        level: "debug",
+        file: "/tmp/openclaw-YYYY-MM-DD.log",
+      };
+    });
+
+    expect(readLoggingConfig()).toEqual({
+      level: "debug",
+      file: "/tmp/openclaw-YYYY-MM-DD.log",
+    });
+    expect(loadLoggingConfigMock).toHaveBeenCalledTimes(1);
   });
 });

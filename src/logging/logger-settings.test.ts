@@ -1,21 +1,14 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fallbackRequireMock, readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } =
-  vi.hoisted(() => ({
-    readLoggingConfigMock: vi.fn(() => undefined),
-    shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
-    fallbackRequireMock: vi.fn(() => {
-      throw new Error("config fallback should not be used in this test");
-    }),
-  }));
+const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
+  readLoggingConfigMock: vi.fn(() => undefined),
+  shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
+}));
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
   shouldSkipMutatingLoggingConfigRead: shouldSkipMutatingLoggingConfigReadMock,
-}));
-
-vi.mock("./node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => fallbackRequireMock,
 }));
 
 let originalTestFileLog: string | undefined;
@@ -34,7 +27,6 @@ beforeEach(() => {
   readLoggingConfigMock.mockClear();
   shouldSkipMutatingLoggingConfigReadMock.mockReset();
   shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
-  fallbackRequireMock.mockClear();
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });
@@ -60,7 +52,6 @@ describe("getResolvedLoggerSettings", () => {
     const settings = logging.getResolvedLoggerSettings();
     expect(settings.level).toBe("silent");
     expect(readLoggingConfigMock).not.toHaveBeenCalled();
-    expect(fallbackRequireMock).not.toHaveBeenCalled();
   });
 
   it("reads logging config when test file logging is explicitly enabled", () => {
@@ -76,6 +67,18 @@ describe("getResolvedLoggerSettings", () => {
     const settings = logging.getResolvedLoggerSettings();
 
     expect(settings.level).toBe("info");
-    expect(fallbackRequireMock).not.toHaveBeenCalled();
+  });
+
+  it("expands YYYY-MM-DD placeholders in configured log file paths", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    readLoggingConfigMock.mockReturnValue({
+      level: "info",
+      file: "/tmp/openclaw-YYYY-MM-DD.log",
+    });
+
+    const settings = logging.getResolvedLoggerSettings();
+
+    expect(settings.file).toMatch(/^\/tmp\/openclaw-\d{4}-\d{2}-\d{2}\.log$/);
+    expect(path.basename(settings.file)).not.toContain("YYYY-MM-DD");
   });
 });
