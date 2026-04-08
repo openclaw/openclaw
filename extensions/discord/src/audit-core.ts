@@ -1,7 +1,4 @@
-import type {
-  DiscordGuildChannelConfig,
-  DiscordGuildEntry,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
@@ -23,8 +20,9 @@ export type DiscordChannelPermissionsAudit = {
 };
 
 const REQUIRED_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
+const MAX_PARALLEL_DISCORD_AUDIT_CHANNELS = 6;
 
-function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
+function shouldAuditChannelConfig(config: { enabled?: boolean } | undefined) {
   if (!config) {
     return true;
   }
@@ -57,7 +55,7 @@ export function listConfiguredGuildChannelKeys(
       if (channelId === "*") {
         continue;
       }
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
+      if (!shouldAuditChannelConfig(value as { enabled?: boolean } | undefined)) {
         continue;
       }
       ids.add(channelId);
@@ -101,32 +99,46 @@ export async function auditDiscordChannelPermissionsWithFetcher(params: {
 
   const required = [...REQUIRED_CHANNEL_PERMISSIONS];
   const channels: DiscordChannelPermissionsAuditEntry[] = [];
+  channels.length = params.channelIds.length;
+  const workerCount = Math.min(params.channelIds.length, MAX_PARALLEL_DISCORD_AUDIT_CHANNELS);
+  let nextIndex = 0;
 
-  for (const channelId of params.channelIds) {
-    try {
-      const perms = await params.fetchChannelPermissions(channelId, {
-        token,
-        accountId: params.accountId ?? undefined,
-      });
-      const missing = required.filter((p) => !perms.permissions.includes(p));
-      channels.push({
-        channelId,
-        ok: missing.length === 0,
-        missing: missing.length ? missing : undefined,
-        error: null,
-        matchKey: channelId,
-        matchSource: "id",
-      });
-    } catch (err) {
-      channels.push({
-        channelId,
-        ok: false,
-        error: formatErrorMessage(err),
-        matchKey: channelId,
-        matchSource: "id",
-      });
-    }
-  }
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= params.channelIds.length) {
+          return;
+        }
+
+        const channelId = params.channelIds[index];
+        try {
+          const perms = await params.fetchChannelPermissions(channelId, {
+            token,
+            accountId: params.accountId ?? undefined,
+          });
+          const missing = required.filter((p) => !perms.permissions.includes(p));
+          channels[index] = {
+            channelId,
+            ok: missing.length === 0,
+            missing: missing.length ? missing : undefined,
+            error: null,
+            matchKey: channelId,
+            matchSource: "id",
+          };
+        } catch (err) {
+          channels[index] = {
+            channelId,
+            ok: false,
+            error: formatErrorMessage(err),
+            matchKey: channelId,
+            matchSource: "id",
+          };
+        }
+      }
+    }),
+  );
 
   return {
     ok: channels.every((c) => c.ok),

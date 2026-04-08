@@ -18,6 +18,7 @@ let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
 let unpinMessageDiscord: typeof import("./send.js").unpinMessageDiscord;
 let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
 let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").__resetDiscordDirectoryCacheForTest;
+let __resetDiscordPermissionCacheForTest: typeof import("./send.permissions.js").__resetDiscordPermissionCacheForTest;
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
 
 beforeAll(async () => {
@@ -38,11 +39,13 @@ beforeAll(async () => {
   ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
   ({ __resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
     await import("./directory-cache.js"));
+  ({ __resetDiscordPermissionCacheForTest } = await import("./send.permissions.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   __resetDiscordDirectoryCacheForTest();
+  __resetDiscordPermissionCacheForTest();
 });
 
 describe("sendMessageDiscord", () => {
@@ -591,6 +594,41 @@ describe("fetchChannelPermissionsDiscord", () => {
     });
     expect(res.permissions).toContain("Administrator");
     expect(res.permissions).toContain("ViewChannel");
+  });
+
+  it("reuses bot and guild permission context across channels in the same guild", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    const perms = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
+    getMock
+      .mockResolvedValueOnce({
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({ id: "bot1" })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: perms.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] })
+      .mockResolvedValueOnce({
+        id: "chan2",
+        guild_id: "guild1",
+        permission_overwrites: [],
+      });
+
+    await fetchChannelPermissionsDiscord("chan1", { rest, token: "t" });
+    const second = await fetchChannelPermissionsDiscord("chan2", { rest, token: "t" });
+
+    expect(second.permissions).toContain("ViewChannel");
+    expect(second.permissions).toContain("SendMessages");
+    expect(getMock.mock.calls.map((call) => call[0])).toEqual([
+      Routes.channel("chan1"),
+      Routes.user("@me"),
+      Routes.guild("guild1"),
+      Routes.guildMember("guild1", "bot1"),
+      Routes.channel("chan2"),
+    ]);
   });
 });
 
