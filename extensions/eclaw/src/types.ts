@@ -95,6 +95,7 @@ export interface EclawBindResponse {
 /** Response from POST /api/channel/message */
 export interface EclawMessageResponse {
   success: boolean;
+  message?: string;
   currentState?: {
     name: string;
     state: string;

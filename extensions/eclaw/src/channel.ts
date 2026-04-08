@@ -88,13 +88,17 @@ export const eclawPlugin = createChatChannelPlugin({
     messaging: {
       normalizeTarget: (target: string) => {
         const trimmed = target?.trim();
-        if (!trimmed) return undefined;
+        if (!trimmed) {
+          return undefined;
+        }
         return trimmed.replace(/^eclaw:/i, "").trim();
       },
       targetResolver: {
         looksLikeId: (id: string) => {
           const trimmed = id?.trim();
-          if (!trimmed) return false;
+          if (!trimmed) {
+            return false;
+          }
           // E-Claw conversationIds are "<deviceId>:<entityId>" or numeric slot IDs.
           return /^[\w-]+:\d+$/.test(trimmed) || /^\d+$/.test(trimmed);
         },

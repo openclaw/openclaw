@@ -128,7 +128,9 @@ function acquireSharedEclawHttpRoute(params: {
 function makeRouteRelease(): () => void {
   let released = false;
   return () => {
-    if (released) return;
+    if (released) {
+      return;
+    }
     released = true;
     sharedRouteRefCount -= 1;
     if (sharedRouteRefCount <= 0) {

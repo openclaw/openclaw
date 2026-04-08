@@ -132,11 +132,10 @@ describe("eclaw gateway bind-failure cleanup", () => {
 
     const registerCallback = vi
       .spyOn(EclawClient.prototype, "registerCallback")
-      .mockImplementation(async function (this: EclawClient) {
-        // Mimic a successful register: set internal state as the real
-        // client would. We only need deviceId to be non-null so that a
-        // later unregister call is a real HTTP attempt (stubbed below).
-        (this as unknown as { "#state"?: unknown }); // keep TS happy
+      .mockImplementation(async () => {
+        // Mimic a successful register: the unregister-on-failure test
+        // below only checks that unregisterCallback was invoked once,
+        // so we don't need to set any internal state here.
         return {
           success: true,
           deviceId: "dev-1",
@@ -444,5 +443,97 @@ describe("eclaw onError logging", () => {
     expect(errorsSeen).toHaveLength(1);
     expect(String(errorsSeen[0]?.err)).toContain("boom");
     expect(String(errorsSeen[0]?.err)).toContain("eclaw:");
+  });
+});
+
+describe("eclaw client strict response validation", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function mkClient(): EclawClient {
+    const client = new EclawClient({
+      apiBase: "https://example.test",
+      apiKey: "eck_test",
+    });
+    // Bypass the "not bound" guard so sendMessage/speakTo reach fetch
+    (client as unknown as { "#state": Record<string, unknown> })["#state"] = {
+      deviceId: "dev-1",
+      botSecret: "secret-1",
+      entityId: 2,
+    };
+    // TypeScript private fields can't be set from outside; do it via Object.defineProperty
+    // on the client-registry proxy path. Simpler: use setEclawClient + direct call.
+    return client;
+  }
+
+  function stubFetch(status: number, body: unknown): void {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+  }
+
+  it("sendMessage throws on HTTP 500", async () => {
+    stubFetch(500, "internal server error");
+    const client = new EclawClient({
+      apiBase: "https://example.test",
+      apiKey: "eck_test",
+    });
+    // Stamp state via bindEntity path: call bindEntity with stubbed ok response first.
+    stubFetch(200, { success: true, deviceId: "dev-1", entityId: 2, botSecret: "s", publicCode: "p", bindingType: "channel" });
+    await client.bindEntity(2, "bot");
+    // Now stub the failing sendMessage response and invoke it
+    stubFetch(500, "internal server error");
+    await expect(client.sendMessage("hi")).rejects.toThrow(/HTTP 500/);
+  });
+
+  it("sendMessage throws when response JSON has success: false", async () => {
+    const client = new EclawClient({
+      apiBase: "https://example.test",
+      apiKey: "eck_test",
+    });
+    stubFetch(200, { success: true, deviceId: "dev-1", entityId: 2, botSecret: "s", publicCode: "p", bindingType: "channel" });
+    await client.bindEntity(2, "bot");
+    stubFetch(200, { success: false, message: "quota exceeded" });
+    await expect(client.sendMessage("hi")).rejects.toThrow(/quota exceeded/);
+    void mkClient; // silence unused-helper warning if any
+  });
+
+  it("speakTo throws on HTTP 404", async () => {
+    const client = new EclawClient({
+      apiBase: "https://example.test",
+      apiKey: "eck_test",
+    });
+    stubFetch(200, { success: true, deviceId: "dev-1", entityId: 2, botSecret: "s", publicCode: "p", bindingType: "channel" });
+    await client.bindEntity(2, "bot");
+    stubFetch(404, "not found");
+    await expect(client.speakTo(3, "hi")).rejects.toThrow(/HTTP 404/);
+  });
+
+  it("speakTo throws when response JSON has success: false", async () => {
+    const client = new EclawClient({
+      apiBase: "https://example.test",
+      apiKey: "eck_test",
+    });
+    stubFetch(200, { success: true, deviceId: "dev-1", entityId: 2, botSecret: "s", publicCode: "p", bindingType: "channel" });
+    await client.bindEntity(2, "bot");
+    stubFetch(200, { success: false, message: "target offline" });
+    await expect(client.speakTo(3, "hi")).rejects.toThrow(/target offline/);
+  });
+
+  it("speakTo accepts empty body on 2xx", async () => {
+    const client = new EclawClient({
+      apiBase: "https://example.test",
+      apiKey: "eck_test",
+    });
+    stubFetch(200, { success: true, deviceId: "dev-1", entityId: 2, botSecret: "s", publicCode: "p", bindingType: "channel" });
+    await client.bindEntity(2, "bot");
+    stubFetch(200, "");
+    await expect(client.speakTo(3, "hi")).resolves.toBeUndefined();
   });
 });

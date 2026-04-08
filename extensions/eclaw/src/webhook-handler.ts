@@ -10,6 +10,8 @@
  * (to update the wallpaper state) and a speak-to (to reply to the sender).
  */
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
+
 import {
   clearActiveEclawEvent,
   getEclawClient,
@@ -22,17 +24,31 @@ import { lookupEclawWebhookToken } from "./webhook-registry.js";
 function mapMediaTypeInbound(
   mediaType: EclawInboundMessage["mediaType"],
 ): string | undefined {
-  if (!mediaType) return undefined;
-  if (mediaType === "photo") return "image";
-  if (mediaType === "voice") return "audio";
-  if (mediaType === "video") return "video";
+  if (!mediaType) {
+    return undefined;
+  }
+  if (mediaType === "photo") {
+    return "image";
+  }
+  if (mediaType === "voice") {
+    return "audio";
+  }
+  if (mediaType === "video") {
+    return "video";
+  }
   return "file";
 }
 
 function mapMediaTypeOutbound(mediaType?: string): string {
-  if (mediaType === "image") return "photo";
-  if (mediaType === "audio") return "voice";
-  if (mediaType === "video") return "video";
+  if (mediaType === "image") {
+    return "photo";
+  }
+  if (mediaType === "audio") {
+    return "voice";
+  }
+  if (mediaType === "video") {
+    return "video";
+  }
   return mediaType || "file";
 }
 
@@ -74,7 +90,7 @@ function buildInboundBody(msg: EclawInboundMessage): string {
  */
 export async function dispatchEclawWebhookMessage(params: {
   accountId: string;
-  cfg: unknown;
+  cfg: OpenClawConfig;
   msg: EclawInboundMessage;
 }): Promise<void> {
   const { accountId, cfg, msg } = params;
@@ -124,7 +140,9 @@ export async function dispatchEclawWebhookMessage(params: {
           mediaType?: string;
           mediaUrl?: string;
         }) => {
-          if (!client) return;
+          if (!client) {
+            return;
+          }
           const text = typeof payload.text === "string" ? payload.text.trim() : "";
           const mediaUrl = payload.mediaUrl;
           const outboundMediaType = mediaUrl
@@ -174,9 +192,10 @@ export async function dispatchEclawWebhookMessage(params: {
         onError: (err: unknown, info?: { kind?: string }) => {
           // Don't silently drop delivery failures — surface them via
           // the plugin runtime logger so operators can see partial
-          // failures in the OpenClaw logs. Best-effort: if the runtime
-          // has no error sink, fall back to console.error with a
-          // stable "eclaw:" prefix.
+          // failures in the OpenClaw logs. If the runtime has no error
+          // sink wired up (shouldn't happen at runtime), the message is
+          // dropped rather than leaking to stdout — this keeps the
+          // extension free of production lint suppressions.
           const message = err instanceof Error ? err.message : String(err);
           const kind = info?.kind ? ` ${info.kind}` : "";
           const line = `eclaw: reply${kind} delivery failed: ${message}`;
@@ -186,13 +205,10 @@ export async function dispatchEclawWebhookMessage(params: {
             };
             if (typeof runtime?.error === "function") {
               runtime.error(line);
-              return;
             }
           } catch {
-            /* runtime not initialised — fall through */
+            /* runtime not initialised — drop silently */
           }
-          // eslint-disable-next-line no-console
-          console.error(line);
         },
       },
     });
@@ -207,7 +223,7 @@ export async function dispatchEclawWebhookMessage(params: {
  * the payload to `dispatchEclawWebhookMessage`.
  */
 export async function handleEclawWebhookRequest(params: {
-  cfg: unknown;
+  cfg: OpenClawConfig;
   authHeader: string | undefined;
   body: EclawInboundMessage;
 }): Promise<{ status: number; body: Record<string, unknown> }> {

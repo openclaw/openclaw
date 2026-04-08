@@ -22,6 +22,23 @@ export interface EclawClientState {
   entityId: number | undefined;
 }
 
+/**
+ * Best-effort capture of an upstream error body for diagnostic messages.
+ * Caps at 200 chars so stack traces stay readable even for HTML error pages.
+ */
+async function readErrorSnippet(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text) {
+      return "";
+    }
+    const trimmed = text.replaceAll(/\s+/gu, " ").trim().slice(0, 200);
+    return trimmed ? `: ${trimmed}` : "";
+  } catch {
+    return "";
+  }
+}
+
 export class EclawClient {
   readonly #apiBase: string;
   readonly #apiKey: string;
@@ -136,7 +153,20 @@ export class EclawClient {
       }),
     });
 
-    return (await res.json()) as EclawMessageResponse;
+    if (!res.ok) {
+      const snippet = await readErrorSnippet(res);
+      throw new Error(
+        `E-Claw sendMessage failed (HTTP ${res.status})${snippet}`,
+      );
+    }
+
+    const data = (await res.json()) as EclawMessageResponse;
+    if (!data.success) {
+      throw new Error(
+        data.message || `E-Claw sendMessage rejected (HTTP ${res.status})`,
+      );
+    }
+    return data;
   }
 
   /** Bot-to-bot message to another entity on the same device. */
@@ -150,7 +180,7 @@ export class EclawClient {
       throw new Error("E-Claw client not bound — call bindEntity() first");
     }
 
-    await fetch(`${this.#apiBase}/api/entity/speak-to`, {
+    const res = await fetch(`${this.#apiBase}/api/entity/speak-to`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -162,6 +192,30 @@ export class EclawClient {
         expects_reply: expectsReply,
       }),
     });
+
+    if (!res.ok) {
+      const snippet = await readErrorSnippet(res);
+      throw new Error(
+        `E-Claw speakTo failed (HTTP ${res.status})${snippet}`,
+      );
+    }
+
+    // speakTo returns { success: boolean, message?: string } on the happy path;
+    // if the backend signals a rejection via success=false even on HTTP 200,
+    // treat it as a delivery failure so the dispatcher can report it. An
+    // empty 2xx body is tolerated (treated as success).
+    let data: { success?: boolean; message?: string } | null = null;
+    try {
+      data = (await res.json()) as { success?: boolean; message?: string };
+    } catch {
+      // Empty / non-JSON body on a 2xx response: treat as success.
+      return;
+    }
+    if (data?.success === false) {
+      throw new Error(
+        data.message || `E-Claw speakTo rejected (HTTP ${res.status})`,
+      );
+    }
   }
 
   /** Unregister this callback on shutdown. Best-effort. */
