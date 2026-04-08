@@ -64,14 +64,17 @@ export function normalizeReplyPayload(
   // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
   // token never leaks to end users.  If stripping leaves nothing, treat it as
   // silent just like the exact-match path above.  (#30916, #30955)
-  if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
-    if (startsWithSilentToken(text, silentToken)) {
+  if (text && !isSilentReplyText(text, silentToken)) {
+    const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
+    if (hasLeadingSilentToken) {
       text = stripLeadingSilentToken(text, silentToken);
     }
-    text = stripSilentToken(text, silentToken);
-    if (!hasContent(text)) {
-      opts.onSkip?.("silent");
-      return null;
+    if (hasLeadingSilentToken || text.includes(silentToken)) {
+      text = stripSilentToken(text, silentToken);
+      if (!hasContent(text)) {
+        opts.onSkip?.("silent");
+        return null;
+      }
     }
   }
   if (text && !trimmed) {

@@ -133,6 +133,14 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("The user is saying hello");
   });
 
+  it("strips glued leading NO_REPLY text case-insensitively", () => {
+    const result = normalizeReplyPayload({
+      text: "no_replyThe user is saying hello",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("The user is saying hello");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();
