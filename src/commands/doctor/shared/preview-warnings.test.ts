@@ -54,7 +54,12 @@ describe("doctor preview warnings", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(warnings).toEqual([expect.stringContaining('channels.signal.allowFrom: set to ["*"]')]);
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Telegram allowFrom contains 1 non-numeric entries (e.g. @alice)"),
+        expect.stringContaining('channels.signal.allowFrom: set to ["*"]'),
+      ]),
+    );
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {

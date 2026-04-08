@@ -4,6 +4,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
@@ -79,7 +80,7 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
   if (!parsed?.rest) {
     return "direct";
   }
-  const tokens = new Set(parsed.rest.toLowerCase().split(":").filter(Boolean));
+  const tokens = new Set(normalizeLowercaseStringOrEmpty(parsed.rest).split(":").filter(Boolean));
   if (tokens.has("channel")) {
     return "channel";
   }

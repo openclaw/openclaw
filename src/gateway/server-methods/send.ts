@@ -17,6 +17,11 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../../shared/string-coerce.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -60,11 +65,10 @@ async function resolveRequestedChannel(params: {
       error: ReturnType<typeof errorShape>;
     }
 > {
-  const channelInput =
-    typeof params.requestChannel === "string" ? params.requestChannel : undefined;
+  const channelInput = readStringValue(params.requestChannel);
   const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = channelInput.trim().toLowerCase();
+    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
     if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
       return {
         error: errorShape(
@@ -218,16 +222,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    const to = request.to.trim();
-    const message = typeof request.message === "string" ? request.message.trim() : "";
-    const mediaUrl =
-      typeof request.mediaUrl === "string" && request.mediaUrl.trim().length > 0
-        ? request.mediaUrl.trim()
-        : undefined;
+    const to = normalizeOptionalString(request.to) ?? "";
+    const message = normalizeOptionalString(request.message) ?? "";
+    const mediaUrl = normalizeOptionalString(request.mediaUrl);
     const mediaUrls = Array.isArray(request.mediaUrls)
       ? request.mediaUrls
-          .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-          .filter((entry) => entry.length > 0)
+          .map((entry) => normalizeOptionalString(entry))
+          .filter((entry): entry is string => Boolean(entry))
       : undefined;
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
       respond(
@@ -247,14 +248,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, channel } = resolvedChannel;
-    const accountId =
-      typeof request.accountId === "string" && request.accountId.trim().length
-        ? request.accountId.trim()
-        : undefined;
-    const threadId =
-      typeof request.threadId === "string" && request.threadId.trim().length
-        ? request.threadId.trim()
-        : undefined;
+    const accountId = normalizeOptionalString(request.accountId);
+    const threadId = normalizeOptionalString(request.threadId);
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
     if (!plugin) {
@@ -299,14 +294,8 @@ export const sendHandlers: GatewayRequestHandlers = {
         const mirrorMediaUrls = mirrorPayloads.flatMap(
           (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
         );
-        const providedSessionKey =
-          typeof request.sessionKey === "string" && request.sessionKey.trim()
-            ? request.sessionKey.trim().toLowerCase()
-            : undefined;
-        const explicitAgentId =
-          typeof request.agentId === "string" && request.agentId.trim()
-            ? request.agentId.trim()
-            : undefined;
+        const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
+        const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
           : undefined;
@@ -469,14 +458,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       durationSeconds: request.durationSeconds,
       durationHours: request.durationHours,
     };
-    const threadId =
-      typeof request.threadId === "string" && request.threadId.trim().length
-        ? request.threadId.trim()
-        : undefined;
-    const accountId =
-      typeof request.accountId === "string" && request.accountId.trim().length
-        ? request.accountId.trim()
-        : undefined;
+    const threadId = normalizeOptionalString(request.threadId);
+    const accountId = normalizeOptionalString(request.accountId);
     try {
       if (!outbound?.sendPoll) {
         respond(

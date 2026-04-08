@@ -1,23 +1,11 @@
-import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import { hasBundledChannelConfiguredState } from "../channels/plugins/configured-state.js";
 import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
-import { isRecord } from "../utils.js";
+import {
+  hasMeaningfulChannelConfigShallow,
+  resolveChannelConfigRecord,
+} from "./channel-configured-shared.js";
 import type { OpenClawConfig } from "./config.js";
-
-function resolveChannelConfig(
-  cfg: OpenClawConfig,
-  channelId: string,
-): Record<string, unknown> | null {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
-  return isRecord(entry) ? entry : null;
-}
-
-function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
-  const entry = resolveChannelConfig(cfg, channelId);
-  return hasMeaningfulChannelConfig(entry);
-}
 
 export function isChannelConfigured(
   cfg: OpenClawConfig,
@@ -31,7 +19,7 @@ export function isChannelConfigured(
   if (pluginPersistedAuthState) {
     return true;
   }
-  if (isGenericChannelConfigured(cfg, channelId)) {
+  if (hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId))) {
     return true;
   }
   const plugin = getBootstrapChannelPlugin(channelId);

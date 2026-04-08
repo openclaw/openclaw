@@ -1,4 +1,8 @@
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
@@ -118,7 +122,9 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
-  return (values ?? []).map((value) => value.trim()).filter(Boolean);
+  return (values ?? [])
+    .map((value) => normalizeOptionalString(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 const recentInboundMessages = createDedupeCache({
@@ -139,8 +145,7 @@ function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
 }
 
 function isSystemPost(post: MattermostPost): boolean {
-  const type = post.type?.trim();
-  return Boolean(type);
+  return normalizeOptionalString(post.type) !== undefined;
 }
 
 function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
@@ -157,11 +162,11 @@ export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
   }
-  return params.replyToId?.trim() || undefined;
+  return normalizeOptionalString(params.replyToId);
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -170,14 +175,14 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
   if (params.kind === "direct") {
     return undefined;
   }
-  const postId = params.postId?.trim();
+  const postId = normalizeOptionalString(params.postId);
   if (!postId) {
     return undefined;
   }
@@ -216,7 +221,10 @@ export function resolveMattermostThreadSessionContext(params: {
 export function resolveMattermostReactionChannelId(
   payload: Pick<MattermostEventPayload, "broadcast" | "data">,
 ): string | undefined {
-  return payload.broadcast?.channel_id?.trim() || payload.data?.channel_id?.trim() || undefined;
+  return (
+    normalizeOptionalString(payload.broadcast?.channel_id) ??
+    normalizeOptionalString(payload.data?.channel_id)
+  );
 }
 
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
@@ -257,7 +265,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     accountId: account.accountId,
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
-  const botToken = opts.botToken?.trim() || account.botToken?.trim();
+  const botToken =
+    normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
   if (!botToken) {
     throw new Error(
       `Mattermost bot token missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.botToken or MATTERMOST_BOT_TOKEN for default).`,
@@ -303,7 +312,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     return;
   }
   const botUserId = botUser.id;
-  const botUsername = botUser.username?.trim() || undefined;
+  const botUsername = normalizeOptionalString(botUser.username);
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
   await registerMattermostMonitorSlashCommands({
     client,
@@ -1034,10 +1043,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const chatType = channelChatType(kind);
 
     const senderName =
-      payload.data?.sender_name?.trim() ||
-      (await resolveUserInfo(senderId))?.username?.trim() ||
+      normalizeOptionalString(payload.data?.sender_name) ??
+      normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
       senderId;
-    const rawText = post.message?.trim() || "";
+    const rawText = normalizeOptionalString(post.message) ?? "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const normalizedAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
     const normalizedGroupAllowFrom = normalizeMattermostAllowList(
@@ -1181,7 +1190,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
+    const threadRootId = normalizeOptionalString(post.root_id);
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
@@ -1196,7 +1205,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
       kind !== "direct" &&
-      ((botUsername ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`) : false) ||
+      ((botUsername
+        ? normalizeLowercaseStringOrEmpty(rawText).includes(
+            `@${normalizeLowercaseStringOrEmpty(botUsername)}`,
+          )
+        : false) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
     const pendingBody =
       rawText ||
@@ -1522,7 +1535,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const action = isRemoved ? "removed" : "added";
 
     const senderInfo = await resolveUserInfo(userId);
-    const senderName = senderInfo?.username?.trim() || userId;
+    const senderName = normalizeOptionalString(senderInfo?.username) ?? userId;
 
     // Resolve the channel from broadcast or post to route to the correct agent session
     const channelId = resolveMattermostReactionChannelId(payload);
@@ -1621,7 +1634,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!channelId) {
         return null;
       }
-      const threadId = entry.post.root_id?.trim();
+      const threadId = normalizeOptionalString(entry.post.root_id);
       const threadKey = threadId ? `thread:${threadId}` : "channel";
       return `mattermost:${account.accountId}:${channelId}:${threadKey}`;
     },
@@ -1629,7 +1642,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (entry.post.file_ids && entry.post.file_ids.length > 0) {
         return false;
       }
-      const text = entry.post.message?.trim() ?? "";
+      const text = normalizeOptionalString(entry.post.message) ?? "";
       if (!text) {
         return false;
       }
@@ -1645,7 +1658,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return;
       }
       const combinedText = entries
-        .map((entry) => entry.post.message?.trim() ?? "")
+        .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
         .filter(Boolean)
         .join("\n");
       const mergedPost: MattermostPost = {

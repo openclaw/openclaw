@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,12 +28,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
 }));
 
-import {
-  getPluginCliCommandDescriptors,
-  loadValidatedConfigForPluginRegistration,
-  registerPluginCliCommands,
-  registerPluginCliCommandsFromValidatedConfig,
-} from "./cli.js";
+let getPluginCliCommandDescriptors: typeof import("./cli.js").getPluginCliCommandDescriptors;
+let loadValidatedConfigForPluginRegistration: typeof import("./cli.js").loadValidatedConfigForPluginRegistration;
+let registerPluginCliCommands: typeof import("./cli.js").registerPluginCliCommands;
+let registerPluginCliCommandsFromValidatedConfig: typeof import("./cli.js").registerPluginCliCommandsFromValidatedConfig;
 
 function createProgram(existingCommandName?: string) {
   const program = new Command();
@@ -119,6 +117,15 @@ function expectAutoEnabledCliLoad(params: {
 }
 
 describe("registerPluginCliCommands", () => {
+  beforeAll(async () => {
+    ({
+      getPluginCliCommandDescriptors,
+      loadValidatedConfigForPluginRegistration,
+      registerPluginCliCommands,
+      registerPluginCliCommandsFromValidatedConfig,
+    } = await import("./cli.js"));
+  });
+
   beforeEach(() => {
     mocks.memoryRegister.mockReset();
     mocks.memoryRegister.mockImplementation(({ program }: { program: Command }) => {

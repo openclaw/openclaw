@@ -1,17 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-host-events";
 import {
-  resolveMemoryCorePluginConfig,
-  resolveMemoryDreamingWorkspaces,
-} from "openclaw/plugin-sdk/memory-host-status";
+  listActiveMemoryPublicArtifacts,
+  type MemoryPluginPublicArtifact,
+} from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
-import { pathExists, resolveArtifactKey } from "./source-path-shared.js";
+import { resolveArtifactKey } from "./source-path-shared.js";
 import {
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
@@ -37,93 +36,44 @@ export type BridgeMemoryWikiResult = {
   pagePaths: string[];
 };
 
-async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFilesRecursive(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
+function shouldImportArtifact(
+  artifact: MemoryPluginPublicArtifact,
+  bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
+): boolean {
+  switch (artifact.kind) {
+    case "memory-root":
+      return bridgeConfig.indexMemoryRoot;
+    case "daily-note":
+      return bridgeConfig.indexDailyNotes;
+    case "dream-report":
+      return bridgeConfig.indexDreamReports;
+    case "event-log":
+      return bridgeConfig.followMemoryEvents;
+    default:
+      return false;
   }
-  return files.toSorted((left, right) => left.localeCompare(right));
 }
 
-async function collectWorkspaceArtifacts(
-  workspaceDir: string,
+async function collectBridgeArtifacts(
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
+  artifacts: MemoryPluginPublicArtifact[],
 ): Promise<BridgeArtifact[]> {
-  const artifacts: BridgeArtifact[] = [];
-  if (bridgeConfig.indexMemoryRoot) {
-    for (const relPath of ["MEMORY.md", "memory.md"]) {
-      const absolutePath = path.join(workspaceDir, relPath);
-      if (await pathExists(absolutePath)) {
-        const syncKey = await resolveArtifactKey(absolutePath);
-        artifacts.push({
-          syncKey,
-          artifactType: "markdown",
-          workspaceDir,
-          relativePath: relPath,
-          absolutePath,
-        });
-      }
-    }
-  }
-
-  if (bridgeConfig.indexDailyNotes) {
-    const memoryDir = path.join(workspaceDir, "memory");
-    const files = await listMarkdownFilesRecursive(memoryDir);
-    for (const absolutePath of files) {
-      const relativePath = path.relative(workspaceDir, absolutePath).replace(/\\/g, "/");
-      if (!relativePath.startsWith("memory/dreaming/")) {
-        const syncKey = await resolveArtifactKey(absolutePath);
-        artifacts.push({
-          syncKey,
-          artifactType: "markdown",
-          workspaceDir,
-          relativePath,
-          absolutePath,
-        });
-      }
-    }
-  }
-
-  if (bridgeConfig.indexDreamReports) {
-    const dreamingDir = path.join(workspaceDir, "memory", "dreaming");
-    const files = await listMarkdownFilesRecursive(dreamingDir);
-    for (const absolutePath of files) {
-      const relativePath = path.relative(workspaceDir, absolutePath).replace(/\\/g, "/");
-      const syncKey = await resolveArtifactKey(absolutePath);
-      artifacts.push({
-        syncKey,
-        artifactType: "markdown",
-        workspaceDir,
-        relativePath,
-        absolutePath,
-      });
-    }
-  }
-
-  if (bridgeConfig.followMemoryEvents) {
-    const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
-    if (await pathExists(eventLogPath)) {
-      const syncKey = await resolveArtifactKey(eventLogPath);
-      artifacts.push({
-        syncKey,
-        artifactType: "memory-events",
-        workspaceDir,
-        relativePath: path.relative(workspaceDir, eventLogPath).replace(/\\/g, "/"),
-        absolutePath: eventLogPath,
-      });
-    }
-  }
-
-  const deduped = new Map<string, BridgeArtifact>();
+  const collected: BridgeArtifact[] = [];
   for (const artifact of artifacts) {
+    if (!shouldImportArtifact(artifact, bridgeConfig)) {
+      continue;
+    }
+    const syncKey = await resolveArtifactKey(artifact.absolutePath);
+    collected.push({
+      syncKey,
+      artifactType: artifact.kind === "event-log" ? "memory-events" : "markdown",
+      workspaceDir: artifact.workspaceDir,
+      relativePath: artifact.relativePath,
+      absolutePath: artifact.absolutePath,
+    });
+  }
+  const deduped = new Map<string, BridgeArtifact>();
+  for (const artifact of collected) {
     deduped.set(artifact.syncKey, artifact);
   }
   return [...deduped.values()];
@@ -253,7 +203,7 @@ export async function syncMemoryWikiBridgeSources(params: {
   if (
     params.config.vaultMode !== "bridge" ||
     !params.config.bridge.enabled ||
-    !params.config.bridge.readMemoryCore ||
+    !params.config.bridge.readMemoryArtifacts ||
     !params.appConfig
   ) {
     return {
@@ -267,42 +217,32 @@ export async function syncMemoryWikiBridgeSources(params: {
     };
   }
 
-  const memoryPluginConfig = resolveMemoryCorePluginConfig(params.appConfig);
-  if (!memoryPluginConfig) {
-    return {
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    };
-  }
-
-  const workspaces = resolveMemoryDreamingWorkspaces(params.appConfig);
+  const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   let artifactCount = 0;
   const activeKeys = new Set<string>();
-  for (const workspace of workspaces) {
-    const artifacts = await collectWorkspaceArtifacts(workspace.workspaceDir, params.config.bridge);
-    artifactCount += artifacts.length;
-    for (const artifact of artifacts) {
-      const stats = await fs.stat(artifact.absolutePath);
-      activeKeys.add(artifact.syncKey);
-      results.push(
-        await writeBridgeSourcePage({
-          config: params.config,
-          artifact,
-          agentIds: workspace.agentIds,
-          sourceUpdatedAtMs: stats.mtimeMs,
-          sourceSize: stats.size,
-          state,
-        }),
-      );
-    }
+  const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
+  const agentIdsByWorkspace = new Map<string, string[]>();
+  for (const artifact of publicArtifacts) {
+    agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
   }
+  artifactCount = artifacts.length;
+  for (const artifact of artifacts) {
+    const stats = await fs.stat(artifact.absolutePath);
+    activeKeys.add(artifact.syncKey);
+    results.push(
+      await writeBridgeSourcePage({
+        config: params.config,
+        artifact,
+        agentIds: agentIdsByWorkspace.get(artifact.workspaceDir) ?? [],
+        sourceUpdatedAtMs: stats.mtimeMs,
+        sourceSize: stats.size,
+        state,
+      }),
+    );
+  }
+  const workspaceCount = new Set(publicArtifacts.map((artifact) => artifact.workspaceDir)).size;
 
   const removedCount = await pruneImportedSourceEntries({
     vaultRoot: params.config.vault.path,
@@ -324,7 +264,7 @@ export async function syncMemoryWikiBridgeSources(params: {
       timestamp: new Date().toISOString(),
       details: {
         sourceType: "memory-bridge",
-        workspaces: workspaces.length,
+        workspaces: workspaceCount,
         artifactCount,
         importedCount,
         updatedCount,
@@ -340,7 +280,7 @@ export async function syncMemoryWikiBridgeSources(params: {
     skippedCount,
     removedCount,
     artifactCount,
-    workspaces: workspaces.length,
+    workspaces: workspaceCount,
     pagePaths,
   };
 }

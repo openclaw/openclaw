@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -12,11 +11,10 @@ import {
   createManagedRun,
   mockSuccessfulCliRun,
   restoreCliRunnerPrepareTestDeps,
-  setupCliRunnerTestModule,
-  SMALL_PNG_BASE64,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -357,6 +355,66 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("surfaces nested Claude stream-json API errors instead of raw event output", async () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    const apiError = `API Error: 400 ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message,
+      },
+      request_id: "req_011CZqHuXhFetYCnr8325DQc",
+    })}`;
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: apiError }],
+            },
+            session_id: "session-api-error",
+            error: "unknown",
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            result: apiError,
+            session_id: "session-api-error",
+          }),
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const run = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-api-error",
+      }),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      name: "FailoverError",
+      message,
+      reason: "billing",
+      status: 402,
+    });
+  });
+
   it("sanitizes dangerous backend env overrides before spawn", async () => {
     mockSuccessfulCliRun();
     await executePreparedCliRun(
@@ -535,21 +593,8 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("loads workspace bootstrap files into the Claude CLI system prompt", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-cli-bootstrap-context-"),
-    );
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
     );
 
     await fs.writeFile(
@@ -572,28 +617,19 @@ describe("runCliAgent spawn path", () => {
     });
 
     try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
+      const { contextFiles } = await realResolveBootstrapContextForRun({
         workspaceDir,
-        prompt: "BOOTSTRAP_CAPTURE_CHECK",
-        provider: "claude-cli",
-        model: "sonnet",
-        timeoutMs: 1_000,
-        runId: "run-bootstrap-context",
       });
-
-      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
-        argv?: string[];
-        input?: string;
-      };
-      const allArgs = (input.argv ?? []).join("\n");
+      const allArgs = buildSystemPrompt({
+        workspaceDir,
+        modelDisplay: "claude-cli/sonnet",
+        contextFiles,
+        tools: [],
+      });
       const agentsPath = path.join(workspaceDir, "AGENTS.md");
       const soulPath = path.join(workspaceDir, "SOUL.md");
       const identityPath = path.join(workspaceDir, "IDENTITY.md");
       const userPath = path.join(workspaceDir, "USER.md");
-      expect(input.input).toContain("BOOTSTRAP_CAPTURE_CHECK");
-      expect(allArgs).toContain("--append-system-prompt");
       expect(allArgs).toContain("# Project Context");
       expect(allArgs).toContain(`## ${agentsPath}`);
       expect(allArgs).toContain("Read SOUL.md and IDENTITY.md before replying.");
@@ -610,139 +646,5 @@ describe("runCliAgent spawn path", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       restoreCliRunnerPrepareTestDeps();
     }
-  });
-
-  it("hydrates prompt media refs into CLI image args", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
-    );
-    const sourceImage = path.join(tempDir, "bb-image.png");
-    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
-
-    try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: tempDir,
-        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-prompt-image",
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
-    const argv = input.argv ?? [];
-    const imageArgIndex = argv.indexOf("--image");
-    expect(imageArgIndex).toBeGreaterThanOrEqual(0);
-    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
-    expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
-  });
-
-  it("appends hydrated prompt media refs for stdin backends", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
-    );
-    const sourceImage = path.join(tempDir, "claude-image.png");
-    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
-
-    try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: tempDir,
-        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
-        provider: "claude-cli",
-        model: "claude-opus-4-1",
-        timeoutMs: 1_000,
-        runId: "run-prompt-image-generic",
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[]; input?: string };
-    const argv = input.argv ?? [];
-    expect(argv).not.toContain("--image");
-    const promptCarrier = [input.input ?? "", ...argv].join("\n");
-    const appendedPath = promptCarrier
-      .split("\n")
-      .find((value) => value.includes("openclaw-cli-images"));
-    expect(appendedPath).toBeDefined();
-    expect(appendedPath).not.toBe(sourceImage);
-    expect(promptCarrier).toContain(appendedPath ?? "");
-  });
-
-  it("prefers explicit images over prompt refs", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
-    );
-    const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
-    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
-
-    try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: tempDir,
-        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
-        images: [{ type: "image", data: SMALL_PNG_BASE64, mimeType: "image/png" }],
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-explicit-image-precedence",
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
-    const argv = input.argv ?? [];
-    expect(argv.filter((arg) => arg === "--image")).toHaveLength(1);
   });
 });

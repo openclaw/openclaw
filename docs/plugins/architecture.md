@@ -1120,7 +1120,8 @@ authoring plugins:
   `openclaw/plugin-sdk/secret-input`, and
   `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
   wiring. `channel-inbound` is the shared home for debounce, mention matching,
-  envelope formatting, and inbound envelope context helpers.
+  inbound mention-policy helpers, envelope formatting, and inbound envelope
+  context helpers.
   `channel-setup` is the narrow optional-install setup seam.
   `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
   deferred startup, including the import-safe setup patch adapters.
@@ -1133,6 +1134,9 @@ authoring plugins:
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/approval-gateway-runtime`,
+  `openclaw/plugin-sdk/approval-handler-adapter-runtime`,
+  `openclaw/plugin-sdk/approval-handler-runtime`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
   `openclaw/plugin-sdk/infra-runtime`,
@@ -1151,9 +1155,9 @@ authoring plugins:
   assistant-visible-text stripping, markdown render/chunking helpers, redaction
   helpers, directive-tag helpers, and safe-text utilities.
 - Approval-specific channel seams should prefer one `approvalCapability`
-  contract on the plugin. Core then reads approval auth, delivery, render, and
-  native-routing behavior through that one capability instead of mixing
-  approval behavior into unrelated plugin fields.
+  contract on the plugin. Core then reads approval auth, delivery, render,
+  native-routing, and lazy native-handler behavior through that one capability
+  instead of mixing approval behavior into unrelated plugin fields.
 - `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
   compatibility shim for older plugins. New code should import the narrower
   generic primitives instead, and repo code should not add new imports of the
@@ -1493,14 +1497,23 @@ Use this when your plugin needs to replace or extend the default context
 pipeline rather than just add memory search or hooks.
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function (api) {
   api.registerContextEngine("lossless-claw", () => ({
     info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact() {
       return { ok: true, compacted: false };
@@ -1513,7 +1526,10 @@ If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
 ```ts
-import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", () => ({
@@ -1525,8 +1541,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact(params) {
       return await delegateCompactionToRuntime(params);

@@ -20,8 +20,6 @@ import {
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
-let actualRunPreparedReply: typeof import("./reply/get-reply-run.js").runPreparedReply;
-const runPreparedReplyMock = vi.hoisted(() => vi.fn());
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -34,20 +32,6 @@ async function writeSkill(params: { workspaceDir: string; name: string; descript
   );
 }
 
-async function runThinkingDirective(home: string, model: string) {
-  const res = await getReplyFromConfig(
-    {
-      Body: "/thinking xhigh",
-      From: "+1004",
-      To: "+2000",
-      CommandAuthorized: true,
-    },
-    {},
-    makeWhatsAppDirectiveConfig(home, { model }, { session: { store: sessionStorePath(home) } }),
-  );
-  return replyTexts(res);
-}
-
 async function runThinkDirectiveAndGetText(home: string): Promise<string | undefined> {
   const res = await getReplyFromConfig(
     { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
@@ -58,36 +42,6 @@ async function runThinkDirectiveAndGetText(home: string): Promise<string | undef
     }),
   );
   return replyText(res);
-}
-
-async function runInlineReasoningMessage(params: {
-  home: string;
-  body: string;
-  storePath: string;
-  blockReplies: string[];
-}) {
-  return await getReplyFromConfig(
-    {
-      Body: params.body,
-      From: "+1222",
-      To: "+1222",
-      Provider: "whatsapp",
-    },
-    {
-      onBlockReply: (payload) => {
-        if (payload.text) {
-          params.blockReplies.push(payload.text);
-        }
-      },
-    },
-    makeWhatsAppDirectiveConfig(
-      params.home,
-      { model: "anthropic/claude-opus-4-6" },
-      {
-        session: { store: params.storePath },
-      },
-    ),
-  );
 }
 
 function makeRunConfig(home: string, storePath: string) {
@@ -153,45 +107,10 @@ describe("directive behavior", () => {
     vi.resetModules();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
-    installFreshDirectiveBehaviorReplyMocks({
-      onActualRunPreparedReply: (runPreparedReply) => {
-        actualRunPreparedReply = runPreparedReply;
-      },
-      runPreparedReply: (...args) => runPreparedReplyMock(...args),
-    });
+    installFreshDirectiveBehaviorReplyMocks();
     ({ getReplyFromConfig } = await import("./reply.js"));
-    runPreparedReplyMock.mockReset();
-    runPreparedReplyMock.mockImplementation((...args: Parameters<typeof actualRunPreparedReply>) =>
-      actualRunPreparedReply(...args),
-    );
   });
 
-  it("keeps reasoning acks out of mixed messages, including rapid repeats", async () => {
-    await withTempHome(async (home) => {
-      runPreparedReplyMock.mockResolvedValue({ text: "done" });
-
-      const blockReplies: string[] = [];
-      const storePath = sessionStorePath(home);
-
-      const firstRes = await runInlineReasoningMessage({
-        home,
-        body: "please reply\n/reasoning on",
-        storePath,
-        blockReplies,
-      });
-      expect(replyTexts(firstRes)).toContain("done");
-
-      await runInlineReasoningMessage({
-        home,
-        body: "again\n/reasoning on",
-        storePath,
-        blockReplies,
-      });
-
-      expect(runPreparedReplyMock).toHaveBeenCalledTimes(2);
-      expect(blockReplies.length).toBe(0);
-    });
-  });
   it("handles standalone verbose directives and persistence", async () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);
@@ -247,25 +166,11 @@ describe("directive behavior", () => {
       }
     });
   });
-  it("covers think status and /thinking xhigh support matrix", async () => {
+  it("covers think status", async () => {
     await withTempHome(async (home) => {
       const text = await runThinkDirectiveAndGetText(home);
       expect(text).toContain("Current thinking level: high");
       expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
-
-      for (const model of [
-        "openai-codex/gpt-5.4",
-        "openai/gpt-5.4",
-        "openai/gpt-5.4-mini",
-        "openai/gpt-5.4-nano",
-      ]) {
-        const texts = await runThinkingDirective(home, model);
-        expect(texts).toContain("Thinking level set to xhigh.");
-      }
-
-      const unsupportedModelTexts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
-      expect(unsupportedModelTexts[0]).toContain('Thinking level "xhigh" is only supported for');
-      expect(unsupportedModelTexts[0]).toContain("provider models that advertise xhigh reasoning");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });

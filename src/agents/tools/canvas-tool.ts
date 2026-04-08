@@ -9,6 +9,7 @@ import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
@@ -160,8 +161,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           return jsonResult({ ok: true });
         }
         case "snapshot": {
-          const formatRaw =
-            typeof params.outputFormat === "string" ? params.outputFormat.toLowerCase() : "png";
+          const formatRaw = normalizeLowercaseStringOrEmpty(params.outputFormat) || "png";
           const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
           const maxWidth =
             typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)

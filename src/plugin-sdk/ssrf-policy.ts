@@ -6,6 +6,7 @@ import {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -251,7 +252,7 @@ export async function assertHttpUrlTargetsPrivateNetwork(
 }
 
 function normalizeHostnameSuffix(value: string): string {
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(value);
   if (!trimmed) {
     return "";
   }
@@ -270,7 +271,7 @@ function isHostnameAllowedBySuffixAllowlist(
   if (allowlist.includes("*")) {
     return true;
   }
-  const normalized = hostname.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
   return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
 }
 

@@ -3,7 +3,6 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as runtimeDoctor from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -28,6 +27,17 @@ function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
   }
   const streaming = entry.streaming;
   return typeof streaming === "string" || typeof streaming === "boolean";
+}
+
+function hasLegacyAccountStreamingAliases(
+  value: unknown,
+  match: (entry: unknown) => boolean,
+): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => match(account));
 }
 
 function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -172,8 +182,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "telegram", "accounts"],
     message:
       "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) =>
-      runtimeDoctor.hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
   },
 ];
 

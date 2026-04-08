@@ -18,6 +18,10 @@ type WsEventHandlers = {
 };
 
 class MockWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
   private openHandlers: WsEventHandlers["open"][] = [];
   private messageHandlers: WsEventHandlers["message"][] = [];
   private closeHandlers: WsEventHandlers["close"][] = [];
@@ -26,6 +30,7 @@ class MockWebSocket {
   closeCalls = 0;
   terminateCalls = 0;
   autoCloseOnClose = true;
+  readyState = MockWebSocket.CONNECTING;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -56,6 +61,7 @@ class MockWebSocket {
 
   close(code?: number, reason?: string): void {
     this.closeCalls += 1;
+    this.readyState = MockWebSocket.CLOSING;
     if (this.autoCloseOnClose) {
       this.emitClose(code ?? 1000, reason ?? "");
     }
@@ -70,6 +76,7 @@ class MockWebSocket {
   }
 
   emitOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
     for (const handler of this.openHandlers) {
       handler();
     }
@@ -82,6 +89,7 @@ class MockWebSocket {
   }
 
   emitClose(code: number, reason: string): void {
+    this.readyState = MockWebSocket.CLOSED;
     for (const handler of this.closeHandlers) {
       handler(code, Buffer.from(reason));
     }
@@ -407,6 +415,7 @@ describe("GatewayClient close handling", () => {
 
 describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     wsInstances.length = 0;
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
@@ -463,6 +472,17 @@ describe("GatewayClient connect auth payload", () => {
     return { ws, connect: connectRequestFrom(ws) };
   }
 
+  function startClientWithEarlyChallenge(params: {
+    client: GatewayClientInstance;
+    nonce?: string;
+  }) {
+    params.client.start();
+    const ws = getLatestWs();
+    emitConnectChallenge(ws, params.nonce);
+    ws.emitOpen();
+    return { ws, connect: connectRequestFrom(ws) };
+  }
+
   function emitConnectFailure(
     ws: MockWebSocket,
     connectId: string | undefined,
@@ -477,6 +497,20 @@ describe("GatewayClient connect auth payload", () => {
           code: "INVALID_REQUEST",
           message: "unauthorized",
           details,
+        },
+      }),
+    );
+  }
+
+  function emitHelloOk(ws: MockWebSocket, connectId: string | undefined) {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connectId,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", scopes: ["operator.admin"] },
         },
       }),
     );
@@ -528,6 +562,21 @@ describe("GatewayClient connect auth payload", () => {
       token: "shared-token",
     });
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("waits for socket open before sending connect after an early challenge", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    });
+
+    const { ws, connect } = startClientWithEarlyChallenge({ client });
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "shared-token",
+    });
+    emitHelloOk(ws, connect.id);
     client.stop();
   });
 
