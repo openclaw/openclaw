@@ -42,8 +42,10 @@ import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   readShortTermRecallEntries,
+  recordGroundedShortTermCandidates,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
   resolveShortTermRecallLockPath,
@@ -294,6 +296,100 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.replace(/^##\s+/, "").trimEnd())
     .filter((line, index, lines) => !(line.length === 0 && lines[index - 1]?.length === 0));
+}
+
+function parseGroundedRef(
+  fallbackPath: string,
+  ref: string,
+): { path: string; startLine: number; endLine: number } | null {
+  const trimmed = ref.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?):(\d+)(?:-(\d+))?$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    path: (match[1] ?? fallbackPath).replaceAll("\\", "/").replace(/^\.\//, ""),
+    startLine: Math.max(1, Number(match[2])),
+    endLine: Math.max(1, Number(match[3] ?? match[2])),
+  };
+}
+
+function collectGroundedShortTermSeedItems(
+  previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
+): Array<{
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  score: number;
+  query: string;
+  signalCount: number;
+  dayBucket?: string;
+}> {
+  const items: Array<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    score: number;
+    query: string;
+    signalCount: number;
+    dayBucket?: string;
+  }> = [];
+  const seen = new Set<string>();
+
+  for (const file of previews) {
+    const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
+    const signals = [
+      ...file.memoryImplications.map((item) => ({
+        text: item.text,
+        refs: item.refs,
+        score: 0.92,
+        query: "__dreaming_grounded_backfill__:lasting-update",
+        signalCount: 2,
+      })),
+      ...file.candidates
+        .filter((candidate) => candidate.lean === "likely_durable")
+        .map((candidate) => ({
+          text: candidate.text,
+          refs: candidate.refs,
+          score: 0.82,
+          query: "__dreaming_grounded_backfill__:candidate",
+          signalCount: 1,
+        })),
+    ];
+
+    for (const signal of signals) {
+      if (!signal.text.trim()) {
+        continue;
+      }
+      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
+      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
+      if (!parsedRef) {
+        continue;
+      }
+      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      items.push({
+        path: parsedRef.path,
+        startLine: parsedRef.startLine,
+        endLine: parsedRef.endLine,
+        snippet: signal.text,
+        score: signal.score,
+        query: signal.query,
+        signalCount: signal.signalCount,
+        ...(dayBucket ? { dayBucket } : {}),
+      });
+    }
+  }
+
+  return items;
 }
 
 function matchesPromotionSelector(
@@ -551,9 +647,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       purpose: managerPurpose,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
-        let embeddingProbe:
-          | Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>>
-          | undefined;
+        let embeddingProbe: { ok?: boolean; error?: string } | undefined;
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
@@ -1548,14 +1642,30 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         return;
       }
 
-      if (opts.rollback) {
-        const removed = await removeBackfillDiaryEntries({ workspaceDir });
+      if (opts.rollback || opts.rollbackShortTerm) {
+        const diaryRollback = opts.rollback
+          ? await removeBackfillDiaryEntries({ workspaceDir })
+          : null;
+        const shortTermRollback = opts.rollbackShortTerm
+          ? await removeGroundedShortTermCandidates({ workspaceDir })
+          : null;
         if (opts.json) {
           defaultRuntime.writeJson({
             workspaceDir,
-            rollback: true,
-            dreamsPath: removed.dreamsPath,
-            removedEntries: removed.removed,
+            rollback: Boolean(opts.rollback),
+            rollbackShortTerm: Boolean(opts.rollbackShortTerm),
+            ...(diaryRollback
+              ? {
+                  dreamsPath: diaryRollback.dreamsPath,
+                  removedEntries: diaryRollback.removed,
+                }
+              : {}),
+            ...(shortTermRollback
+              ? {
+                  shortTermStorePath: shortTermRollback.storePath,
+                  removedShortTermEntries: shortTermRollback.removed,
+                }
+              : {}),
           });
           return;
         }
@@ -1563,8 +1673,30 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           [
             `${colorize(isRich(), theme.heading, "REM Backfill")} ${colorize(isRich(), theme.muted, "(rollback)")}`,
             colorize(isRich(), theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
-            colorize(isRich(), theme.muted, `dreamsPath=${shortenHomePath(removed.dreamsPath)}`),
-            colorize(isRich(), theme.muted, `removedEntries=${removed.removed}`),
+            ...(diaryRollback
+              ? [
+                  colorize(
+                    isRich(),
+                    theme.muted,
+                    `dreamsPath=${shortenHomePath(diaryRollback.dreamsPath)}`,
+                  ),
+                  colorize(isRich(), theme.muted, `removedEntries=${diaryRollback.removed}`),
+                ]
+              : []),
+            ...(shortTermRollback
+              ? [
+                  colorize(
+                    isRich(),
+                    theme.muted,
+                    `shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`,
+                  ),
+                  colorize(
+                    isRich(),
+                    theme.muted,
+                    `removedShortTermEntries=${shortTermRollback.removed}`,
+                  ),
+                ]
+              : []),
           ].join("\n"),
         );
         return;
@@ -1619,6 +1751,24 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           entries,
           timezone: remConfig.timezone,
         });
+        let stagedShortTermEntries = 0;
+        let replacedShortTermEntries = 0;
+        if (opts.stageShortTerm) {
+          const cleared = await removeGroundedShortTermCandidates({ workspaceDir });
+          replacedShortTermEntries = cleared.removed;
+          const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
+          if (shortTermSeedItems.length > 0) {
+            await recordGroundedShortTermCandidates({
+              workspaceDir,
+              query: "__dreaming_grounded_backfill__",
+              items: shortTermSeedItems,
+              dedupeByQueryPerDay: true,
+              nowMs: Date.now(),
+              timezone: remConfig.timezone,
+            });
+          }
+          stagedShortTermEntries = shortTermSeedItems.length;
+        }
 
         if (opts.json) {
           defaultRuntime.writeJson({
@@ -1629,6 +1779,12 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             writtenEntries: written.written,
             replacedEntries: written.replaced,
             dreamsPath: written.dreamsPath,
+            ...(opts.stageShortTerm
+              ? {
+                  stagedShortTermEntries,
+                  replacedShortTermEntries,
+                }
+              : {}),
           });
           return;
         }
@@ -1644,6 +1800,15 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
               theme.muted,
               `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
             ),
+            ...(opts.stageShortTerm
+              ? [
+                  colorize(
+                    rich,
+                    theme.muted,
+                    `stagedShortTermEntries=${stagedShortTermEntries} replacedShortTermEntries=${replacedShortTermEntries}`,
+                  ),
+                ]
+              : []),
             colorize(rich, theme.muted, `dreamsPath=${shortenHomePath(written.dreamsPath)}`),
           ].join("\n"),
         );
