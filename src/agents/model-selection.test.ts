@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -963,7 +964,8 @@ describe("model-selection", () => {
           provider: "google",
           model: "\u001B[31mclaude-3-5-sonnet\nspoof",
         });
-        const warning = warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
+        const rawWarning = warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
+        const warning = stripAnsi(rawWarning ?? "");
         expect(warning).toContain('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");
