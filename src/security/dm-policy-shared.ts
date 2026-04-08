@@ -66,6 +66,7 @@ export const DM_GROUP_ACCESS_REASON = {
   GROUP_POLICY_EMPTY_ALLOWLIST: "group_policy_empty_allowlist",
   GROUP_POLICY_NOT_ALLOWLISTED: "group_policy_not_allowlisted",
   DM_POLICY_OPEN: "dm_policy_open",
+  DM_POLICY_DENYLISTED: "dm_policy_denylisted",
   DM_POLICY_DISABLED: "dm_policy_disabled",
   DM_POLICY_ALLOWLISTED: "dm_policy_allowlisted",
   DM_POLICY_PAIRING_REQUIRED: "dm_policy_pairing_required",
@@ -79,6 +80,7 @@ type DmGroupAccessInputParams = {
   dmPolicy?: string | null;
   groupPolicy?: string | null;
   allowFrom?: Array<string | number> | null;
+  denyFrom?: Array<string | number> | null;
   groupAllowFrom?: Array<string | number> | null;
   storeAllowFrom?: Array<string | number> | null;
   groupAllowFromFallbackToAllowFrom?: boolean | null;
@@ -108,6 +110,7 @@ export function resolveDmGroupAccessDecision(params: {
   groupPolicy?: string | null;
   effectiveAllowFrom: Array<string | number>;
   effectiveGroupAllowFrom: Array<string | number>;
+  denyFrom?: Array<string | number> | null;
   isSenderAllowed: (allowFrom: string[]) => boolean;
 }): {
   decision: DmGroupAccessDecision;
@@ -121,6 +124,16 @@ export function resolveDmGroupAccessDecision(params: {
       : "allowlist";
   const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
   const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
+
+  // denyFrom takes precedence — silently block denied senders regardless of policy.
+  const effectiveDenyFrom = normalizeStringEntries(params.denyFrom ?? []);
+  if (effectiveDenyFrom.length > 0 && params.isSenderAllowed(effectiveDenyFrom)) {
+    return {
+      decision: "block",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_DENYLISTED,
+      reason: params.isGroup ? "groupPolicy (denylisted)" : `dmPolicy=${dmPolicy} (denylisted)`,
+    };
+  }
 
   if (params.isGroup) {
     const groupAccess = evaluateMatchedGroupAccessForPolicy({
@@ -215,6 +228,7 @@ export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams):
     groupPolicy: params.groupPolicy,
     effectiveAllowFrom,
     effectiveGroupAllowFrom,
+    denyFrom: params.denyFrom,
     isSenderAllowed: params.isSenderAllowed,
   });
   return {
@@ -245,6 +259,7 @@ export function resolveDmGroupAccessWithCommandGate(
     dmPolicy: params.dmPolicy,
     groupPolicy: params.groupPolicy,
     allowFrom: params.allowFrom,
+    denyFrom: params.denyFrom,
     groupAllowFrom: params.groupAllowFrom,
     storeAllowFrom: params.storeAllowFrom,
     groupAllowFromFallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom,
