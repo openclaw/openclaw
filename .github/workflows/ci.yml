@@ -549,6 +549,10 @@ jobs:
           TASK: ${{ matrix.task }}
         run: |
           echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+          if [ "$TASK" = "test" ]; then
+            echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
+          fi
           if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
           fi
