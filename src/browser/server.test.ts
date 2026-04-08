@@ -468,19 +468,16 @@ describe("browser control server", () => {
       textGone: undefined,
     });
 
-    const evalRes = (await realFetch(`${base}/act`, {
+    const evalRes = await realFetch(`${base}/act`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "evaluate", fn: "() => 1" }),
-    }).then((r) => r.json())) as { ok: boolean; result?: unknown };
-    expect(evalRes.ok).toBe(true);
-    expect(evalRes.result).toBe("ok");
-    expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: cdpBaseUrl,
-      targetId: "abcd1234",
-      fn: "() => 1",
-      ref: undefined,
     });
+    expect(evalRes.status).toBe(403);
+    await expect(evalRes.json()).resolves.toMatchObject({
+      error: "evaluate is disabled for security reasons",
+    });
+    expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
 
     const upload = await realFetch(`${base}/hooks/file-chooser`, {
       method: "POST",

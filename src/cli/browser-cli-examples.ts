@@ -26,7 +26,6 @@ export const browserActionExamples = [
   'clawdbot browser fill --fields \'[{"ref":"1","value":"Ada"}]\'',
   "clawdbot browser dialog --accept",
   'clawdbot browser wait --text "Done"',
-  "clawdbot browser evaluate --fn '(el) => el.textContent' --ref 7",
   "clawdbot browser console --level error",
   "clawdbot browser pdf",
 ];

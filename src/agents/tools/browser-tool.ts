@@ -86,12 +86,6 @@ const BrowserActSchema = Type.Union([
     targetId: Type.Optional(Type.String()),
   }),
   Type.Object({
-    kind: Type.Literal("evaluate"),
-    fn: Type.String(),
-    ref: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
     kind: Type.Literal("close"),
     targetId: Type.Optional(Type.String()),
   }),

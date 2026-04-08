@@ -145,11 +145,14 @@ export function registerBrowserAgentRoutes(
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
 
+    if (kind === "evaluate") {
+      return jsonError(res, 403, "evaluate is disabled for security reasons");
+    }
+
     if (
       kind !== "click" &&
       kind !== "close" &&
       kind !== "drag" &&
-      kind !== "evaluate" &&
       kind !== "fill" &&
       kind !== "hover" &&
       kind !== "press" &&
@@ -322,23 +325,6 @@ export function registerBrowserAgentRoutes(
             textGone,
           });
           return res.json({ ok: true, targetId: tab.targetId });
-        }
-        case "evaluate": {
-          const fn = toStringOrEmpty(body.fn);
-          if (!fn) return jsonError(res, 400, "fn is required");
-          const ref = toStringOrEmpty(body.ref) || undefined;
-          const result = await pw.evaluateViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            fn,
-            ref,
-          });
-          return res.json({
-            ok: true,
-            targetId: tab.targetId,
-            url: tab.url,
-            result,
-          });
         }
         case "close": {
           await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });

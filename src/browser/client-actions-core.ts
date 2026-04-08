@@ -49,7 +49,6 @@ export type BrowserActRequest =
       textGone?: string;
       targetId?: string;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string }
   | { kind: "close"; targetId?: string };
 
 export type BrowserActResponse = {

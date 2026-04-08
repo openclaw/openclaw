@@ -486,40 +486,4 @@ export function registerBrowserActionInputCommands(
       }
     });
 
-  browser
-    .command("evaluate")
-    .description("Evaluate a function against the page or a ref")
-    .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
-    .option("--ref <id>", "ARIA ref from ai snapshot")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.browserProfile;
-      if (!opts.fn) {
-        defaultRuntime.error(danger("Missing --fn"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      try {
-        const result = await browserAct(
-          baseUrl,
-          {
-            kind: "evaluate",
-            fn: opts.fn,
-            ref: opts.ref?.trim() || undefined,
-            targetId: opts.targetId?.trim() || undefined,
-          },
-          { profile },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(JSON.stringify(result.result ?? null, null, 2));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
 }
