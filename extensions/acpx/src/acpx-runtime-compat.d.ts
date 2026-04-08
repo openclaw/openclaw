@@ -45,7 +45,11 @@ declare module "acpx/runtime" {
     setMode(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
     setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
     cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
-    close(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
+    close(input: {
+      handle: AcpRuntimeHandle;
+      reason?: string;
+      discardPersistentState?: boolean;
+    }): Promise<void>;
   }
 
   export function createAcpRuntime(...args: unknown[]): AcpxRuntime;

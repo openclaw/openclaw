@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import {
   isJavaScriptModulePath,
   resolveCompiledBundledModulePath,
@@ -15,6 +16,8 @@ afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+  vi.resetModules();
+  vi.doUnmock("jiti");
 });
 
 function createTempDir(): string {
@@ -61,5 +64,40 @@ describe("channel plugin module loader helpers", () => {
     expect(isJavaScriptModulePath("/tmp/entry.js")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.MJS")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
+  });
+
+  it("keeps Windows dist loads off Jiti native import", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
+        import.meta.url,
+        "./module-loader.js?scope=windows-dist-jiti",
+      );
+      const rootDir = createTempDir();
+      const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.js");
+      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+      fs.writeFileSync(modulePath, "export {};\n", "utf8");
+
+      expect(
+        loaderModule.loadChannelPluginModule({
+          modulePath,
+          rootDir,
+          shouldTryNativeRequire: () => false,
+        }),
+      ).toEqual({ ok: true });
+      expect(createJiti).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          tryNative: false,
+        }),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

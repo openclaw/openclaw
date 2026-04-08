@@ -156,10 +156,6 @@ function assertControllerId(controllerId?: string | null): string {
   return normalized;
 }
 
-function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
-  return normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task");
-}
-
 function resolveFlowBlockedSummary(
   task: Pick<TaskRecord, "status" | "terminalOutcome" | "terminalSummary" | "progressSummary">,
 ): string | undefined {
@@ -427,7 +423,8 @@ export function createTaskFlowForTask(params: {
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,
-    goal: resolveFlowGoal(params.task),
+    goal:
+      normalizeOptionalString(params.task.label) ?? (params.task.task.trim() || "Background task"),
     blockedTaskId:
       terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
@@ -634,7 +631,7 @@ export function syncFlowFromTask(
   return updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
-    goal: resolveFlowGoal(task),
+    goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
     blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,

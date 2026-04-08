@@ -7,7 +7,12 @@ import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
-import { createCliJsonlStreamingParser, parseCliOutput, type CliOutput } from "../cli-output.js";
+import {
+  createCliJsonlStreamingParser,
+  extractCliErrorMessage,
+  parseCliOutput,
+  type CliOutput,
+} from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
@@ -321,7 +326,11 @@ export async function executePreparedCliRun(
             status: resolveFailoverStatus("timeout"),
           });
         }
-        const err = stderr || stdout || "CLI failed.";
+        const primaryErrorText = stderr || stdout;
+        const structuredError =
+          extractCliErrorMessage(primaryErrorText) ??
+          (stderr ? extractCliErrorMessage(stdout) : null);
+        const err = structuredError || primaryErrorText || "CLI failed.";
         const reason = classifyFailoverReason(err, { provider: params.provider }) ?? "unknown";
         const status = resolveFailoverStatus(reason);
         throw new FailoverError(err, {

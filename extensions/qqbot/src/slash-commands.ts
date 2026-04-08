@@ -11,6 +11,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { QQBotAccountConfig } from "./types.js";
 import { debugLog } from "./utils/debug-log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "./utils/platform.js";
@@ -134,9 +135,9 @@ const frameworkCommands: Map<string, SlashCommand> = new Map();
 
 function registerCommand(cmd: SlashCommand): void {
   if (cmd.requireAuth) {
-    frameworkCommands.set(cmd.name.toLowerCase(), cmd);
+    frameworkCommands.set(normalizeLowercaseStringOrEmpty(cmd.name), cmd);
   } else {
-    commands.set(cmd.name.toLowerCase(), cmd);
+    commands.set(normalizeLowercaseStringOrEmpty(cmd.name), cmd);
   }
 }
 
@@ -604,7 +605,9 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
 
   // Parse the command name and trailing arguments.
   const spaceIdx = content.indexOf(" ");
-  const cmdName = (spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx)).toLowerCase();
+  const cmdName = normalizeLowercaseStringOrEmpty(
+    spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx),
+  );
   const args = spaceIdx === -1 ? "" : content.slice(spaceIdx + 1).trim();
 
   const cmd = commands.get(cmdName);

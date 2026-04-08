@@ -20,27 +20,24 @@ export type AgentAvatarResolution =
   | { kind: "remote"; url: string }
   | { kind: "data"; url: string };
 
-function normalizeAvatarValue(value: string | undefined | null): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
 function resolveAvatarSource(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { includeUiOverride?: boolean },
 ): string | null {
   if (opts?.includeUiOverride) {
-    const fromUiConfig = normalizeAvatarValue(cfg.ui?.assistant?.avatar);
+    const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
     if (fromUiConfig) {
       return fromUiConfig;
     }
   }
-  const fromConfig = normalizeAvatarValue(resolveAgentIdentity(cfg, agentId)?.avatar);
+  const fromConfig = normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.avatar) ?? null;
   if (fromConfig) {
     return fromConfig;
   }
   const workspace = resolveAgentWorkspaceDir(cfg, agentId);
-  const fromIdentity = normalizeAvatarValue(loadAgentIdentityFromWorkspace(workspace)?.avatar);
+  const fromIdentity =
+    normalizeOptionalString(loadAgentIdentityFromWorkspace(workspace)?.avatar) ?? null;
   return fromIdentity;
 }
 

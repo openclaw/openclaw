@@ -72,14 +72,6 @@ function redactObservationText(text: string | undefined): string | undefined {
   });
 }
 
-function extractRequestId(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  const match = text.match(REQUEST_ID_RE);
-  return normalizeOptionalString(match?.[1]);
-}
-
 function buildObservationFingerprint(params: {
   raw: string;
   requestId?: string;
@@ -123,7 +115,8 @@ export function buildApiErrorObservationFields(rawError?: string): {
   }
   try {
     const parsed = parseApiErrorInfo(trimmed);
-    const requestId = parsed?.requestId ?? extractRequestId(trimmed);
+    const requestId =
+      parsed?.requestId ?? normalizeOptionalString(trimmed.match(REQUEST_ID_RE)?.[1]);
     const requestIdHash = requestId ? redactIdentifier(requestId, { len: 12 }) : undefined;
     const rawFingerprint = buildObservationFingerprint({
       raw: trimmed,

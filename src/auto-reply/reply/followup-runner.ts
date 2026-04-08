@@ -18,25 +18,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
-import {
-  resolveOriginAccountId,
-  resolveOriginMessageProvider,
-  resolveOriginMessageTo,
-} from "./origin-routing.js";
+import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
-import {
-  applyReplyThreading,
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  shouldSuppressMessagingToolReplies,
-} from "./reply-payloads.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -331,46 +320,18 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
-      );
-
-      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
+      const finalPayloads = resolveFollowupDeliveryPayloads({
+        cfg: queued.run.config,
         payloads: sanitizedPayloads,
-        replyToMode,
-        replyToChannel,
+        messageProvider: queued.run.messageProvider,
+        originatingAccountId: queued.originatingAccountId ?? queued.run.agentAccountId,
+        originatingChannel: queued.originatingChannel,
+        originatingChatType: queued.originatingChatType,
+        originatingTo: queued.originatingTo,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls,
+        sentTargets: runResult.messagingToolSentTargets,
+        sentTexts: runResult.messagingToolSentTexts,
       });
-
-      const dedupedPayloads = filterMessagingToolDuplicates({
-        payloads: replyTaggedPayloads,
-        sentTexts: runResult.messagingToolSentTexts ?? [],
-      });
-      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
-      });
-      const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-        messageProvider: resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
-        }),
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: queued.originatingTo,
-        }),
-        accountId: resolveOriginAccountId({
-          originatingAccountId: queued.originatingAccountId,
-          accountId: queued.run.agentAccountId,
-        }),
-      });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;

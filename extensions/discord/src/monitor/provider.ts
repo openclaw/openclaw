@@ -8,6 +8,8 @@ import {
 } from "@buape/carbon";
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
@@ -39,7 +41,10 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  summarizeStringEntries,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -59,7 +64,10 @@ import {
 } from "./agent-components.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
-import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
+import {
+  createExecApprovalButton,
+  createDiscordExecApprovalButtonContext,
+} from "./exec-approvals.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
@@ -87,6 +95,7 @@ export type MonitorDiscordOpts = {
   accountId?: string;
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
+  channelRuntime?: import("openclaw/plugin-sdk/channel-core").PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   historyLimit?: number;
@@ -174,12 +183,12 @@ function appendPluginCommandSpecs(params: {
 }): NativeCommandSpec[] {
   const merged = [...params.commandSpecs];
   const existingNames = new Set(
-    merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
+    merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
   );
   for (const pluginCommand of (getPluginCommandSpecsForTesting ?? getPluginCommandSpecs)(
     "discord",
   )) {
-    const normalizedName = pluginCommand.name.trim().toLowerCase();
+    const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
     if (!normalizedName) {
       continue;
     }
@@ -830,19 +839,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     // Initialize exec approvals handler if enabled
     const execApprovalsConfig = discordCfg.execApprovals ?? {};
-    const execApprovalsHandler = isDiscordExecApprovalClientEnabled({
+    const execApprovalsEnabled = isDiscordExecApprovalClientEnabled({
       cfg,
       accountId: account.accountId,
       configOverride: execApprovalsConfig,
-    })
-      ? new DiscordExecApprovalHandler({
+    });
+    if (execApprovalsEnabled) {
+      registerChannelRuntimeContext({
+        channelRuntime: opts.channelRuntime,
+        channelId: "discord",
+        accountId: account.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: {
           token,
-          accountId: account.accountId,
           config: execApprovalsConfig,
-          cfg,
-          runtime,
-        })
-      : null;
+        },
+        abortSignal: opts.abortSignal,
+      });
+    }
 
     const agentComponentsConfig = discordCfg.agentComponents ?? {};
     const agentComponentsEnabled = agentComponentsConfig.enabled ?? true;
@@ -872,8 +886,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     ];
     const modals: Modal[] = [];
 
-    if (execApprovalsHandler) {
-      components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
+    if (execApprovalsEnabled) {
+      components.push(
+        createExecApprovalButton(
+          createDiscordExecApprovalButtonContext({
+            cfg,
+            accountId: account.accountId,
+            config: execApprovalsConfig,
+          }),
+        ),
+      );
     }
 
     if (agentComponentsEnabled) {
@@ -1098,7 +1120,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
       voiceManager,
       voiceManagerRef,
-      execApprovalsHandler,
       threadBindings,
       gatewaySupervisor,
     });

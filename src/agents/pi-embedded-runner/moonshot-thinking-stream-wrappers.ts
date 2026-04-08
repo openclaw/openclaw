@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
@@ -10,7 +11,10 @@ function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | u
     return value ? "enabled" : "disabled";
   }
   if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(value);
+    if (!normalized) {
+      return undefined;
+    }
     if (["enabled", "enable", "on", "true"].includes(normalized)) {
       return "enabled";
     }

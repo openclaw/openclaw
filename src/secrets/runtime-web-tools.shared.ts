@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type {
   ResolverContext,
   SecretDefaults,
@@ -95,10 +96,10 @@ export function normalizeKnownProvider<TProvider extends { id: string }>(
   value: unknown,
   providers: TProvider[],
 ): string | undefined {
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
   if (providers.some((provider) => provider.id === normalized)) {
     return normalized;
   }
@@ -140,6 +141,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   invalidAutoDetectCode: RuntimeWebWarningCode;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
+  configuredBundledPluginIdHint?: string;
   resolveProviders: (params: { configuredBundledPluginId?: string }) => Promise<TProvider[]>;
   sortProviders: (providers: TProvider[]) => TProvider[];
   readConfiguredCredential: (params: {
@@ -161,19 +163,43 @@ export async function resolveRuntimeWebProviderSurface<
 >(
   params: ResolveRuntimeWebProviderSurfaceParams<TProvider, TToolConfig>,
 ): Promise<RuntimeWebProviderSurface<TProvider>> {
-  const configuredBundledPluginId = resolveManifestContractOwnerPluginId({
-    contract: params.contract,
-    value: params.rawProvider,
-    origin: "bundled",
-    config: params.sourceConfig,
-    env: { ...process.env, ...params.context.env },
-  });
-
-  const allProviders = params.sortProviders(
+  let configuredBundledPluginId = params.configuredBundledPluginIdHint;
+  if (!configuredBundledPluginId && params.rawProvider) {
+    configuredBundledPluginId = resolveManifestContractOwnerPluginId({
+      contract: params.contract,
+      value: params.rawProvider,
+      origin: "bundled",
+      config: params.sourceConfig,
+      env: { ...process.env, ...params.context.env },
+    });
+  }
+  let allProviders = params.sortProviders(
     await params.resolveProviders({
       configuredBundledPluginId,
     }),
   );
+  if (
+    params.rawProvider &&
+    params.configuredBundledPluginIdHint &&
+    configuredBundledPluginId &&
+    !allProviders.some((provider) => provider.id === params.rawProvider)
+  ) {
+    configuredBundledPluginId = undefined;
+  }
+  if (params.rawProvider && !configuredBundledPluginId) {
+    configuredBundledPluginId = resolveManifestContractOwnerPluginId({
+      contract: params.contract,
+      value: params.rawProvider,
+      origin: "bundled",
+      config: params.sourceConfig,
+      env: { ...process.env, ...params.context.env },
+    });
+    allProviders = params.sortProviders(
+      await params.resolveProviders({
+        configuredBundledPluginId,
+      }),
+    );
+  }
   const hasConfiguredSurface =
     Boolean(params.toolConfig) ||
     allProviders.some((provider) => {

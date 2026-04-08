@@ -11,9 +11,7 @@ const RUNTIME_SIDECAR_ARTIFACTS = new Set([
   "thread-bindings-runtime.js",
 ]);
 
-export function trimBundledPluginString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
+export { normalizeOptionalString as trimBundledPluginString };
 
 export function normalizeBundledPluginStringList(value: unknown): string[] {
   return normalizeTrimmedStringList(value);
@@ -59,7 +57,7 @@ export function deriveBundledPluginIdHint(params: {
   if (!params.hasMultipleExtensions) {
     return params.manifestId;
   }
-  const packageName = trimBundledPluginString(params.packageName);
+  const packageName = normalizeOptionalString(params.packageName);
   if (!packageName) {
     return `${params.manifestId}/${base}`;
   }

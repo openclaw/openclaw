@@ -1,20 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock shared.js to avoid transitive runtime-api imports that pull in uninstalled packages.
-vi.mock("./shared.js", () => ({
-  applyAuthorizationHeaderForUrl: vi.fn(),
-  GRAPH_ROOT: "https://graph.microsoft.com/v1.0",
-  inferPlaceholder: vi.fn(({ contentType }: { contentType?: string }) =>
-    contentType?.startsWith("image/") ? "[image]" : "[file]",
-  ),
-  isRecord: (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v),
-  isUrlAllowed: vi.fn(() => true),
-  normalizeContentType: vi.fn((ct: string | null | undefined) => ct ?? undefined),
-  resolveMediaSsrfPolicy: vi.fn(() => undefined),
-  resolveAttachmentFetchPolicy: vi.fn(() => ({ allowHosts: ["*"], authAllowHosts: ["*"] })),
-  resolveRequestUrl: vi.fn((input: string) => input),
-  safeFetchWithPolicy: vi.fn(),
-}));
+vi.mock("./shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./shared.js")>();
+  return {
+    ...actual,
+    applyAuthorizationHeaderForUrl: vi.fn(),
+    GRAPH_ROOT: "https://graph.microsoft.com/v1.0",
+    inferPlaceholder: vi.fn(({ contentType }: { contentType?: string }) =>
+      contentType?.startsWith("image/") ? "[image]" : "[file]",
+    ),
+    isRecord: (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v),
+    isUrlAllowed: vi.fn(() => true),
+    normalizeContentType: vi.fn((ct: string | null | undefined) => ct ?? undefined),
+    resolveMediaSsrfPolicy: vi.fn(() => undefined),
+    resolveAttachmentFetchPolicy: vi.fn(() => ({ allowHosts: ["*"], authAllowHosts: ["*"] })),
+    resolveRequestUrl: vi.fn((input: string) => input),
+    safeFetchWithPolicy: vi.fn(),
+  };
+});
 
 vi.mock("../../runtime-api.js", () => ({
   fetchWithSsrFGuard: vi.fn(),

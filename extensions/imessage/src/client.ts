@@ -2,7 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageRpcError = {
@@ -42,7 +42,7 @@ function isTestEnv(): boolean {
   if (process.env.NODE_ENV === "test") {
     return true;
   }
-  const vitest = process.env.VITEST?.trim().toLowerCase();
+  const vitest = normalizeLowercaseStringOrEmpty(process.env.VITEST);
   return Boolean(vitest);
 }
 

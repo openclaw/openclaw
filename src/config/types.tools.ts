@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
@@ -208,7 +209,7 @@ export function parseToolsBySenderTypedKey(
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
     const prefix = `${type}:`;
     if (!lowered.startsWith(prefix)) {
@@ -634,9 +635,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled. */
+  /** Experimental tool flags. Default off unless explicitly enabled or runtime auto-enabled. */
   experimental?: {
-    /** Enable the structured `update_plan` tool for all providers. OpenAI-family runs auto-enable it. */
+    /** Enable or disable the structured `update_plan` tool. OpenAI-family runs auto-enable it unless this is false. */
     planTool?: boolean;
   };
 };

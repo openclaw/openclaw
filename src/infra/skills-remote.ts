@@ -5,6 +5,10 @@ import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
@@ -75,12 +79,8 @@ function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
-  const platformNorm = String(platform ?? "")
-    .trim()
-    .toLowerCase();
-  const familyNorm = String(deviceFamily ?? "")
-    .trim()
-    .toLowerCase();
+  const platformNorm = normalizeLowercaseStringOrEmpty(platform);
+  const familyNorm = normalizeLowercaseStringOrEmpty(deviceFamily);
   if (platformNorm.includes("mac")) {
     return true;
   }
@@ -217,12 +217,12 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
       ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
       : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
-      return parsed.bins.map((bin) => String(bin).trim()).filter(Boolean);
+      return parsed.bins.map((bin) => normalizeOptionalString(String(bin)) ?? "").filter(Boolean);
     }
     if (typeof parsed.stdout === "string") {
       return parsed.stdout
         .split(/\r?\n/)
-        .map((line) => line.trim())
+        .map((line) => normalizeOptionalString(line) ?? "")
         .filter(Boolean);
     }
   } catch {

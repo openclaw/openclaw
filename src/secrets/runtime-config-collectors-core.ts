@@ -5,6 +5,7 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
@@ -564,7 +565,8 @@ function collectSandboxSshAssignments(params: {
       "docker";
     const effectiveMode =
       (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ?? defaultsMode ?? "off";
-    const active = effectiveBackend.trim().toLowerCase() === "ssh" && effectiveMode !== "off";
+    const active =
+      normalizeOptionalLowercaseString(effectiveBackend) === "ssh" && effectiveMode !== "off";
     for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
       if (ssh && Object.prototype.hasOwnProperty.call(ssh, key)) {
         collectSecretInputAssignment({
@@ -590,7 +592,7 @@ function collectSandboxSshAssignments(params: {
   }
 
   const defaultsActive =
-    (defaultsBackend?.trim().toLowerCase() === "ssh" && defaultsMode !== "off") ||
+    (normalizeOptionalLowercaseString(defaultsBackend) === "ssh" && defaultsMode !== "off") ||
     inheritedDefaultsUsage.identityData ||
     inheritedDefaultsUsage.certificateData ||
     inheritedDefaultsUsage.knownHostsData;

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.6",
+  "version": "2026.4.8",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -28,6 +28,7 @@
     "assets/",
     "dist/",
     "!dist/**/*.map",
+    "!dist/plugin-sdk/.tsbuildinfo",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
@@ -115,6 +116,22 @@
     "./plugin-sdk/approval-delivery-runtime": {
       "types": "./dist/plugin-sdk/approval-delivery-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-delivery-runtime.js"
+    },
+    "./plugin-sdk/approval-gateway-runtime": {
+      "types": "./dist/plugin-sdk/approval-gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-gateway-runtime.js"
+    },
+    "./plugin-sdk/approval-handler-adapter-runtime": {
+      "types": "./dist/plugin-sdk/approval-handler-adapter-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-handler-adapter-runtime.js"
+    },
+    "./plugin-sdk/approval-handler-runtime": {
+      "types": "./dist/plugin-sdk/approval-handler-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-handler-runtime.js"
+    },
+    "./plugin-sdk/channel-runtime-context": {
+      "types": "./dist/plugin-sdk/channel-runtime-context.d.ts",
+      "default": "./dist/plugin-sdk/channel-runtime-context.js"
     },
     "./plugin-sdk/approval-native-runtime": {
       "types": "./dist/plugin-sdk/approval-native-runtime.d.ts",
@@ -260,9 +277,17 @@
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
     },
+    "./plugin-sdk/channel-secret-basic-runtime": {
+      "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
+    },
     "./plugin-sdk/channel-secret-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-runtime.js"
+    },
+    "./plugin-sdk/channel-secret-tts-runtime": {
+      "types": "./dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
     },
     "./plugin-sdk/secret-ref-runtime": {
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
@@ -864,6 +889,10 @@
       "types": "./dist/plugin-sdk/provider-http.d.ts",
       "default": "./dist/plugin-sdk/provider-http.js"
     },
+    "./plugin-sdk/provider-model-types": {
+      "types": "./dist/plugin-sdk/provider-model-types.d.ts",
+      "default": "./dist/plugin-sdk/provider-model-types.js"
+    },
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
@@ -1038,7 +1067,7 @@
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 node scripts/run-vitest.mjs run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
-    "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
+    "build": "node scripts/build-all.mjs",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
@@ -1046,7 +1075,7 @@
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm tsgo && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm tsgo && node scripts/prepare-extension-package-boundary-artifacts.mjs && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
@@ -1149,6 +1178,8 @@
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
     "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",
+    "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
+    "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
@@ -1185,7 +1216,7 @@
     "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:codex": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4 bash scripts/test-live-cli-backend-docker.sh",
-    "test:docker:live-cli-backend:gemini": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3.1-pro-preview bash scripts/test-live-cli-backend-docker.sh",
+    "test:docker:live-cli-backend:gemini": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.4 bash scripts/test-live-gateway-models-docker.sh",
@@ -1205,6 +1236,9 @@
     "test:extensions": "node scripts/run-vitest.mjs run --config vitest.extensions.config.ts",
     "test:extensions:batch": "node scripts/test-extension-batch.mjs",
     "test:extensions:memory": "node scripts/profile-extension-memory.mjs",
+    "test:extensions:package-boundary": "node scripts/check-extension-package-tsc-boundary.mjs",
+    "test:extensions:package-boundary:canary": "node scripts/check-extension-package-tsc-boundary.mjs --mode=canary",
+    "test:extensions:package-boundary:compile": "node scripts/check-extension-package-tsc-boundary.mjs --mode=compile",
     "test:fast": "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
     "test:force": "node --import tsx scripts/test-force.ts",
     "test:gateway": "node scripts/run-vitest.mjs run --config vitest.gateway.config.ts",
@@ -1242,6 +1276,9 @@
     "test:startup:bench:update": "node scripts/test-update-cli-startup-bench.mjs",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
+    "test:unit": "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
+    "test:unit:fast": "node scripts/run-vitest.mjs run --config vitest.unit-fast.config.ts",
+    "test:unit:fast:audit": "node scripts/test-unit-fast-audit.mjs",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",

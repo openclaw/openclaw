@@ -753,6 +753,11 @@ jobs:
         continue-on-error: true
         run: pnpm run lint:extensions:bundled
 
+      - name: Run extension package boundary TypeScript check
+        id: extension_package_boundary_tsc
+        continue-on-error: true
+        run: pnpm run test:extensions:package-boundary
+
       - name: Enforce safe external URL opening policy
         id: no_raw_window_open
         continue-on-error: true
@@ -797,6 +802,7 @@ jobs:
           EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME: ${{ steps.extension_relative_outside_package_boundary.outcome }}
           EXTENSION_CHANNEL_LINT_OUTCOME: ${{ steps.extension_channel_lint.outcome }}
           EXTENSION_BUNDLED_LINT_OUTCOME: ${{ steps.extension_bundled_lint.outcome }}
+          EXTENSION_PACKAGE_BOUNDARY_TSC_OUTCOME: ${{ steps.extension_package_boundary_tsc.outcome }}
           NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
           CONTROL_UI_I18N_OUTCOME: ${{ steps.control_ui_i18n.outcome == 'skipped' && 'success' || steps.control_ui_i18n.outcome }}
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
@@ -820,6 +826,7 @@ jobs:
             "extension-relative-outside-package-boundary|$EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME" \
             "lint:extensions:channels|$EXTENSION_CHANNEL_LINT_OUTCOME" \
             "lint:extensions:bundled|$EXTENSION_BUNDLED_LINT_OUTCOME" \
+            "test:extensions:package-boundary|$EXTENSION_PACKAGE_BOUNDARY_TSC_OUTCOME" \
             "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
             "ui:i18n:check|$CONTROL_UI_I18N_OUTCOME" \
             "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do

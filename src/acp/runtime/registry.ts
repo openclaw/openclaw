@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { AcpRuntimeError } from "./errors.js";
 import type { AcpRuntime } from "./types.js";
 
@@ -26,10 +26,6 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
 
 const ACP_BACKENDS_BY_ID = resolveAcpRuntimeRegistryGlobalState().backendsById;
 
-function normalizeBackendId(id: string | undefined): string {
-  return normalizeOptionalString(id)?.toLowerCase() || "";
-}
-
 function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
   if (!backend.healthy) {
     return true;
@@ -42,7 +38,7 @@ function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
 }
 
 export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
-  const id = normalizeBackendId(backend.id);
+  const id = normalizeOptionalLowercaseString(backend.id) || "";
   if (!id) {
     throw new Error("ACP runtime backend id is required");
   }
@@ -56,7 +52,7 @@ export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
 }
 
 export function unregisterAcpRuntimeBackend(id: string): void {
-  const normalized = normalizeBackendId(id);
+  const normalized = normalizeOptionalLowercaseString(id) || "";
   if (!normalized) {
     return;
   }
@@ -64,7 +60,7 @@ export function unregisterAcpRuntimeBackend(id: string): void {
 }
 
 export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
-  const normalized = normalizeBackendId(id);
+  const normalized = normalizeOptionalLowercaseString(id) || "";
   if (normalized) {
     return ACP_BACKENDS_BY_ID.get(normalized) ?? null;
   }
@@ -80,7 +76,7 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
 }
 
 export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
-  const normalized = normalizeBackendId(id);
+  const normalized = normalizeOptionalLowercaseString(id) || "";
   const backend = getAcpRuntimeBackend(normalized || undefined);
   if (!backend) {
     throw new AcpRuntimeError(

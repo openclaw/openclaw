@@ -20,7 +20,9 @@ type RunCommand = (
 
 type FetchLike = (input: string) => Promise<{ ok: boolean }>;
 
-const DEFAULT_QA_DOCKER_DIR = path.resolve(process.cwd(), ".artifacts/qa-docker");
+function resolveDefaultQaDockerDir(repoRoot: string) {
+  return path.resolve(repoRoot, ".artifacts/qa-docker");
+}
 
 function describeError(error: unknown) {
   if (error instanceof Error) {
@@ -247,21 +249,24 @@ export async function runQaDockerUp(
     providerBaseUrl?: string;
     image?: string;
     usePrebuiltImage?: boolean;
+    bindUiDist?: boolean;
     skipUiBuild?: boolean;
   },
   deps?: {
     runCommand?: RunCommand;
     fetchImpl?: FetchLike;
     sleepImpl?: (ms: number) => Promise<unknown>;
+    resolveHostPortImpl?: typeof resolveHostPort;
   },
 ): Promise<QaDockerUpResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const outputDir = path.resolve(params.outputDir ?? DEFAULT_QA_DOCKER_DIR);
-  const gatewayPort = await resolveHostPort(
+  const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
+  const outputDir = path.resolve(params.outputDir ?? resolveDefaultQaDockerDir(repoRoot));
+  const gatewayPort = await resolveHostPortImpl(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,
   );
-  const qaLabPort = await resolveHostPort(params.qaLabPort ?? 43124, params.qaLabPort != null);
+  const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
   const runCommand = deps?.runCommand ?? execCommand;
   const fetchImpl =
     deps?.fetchImpl ??
@@ -282,6 +287,7 @@ export async function runQaDockerUp(
     providerBaseUrl: params.providerBaseUrl,
     imageName: params.image,
     usePrebuiltImage: params.usePrebuiltImage,
+    bindUiDist: params.bindUiDist,
     includeQaLabUi: true,
   });
 

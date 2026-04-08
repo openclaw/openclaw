@@ -4,7 +4,7 @@ import {
   type ExecTarget,
   normalizeExecTarget,
 } from "../../../infra/exec-approvals.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 
 type ExecDirectiveParse = {
@@ -26,7 +26,7 @@ type ExecDirectiveParse = {
 };
 
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -34,7 +34,7 @@ function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
 }
 
 function normalizeExecAsk(value?: string): ExecAsk | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized as ExecAsk;
   }
@@ -77,7 +77,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (idx === -1) {
       return null;
     }
-    const key = token.slice(0, idx).trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(token.slice(0, idx));
     const value = token.slice(idx + 1).trim();
     if (!key) {
       return null;

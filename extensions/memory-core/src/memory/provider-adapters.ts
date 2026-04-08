@@ -21,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
@@ -40,9 +41,11 @@ function sanitizeHeaders(
   headers: Record<string, string>,
   excludedHeaderNames: string[],
 ): Array<[string, string]> {
-  const excluded = new Set(excludedHeaderNames.map((name) => name.toLowerCase()));
+  const excluded = new Set(
+    excludedHeaderNames.map((name) => normalizeLowercaseStringOrEmpty(name)),
+  );
   return Object.entries(headers)
-    .filter(([key]) => !excluded.has(key.toLowerCase()))
+    .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => [key, value]);
 }

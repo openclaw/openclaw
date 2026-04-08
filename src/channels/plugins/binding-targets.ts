@@ -31,6 +31,7 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: "new" | "reset";
+  commandSource?: string;
 }): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
   await ensureStatefulTargetBuiltinsRegistered();
   const resolved = resolveStatefulBindingTargetBySessionKey({

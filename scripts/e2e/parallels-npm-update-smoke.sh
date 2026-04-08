@@ -320,6 +320,57 @@ function Invoke-CaptureLogged {
   return ($output | Out-String).Trim()
 }
 
+function Wait-GatewayRpcReady {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath,
+    [int]$Attempts = 20,
+    [int]$SleepSeconds = 3
+  )
+
+  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    Write-ProgressLog "update.gateway-status.attempt-$attempt"
+    try {
+      Invoke-Logged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
+      return
+    } catch {
+      if ($attempt -ge $Attempts) {
+        throw
+      }
+      Write-ProgressLog "update.gateway-status.retry-$attempt"
+      Start-Sleep -Seconds $SleepSeconds
+    }
+  }
+}
+
+function Restart-GatewayWithRecovery {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath
+  )
+
+  $restartFailed = $false
+  try {
+    Invoke-Logged 'openclaw gateway restart' { & $OpenClawPath gateway restart }
+  } catch {
+    $restartFailed = $true
+    Write-ProgressLog 'update.restart-gateway.soft-fail'
+    ($_ | Out-String) | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  Write-ProgressLog 'update.gateway-status'
+  try {
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+    return
+  } catch {
+    if (-not $restartFailed) {
+      throw
+    }
+    Write-ProgressLog 'update.gateway-start-recover'
+    Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
+    Write-ProgressLog 'update.gateway-status-recover'
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  }
+}
+
 try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
@@ -341,11 +392,11 @@ try {
   Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
+  # Current login-item restarts can report failure before the background service
+  # is fully observable again, so verify readiness separately and fall back to
+  # an explicit start only if the RPC endpoint never returns.
   Write-ProgressLog 'update.restart-gateway'
-  Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
-  Start-Sleep -Seconds 5
-  Write-ProgressLog 'update.gateway-status'
-  Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Restart-GatewayWithRecovery -OpenClawPath $openclaw
   Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE

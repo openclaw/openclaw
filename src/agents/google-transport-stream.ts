@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -112,11 +113,11 @@ type GoogleSseChunk = {
 let toolCallCounter = 0;
 
 function isGemini3ProModel(modelId: string): boolean {
-  return /gemini-3(?:\.\d+)?-pro/.test(modelId.toLowerCase());
+  return /gemini-3(?:\.\d+)?-pro/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
 function isGemini3FlashModel(modelId: string): boolean {
-  return /gemini-3(?:\.\d+)?-flash/.test(modelId.toLowerCase());
+  return /gemini-3(?:\.\d+)?-flash/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
 function requiresToolCallId(modelId: string): boolean {
@@ -124,7 +125,7 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }

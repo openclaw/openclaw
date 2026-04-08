@@ -5,7 +5,10 @@ import {
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
@@ -55,7 +58,8 @@ function normalizeResolvedChannel(channel: string): string {
   return (
     normalizeAnyChannelId(channel) ??
     normalizeChatChannelId(channel) ??
-    channel.trim().toLowerCase()
+    normalizeOptionalLowercaseString(channel) ??
+    ""
   );
 }
 

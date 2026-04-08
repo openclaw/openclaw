@@ -9,6 +9,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 let sessionStoreRuntimePromise:
   | Promise<typeof import("../../config/sessions/store.runtime.js")>
@@ -37,12 +38,12 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   if (store[normalized]) {
     return normalized;
   }
-  const lower = normalized.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(normalized);
   if (store[lower]) {
     return lower;
   }
   for (const key of Object.keys(store)) {
-    if (key.toLowerCase() === lower) {
+    if (normalizeLowercaseStringOrEmpty(key) === lower) {
       return key;
     }
   }
@@ -171,7 +172,7 @@ export async function upsertAcpSessionMeta(params: {
       return nextEntry;
     },
     {
-      activeSessionKey: sessionKey.toLowerCase(),
+      activeSessionKey: normalizeLowercaseStringOrEmpty(sessionKey),
       allowDropAcpMetaSessionKeys: [sessionKey],
     },
   );

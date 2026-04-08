@@ -112,10 +112,12 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const mcpLoopbackRuntime =
-    backendResolved.id === "claude-cli" ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  const mcpLoopbackRuntime = backendResolved.bundleMcp
+    ? prepareDeps.getActiveMcpLoopbackRuntime()
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
+    mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
@@ -133,15 +135,17 @@ export async function prepareCliRunContext(
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    authEpoch,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: params.authProfileId,
+        authEpoch,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackend.mcpConfigHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
