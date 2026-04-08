@@ -242,8 +242,11 @@ internal fun gatewayEndpointValidationMessage(
 
 internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {
   val host = hostInput.trim()
-  val port = portInput.trim().toIntOrNull() ?: return null
-  if (host.isEmpty() || port !in 1..65535) return null
+  if (host.isEmpty()) return null
+  val portTrimmed = portInput.trim()
+  val defaultPort = if (tls) 443 else 18789
+  val port = if (portTrimmed.isEmpty()) defaultPort else portTrimmed.toIntOrNull() ?: return null
+  if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://$host:$port"
 }
