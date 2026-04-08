@@ -195,17 +195,10 @@ export function decodeCapturedOutputBuffer(params: {
 // 辅助函数：检查 Buffer 是否是有效的 UTF-8
 function isValidUtf8Buffer(buffer: Buffer): boolean {
   try {
-    // 尝试用 UTF-8 解码并重新编码，看是否一致
+    // 尝试用 UTF-8 解码并重新编码，看是否完全一致
     const decoded = buffer.toString("utf8");
     const reencoded = Buffer.from(decoded, "utf8");
-    // 对于短 buffer，精确比较
-    if (buffer.length < 1024) {
-      return buffer.equals(reencoded);
-    }
-    // 对于长 buffer，只比较前 1KB 和后 1KB
-    const prefixMatch = buffer.subarray(0, 1024).equals(reencoded.subarray(0, Math.min(1024, reencoded.length)));
-    const suffixMatch = buffer.subarray(-1024).equals(reencoded.subarray(-1024));
-    return prefixMatch && suffixMatch;
+    return buffer.equals(reencoded);
   } catch {
     return false;
   }
