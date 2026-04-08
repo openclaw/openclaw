@@ -79,6 +79,20 @@ static void test_channels_parse_basic(void) {
     json_node_unref(node);
 }
 
+static void test_channels_mixed_type_channel_order_elements(void) {
+    JsonNode *node = parse_json(
+        "{\"channelOrder\": [\"alpha\", 1, {\"bad\":true}, \"beta\"], \"channels\": {}}"
+    );
+    GatewayChannelsData *data = gateway_data_parse_channels(node);
+    ASSERT(data != NULL, "ch_mixed_order: parsed");
+    ASSERT(data->n_channel_order == 2, "ch_mixed_order: keeps only valid string ids");
+    ASSERT(g_strcmp0(data->channel_order[0], "alpha") == 0, "ch_mixed_order: first valid preserved");
+    ASSERT(g_strcmp0(data->channel_order[1], "beta") == 0, "ch_mixed_order: second valid preserved");
+    ASSERT(data->n_channels == 2, "ch_mixed_order: channel list aligns to valid ids");
+    gateway_channels_data_free(data);
+    json_node_unref(node);
+}
+
 static void test_channels_parse_empty(void) {
     JsonNode *node = parse_json("{}");
     GatewayChannelsData *data = gateway_data_parse_channels(node);
@@ -1164,6 +1178,7 @@ int main(void) {
     test_channels_parse_null();
     /* Channels — negative */
     test_channels_wrong_type_channel_order();
+    test_channels_mixed_type_channel_order_elements();
     test_channels_labels_wrong_type();
     test_channels_accounts_not_array();
     test_channels_non_object_payload();

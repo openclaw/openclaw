@@ -10,6 +10,7 @@
 
 #include "format_utils.h"
 #include "gateway_rpc.h"
+#include "json_access.h"
 
 static GtkWidget *usage_status_label = NULL;
 static GtkWidget *usage_summary_label = NULL;
@@ -21,15 +22,6 @@ static gboolean usage_fetch_in_flight = FALSE;
 static gint64 usage_last_fetch_us = 0;
 
 static gint usage_selected_days = 30;
-
-static const gchar* usage_json_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) {
-        return NULL;
-    }
-    return json_node_get_string(node);
-}
 
 static void usage_clear_retros(void) {
     if (!usage_retros_box) return;
@@ -73,7 +65,7 @@ static void on_usage_sessions_response(const GatewayRpcResponse *response, gpoin
         if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
         JsonObject *row = json_node_get_object(n);
 
-        const gchar *key = usage_json_string_member(row, "key");
+        const gchar *key = oc_json_string_member(row, "key");
         if (!key) key = "(session)";
         JsonObject *usage = NULL;
         if (json_object_has_member(row, "usage")) {
@@ -183,12 +175,12 @@ static void on_usage_status_response(const GatewayRpcResponse *response, gpointe
             JsonNode *n = json_array_get_element(providers, i);
             if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
             JsonObject *p = json_node_get_object(n);
-            const gchar *name = usage_json_string_member(p, "displayName");
-            if (!name) name = usage_json_string_member(p, "provider");
+            const gchar *name = oc_json_string_member(p, "displayName");
+            if (!name) name = oc_json_string_member(p, "provider");
             if (!name) name = "provider";
-            const gchar *plan = usage_json_string_member(p, "plan");
+            const gchar *plan = oc_json_string_member(p, "plan");
             guint windows = 0;
-            const gchar *provider_error = usage_json_string_member(p, "error");
+            const gchar *provider_error = oc_json_string_member(p, "error");
             JsonNode *wn = json_object_get_member(p, "windows");
             if (wn && JSON_NODE_HOLDS_ARRAY(wn)) {
                 JsonArray *wa = json_node_get_array(wn);

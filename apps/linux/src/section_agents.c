@@ -10,6 +10,7 @@
 
 #include "format_utils.h"
 #include "gateway_rpc.h"
+#include "json_access.h"
 
 typedef struct {
     gchar *id;
@@ -73,15 +74,6 @@ static gint agents_selected_index = -1;
 static gchar *agents_selected_agent_id = NULL;
 static gboolean agents_fetch_in_flight = FALSE;
 static gint64 agents_last_fetch_us = 0;
-
-static const gchar* agents_json_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) {
-        return NULL;
-    }
-    return json_node_get_string(node);
-}
 
 static const gchar* agents_selected_agent_model(void) {
     if (!agents_cache || agents_selected_index < 0 || (guint)agents_selected_index >= agents_cache->len) {
@@ -383,8 +375,8 @@ static void on_agents_list_response(const GatewayRpcResponse *response, gpointer
                 if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
                 JsonObject *ao = json_node_get_object(n);
                 AgentRow *row = g_new0(AgentRow, 1);
-                row->id = g_strdup(agents_json_string_member(ao, "id"));
-                row->name = g_strdup(agents_json_string_member(ao, "name"));
+                row->id = g_strdup(oc_json_string_member(ao, "id"));
+                row->name = g_strdup(oc_json_string_member(ao, "name"));
                 if (!row->id || row->id[0] == '\0') {
                     agent_row_free(row);
                     continue;
@@ -393,23 +385,23 @@ static void on_agents_list_response(const GatewayRpcResponse *response, gpointer
                     JsonNode *identity_node = json_object_get_member(ao, "identity");
                     if (identity_node && JSON_NODE_HOLDS_OBJECT(identity_node)) {
                         JsonObject *identity = json_node_get_object(identity_node);
-                        const gchar *identity_name = agents_json_string_member(identity, "name");
+                        const gchar *identity_name = oc_json_string_member(identity, "name");
                         if ((!row->name || row->name[0] == '\0') && identity_name) {
                             g_free(row->name);
                             row->name = g_strdup(identity_name);
                         }
-                        row->emoji = g_strdup(agents_json_string_member(identity, "emoji"));
-                        row->avatar = g_strdup(agents_json_string_member(identity, "avatar"));
-                        if (!row->avatar) row->avatar = g_strdup(agents_json_string_member(identity, "avatarUrl"));
+                        row->emoji = g_strdup(oc_json_string_member(identity, "emoji"));
+                        row->avatar = g_strdup(oc_json_string_member(identity, "avatar"));
+                        if (!row->avatar) row->avatar = g_strdup(oc_json_string_member(identity, "avatarUrl"));
                     }
                 }
-                row->workspace = g_strdup(agents_json_string_member(ao, "workspace"));
-                if (!row->avatar) row->avatar = g_strdup(agents_json_string_member(ao, "avatar"));
+                row->workspace = g_strdup(oc_json_string_member(ao, "workspace"));
+                if (!row->avatar) row->avatar = g_strdup(oc_json_string_member(ao, "avatar"));
                 if (json_object_has_member(ao, "model")) {
                     JsonNode *model_node = json_object_get_member(ao, "model");
                     if (model_node && JSON_NODE_HOLDS_OBJECT(model_node)) {
                         JsonObject *model = json_node_get_object(model_node);
-                        row->model = g_strdup(agents_json_string_member(model, "primary"));
+                        row->model = g_strdup(oc_json_string_member(model, "primary"));
                     } else if (model_node && JSON_NODE_HOLDS_VALUE(model_node) &&
                                json_node_get_value_type(model_node) == G_TYPE_STRING) {
                         row->model = g_strdup(json_node_get_string(model_node));
@@ -475,8 +467,8 @@ static void on_agents_models_response(const GatewayRpcResponse *response, gpoint
                 m->id = g_strdup(json_node_get_string(idn));
             }
         }
-        const gchar *name = agents_json_string_member(mo, "name");
-        const gchar *provider = agents_json_string_member(mo, "provider");
+        const gchar *name = oc_json_string_member(mo, "name");
+        const gchar *provider = oc_json_string_member(mo, "provider");
         m->label = g_strdup_printf("%s (%s)",
                                    name ? name : "model",
                                    provider ? provider : "provider");

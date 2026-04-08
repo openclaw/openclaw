@@ -10,20 +10,12 @@
 
 #include "gateway_data.h"
 #include "gateway_rpc.h"
+#include "json_access.h"
 
 static GtkWidget *workflows_status_label = NULL;
 static GtkWidget *workflows_list_box = NULL;
 static gboolean workflows_fetch_in_flight = FALSE;
 static gint64 workflows_last_fetch_us = 0;
-
-static const gchar* workflows_json_string_member(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) {
-        return NULL;
-    }
-    return json_node_get_string(node);
-}
 
 static void workflows_clear(void) {
     if (!workflows_list_box) return;
@@ -57,7 +49,7 @@ static void workflows_render_from_config(const GatewayConfigSnapshot *cfg) {
             JsonNode *n = json_array_get_element(arr, i);
             if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
             JsonObject *b = json_node_get_object(n);
-            const gchar *agent_id = workflows_json_string_member(b, "agentId");
+            const gchar *agent_id = oc_json_string_member(b, "agentId");
             if (!agent_id) agent_id = "(agent)";
             const gchar *channel = "?";
             const gchar *peer_kind = "any";
@@ -66,14 +58,14 @@ static void workflows_render_from_config(const GatewayConfigSnapshot *cfg) {
                 JsonNode *mn = json_object_get_member(b, "match");
                 if (mn && JSON_NODE_HOLDS_OBJECT(mn)) {
                     JsonObject *match = json_node_get_object(mn);
-                    const gchar *channel_member = workflows_json_string_member(match, "channel");
+                    const gchar *channel_member = oc_json_string_member(match, "channel");
                     if (channel_member) channel = channel_member;
                     if (json_object_has_member(match, "peer")) {
                         JsonNode *pn = json_object_get_member(match, "peer");
                         if (pn && JSON_NODE_HOLDS_OBJECT(pn)) {
                             JsonObject *peer = json_node_get_object(pn);
-                            const gchar *kind_member = workflows_json_string_member(peer, "kind");
-                            const gchar *id_member = workflows_json_string_member(peer, "id");
+                            const gchar *kind_member = oc_json_string_member(peer, "kind");
+                            const gchar *id_member = oc_json_string_member(peer, "id");
                             if (kind_member) peer_kind = kind_member;
                             if (id_member) peer_id = id_member;
                         }

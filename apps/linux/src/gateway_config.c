@@ -21,6 +21,7 @@
  */
 
 #include "gateway_config.h"
+#include "json_access.h"
 #include "log.h"
 #include <json-glib/json-glib.h>
 #include <string.h>
@@ -134,7 +135,7 @@ static void resolve_auth(JsonObject *auth_obj, GatewayConfig *config) {
 
     if (auth_obj) {
         if (json_object_has_member(auth_obj, "mode")) {
-            const gchar *mode = json_object_get_string_member(auth_obj, "mode");
+            const gchar *mode = oc_json_string_member(auth_obj, "mode");
             if (mode && mode[0] != '\0') {
                 cfg_auth_mode = g_strdup(mode);
             }
@@ -365,7 +366,7 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
 
     JsonObject *gateway_obj = NULL;
     if (json_object_has_member(root_obj, "gateway")) {
-        gateway_obj = json_object_get_object_member(root_obj, "gateway");
+        gateway_obj = oc_json_object_member(root_obj, "gateway");
     }
 
     /* E2: Reject malformed-present gateway.mode (must be string if present) */
@@ -381,7 +382,7 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
 
     /* Resolve mode */
     if (gateway_obj && json_object_has_member(gateway_obj, "mode")) {
-        const gchar *mode = json_object_get_string_member(gateway_obj, "mode");
+        const gchar *mode = oc_json_string_member(gateway_obj, "mode");
         if (mode && mode[0] != '\0') {
             config->mode = g_strdup(mode);
         }
@@ -507,7 +508,7 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     /* Resolve auth from gateway.auth.* + env overrides */
     JsonObject *auth_obj = NULL;
     if (gateway_obj && json_object_has_member(gateway_obj, "auth")) {
-        auth_obj = json_object_get_object_member(gateway_obj, "auth");
+        auth_obj = oc_json_object_member(gateway_obj, "auth");
     }
     /* E4: Reject malformed-present gateway.auth.mode (must be string if present) */
     if (auth_obj && json_object_has_member(auth_obj, "mode")) {
@@ -554,9 +555,9 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
 
     /* Resolve controlUi.basePath */
     if (gateway_obj && json_object_has_member(gateway_obj, "controlUi")) {
-        JsonObject *cui_obj = json_object_get_object_member(gateway_obj, "controlUi");
+        JsonObject *cui_obj = oc_json_object_member(gateway_obj, "controlUi");
         if (cui_obj && json_object_has_member(cui_obj, "basePath")) {
-            const gchar *bp = json_object_get_string_member(cui_obj, "basePath");
+            const gchar *bp = oc_json_string_member(cui_obj, "basePath");
             if (bp && bp[0] != '\0') {
                 config->control_ui_base_path = g_strdup(bp);
             }

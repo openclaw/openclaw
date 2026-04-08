@@ -13,23 +13,9 @@
  */
 
 #include "gateway_protocol.h"
+#include "json_access.h"
 #include "log.h"
 #include <string.h>
-
-static const gchar* json_object_get_member_string_typed(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_VALUE(node)) return NULL;
-    if (json_node_get_value_type(node) != G_TYPE_STRING) return NULL;
-    return json_node_get_string(node);
-}
-
-static JsonObject* json_object_get_member_object_typed(JsonObject *obj, const gchar *member) {
-    if (!obj || !member || !json_object_has_member(obj, member)) return NULL;
-    JsonNode *node = json_object_get_member(obj, member);
-    if (!node || !JSON_NODE_HOLDS_OBJECT(node)) return NULL;
-    return json_node_get_object(node);
-}
 
 GatewayFrame* gateway_protocol_parse_frame(const gchar *json_str) {
     if (!json_str) return NULL;
@@ -51,32 +37,32 @@ GatewayFrame* gateway_protocol_parse_frame(const gchar *json_str) {
         return NULL;
     }
 
-    const gchar *type_str = json_object_get_member_string_typed(obj, "type");
+    const gchar *type_str = oc_json_string_member(obj, "type");
     if (!type_str) return NULL;
 
     GatewayFrame *frame = g_new0(GatewayFrame, 1);
 
     if (g_strcmp0(type_str, "req") == 0) {
         frame->type = GATEWAY_FRAME_REQ;
-        frame->id = g_strdup(json_object_get_member_string_typed(obj, "id"));
-        frame->method = g_strdup(json_object_get_member_string_typed(obj, "method"));
+        frame->id = g_strdup(oc_json_string_member(obj, "id"));
+        frame->method = g_strdup(oc_json_string_member(obj, "method"));
         if (json_object_has_member(obj, "params"))
             frame->payload = json_node_copy(json_object_get_member(obj, "params"));
     } else if (g_strcmp0(type_str, "res") == 0) {
         frame->type = GATEWAY_FRAME_RES;
-        frame->id = g_strdup(json_object_get_member_string_typed(obj, "id"));
+        frame->id = g_strdup(oc_json_string_member(obj, "id"));
         if (json_object_has_member(obj, "error")) {
-            JsonObject *err_obj = json_object_get_member_object_typed(obj, "error");
+            JsonObject *err_obj = oc_json_object_member(obj, "error");
             if (err_obj) {
-                frame->code = g_strdup(json_object_get_member_string_typed(err_obj, "code"));
-                frame->error = g_strdup(json_object_get_member_string_typed(err_obj, "message"));
+                frame->code = g_strdup(oc_json_string_member(err_obj, "code"));
+                frame->error = g_strdup(oc_json_string_member(err_obj, "message"));
             }
         }
         if (json_object_has_member(obj, "payload"))
             frame->payload = json_node_copy(json_object_get_member(obj, "payload"));
     } else if (g_strcmp0(type_str, "event") == 0) {
         frame->type = GATEWAY_FRAME_EVENT;
-        frame->event_type = g_strdup(json_object_get_member_string_typed(obj, "event"));
+        frame->event_type = g_strdup(oc_json_string_member(obj, "event"));
         if (json_object_has_member(obj, "payload"))
             frame->payload = json_node_copy(json_object_get_member(obj, "payload"));
     } else {
@@ -215,7 +201,7 @@ gchar* gateway_protocol_extract_challenge_nonce(const GatewayFrame *frame) {
     if (!frame->payload || !JSON_NODE_HOLDS_OBJECT(frame->payload)) return NULL;
 
     JsonObject *obj = json_node_get_object(frame->payload);
-    const gchar *nonce = json_object_get_member_string_typed(obj, "nonce");
+    const gchar *nonce = oc_json_string_member(obj, "nonce");
     if (nonce && nonce[0] != '\0') {
         return g_strdup(nonce);
     }
@@ -282,7 +268,7 @@ gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
     if (!json_object_has_member(obj, "type")) {
         return FALSE;
     }
-    const gchar *type_str = json_object_get_member_string_typed(obj, "type");
+    const gchar *type_str = oc_json_string_member(obj, "type");
     if (g_strcmp0(type_str, "hello-ok") != 0) {
         return FALSE;
     }
@@ -360,7 +346,7 @@ gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
     if (out_auth_source) {
         *out_auth_source = NULL;
         if (auth) {
-            *out_auth_source = g_strdup(json_object_get_member_string_typed(auth, "source"));
+            *out_auth_source = g_strdup(oc_json_string_member(auth, "source"));
         }
     }
 
