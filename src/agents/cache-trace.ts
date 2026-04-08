@@ -6,11 +6,13 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { redactImageDataForDiagnostics } from "./payload-redaction.js";
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
 export type CacheTraceStage =
+  | "cache:result"
+  | "cache:state"
   | "session:loaded"
   | "session:sanitized"
   | "session:limited"
@@ -198,14 +200,14 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.prompt = payload.prompt;
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = payload.system;
+      event.system = sanitizeDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
     if (payload.options) {
-      event.options = redactImageDataForDiagnostics(payload.options) as Record<string, unknown>;
+      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
     }
     if (payload.model) {
-      event.model = payload.model;
+      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
     }
 
     const messages = payload.messages;
@@ -216,7 +218,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
-        event.messages = redactImageDataForDiagnostics(messages) as AgentMessage[];
+        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
       }
     }
 
@@ -236,14 +238,19 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
 
   const wrapStreamFn: CacheTrace["wrapStreamFn"] = (streamFn) => {
     const wrapped: StreamFn = (model, context, options) => {
+      const traceContext = context as {
+        messages?: AgentMessage[];
+        system?: unknown;
+        systemPrompt?: unknown;
+      };
       recordStage("stream:context", {
         model: {
           id: model?.id,
           provider: model?.provider,
           api: model?.api,
         },
-        system: (context as { system?: unknown }).system,
-        messages: (context as { messages?: AgentMessage[] }).messages ?? [],
+        system: traceContext.systemPrompt ?? traceContext.system,
+        messages: traceContext.messages ?? [],
         options: (options ?? {}) as Record<string, unknown>,
       });
       return streamFn(model, context, options);

@@ -15,11 +15,17 @@ class FailFirstPlayTtsProvider extends FakeProvider {
 
 class DelayedPlayTtsProvider extends FakeProvider {
   private releasePlayTts: (() => void) | null = null;
+  private resolvePlayTtsStarted: (() => void) | null = null;
   readonly playTtsStarted = vi.fn();
+  readonly playTtsStartedPromise = new Promise<void>((resolve) => {
+    this.resolvePlayTtsStarted = resolve;
+  });
 
   override async playTts(input: Parameters<FakeProvider["playTts"]>[0]): Promise<void> {
     this.playTtsCalls.push(input);
     this.playTtsStarted();
+    this.resolvePlayTtsStarted?.();
+    this.resolvePlayTtsStarted = null;
     await new Promise<void>((resolve) => {
       this.releasePlayTts = resolve;
     });
@@ -31,6 +37,36 @@ class DelayedPlayTtsProvider extends FakeProvider {
   }
 }
 
+function requireCall(
+  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
+  callId: string,
+) {
+  const call = manager.getCall(callId);
+  if (!call) {
+    throw new Error(`expected active call ${callId}`);
+  }
+  return call;
+}
+
+function requireMappedCall(
+  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
+  providerCallId: string,
+) {
+  const call = manager.getCallByProviderCallId(providerCallId);
+  if (!call) {
+    throw new Error(`expected mapped provider call ${providerCallId}`);
+  }
+  return call;
+}
+
+function requireFirstPlayTtsCall(provider: FakeProvider) {
+  const call = provider.playTtsCalls[0];
+  if (!call) {
+    throw new Error("expected provider.playTts to be called once");
+  }
+  return call;
+}
+
 describe("CallManager notify and mapping", () => {
   it("upgrades providerCallId mapping when provider ID changes", async () => {
     const { manager } = await createManagerHarness();
@@ -39,8 +75,8 @@ describe("CallManager notify and mapping", () => {
     expect(success).toBe(true);
     expect(error).toBeUndefined();
 
-    expect(manager.getCall(callId)?.providerCallId).toBe("request-uuid");
-    expect(manager.getCallByProviderCallId("request-uuid")?.callId).toBe(callId);
+    expect(requireCall(manager, callId).providerCallId).toBe("request-uuid");
+    expect(requireMappedCall(manager, "request-uuid").callId).toBe(callId);
 
     manager.processEvent({
       id: "evt-1",
@@ -50,8 +86,8 @@ describe("CallManager notify and mapping", () => {
       timestamp: Date.now(),
     });
 
-    expect(manager.getCall(callId)?.providerCallId).toBe("call-uuid");
-    expect(manager.getCallByProviderCallId("call-uuid")?.callId).toBe(callId);
+    expect(requireCall(manager, callId).providerCallId).toBe("call-uuid");
+    expect(requireMappedCall(manager, "call-uuid").callId).toBe(callId);
     expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
   });
 
@@ -77,7 +113,7 @@ describe("CallManager notify and mapping", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(provider.playTtsCalls).toHaveLength(1);
-      expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
+      expect(requireFirstPlayTtsCall(provider).text).toBe("Hello there");
     },
   );
 
@@ -101,7 +137,7 @@ describe("CallManager notify and mapping", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(provider.playTtsCalls[0]?.text).toBe("Hello from conversation");
+    expect(requireFirstPlayTtsCall(provider).text).toBe("Hello from conversation");
   });
 
   it("speaks initial message on answered for conversation mode when Twilio streaming is disabled", async () => {
@@ -127,7 +163,7 @@ describe("CallManager notify and mapping", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(provider.playTtsCalls[0]?.text).toBe("Twilio non-stream");
+    expect(requireFirstPlayTtsCall(provider).text).toBe("Twilio non-stream");
   });
 
   it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
@@ -180,7 +216,7 @@ describe("CallManager notify and mapping", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(provider.playTtsCalls[0]?.text).toBe("Twilio stream unavailable");
+    expect(requireFirstPlayTtsCall(provider).text).toBe("Twilio stream unavailable");
   });
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
@@ -202,10 +238,10 @@ describe("CallManager notify and mapping", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const afterFailure = manager.getCall(callId);
+    const afterFailure = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(afterFailure?.metadata?.initialMessage).toBe("Retry me");
-    expect(afterFailure?.state).toBe("listening");
+    expect(afterFailure.metadata).toEqual(expect.objectContaining({ initialMessage: "Retry me" }));
+    expect(afterFailure.state).toBe("listening");
 
     manager.processEvent({
       id: "evt-retry-2",
@@ -216,9 +252,9 @@ describe("CallManager notify and mapping", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const afterSuccess = manager.getCall(callId);
+    const afterSuccess = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(2);
-    expect(afterSuccess?.metadata?.initialMessage).toBeUndefined();
+    expect(afterSuccess.metadata).not.toHaveProperty("initialMessage");
   });
 
   it("speaks initial message only once on repeated stream-connect triggers", async () => {
@@ -247,7 +283,7 @@ describe("CallManager notify and mapping", () => {
     await manager.speakInitialMessage("call-uuid");
 
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(provider.playTtsCalls[0]?.text).toBe("Stream hello");
+    expect(requireFirstPlayTtsCall(provider).text).toBe("Stream hello");
   });
 
   it("prevents concurrent initial-message replays while first playback is in flight", async () => {
@@ -271,9 +307,8 @@ describe("CallManager notify and mapping", () => {
     expect(provider.playTtsCalls).toHaveLength(0);
 
     const first = manager.speakInitialMessage("call-uuid");
-    await vi.waitFor(() => {
-      expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
-    });
+    await provider.playTtsStartedPromise;
+    expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
 
     const second = manager.speakInitialMessage("call-uuid");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -282,9 +317,9 @@ describe("CallManager notify and mapping", () => {
     provider.releaseCurrentPlayback();
     await Promise.all([first, second]);
 
-    const call = manager.getCall(callId);
-    expect(call?.metadata?.initialMessage).toBeUndefined();
+    const call = requireCall(manager, callId);
+    expect(call.metadata).not.toHaveProperty("initialMessage");
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(provider.playTtsCalls[0]?.text).toBe("In-flight hello");
+    expect(requireFirstPlayTtsCall(provider).text).toBe("In-flight hello");
   });
 });

@@ -1,6 +1,6 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
 import {
   discordModerationActionRuntime,
   handleDiscordModerationAction,

@@ -10,11 +10,18 @@ title: "Community Plugins"
 
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained
-by the community, published on npm, and installable with a single command.
+by the community, published on [ClawHub](/tools/clawhub) or npm, and
+installable with a single command.
+
+ClawHub is the canonical discovery surface for community plugins. Do not open
+docs-only PRs just to add your plugin here for discoverability; publish it on
+ClawHub instead.
 
 ```bash
-openclaw plugins install <npm-spec>
+openclaw plugins install <package-name>
 ```
+
+OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
@@ -74,18 +81,19 @@ Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
 
-- **npm:** `@sliverp/qqbot`
-- **repo:** [github.com/sliverp/qqbot](https://github.com/sliverp/qqbot)
+- **npm:** `@tencent-connect/openclaw-qqbot`
+- **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
 
 ```bash
-openclaw plugins install @sliverp/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
 ### wecom
 
-OpenClaw Enterprise WeCom Channel Plugin.
-A bot plugin powered by WeCom AI Bot WebSocket persistent connections,
-supports direct messages & group chats, streaming replies, and proactive messaging.
+WeCom channel plugin for OpenClaw by the Tencent WeCom team. Powered by
+WeCom Bot WebSocket persistent connections, it supports direct messages & group
+chats, streaming replies, proactive messaging, image/file processing, Markdown
+formatting, built-in access control, and document/meeting/messaging skills.
 
 - **npm:** `@wecom/wecom-openclaw-plugin`
 - **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
@@ -99,8 +107,9 @@ openclaw plugins install @wecom/wecom-openclaw-plugin
 We welcome community plugins that are useful, documented, and safe to operate.
 
 <Steps>
-  <Step title="Publish to npm">
-    Your plugin must be installable via `openclaw plugins install \<npm-spec\>`.
+  <Step title="Publish to ClawHub or npm">
+    Your plugin must be installable via `openclaw plugins install \<package-name\>`.
+    Publish to [ClawHub](/tools/clawhub) (preferred) or npm.
     See [Building Plugins](/plugins/building-plugins) for the full guide.
 
   </Step>
@@ -111,26 +120,25 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
   </Step>
 
-  <Step title="Open a PR">
-    Add your plugin to this page with:
+  <Step title="Use docs PRs only for source-doc changes">
+    You do not need a docs PR just to make your plugin discoverable. Publish it
+    on ClawHub instead.
 
-    - Plugin name
-    - npm package name
-    - GitHub repository URL
-    - One-line description
-    - Install command
+    Open a docs PR only when OpenClaw's source docs need an actual content
+    change, such as correcting install guidance or adding cross-repo
+    documentation that belongs in the main docs set.
 
   </Step>
 </Steps>
 
 ## Quality bar
 
-| Requirement          | Why                                           |
-| -------------------- | --------------------------------------------- |
-| Published on npm     | Users need `openclaw plugins install` to work |
-| Public GitHub repo   | Source review, issue tracking, transparency   |
-| Setup and usage docs | Users need to know how to configure it        |
-| Active maintenance   | Recent updates or responsive issue handling   |
+| Requirement                 | Why                                           |
+| --------------------------- | --------------------------------------------- |
+| Published on ClawHub or npm | Users need `openclaw plugins install` to work |
+| Public GitHub repo          | Source review, issue tracking, transparency   |
+| Setup and usage docs        | Users need to know how to configure it        |
+| Active maintenance          | Recent updates or responsive issue handling   |
 
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 

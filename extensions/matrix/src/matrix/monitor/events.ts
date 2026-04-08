@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -34,8 +35,13 @@ export function registerMatrixMonitorEvents(params: {
   cfg: CoreConfig;
   client: MatrixClient;
   auth: MatrixAuth;
+  allowFrom: string[];
+  dmEnabled: boolean;
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  readStoreAllowFrom: () => Promise<string[]>;
   directTracker?: {
     invalidateRoom: (roomId: string) => void;
+    rememberInvite?: (roomId: string, remoteUserId: string) => void;
   };
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
@@ -48,6 +54,10 @@ export function registerMatrixMonitorEvents(params: {
     cfg,
     client,
     auth,
+    allowFrom,
+    dmEnabled,
+    dmPolicy,
+    readStoreAllowFrom,
     directTracker,
     logVerboseMessage,
     warnedEncryptedRooms,
@@ -58,6 +68,10 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
+    allowFrom,
+    dmEnabled,
+    dmPolicy,
+    readStoreAllowFrom,
     logVerboseMessage,
   });
 
@@ -114,7 +128,14 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
+    const invitee = normalizeOptionalString(event?.state_key) ?? "";
+    const senderIsInvitee =
+      Boolean(invitee) && (normalizeOptionalString(event?.sender) ?? "") === invitee;
     const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
+    const rememberedSender = normalizeOptionalString(event?.sender);
+    if (rememberedSender && !senderIsInvitee) {
+      directTracker?.rememberInvite?.(roomId, rememberedSender);
+    }
     logVerboseMessage(
       `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,
     );

@@ -1,4 +1,11 @@
-import { definePluginEntry, type OpenClawConfig, type OpenClawPluginApi } from "./api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  definePluginEntry,
+  fetchWithSsrFGuard,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  type OpenClawConfig,
+  type OpenClawPluginApi,
+} from "./api.js";
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
@@ -29,11 +36,9 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
     : [];
   const selected = list.find((entry) => entry.default === true) ?? list[0];
 
-  const id =
-    typeof selected?.id === "string" && selected.id.trim() ? selected.id.trim() : "unknown";
-  const identityName =
-    typeof selected?.identity?.name === "string" ? selected.identity.name.trim() : "";
-  const fallbackName = typeof selected?.name === "string" ? selected.name.trim() : "";
+  const id = normalizeOptionalString(selected?.id) ?? "unknown";
+  const identityName = normalizeOptionalString(selected?.identity?.name) ?? "";
+  const fallbackName = normalizeOptionalString(selected?.name) ?? "";
   const name = identityName || fallbackName;
 
   return { id, name };
@@ -61,12 +66,16 @@ export default definePluginEntry({
     const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
 
     api.on("message_received", async (event, ctx) => {
-      if (ctx.channelId !== "slack") return;
+      if (ctx.channelId !== "slack") {
+        return;
+      }
 
       const text = event.content ?? "";
       const threadTs = (event.metadata?.threadTs as string) ?? "";
       const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
-      if (!threadTs || !channelId) return;
+      if (!threadTs || !channelId) {
+        return;
+      }
 
       const mentioned =
         (agentName && text.includes(`@${agentName}`)) ||
@@ -78,35 +87,54 @@ export default definePluginEntry({
     });
 
     api.on("message_sending", async (event, ctx) => {
-      if (ctx.channelId !== "slack") return;
+      if (ctx.channelId !== "slack") {
+        return;
+      }
 
       const threadTs = (event.metadata?.threadTs as string) ?? "";
       const channelId = (event.metadata?.channelId as string) ?? event.to;
-      if (!threadTs) return;
-      if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) return;
+      if (!threadTs) {
+        return;
+      }
+      if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) {
+        return;
+      }
 
       cleanExpiredMentions();
-      if (mentionedThreads.has(`${channelId}:${threadTs}`)) return;
+      if (mentionedThreads.has(`${channelId}:${threadTs}`)) {
+        return;
+      }
 
       try {
-        const resp = await fetch(`${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent_id: agentId }),
-          signal: AbortSignal.timeout(3000),
+        // The forwarder is an internal service (e.g. a Docker container); allow private-network
+        // access but pin DNS so DNS-rebinding attacks cannot pivot to a different internal host.
+        const { response: resp, release } = await fetchWithSsrFGuard({
+          url: `${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`,
+          init: {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ agent_id: agentId }),
+          },
+          timeoutMs: 3000,
+          policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+          auditContext: "thread-ownership",
         });
 
-        if (resp.ok) {
-          return;
+        try {
+          if (resp.ok) {
+            return;
+          }
+          if (resp.status === 409) {
+            const body = (await resp.json()) as { owner?: string };
+            api.logger.info?.(
+              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+            );
+            return { cancel: true };
+          }
+          api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
+        } finally {
+          await release();
         }
-        if (resp.status === 409) {
-          const body = (await resp.json()) as { owner?: string };
-          api.logger.info?.(
-            `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
-          );
-          return { cancel: true };
-        }
-        api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
       } catch (err) {
         api.logger.warn?.(
           `thread-ownership: ownership check failed (${String(err)}), allowing send`,

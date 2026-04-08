@@ -24,8 +24,19 @@ describe("doctor empty allowlist policy warnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining("this channel does not fall back to allowFrom"),
+      expect.stringContaining('channels.imessage.groupPolicy is "allowlist"'),
     ]);
+  });
+
+  it("stays quiet for zalouser hybrid route-and-sender group access", () => {
+    const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
+      account: { groupPolicy: "allowlist" },
+      channelName: "zalouser",
+      doctorFixCommand: "openclaw doctor --fix",
+      prefix: "channels.zalouser",
+    });
+
+    expect(warnings).toEqual([]);
   });
 
   it("stays quiet for channels that do not use sender-based group allowlists", () => {

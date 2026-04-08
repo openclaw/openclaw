@@ -1,13 +1,49 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
+const HTML_ENTITY_REPLACEMENTS: Readonly<Record<string, string>> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+const MAX_UNICODE_SCALAR_VALUE = 0x10ffff;
+
+function decodeNumericHtmlEntity(match: string, rawValue: string, radix: 10 | 16): string {
+  const codePoint = Number.parseInt(rawValue, radix);
+  if (
+    !Number.isSafeInteger(codePoint) ||
+    codePoint < 0 ||
+    codePoint > MAX_UNICODE_SCALAR_VALUE ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
+    return match;
+  }
+  return String.fromCodePoint(codePoint);
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity: string) => {
+    const normalized = normalizeLowercaseStringOrEmpty(entity);
+    if (normalized.startsWith("#x")) {
+      return decodeNumericHtmlEntity(match, normalized.slice(2), 16);
+    }
+    if (normalized.startsWith("#")) {
+      return decodeNumericHtmlEntity(match, normalized.slice(1), 10);
+    }
+    return HTML_ENTITY_REPLACEMENTS[normalized] ?? match;
+  });
+}
+
 function normalizeVisibleMentionText(value: string): string {
-  return value
-    .replace(/<[^>]+>/g, " ")
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    decodeHtmlEntities(
+      value.replace(/<[^>]+>/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+    ).replace(/\s+/g, " "),
+  );
 }
 
 function extractVisibleMentionText(value?: string): string {
@@ -30,6 +66,7 @@ function isVisibleMentionLabel(params: {
   text: string;
   userId: string;
   mentionRegexes: RegExp[];
+  displayName?: string | null;
 }): boolean {
   const cleaned = extractVisibleMentionText(params.text);
   if (!cleaned) {
@@ -40,12 +77,11 @@ function isVisibleMentionLabel(params: {
   }
   const localpart = resolveMatrixUserLocalpart(params.userId);
   const candidates = [
-    params.userId.trim().toLowerCase(),
-    localpart,
-    localpart ? `@${localpart}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.toLowerCase());
+    extractVisibleMentionText(params.userId),
+    localpart ? extractVisibleMentionText(localpart) : null,
+    localpart ? extractVisibleMentionText(`@${localpart}`) : null,
+    params.displayName ? extractVisibleMentionText(params.displayName) : null,
+  ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
 
@@ -64,6 +100,7 @@ function hasVisibleRoomMention(value?: string): boolean {
 function checkFormattedBodyMention(params: {
   formattedBody?: string;
   userId: string;
+  displayName?: string | null;
   mentionRegexes: RegExp[];
 }): boolean {
   if (!params.formattedBody || !params.userId) {
@@ -87,6 +124,7 @@ function checkFormattedBodyMention(params: {
           text: visibleLabel,
           userId: params.userId,
           mentionRegexes: params.mentionRegexes,
+          displayName: params.displayName,
         })
       ) {
         return true;
@@ -101,6 +139,7 @@ function checkFormattedBodyMention(params: {
 export function resolveMentions(params: {
   content: RoomMessageEventContent;
   userId?: string | null;
+  displayName?: string | null;
   text?: string;
   mentionRegexes: RegExp[];
 }) {
@@ -120,6 +159,7 @@ export function resolveMentions(params: {
     ? checkFormattedBodyMention({
         formattedBody: params.content.formatted_body,
         userId: params.userId,
+        displayName: params.displayName,
         mentionRegexes: params.mentionRegexes,
       })
     : false;

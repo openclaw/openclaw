@@ -1,6 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
+import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -13,12 +13,19 @@ import {
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
 import { normalizeHostname } from "./hostname.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "./undici-runtime.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
   address: string | LookupAddress[],
   family?: number,
 ) => void;
+
+type LookupResult = LookupAddress | LookupAddress[];
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -113,10 +120,7 @@ function looksLikeUnsupportedIpv4Literal(address: string): boolean {
 
 // Returns true for private/internal and special-use non-global addresses.
 export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolean {
-  let normalized = address.trim().toLowerCase();
-  if (normalized.startsWith("[") && normalized.endsWith("]")) {
-    normalized = normalized.slice(1, -1);
-  }
+  const normalized = normalizeHostname(address);
   if (!normalized) {
     return false;
   }
@@ -197,6 +201,13 @@ function assertAllowedResolvedAddressesOrThrow(
       throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
     }
   }
+}
+
+function normalizeLookupResults(results: LookupResult): readonly LookupAddress[] {
+  if (Array.isArray(results)) {
+    return results;
+  }
+  return [results];
 }
 
 export function createPinnedLookup(params: {
@@ -285,6 +296,7 @@ export type PinnedDispatcherPolicy =
   | {
       mode: "explicit-proxy";
       proxyUrl: string;
+      allowPrivateProxy?: boolean;
       proxyTls?: Record<string, unknown>;
       pinnedHostname?: PinnedHostnameOverride;
     };
@@ -329,7 +341,9 @@ export async function resolvePinnedHostnameWithPolicy(
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
-  const results = await lookupFn(normalized, { all: true });
+  const results = normalizeLookupResults(
+    (await lookupFn(normalized, { all: true })) as LookupResult,
+  );
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
@@ -403,25 +417,29 @@ export function createPinnedDispatcher(
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    return new Agent({
+    return createHttp1Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
     });
   }
 
   if (policy.mode === "env-proxy") {
-    return new EnvHttpProxyAgent({
+    return createHttp1EnvHttpProxyAgent({
       connect: withPinnedLookup(lookup, policy.connect),
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
   }
 
   const proxyUrl = policy.proxyUrl.trim();
-  if (!policy.proxyTls) {
-    return new ProxyAgent(proxyUrl);
+  const requestTls = withPinnedLookup(lookup, policy.proxyTls);
+  if (!requestTls) {
+    return createHttp1ProxyAgent({ uri: proxyUrl });
   }
-  return new ProxyAgent({
+  return createHttp1ProxyAgent({
     uri: proxyUrl,
-    proxyTls: { ...policy.proxyTls },
+    // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
+    // transport hints for explicit proxies. Translate that to undici's
+    // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
+    requestTls,
   });
 }
 

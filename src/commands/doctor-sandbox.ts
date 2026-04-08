@@ -166,7 +166,7 @@ async function handleMissingSandboxImage(
 
   let built = false;
   if (params.buildScript) {
-    const build = await prompter.confirmSkipInNonInteractive({
+    const build = await prompter.confirmRuntimeRepair({
       message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
@@ -276,7 +276,6 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
 
     const scope = resolveSandboxScope({
       scope: agentSandbox.scope ?? globalSandbox?.scope,
-      perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
     });
 
     if (scope !== "shared") {

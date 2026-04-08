@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -8,9 +9,23 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createDiscordActionGate, listEnabledDiscordAccounts } from "./accounts.js";
-import { handleDiscordMessageAction } from "./actions/handle-action.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import {
+  createDiscordActionGate,
+  listEnabledDiscordAccounts,
+  resolveDiscordAccount,
+} from "./accounts.js";
 import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
+
+let discordChannelActionsRuntimePromise:
+  | Promise<typeof import("./channel-actions.runtime.js")>
+  | undefined;
+
+async function loadDiscordChannelActionsRuntime() {
+  discordChannelActionsRuntimePromise ??= import("./channel-actions.runtime.js");
+  return await discordChannelActionsRuntimePromise;
+}
 
 function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
   const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
@@ -29,12 +44,33 @@ function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscord
   };
 }
 
+function resolveScopedDiscordActionDiscovery(params: {
+  cfg: Parameters<typeof listEnabledDiscordAccounts>[0];
+  accountId?: string | null;
+}) {
+  if (!params.accountId) {
+    return resolveDiscordActionDiscovery(params.cfg);
+  }
+  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.enabled || !account.token.trim()) {
+    return null;
+  }
+  const gate = createDiscordActionGate({
+    cfg: params.cfg,
+    accountId: account.accountId,
+  });
+  return {
+    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) => gate(key, defaultValue),
+  };
+}
+
 function describeDiscordMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveDiscordActionDiscovery(cfg);
+  const discovery = resolveScopedDiscordActionDiscovery({ cfg, accountId });
   if (!discovery) {
     return {
       actions: [],
@@ -124,7 +160,7 @@ function describeDiscordMessageTool({
     capabilities: ["interactive", "components"],
     schema: {
       properties: {
-        components: createDiscordMessageToolComponentsSchema(),
+        components: Type.Optional(createDiscordMessageToolComponentsSchema()),
       },
     },
   };
@@ -133,13 +169,12 @@ function describeDiscordMessageTool({
 export const discordMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
+    const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
-      const to = typeof args.to === "string" ? args.to : undefined;
-      return to ? { to } : null;
+      return extractToolSend(args, "sendMessage");
     }
     if (action === "threadReply") {
-      const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
+      const channelId = normalizeOptionalString(args.channelId) ?? "";
       return channelId ? { to: `channel:${channelId}` } : null;
     }
     return null;
@@ -153,7 +188,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     toolContext,
     mediaLocalRoots,
   }) => {
-    return await handleDiscordMessageAction({
+    return await (
+      await loadDiscordChannelActionsRuntime()
+    ).handleDiscordMessageAction({
       action,
       params,
       cfg,

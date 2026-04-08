@@ -1,27 +1,22 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { findLegacyConfigIssues } from "../config/legacy.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { detectLegacyMatrixCrypto } from "../infra/matrix-legacy-crypto.js";
-import { detectLegacyMatrixState } from "../infra/matrix-legacy-state.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
-import { maybeRepairDiscordNumericIds } from "./doctor/providers/discord.js";
+import { emitDoctorNotes } from "./doctor/emit-notes.js";
+import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
 import {
-  applyMatrixDoctorRepair,
-  collectMatrixInstallPathWarnings,
-  formatMatrixLegacyCryptoPreview,
-  formatMatrixLegacyStatePreview,
-} from "./doctor/providers/matrix.js";
-import {
-  collectTelegramEmptyAllowlistExtraWarnings,
-  maybeRepairTelegramAllowFromUsernames,
-} from "./doctor/providers/telegram.js";
-import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor/shared/allowlist-policy-repair.js";
+  collectChannelDoctorMutableAllowlistWarnings,
+  collectChannelDoctorStaleConfigMutations,
+  runChannelDoctorConfigSequences,
+} from "./doctor/shared/channel-doctor.js";
 import {
   applyLegacyCompatibilityStep,
   applyUnknownConfigKeyStep,
@@ -31,15 +26,13 @@ import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
-import { scanEmptyAllowlistPolicyWarnings } from "./doctor/shared/empty-allowlist-scan.js";
-import { maybeRepairExecSafeBinProfiles } from "./doctor/shared/exec-safe-bins.js";
-import { maybeRepairLegacyToolsBySenderKeys } from "./doctor/shared/legacy-tools-by-sender.js";
-import {
-  collectMutableAllowlistWarnings,
-  scanMutableAllowlistEntries,
-} from "./doctor/shared/mutable-allowlist.js";
-import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
 import { collectDoctorPreviewWarnings } from "./doctor/shared/preview-warnings.js";
+
+function hasLegacyInternalHookHandlers(raw: unknown): boolean {
+  const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
+    ?.handlers;
+  return Array.isArray(handlers) && handlers.length > 0;
+}
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
@@ -52,7 +45,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
-  let shouldWriteConfig = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
 
@@ -63,11 +55,47 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
-  if (legacyStep.issueLines.length > 0) {
-    note(legacyStep.issueLines.join("\n"), "Compatibility config keys detected");
+  const pluginLegacyIssues = findLegacyConfigIssues(
+    snapshot.parsed,
+    snapshot.parsed,
+    listPluginDoctorLegacyConfigRules(),
+  );
+  const seenLegacyIssues = new Set(
+    snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
+  );
+  const pluginIssueLines = pluginLegacyIssues
+    .filter((issue) => {
+      const key = `${issue.path}:${issue.message}`;
+      if (seenLegacyIssues.has(key)) {
+        return false;
+      }
+      seenLegacyIssues.add(key);
+      return true;
+    })
+    .map((issue) => `- ${issue.path}: ${issue.message}`);
+  const legacyIssueLines = [...legacyStep.issueLines, ...pluginIssueLines];
+  if (
+    pluginIssueLines.length > 0 &&
+    !shouldRepair &&
+    !fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
+  ) {
+    fixHints = [...fixHints, `Run "${doctorFixCommand}" to migrate legacy config keys.`];
+  }
+  if (legacyIssueLines.length > 0) {
+    note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
   if (legacyStep.changeLines.length > 0) {
     note(legacyStep.changeLines.join("\n"), "Doctor changes");
+  }
+  if (hasLegacyInternalHookHandlers(snapshot.parsed)) {
+    note(
+      [
+        "- hooks.internal.handlers: legacy inline hook modules are no longer part of the public config surface.",
+        "- Migrate each entry to a managed or workspace hook directory with HOOK.md + handler.js, then enable it through hooks.internal.entries.<hookKey> as needed.",
+        "- openclaw doctor --fix does not rewrite this shape automatically.",
+      ].join("\n"),
+      "Legacy config keys detected",
+    );
   }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
@@ -92,44 +120,28 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const matrixLegacyState = detectLegacyMatrixState({
+  const channelDoctorSequence = await runChannelDoctorConfigSequences({
     cfg: candidate,
     env: process.env,
+    shouldRepair,
   });
-  const matrixLegacyCrypto = detectLegacyMatrixCrypto({
-    cfg: candidate,
-    env: process.env,
+  emitDoctorNotes({
+    note,
+    changeNotes: channelDoctorSequence.changeNotes,
+    warningNotes: channelDoctorSequence.warningNotes,
   });
-  if (shouldRepair) {
-    const matrixRepair = await applyMatrixDoctorRepair({
-      cfg: candidate,
-      env: process.env,
-    });
-    for (const change of matrixRepair.changes) {
-      note(change, "Doctor changes");
-    }
-    for (const warning of matrixRepair.warnings) {
-      note(warning, "Doctor warnings");
-    }
-  } else if (matrixLegacyState) {
-    if ("warning" in matrixLegacyState) {
-      note(`- ${matrixLegacyState.warning}`, "Doctor warnings");
-    } else {
-      note(formatMatrixLegacyStatePreview(matrixLegacyState), "Doctor warnings");
-    }
-  }
-  if (
-    !shouldRepair &&
-    (matrixLegacyCrypto.warnings.length > 0 || matrixLegacyCrypto.plans.length > 0)
-  ) {
-    for (const preview of formatMatrixLegacyCryptoPreview(matrixLegacyCrypto)) {
-      note(preview, "Doctor warnings");
-    }
-  }
 
-  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(candidate);
-  if (matrixInstallWarnings.length > 0) {
-    note(matrixInstallWarnings.join("\n"), "Doctor warnings");
+  for (const staleCleanup of await collectChannelDoctorStaleConfigMutations(candidate)) {
+    if (staleCleanup.changes.length === 0) {
+      continue;
+    }
+    note(staleCleanup.changes.join("\n"), "Doctor changes");
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: staleCleanup,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
+    }));
   }
 
   const missingDefaultAccountBindingWarnings =
@@ -143,94 +155,31 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   if (shouldRepair) {
-    const repair = await maybeRepairTelegramAllowFromUsernames(candidate);
-    if (repair.changes.length > 0) {
-      note(repair.changes.join("\n"), "Doctor changes");
-      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-        state: { cfg, candidate, pendingChanges, fixHints },
-        mutation: repair,
-        shouldRepair,
-      }));
-    }
-
-    const discordRepair = maybeRepairDiscordNumericIds(candidate);
-    if (discordRepair.changes.length > 0) {
-      note(discordRepair.changes.join("\n"), "Doctor changes");
-      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-        state: { cfg, candidate, pendingChanges, fixHints },
-        mutation: discordRepair,
-        shouldRepair,
-      }));
-    }
-
-    const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
-    if (allowFromRepair.changes.length > 0) {
-      note(
-        allowFromRepair.changes.map((line) => sanitizeForLog(line)).join("\n"),
-        "Doctor changes",
-      );
-      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-        state: { cfg, candidate, pendingChanges, fixHints },
-        mutation: allowFromRepair,
-        shouldRepair,
-      }));
-    }
-
-    const allowlistRepair = await maybeRepairAllowlistPolicyAllowFrom(candidate);
-    if (allowlistRepair.changes.length > 0) {
-      note(allowlistRepair.changes.join("\n"), "Doctor changes");
-      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-        state: { cfg, candidate, pendingChanges, fixHints },
-        mutation: allowlistRepair,
-        shouldRepair,
-      }));
-    }
-
-    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
-      doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-      extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
-    });
-    if (emptyAllowlistWarnings.length > 0) {
-      note(
-        emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
-    if (toolsBySenderRepair.changes.length > 0) {
-      note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
-      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-        state: { cfg, candidate, pendingChanges, fixHints },
-        mutation: toolsBySenderRepair,
-        shouldRepair,
-      }));
-    }
-
-    const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
-    if (safeBinProfileRepair.changes.length > 0) {
-      note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
-      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
-        state: { cfg, candidate, pendingChanges, fixHints },
-        mutation: safeBinProfileRepair,
-        shouldRepair,
-      }));
-    }
-    if (safeBinProfileRepair.warnings.length > 0) {
-      note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
-    }
-  } else {
-    for (const warning of collectDoctorPreviewWarnings({
-      cfg: candidate,
+    const repairSequence = await runDoctorRepairSequence({
+      state: { cfg, candidate, pendingChanges, fixHints },
       doctorFixCommand,
-    })) {
-      note(warning, "Doctor warnings");
-    }
+    });
+    ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
+    emitDoctorNotes({
+      note,
+      changeNotes: repairSequence.changeNotes,
+      warningNotes: repairSequence.warningNotes,
+    });
+  } else {
+    emitDoctorNotes({
+      note,
+      warningNotes: await collectDoctorPreviewWarnings({
+        cfg: candidate,
+        doctorFixCommand,
+      }),
+    });
   }
 
-  const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
-  if (mutableAllowlistHits.length > 0) {
-    note(collectMutableAllowlistWarnings(mutableAllowlistHits).join("\n"), "Doctor warnings");
+  const mutableAllowlistWarnings = await collectChannelDoctorMutableAllowlistWarnings({
+    cfg: candidate,
+  });
+  if (mutableAllowlistWarnings.length > 0) {
+    note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
   }
 
   const unknownStep = applyUnknownConfigKeyStep({
@@ -244,29 +193,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 
-  if (!shouldRepair && pendingChanges) {
-    const shouldApply = await params.confirm({
-      message: "Apply recommended config repairs now?",
-      initialValue: true,
-    });
-    if (shouldApply) {
-      cfg = candidate;
-      shouldWriteConfig = true;
-    } else if (fixHints.length > 0) {
-      note(fixHints.join("\n"), "Doctor");
-    }
-  }
-
-  if (shouldRepair && pendingChanges) {
-    shouldWriteConfig = true;
-  }
+  const finalized = await finalizeDoctorConfigFlow({
+    cfg,
+    candidate,
+    pendingChanges,
+    shouldRepair,
+    fixHints,
+    confirm: params.confirm,
+    note,
+  });
+  cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig,
+    shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
   };
 }

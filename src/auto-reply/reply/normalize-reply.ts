@@ -1,30 +1,31 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
-import { hasSlackDirectives, parseSlackDirectives } from "./slack-directives.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
+  applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
   silentToken?: string;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -32,6 +33,7 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
+  const applyChannelTransforms = opts.applyChannelTransforms ?? true;
   const hasContent = (text: string | undefined) =>
     hasReplyPayloadContent(
       {
@@ -42,7 +44,7 @@ export function normalizeReplyPayload(
         trimText: true,
       },
     );
-  const trimmed = payload.text?.trim() ?? "";
+  const trimmed = normalizeOptionalString(payload.text) ?? "";
   if (!hasContent(trimmed)) {
     opts.onSkip?.("empty");
     return null;
@@ -50,7 +52,7 @@ export function normalizeReplyPayload(
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
-  if (text && isSilentReplyText(text, silentToken)) {
+  if (text && isSilentReplyPayloadText(text, silentToken)) {
     if (!hasContent("")) {
       opts.onSkip?.("silent");
       return null;
@@ -93,10 +95,9 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
   let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (text && hasLineDirectives(text)) {
-    enrichedPayload = parseLineDirectives(enrichedPayload);
+  if (applyChannelTransforms && opts.transformReplyPayload) {
+    enrichedPayload = opts.transformReplyPayload(enrichedPayload) ?? enrichedPayload;
     text = enrichedPayload.text;
   }
 
@@ -115,9 +116,5 @@ export function normalizeReplyPayload(
   }
 
   enrichedPayload = { ...enrichedPayload, text };
-  if (opts.enableSlackInteractiveReplies && text && hasSlackDirectives(text)) {
-    enrichedPayload = parseSlackDirectives(enrichedPayload);
-  }
-
   return enrichedPayload;
 }

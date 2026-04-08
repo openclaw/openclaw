@@ -11,6 +11,7 @@ import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   agentDir?: string;
@@ -28,12 +29,15 @@ export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
   const normalizedAuthChoice =
-    normalizeLegacyOnboardAuthChoice(params.authChoice) ?? params.authChoice;
+    normalizeLegacyOnboardAuthChoice(params.authChoice, {
+      config: params.config,
+      env: params.env,
+    }) ?? params.authChoice;
   const normalizedProviderAuthChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: normalizedAuthChoice,
     tokenProvider: params.opts?.tokenProvider,
     config: params.config,
-    env: process.env,
+    env: params.env,
   });
   const normalizedParams =
     normalizedProviderAuthChoice === params.authChoice
@@ -50,6 +54,21 @@ export async function applyAuthChoice(
     if (result) {
       return result;
     }
+  }
+
+  if (normalizedParams.authChoice === "token" || normalizedParams.authChoice === "setup-token") {
+    throw new Error(
+      [
+        `Auth choice "${normalizedParams.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "setup-token" with tokenProvider="anthropic" or choose the Anthropic setup-token entry explicitly.',
+      ].join("\n"),
+    );
+  }
+
+  if (normalizedParams.authChoice === "oauth") {
+    throw new Error(
+      'Auth choice "oauth" is no longer supported directly. Use "setup-token" for Anthropic legacy token auth or a provider-specific OAuth entry.',
+    );
   }
 
   return { config: normalizedParams.config };

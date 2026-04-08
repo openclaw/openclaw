@@ -6,7 +6,12 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import {
+  consumePendingToolMediaReply,
+  hasAssistantVisibleReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -42,7 +47,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       model: lastAssistant.model,
     });
     const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyFailoverReason(rawError ?? "");
+    const failoverReason = classifyFailoverReason(rawError ?? "", {
+      provider: lastAssistant.provider,
+    });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
     const observedError = buildApiErrorObservationFields(rawError);
     const safeErrorText =
@@ -96,20 +103,48 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  ctx.flushBlockReplyBuffer();
-  // Flush the reply pipeline so the response reaches the channel before
-  // compaction wait blocks the run.  This mirrors the pattern used by
-  // handleToolExecutionStart and ensures delivery is not held hostage to
-  // long-running compaction (#35074).
-  void ctx.params.onBlockReplyFlush?.();
+  const finalizeAgentEnd = () => {
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
 
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
+    if (ctx.state.pendingCompactionRetry > 0) {
+      ctx.resolveCompactionRetry();
+    } else {
+      ctx.maybeResolveCompactionWait();
+    }
+  };
 
-  if (ctx.state.pendingCompactionRetry > 0) {
-    ctx.resolveCompactionRetry();
-  } else {
-    ctx.maybeResolveCompactionWait();
+  const flushPendingMediaAndChannel = () => {
+    const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+    if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+      ctx.emitBlockReply(pendingToolMediaReply);
+    }
+
+    const postMediaFlushResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(postMediaFlushResult)) {
+      return postMediaFlushResult.then(() => {
+        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+        if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+          return onBlockReplyFlushResult;
+        }
+      });
+    }
+
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult;
+    }
+  };
+
+  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  finalizeAgentEnd();
+  if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+    return flushBlockReplyBufferResult.then(() => flushPendingMediaAndChannel());
+  }
+
+  const flushPendingMediaAndChannelResult = flushPendingMediaAndChannel();
+  if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
+    return flushPendingMediaAndChannelResult;
   }
 }

@@ -1,3 +1,9 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+import { asRecord } from "./tool-display-record.js";
+
 const MUTATING_TOOL_NAMES = new Set([
   "write",
   "edit",
@@ -56,34 +62,41 @@ export type ToolActionRef = {
   actionFingerprint?: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function normalizeActionName(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
+  const normalized = normalizeOptionalLowercaseString(value)?.replace(/[\s-]+/g, "_");
   return normalized || undefined;
 }
 
 function normalizeFingerprintValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? normalized.toLowerCase() : undefined;
+    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
   }
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return String(value).toLowerCase();
+    return normalizeLowercaseStringOrEmpty(String(value));
   }
   return undefined;
 }
 
+function appendFingerprintAlias(
+  parts: string[],
+  record: Record<string, unknown> | undefined,
+  label: string,
+  keys: string[],
+): boolean {
+  for (const key of keys) {
+    const value = normalizeFingerprintValue(record?.[key]);
+    if (!value) {
+      continue;
+    }
+    parts.push(`${label}=${value}`);
+    return true;
+  }
+  return false;
+}
+
 export function isLikelyMutatingToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (!normalized) {
     return false;
   }
@@ -96,7 +109,7 @@ export function isLikelyMutatingToolName(toolName: string): boolean {
 }
 
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
 
@@ -144,7 +157,7 @@ export function buildToolActionFingerprint(
   if (!isMutatingToolCall(toolName, args)) {
     return undefined;
   }
-  const normalizedTool = toolName.trim().toLowerCase();
+  const normalizedTool = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
   const parts = [`tool=${normalizedTool}`];
@@ -152,26 +165,31 @@ export function buildToolActionFingerprint(
     parts.push(`action=${action}`);
   }
   let hasStableTarget = false;
-  for (const key of [
-    "path",
-    "filePath",
-    "oldPath",
-    "newPath",
-    "to",
-    "target",
-    "messageId",
-    "sessionKey",
-    "jobId",
-    "id",
-    "model",
-  ]) {
-    const value = normalizeFingerprintValue(record?.[key]);
-    if (value) {
-      parts.push(`${key.toLowerCase()}=${value}`);
-      hasStableTarget = true;
-    }
-  }
-  const normalizedMeta = meta?.trim().replace(/\s+/g, " ").toLowerCase();
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "path", [
+      "path",
+      "file_path",
+      "filePath",
+      "filepath",
+      "file",
+    ]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "oldpath", ["oldPath", "old_path"]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "newpath", ["newPath", "new_path"]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "to", ["to", "target"]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "messageid", ["messageId", "message_id"]) ||
+    hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "sessionkey", ["sessionKey", "session_key"]) ||
+    hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
+  hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
+  hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
+  const normalizedMeta = normalizeOptionalLowercaseString(meta?.trim().replace(/\s+/g, " "));
   // Meta text often carries volatile details (for example "N chars").
   // Prefer stable arg-derived keys for matching; only fall back to meta
   // when no stable target key is available.

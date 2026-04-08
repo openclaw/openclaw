@@ -3,8 +3,15 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
@@ -12,12 +19,32 @@ import {
   formatGroupAllowlistEntry,
   formatGroupMembers,
   formatReplyTag,
+  normalizeParticipantList,
   parseTapbackText,
   resolveGroupFlagFromChatGuid,
   resolveTapbackContext,
   type NormalizedWebhookMessage,
   type NormalizedWebhookReaction,
 } from "./monitor-normalize.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  evictOldHistoryKeys,
+  evaluateSupplementalContextVisibility,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
+  resolveChannelContextVisibilityMode,
+  resolveDmGroupAccessWithLists,
+  resolveControlCommandGate,
+  stripMarkdown,
+  type HistoryEntry,
+} from "./monitor-processing-api.js";
 import {
   getShortIdForUuid,
   rememberBlueBubblesReplyCache,
@@ -33,26 +60,10 @@ import type {
   BlueBubblesRuntimeEnv,
   WebhookTarget,
 } from "./monitor-shared.js";
+import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-contact-names.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import {
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  evictOldHistoryKeys,
-  logAckFailure,
-  logInboundDrop,
-  logTypingFailure,
-  mapAllowFromEntries,
-  readStoreAllowFromForDmPolicy,
-  recordPendingHistoryEntryIfEnabled,
-  resolveAckReaction,
-  resolveDmGroupAccessWithLists,
-  resolveControlCommandGate,
-  stripMarkdown,
-  type HistoryEntry,
-} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
@@ -61,6 +72,7 @@ import {
   isAllowedBlueBubblesSender,
   normalizeBlueBubblesHandle,
 } from "./targets.js";
+import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
@@ -84,13 +96,136 @@ type PendingOutboundMessageId = {
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
 
-function trimOrUndefined(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+function normalizeSnippet(value: string): string {
+  return normalizeOptionalLowercaseString(stripMarkdown(value).replace(/\s+/g, " ")) ?? "";
 }
 
-function normalizeSnippet(value: string): string {
-  return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+type BlueBubblesChatRecord = Record<string, unknown>;
+
+function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined) {
+  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+}
+
+function extractBlueBubblesChatGuid(chat: BlueBubblesChatRecord): string | undefined {
+  const candidates = [chat.chatGuid, chat.guid, chat.chat_guid];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function extractBlueBubblesChatId(chat: BlueBubblesChatRecord): number | undefined {
+  const candidates = [chat.chatId, chat.id, chat.chat_id];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function extractChatIdentifierFromChatGuid(chatGuid: string): string | undefined {
+  const parts = chatGuid.split(";");
+  if (parts.length < 3) {
+    return undefined;
+  }
+  const identifier = parts[2]?.trim();
+  return identifier || undefined;
+}
+
+function extractBlueBubblesChatIdentifier(chat: BlueBubblesChatRecord): string | undefined {
+  const candidates = [chat.chatIdentifier, chat.chat_identifier, chat.identifier];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  const chatGuid = extractBlueBubblesChatGuid(chat);
+  return chatGuid ? extractChatIdentifierFromChatGuid(chatGuid) : undefined;
+}
+
+async function queryBlueBubblesChats(params: {
+  baseUrl: string;
+  password: string;
+  timeoutMs?: number;
+  offset: number;
+  limit: number;
+  allowPrivateNetwork?: boolean;
+}): Promise<BlueBubblesChatRecord[]> {
+  const url = buildBlueBubblesApiUrl({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/chat/query",
+    password: params.password,
+  });
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: params.limit,
+        offset: params.offset,
+        with: ["participants"],
+      }),
+    },
+    params.timeoutMs,
+    blueBubblesPolicy(params.allowPrivateNetwork),
+  );
+  if (!res.ok) {
+    return [];
+  }
+  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const data = payload && typeof payload.data !== "undefined" ? (payload.data as unknown) : null;
+  return Array.isArray(data) ? (data as BlueBubblesChatRecord[]) : [];
+}
+
+async function fetchBlueBubblesParticipantsForInboundMessage(params: {
+  baseUrl: string;
+  password: string;
+  chatGuid?: string;
+  chatId?: number;
+  chatIdentifier?: string;
+  allowPrivateNetwork?: boolean;
+}): Promise<import("./monitor-normalize.js").BlueBubblesParticipant[] | null> {
+  if (!params.chatGuid && params.chatId == null && !params.chatIdentifier) {
+    return null;
+  }
+
+  const limit = 500;
+  for (let offset = 0; offset < 5000; offset += limit) {
+    const chats = await queryBlueBubblesChats({
+      baseUrl: params.baseUrl,
+      password: params.password,
+      offset,
+      limit,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+    });
+    if (chats.length === 0) {
+      return null;
+    }
+
+    for (const chat of chats) {
+      const chatGuid = extractBlueBubblesChatGuid(chat);
+      const chatId = extractBlueBubblesChatId(chat);
+      const chatIdentifier = extractBlueBubblesChatIdentifier(chat);
+      const matches =
+        (params.chatGuid && chatGuid === params.chatGuid) ||
+        (params.chatId != null && chatId === params.chatId) ||
+        (params.chatIdentifier &&
+          (chatIdentifier === params.chatIdentifier || chatGuid === params.chatIdentifier));
+      if (matches) {
+        return normalizeParticipantList(chat);
+      }
+    }
+
+    if (chats.length < limit) {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function isBlueBubblesSelfChatMessage(
@@ -133,12 +268,12 @@ function rememberPendingOutboundMessageId(entry: {
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     outboundTarget: entry.outboundTarget,
-    chatGuid: trimOrUndefined(entry.chatGuid),
-    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatGuid: normalizeOptionalString(entry.chatGuid),
+    chatIdentifier: normalizeOptionalString(entry.chatIdentifier),
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
-    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    isMediaSnippet: normalizeLowercaseStringOrEmpty(snippetRaw).startsWith("<media:"),
     createdAt: Date.now(),
   });
   return pendingOutboundMessageIdCounter;
@@ -155,14 +290,14 @@ function chatsMatch(
   left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
   right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
 ): boolean {
-  const leftGuid = trimOrUndefined(left.chatGuid);
-  const rightGuid = trimOrUndefined(right.chatGuid);
+  const leftGuid = normalizeOptionalString(left.chatGuid);
+  const rightGuid = normalizeOptionalString(right.chatGuid);
   if (leftGuid && rightGuid) {
     return leftGuid === rightGuid;
   }
 
-  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
-  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  const leftIdentifier = normalizeOptionalString(left.chatIdentifier);
+  const rightIdentifier = normalizeOptionalString(right.chatIdentifier);
   if (leftIdentifier && rightIdentifier) {
     return leftIdentifier === rightIdentifier;
   }
@@ -185,7 +320,7 @@ function consumePendingOutboundMessageId(params: {
 }): PendingOutboundMessageId | null {
   prunePendingOutboundMessageIds();
   const bodyNorm = normalizeSnippet(params.body);
-  const isMediaBody = params.body.trim().toLowerCase().startsWith("<media:");
+  const isMediaBody = normalizeLowercaseStringOrEmpty(params.body).startsWith("<media:");
 
   for (let i = 0; i < pendingOutboundMessageIds.length; i++) {
     const entry = pendingOutboundMessageIds[i];
@@ -261,7 +396,7 @@ function resolveBlueBubblesAckReaction(params: {
     normalizeBlueBubblesReactionInput(raw);
     return raw;
   } catch {
-    const key = raw.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(raw);
     if (!invalidAckReactions.has(key)) {
       invalidAckReactions.add(key);
       logVerbose(
@@ -597,7 +732,7 @@ export async function processMessage(
     chatId: message.chatId ?? undefined,
     chatIdentifier: message.chatIdentifier ?? undefined,
   });
-  const groupName = message.chatName?.trim() || undefined;
+  const groupName = normalizeOptionalString(message.chatName);
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
@@ -702,14 +837,20 @@ export async function processMessage(
     ? (chatGuid ?? chatIdentifier ?? (chatId ? String(chatId) : "group"))
     : message.senderId;
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const route = resolveBlueBubblesConversationRoute({
+    cfg: config,
+    accountId: account.accountId,
+    isGroup,
+    peerId,
+    sender: message.senderId,
+    chatId,
+    chatGuid,
+    chatIdentifier,
+  });
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg: config,
     channel: "bluebubbles",
     accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
   });
 
   // Mention gating for group chats (parity with iMessage/WhatsApp)
@@ -783,12 +924,47 @@ export async function processMessage(
     return;
   }
 
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
+
+  if (isGroup && !message.participants?.length && baseUrl && password) {
+    try {
+      const fetchedParticipants = await fetchBlueBubblesParticipantsForInboundMessage({
+        baseUrl,
+        password,
+        chatGuid: message.chatGuid,
+        chatId: message.chatId,
+        chatIdentifier: message.chatIdentifier,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      });
+      if (fetchedParticipants?.length) {
+        message.participants = fetchedParticipants;
+      }
+    } catch (err) {
+      logVerbose(
+        core,
+        runtime,
+        `bluebubbles: participant fallback lookup failed chat=${peerId}: ${String(err)}`,
+      );
+    }
+  }
+
+  if (
+    isGroup &&
+    account.config.enrichGroupParticipantsFromContacts === true &&
+    message.participants?.length
+  ) {
+    // BlueBubbles only gives us participant handles, so enrich phone numbers from local Contacts
+    // after access, command, and mention gating have already allowed the message through.
+    message.participants = await enrichBlueBubblesParticipantsWithContactNames(
+      message.participants,
+    );
+  }
+
   // Cache allowed inbound messages so later replies can resolve sender/body without
   // surfacing dropped content (allowlist/mention/command gating).
   cacheInboundMessage();
 
-  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
-  const password = normalizeSecretInputString(account.config.password);
   const maxBytes =
     account.config.mediaMaxMb && account.config.mediaMaxMb > 0
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -880,11 +1056,45 @@ export async function processMessage(
   if (replyToId && !replyToShortId) {
     replyToShortId = getShortIdForUuid(replyToId);
   }
+  const hasReplyContext = Boolean(replyToId || replyToBody || replyToSender);
+  const replySenderAllowed =
+    !isGroup || effectiveGroupAllowFrom.length === 0
+      ? true
+      : replyToSender
+        ? isAllowedBlueBubblesSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender: replyToSender,
+            chatId: message.chatId ?? undefined,
+            chatGuid: message.chatGuid ?? undefined,
+            chatIdentifier: message.chatIdentifier ?? undefined,
+          })
+        : false;
+  const includeReplyContext =
+    !hasReplyContext ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: replySenderAllowed,
+    }).include;
+  if (hasReplyContext && !includeReplyContext && isGroup) {
+    logVerbose(
+      core,
+      runtime,
+      `bluebubbles: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
+    );
+  }
+  const visibleReplyToId = includeReplyContext ? replyToId : undefined;
+  const visibleReplyToShortId = includeReplyContext ? replyToShortId : undefined;
+  const visibleReplyToBody = includeReplyContext ? replyToBody : undefined;
+  const visibleReplyToSender = includeReplyContext ? replyToSender : undefined;
 
   // Use inline [[reply_to:N]] tag format
   // For tapbacks/reactions: append at end (e.g., "reacted with ❤️ [[reply_to:4]]")
   // For regular replies: prepend at start (e.g., "[[reply_to:4]] Awesome")
-  const replyTag = formatReplyTag({ replyToId, replyToShortId });
+  const replyTag = formatReplyTag({
+    replyToId: visibleReplyToId,
+    replyToShortId: visibleReplyToShortId,
+  });
   const baseBody = replyTag
     ? isTapbackMessage
       ? `${rawBody} ${replyTag}`
@@ -895,11 +1105,11 @@ export async function processMessage(
   // The sender identity is included in the envelope body via formatInboundEnvelope.
   const senderLabel = message.senderName || `user:${message.senderId}`;
   const fromLabel = isGroup
-    ? `${message.chatName?.trim() || "Group"} id:${peerId}`
+    ? `${normalizeOptionalString(message.chatName) || "Group"} id:${peerId}`
     : senderLabel !== message.senderId
       ? `${senderLabel} id:${message.senderId}`
       : senderLabel;
-  const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
+  const groupSubject = isGroup ? normalizeOptionalString(message.chatName) : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
         participants: message.participants,
@@ -938,6 +1148,7 @@ export async function processMessage(
           baseUrl,
           password,
           target: resolveTarget,
+          allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
     }
   }
@@ -1176,10 +1387,10 @@ export async function processMessage(
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
     // Use short ID for token savings (agent can use this to reference the message)
-    ReplyToId: replyToShortId || replyToId,
-    ReplyToIdFull: replyToId,
-    ReplyToBody: replyToBody,
-    ReplyToSender: replyToSender,
+    ReplyToId: visibleReplyToShortId || visibleReplyToId,
+    ReplyToIdFull: visibleReplyToId,
+    ReplyToBody: visibleReplyToBody,
+    ReplyToSender: visibleReplyToSender,
     GroupSubject: groupSubject,
     GroupMembers: groupMembers,
     SenderName: message.senderName || undefined,
@@ -1491,15 +1702,29 @@ export async function processReaction(
   const peerId = reaction.isGroup
     ? (chatGuid ?? chatIdentifier ?? (chatId ? String(chatId) : "group"))
     : reaction.senderId;
+  const requireMention =
+    reaction.isGroup &&
+    core.channel.groups.resolveRequireMention({
+      cfg: config,
+      channel: "bluebubbles",
+      groupId: peerId,
+      accountId: account.accountId,
+    });
 
-  const route = core.channel.routing.resolveAgentRoute({
+  if (requireMention) {
+    logVerbose(core, runtime, "bluebubbles: skipping group reaction (requireMention=true)");
+    return;
+  }
+
+  const route = resolveBlueBubblesConversationRoute({
     cfg: config,
-    channel: "bluebubbles",
     accountId: account.accountId,
-    peer: {
-      kind: reaction.isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    isGroup: reaction.isGroup,
+    peerId,
+    sender: reaction.senderId,
+    chatId,
+    chatGuid,
+    chatIdentifier,
   });
 
   const senderLabel = reaction.senderName || reaction.senderId;

@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   type ChunkMode,
   isSilentReplyText,
@@ -38,6 +39,8 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 type SendContext = {
   sendActivity: (textOrActivity: string | object) => Promise<unknown>;
+  updateActivity: (activity: object) => Promise<{ id?: string } | void>;
+  deleteActivity: (activityId: string) => Promise<void>;
 };
 
 export type MSTeamsConversationReference = {
@@ -262,24 +265,32 @@ export function renderReplyPayloadsToMessages(
   return out;
 }
 
-async function buildActivity(
+import { AI_GENERATED_ENTITY } from "./ai-entity.js";
+
+export async function buildActivity(
   msg: MSTeamsRenderedMessage,
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,
   sharePointSiteId?: string,
   mediaMaxBytes?: number,
+  options?: { feedbackLoopEnabled?: boolean },
 ): Promise<Record<string, unknown>> {
   const activity: Record<string, unknown> = { type: "message" };
+
+  // Mark as AI-generated so Teams renders the "AI generated" badge.
+  activity.channelData = {
+    feedbackLoopEnabled: options?.feedbackLoopEnabled ?? false,
+  };
 
   if (msg.text) {
     // Parse mentions from text (format: @[Name](id))
     const { text: formattedText, entities } = parseMentions(msg.text);
     activity.text = formattedText;
 
-    // Add mention entities if any mentions were found
-    if (entities.length > 0) {
-      activity.entities = entities;
-    }
+    // Start with mention entities (if any) + AI-generated entity
+    activity.entities = [...(entities.length > 0 ? entities : []), AI_GENERATED_ENTITY];
+  } else {
+    activity.entities = [AI_GENERATED_ENTITY];
   }
 
   if (msg.mediaUrl) {
@@ -295,7 +306,9 @@ async function buildActivity(
 
       // Determine conversation type and file type
       // Teams only accepts base64 data URLs for images
-      const conversationType = conversationRef.conversation?.conversationType?.toLowerCase();
+      const conversationType = normalizeOptionalLowercaseString(
+        conversationRef.conversation?.conversationType,
+      );
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
 
@@ -399,6 +412,8 @@ export async function sendMSTeamsMessages(params: {
   sharePointSiteId?: string;
   /** Max media size in bytes. Default: 100MB. */
   mediaMaxBytes?: number;
+  /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
+  feedbackLoopEnabled?: boolean;
 }): Promise<string[]> {
   const messages = params.messages.filter(
     (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
@@ -459,6 +474,7 @@ export async function sendMSTeamsMessages(params: {
             params.tokenProvider,
             params.sharePointSiteId,
             params.mediaMaxBytes,
+            { feedbackLoopEnabled: params.feedbackLoopEnabled },
           ),
         ),
       { messageIndex, messageCount: messages.length },
@@ -481,11 +497,21 @@ export async function sendMSTeamsMessages(params: {
   const sendProactively = async (
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
+    threadActivityId?: string,
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
+    const isChannel = params.conversationRef.conversation?.conversationType === "channel";
+    // For Teams channels, reconstruct the threaded conversation ID so the
+    // proactive message lands in the correct thread instead of creating a
+    // new top-level post in the channel.
+    const conversationId =
+      isChannel && threadActivityId
+        ? `${baseRef.conversation.id};messageid=${threadActivityId}`
+        : baseRef.conversation.id;
     const proactiveRef: MSTeamsConversationReference = {
       ...baseRef,
       activityId: undefined,
+      conversation: { ...baseRef.conversation, id: conversationId },
     };
 
     const messageIds: string[] = [];
@@ -500,6 +526,7 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
+    const threadActivityId = params.conversationRef.activityId;
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({
@@ -508,9 +535,13 @@ export async function sendMSTeamsMessages(params: {
           fellBack: false,
         }),
         onRevoked: async () => {
+          // When the live turn context is revoked (e.g. debounced messages),
+          // reconstruct the threaded conversation ID so the proactive
+          // fallback delivers the reply into the correct channel thread.
           const remaining = messages.slice(idx);
           return {
-            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            ids:
+              remaining.length > 0 ? await sendProactively(remaining, idx, threadActivityId) : [],
             fellBack: true,
           };
         },

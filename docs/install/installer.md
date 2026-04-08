@@ -11,11 +11,11 @@ title: "Installer Internals"
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
-| Script                             | Platform             | What it does                                                                                 |
-| ---------------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
-| [`install.sh`](#installsh)         | macOS / Linux / WSL  | Installs Node if needed, installs OpenClaw via npm (default) or git, and can run onboarding. |
-| [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + OpenClaw into a local prefix (`~/.openclaw`). No root required.              |
-| [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs OpenClaw via npm (default) or git, and can run onboarding. |
+| Script                             | Platform             | What it does                                                                                                   |
+| ---------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [`install.sh`](#installsh)         | macOS / Linux / WSL  | Installs Node if needed, installs OpenClaw via npm (default) or git, and can run onboarding.                   |
+| [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) with npm or git checkout modes. No root required. |
+| [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs OpenClaw via npm (default) or git, and can run onboarding.                   |
 
 ## Quick commands
 
@@ -58,6 +58,8 @@ If install succeeds but `openclaw` is not found in a new terminal, see [Node.js 
 
 ---
 
+<a id="installsh"></a>
+
 ## install.sh
 
 <Tip>
@@ -71,7 +73,7 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     Supports macOS and Linux (including WSL). If macOS is detected, installs Homebrew if missing.
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). OpenClaw still supports Node 22 LTS, currently `22.16+`, for compatibility.
+    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). OpenClaw still supports Node 22 LTS, currently `22.14+`, for compatibility.
   </Step>
   <Step title="Ensure Git">
     Installs Git if missing.
@@ -81,6 +83,7 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     - `git` method: clone/update repo, install deps with pnpm, build, then install wrapper at `~/.local/bin/openclaw`
   </Step>
   <Step title="Post-install tasks">
+    - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
     - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
     - Defaults `SHARP_IGNORE_GLOBAL_LIBVIPS=1`
@@ -170,10 +173,14 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 
 ---
 
+<a id="install-clish"></a>
+
 ## install-cli.sh
 
 <Info>
-Designed for environments where you want everything under a local prefix (default `~/.openclaw`) and no system Node dependency.
+Designed for environments where you want everything under a local prefix
+(default `~/.openclaw`) and no system Node dependency. Supports npm installs
+by default, plus git-checkout installs under the same prefix flow.
 </Info>
 
 ### Flow (install-cli.sh)
@@ -186,7 +193,13 @@ Designed for environments where you want everything under a local prefix (defaul
     If Git is missing, attempts install via apt/dnf/yum on Linux or Homebrew on macOS.
   </Step>
   <Step title="Install OpenClaw under prefix">
-    Installs with npm using `--prefix <prefix>`, then writes wrapper to `<prefix>/bin/openclaw`.
+    - `npm` method (default): installs under the prefix with npm, then writes wrapper to `<prefix>/bin/openclaw`
+    - `git` method: clones/updates a checkout (default `~/openclaw`) and still writes the wrapper to `<prefix>/bin/openclaw`
+  </Step>
+  <Step title="Refresh loaded gateway service">
+    If a gateway service is already loaded from that same prefix, the script runs
+    `openclaw gateway install --force`, then `openclaw gateway restart`, and
+    probes gateway health best-effort.
   </Step>
 </Steps>
 
@@ -201,6 +214,11 @@ Designed for environments where you want everything under a local prefix (defaul
   <Tab title="Custom prefix + version">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --prefix /opt/openclaw --version latest
+    ```
+  </Tab>
+  <Tab title="Git install">
+    ```bash
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --install-method git --git-dir ~/openclaw
     ```
   </Tab>
   <Tab title="Automation JSON output">
@@ -218,35 +236,43 @@ Designed for environments where you want everything under a local prefix (defaul
 <AccordionGroup>
   <Accordion title="Flags reference">
 
-| Flag                   | Description                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| `--prefix <path>`      | Install prefix (default: `~/.openclaw`)                                         |
-| `--version <ver>`      | OpenClaw version or dist-tag (default: `latest`)                                |
-| `--node-version <ver>` | Node version (default: `22.22.0`)                                               |
-| `--json`               | Emit NDJSON events                                                              |
-| `--onboard`            | Run `openclaw onboard` after install                                            |
-| `--no-onboard`         | Skip onboarding (default)                                                       |
-| `--set-npm-prefix`     | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable |
-| `--help`               | Show usage (`-h`)                                                               |
+| Flag                        | Description                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `--prefix <path>`           | Install prefix (default: `~/.openclaw`)                                         |
+| `--install-method npm\|git` | Choose install method (default: `npm`). Alias: `--method`                       |
+| `--npm`                     | Shortcut for npm method                                                         |
+| `--git`, `--github`         | Shortcut for git method                                                         |
+| `--git-dir <path>`          | Git checkout directory (default: `~/openclaw`). Alias: `--dir`                  |
+| `--version <ver>`           | OpenClaw version or dist-tag (default: `latest`)                                |
+| `--node-version <ver>`      | Node version (default: `22.22.0`)                                               |
+| `--json`                    | Emit NDJSON events                                                              |
+| `--onboard`                 | Run `openclaw onboard` after install                                            |
+| `--no-onboard`              | Skip onboarding (default)                                                       |
+| `--set-npm-prefix`          | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable |
+| `--help`                    | Show usage (`-h`)                                                               |
 
   </Accordion>
 
   <Accordion title="Environment variables reference">
 
-| Variable                                    | Description                                                                       |
-| ------------------------------------------- | --------------------------------------------------------------------------------- |
-| `OPENCLAW_PREFIX=<path>`                    | Install prefix                                                                    |
-| `OPENCLAW_VERSION=<ver>`                    | OpenClaw version or dist-tag                                                      |
-| `OPENCLAW_NODE_VERSION=<ver>`               | Node version                                                                      |
-| `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                                                                   |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level                                                                     |
-| `OPENCLAW_GIT_DIR=<path>`                   | Legacy cleanup lookup path (used when removing old `Peekaboo` submodule checkout) |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | Control sharp/libvips behavior (default: `1`)                                     |
+| Variable                                    | Description                                   |
+| ------------------------------------------- | --------------------------------------------- |
+| `OPENCLAW_PREFIX=<path>`                    | Install prefix                                |
+| `OPENCLAW_INSTALL_METHOD=git\|npm`          | Install method                                |
+| `OPENCLAW_VERSION=<ver>`                    | OpenClaw version or dist-tag                  |
+| `OPENCLAW_NODE_VERSION=<ver>`               | Node version                                  |
+| `OPENCLAW_GIT_DIR=<path>`                   | Git checkout directory for git installs       |
+| `OPENCLAW_GIT_UPDATE=0\|1`                  | Toggle git updates for existing checkouts     |
+| `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                               |
+| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level                                 |
+| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | Control sharp/libvips behavior (default: `1`) |
 
   </Accordion>
 </AccordionGroup>
 
 ---
+
+<a id="installps1"></a>
 
 ## install.ps1
 
@@ -257,14 +283,16 @@ Designed for environments where you want everything under a local prefix (defaul
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS, currently `22.16+`, remains supported for compatibility.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS, currently `22.14+`, remains supported for compatibility.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using selected `-Tag`
     - `git` method: clone/update repo, install/build with pnpm, and install wrapper at `%USERPROFILE%\.local\bin\openclaw.cmd`
   </Step>
   <Step title="Post-install tasks">
-    Adds needed bin directory to user PATH when possible, then runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort).
+    - Adds needed bin directory to user PATH when possible
+    - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
+    - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
   </Step>
 </Steps>
 

@@ -4,7 +4,13 @@ import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
+const shutdownLog = createSubsystemLogger("gateway/shutdown");
+const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
+const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -17,6 +23,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
+  stopTaskRegistryMaintenance?: (() => void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -30,14 +37,13 @@ export function createGatewayCloseHandler(params: {
   chatRunState: { clear: () => void };
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
-  browserControl: { stop: () => Promise<void> } | null;
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
 }) {
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     try {
-      const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
+      const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
       const restartExpectedMs =
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
@@ -76,6 +82,11 @@ export function createGatewayCloseHandler(params: {
       await stopGmailWatcher();
       params.cron.stop();
       params.heartbeatRunner.stop();
+      try {
+        params.stopTaskRegistryMaintenance?.();
+      } catch {
+        /* ignore */
+      }
       try {
         params.updateCheckStop?.();
       } catch {
@@ -133,10 +144,35 @@ export function createGatewayCloseHandler(params: {
       }
       params.clients.clear();
       await params.configReloader.stop().catch(() => {});
-      if (params.browserControl) {
-        await params.browserControl.stop().catch(() => {});
+      const wsClients = params.wss.clients ?? new Set();
+      const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
+      const closedWithinGrace = await Promise.race([
+        closePromise.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), WEBSOCKET_CLOSE_GRACE_MS)),
+      ]);
+      if (!closedWithinGrace) {
+        shutdownLog.warn(
+          `websocket server close exceeded ${WEBSOCKET_CLOSE_GRACE_MS}ms; forcing shutdown continuation with ${wsClients.size} tracked client(s)`,
+        );
+        for (const client of wsClients) {
+          try {
+            client.terminate();
+          } catch {
+            /* ignore */
+          }
+        }
+        await Promise.race([
+          closePromise,
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              shutdownLog.warn(
+                `websocket server close still pending after ${WEBSOCKET_CLOSE_FORCE_CONTINUE_MS}ms force window; continuing shutdown`,
+              );
+              resolve();
+            }, WEBSOCKET_CLOSE_FORCE_CONTINUE_MS),
+          ),
+        ]);
       }
-      await new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const servers =
         params.httpServers && params.httpServers.length > 0
           ? params.httpServers

@@ -1,13 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
-import { readGeneratedModelsJson } from "./models-config.test-utils.js";
+
+vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  syncExternalCliCredentials: () => false,
+}));
 
 installModelsConfigTestHooks();
+
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
+let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
+let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+  ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
+  ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+    await import("./models-config.js"));
+  ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  resetModelsJsonReadyCacheForTest();
+});
 
 type ModelEntry = {
   id: string;
@@ -84,9 +112,9 @@ describe("models-config: explicit reasoning override", () => {
     });
   });
 
-  it("falls back to built-in reasoning:true when user omits the field (MiniMax-M2.7)", async () => {
-    // When the user does not set reasoning at all, the built-in catalog value
-    // (true for MiniMax-M2.7) should be used so the model works out of the box.
+  it("keeps reasoning unset when user omits the field (MiniMax-M2.7)", async () => {
+    // Inline user model entries preserve omitted fields instead of silently
+    // inheriting built-in defaults from the provider catalog.
     await withTempHome(async () => {
       await withMinimaxApiKey(async () => {
         // Omit 'reasoning' to simulate a user config that doesn't set it.
@@ -112,8 +140,7 @@ describe("models-config: explicit reasoning override", () => {
 
         const m25 = await generateAndReadMinimaxModel(cfg);
         expect(m25).toBeDefined();
-        // Built-in catalog has reasoning:true — should be applied as default.
-        expect(m25?.reasoning).toBe(true);
+        expect(m25?.reasoning).toBeUndefined();
       });
     });
   });

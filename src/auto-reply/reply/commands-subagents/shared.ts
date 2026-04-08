@@ -1,41 +1,35 @@
+import { resolveModelDisplayName } from "../../../agents/model-selection-display.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
-import {
-  countPendingDescendantRuns,
-  type SubagentRunRecord,
-} from "../../../agents/subagent-registry.js";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-  sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
-import { parseExplicitTargetForChannel } from "../../../channels/plugins/target-parsing.js";
-import type {
-  SessionEntry,
-  loadSessionStore as loadSessionStoreFn,
-  resolveStorePath as resolveStorePathFn,
-} from "../../../config/sessions.js";
+import type { resolveStorePath as resolveStorePathFn } from "../../../config/sessions/paths.js";
+import type { loadSessionStore as loadSessionStoreFn } from "../../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
-import { extractTextFromChatContent } from "../../../shared/chat-content.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import {
   formatDurationCompact,
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
-import {
-  isDiscordSurface,
-  isMatrixSurface,
-  isTelegramSurface,
-  resolveCommandSurfaceChannel,
-  resolveDiscordAccountId,
-  resolveChannelAccountId,
-} from "../channel-context.js";
+import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
+import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -43,18 +37,10 @@ import {
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
-import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
-export {
-  isDiscordSurface,
-  isMatrixSurface,
-  isTelegramSurface,
-  resolveCommandSurfaceChannel,
-  resolveDiscordAccountId,
-  resolveChannelAccountId,
-  resolveTelegramConversationId,
-};
+export { resolveCommandSurfaceChannel, resolveChannelAccountId };
+export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -89,42 +75,6 @@ function formatTaskPreview(value: string) {
   return truncateLine(compactLine(value), SUBAGENT_TASK_PREVIEW_MAX);
 }
 
-function resolveModelDisplay(
-  entry?: {
-    model?: unknown;
-    modelProvider?: unknown;
-    modelOverride?: unknown;
-    providerOverride?: unknown;
-  },
-  fallbackModel?: string,
-) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  let combined = model.includes("/") ? model : model && provider ? `${provider}/${model}` : model;
-  if (!combined) {
-    const overrideModel =
-      typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
-    const overrideProvider =
-      typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
-    combined = overrideModel.includes("/")
-      ? overrideModel
-      : overrideModel && overrideProvider
-        ? `${overrideProvider}/${overrideModel}`
-        : overrideModel;
-  }
-  if (!combined) {
-    combined = fallbackModel?.trim() || "";
-  }
-  if (!combined) {
-    return "model n/a";
-  }
-  const slash = combined.lastIndexOf("/");
-  if (slash >= 0 && slash < combined.length - 1) {
-    return combined.slice(slash + 1);
-  }
-  return combined;
-}
-
 export function resolveDisplayStatus(
   entry: SubagentRunRecord,
   options?: { pendingDescendants?: number },
@@ -148,11 +98,30 @@ export function formatSubagentListLine(params: {
   const usageText = formatTokenUsageDisplay(params.sessionEntry);
   const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
   const task = formatTaskPreview(params.entry.task);
-  const runtime = formatDurationCompact(params.runtimeMs);
+  const runtime = formatDurationCompact(params.runtimeMs) ?? "n/a";
   const status = resolveDisplayStatus(params.entry, {
     pendingDescendants: params.pendingDescendants,
   });
-  return `${params.index}. ${label} (${resolveModelDisplay(params.sessionEntry, params.entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+  return `${params.index}. ${label} (${resolveModelDisplayName({
+    runtimeProvider:
+      typeof params.sessionEntry?.modelProvider === "string"
+        ? params.sessionEntry.modelProvider
+        : null,
+    runtimeModel: typeof params.sessionEntry?.model === "string" ? params.sessionEntry.model : null,
+    overrideProvider:
+      typeof params.sessionEntry?.providerOverride === "string"
+        ? params.sessionEntry.providerOverride
+        : null,
+    overrideModel:
+      typeof params.sessionEntry?.modelOverride === "string"
+        ? params.sessionEntry.modelOverride
+        : null,
+    fallbackModel: params.entry.model,
+  })}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${
+    normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label)
+      ? ` - ${task}`
+      : ""
+  }`;
 }
 
 function formatTimestamp(valueMs?: number) {
@@ -210,7 +179,14 @@ export function resolveSubagentTarget(
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
     isActive: (entry) =>
-      !entry.endedAt || Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
+      !entry.endedAt ||
+      Math.max(
+        0,
+        countPendingDescendantRunsFromRuns(
+          getSubagentRunsSnapshotForRead(subagentRuns),
+          entry.childSessionKey,
+        ),
+      ) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
       invalidIndex: (value) => `Invalid subagent index: ${value}`,
@@ -238,8 +214,8 @@ export function resolveRequesterSessionKey(
   params: SubagentsCommandParams,
   opts?: { preferCommandTarget?: boolean },
 ): string | undefined {
-  const commandTarget = params.ctx.CommandTargetSessionKey?.trim();
-  const commandSession = params.sessionKey?.trim();
+  const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
+  const commandSession = normalizeOptionalString(params.sessionKey);
   const shouldPreferCommandTarget =
     opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
   const raw = shouldPreferCommandTarget
@@ -299,7 +275,7 @@ export function resolveSubagentsAction(params: {
 }): SubagentsAction | null {
   if (params.handledPrefix === COMMAND) {
     const [actionRaw] = params.restTokens;
-    const action = (actionRaw?.toLowerCase() || "list") as SubagentsAction;
+    const action = (normalizeLowercaseStringOrEmpty(actionRaw) || "list") as SubagentsAction;
     if (!ACTIONS.has(action)) {
       return null;
     }
@@ -327,23 +303,6 @@ export type FocusTargetResolution = {
   agentId: string;
   label?: string;
 };
-
-export function resolveDiscordChannelIdForFocus(
-  params: SubagentsCommandParams,
-): string | undefined {
-  const toCandidates = [
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "",
-    typeof params.command.to === "string" ? params.command.to.trim() : "",
-    typeof params.ctx.To === "string" ? params.ctx.To.trim() : "",
-  ].filter(Boolean);
-  for (const candidate of toCandidates) {
-    const target = parseExplicitTargetForChannel("discord", candidate);
-    if (target?.chatType === "channel" && target.to) {
-      return target.to;
-    }
-  }
-  return undefined;
-}
 
 export async function resolveFocusTargetSession(params: {
   runs: SubagentRunRecord[];
@@ -379,7 +338,7 @@ export async function resolveFocusTargetSession(params: {
         method: "sessions.resolve",
         params: attempt,
       });
-      const key = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+      const key = normalizeOptionalString(resolved?.key) ?? "";
       if (!key) {
         continue;
       }
@@ -419,20 +378,6 @@ export function buildSubagentsHelp() {
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");
-}
-
-export type ChatMessage = {
-  role?: unknown;
-  content?: unknown;
-};
-
-export function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
-  const role = typeof message.role === "string" ? message.role : "";
-  const shouldSanitize = role === "assistant";
-  const text = extractTextFromChatContent(message.content, {
-    sanitizeText: shouldSanitize ? sanitizeTextContent : undefined,
-  });
-  return text ? { role, text } : null;
 }
 
 export function formatLogLines(messages: ChatMessage[]) {

@@ -10,6 +10,8 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
@@ -18,23 +20,11 @@ import {
   memoryConfigSchema,
   vectorDimsForModel,
 } from "./config.js";
+import { loadLanceDbModule } from "./lancedb-runtime.js";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-let lancedbImportPromise: Promise<typeof import("@lancedb/lancedb")> | null = null;
-const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
-  if (!lancedbImportPromise) {
-    lancedbImportPromise = import("@lancedb/lancedb");
-  }
-  try {
-    return await lancedbImportPromise;
-  } catch (err) {
-    // Common on macOS today: upstream package may not ship darwin native bindings.
-    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
-  }
-};
 
 type MemoryEntry = {
   id: string;
@@ -79,7 +69,7 @@ class MemoryDB {
   }
 
   private async doInitialize(): Promise<void> {
-    const lancedb = await loadLanceDB();
+    const lancedb = await loadLanceDbModule();
     this.db = await lancedb.connect(this.dbPath);
     const tables = await this.db.tableNames();
 
@@ -180,6 +170,7 @@ class Embeddings {
     if (this.dimensions) {
       params.dimensions = this.dimensions;
     }
+    ensureGlobalUndiciEnvProxyDispatcher();
     const response = await this.client.embeddings.create(params);
     return response.data[0].embedding;
   }
@@ -269,7 +260,7 @@ export function shouldCapture(text: string, options?: { maxChars?: number }): bo
 }
 
 export function detectCategory(text: string): MemoryCategory {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
   }

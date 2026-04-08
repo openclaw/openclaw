@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveAgentModelFallbackValues, resolveAgentModelPrimaryValue } from "./model-input.js";
+import {
+  DiscordConfigSchema,
+  MSTeamsConfigSchema,
+  SlackConfigSchema,
+} from "./zod-schema.providers-core.js";
 
-const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
+const { loadConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
 import { withTempHome } from "./test-helpers.js";
 
@@ -56,6 +60,20 @@ function expectValidConfigValue(params: {
   expect(params.readValue(res.config)).toBe(params.expectedValue);
 }
 
+function expectSchemaConfigValue(params: {
+  schema: { safeParse: (value: unknown) => { success: true; data: unknown } | { success: false } };
+  config: unknown;
+  readValue: (config: unknown) => unknown;
+  expectedValue: unknown;
+}) {
+  const res = params.schema.safeParse(params.config);
+  expect(res.success).toBe(true);
+  if (!res.success) {
+    throw new Error("expected schema config to be valid");
+  }
+  expect(params.readValue(res.data)).toBe(params.expectedValue);
+}
+
 function expectInvalidIssuePath(config: unknown, expectedPath: string) {
   const res = validateConfigObject(config);
   expect(res.ok).toBe(false);
@@ -64,18 +82,15 @@ function expectInvalidIssuePath(config: unknown, expectedPath: string) {
   }
 }
 
-function expectRoutingAllowFromLegacySnapshot(
+function expectSnapshotInvalidRootKey(
   ctx: { snapshot: ConfigSnapshot; parsed: unknown },
-  expectedAllowFrom: string[],
+  key: string,
 ) {
   expect(ctx.snapshot.valid).toBe(false);
-  expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
-  const parsed = ctx.parsed as {
-    routing?: { allowFrom?: string[] };
-    channels?: unknown;
-  };
-  expect(parsed.routing?.allowFrom).toEqual(expectedAllowFrom);
-  expect(parsed.channels).toBeUndefined();
+  expect(ctx.snapshot.legacyIssues).toEqual([]);
+  expect(ctx.snapshot.issues[0]?.path).toBe("");
+  expect(ctx.snapshot.issues[0]?.message).toContain(`"${key}"`);
+  expect((ctx.parsed as Record<string, unknown>)[key]).toBeTruthy();
 }
 
 describe("legacy config detection", () => {
@@ -88,49 +103,48 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.imessage?.dmPolicy).toBe("open");
     }
   });
-  it.each([
-    [
-      "defaults imessage.dmPolicy to pairing when imessage section exists",
-      { channels: { imessage: {} } },
-      (config: unknown) =>
+  it("defaults imessage.dmPolicy to pairing when imessage section exists", () => {
+    expectValidConfigValue({
+      config: { channels: { imessage: {} } },
+      readValue: (config) =>
         (config as { channels?: { imessage?: { dmPolicy?: string } } }).channels?.imessage
           ?.dmPolicy,
-      "pairing",
-    ],
-    [
-      "defaults imessage.groupPolicy to allowlist when imessage section exists",
-      { channels: { imessage: {} } },
-      (config: unknown) =>
+      expectedValue: "pairing",
+    });
+  });
+  it("defaults imessage.groupPolicy to allowlist when imessage section exists", () => {
+    expectValidConfigValue({
+      config: { channels: { imessage: {} } },
+      readValue: (config) =>
         (config as { channels?: { imessage?: { groupPolicy?: string } } }).channels?.imessage
           ?.groupPolicy,
-      "allowlist",
-    ],
+      expectedValue: "allowlist",
+    });
+  });
+  it.each([
     [
       "defaults discord.groupPolicy to allowlist when discord section exists",
-      { channels: { discord: {} } },
-      (config: unknown) =>
-        (config as { channels?: { discord?: { groupPolicy?: string } } }).channels?.discord
-          ?.groupPolicy,
+      DiscordConfigSchema,
+      {},
+      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
       "allowlist",
     ],
     [
       "defaults slack.groupPolicy to allowlist when slack section exists",
-      { channels: { slack: {} } },
-      (config: unknown) =>
-        (config as { channels?: { slack?: { groupPolicy?: string } } }).channels?.slack
-          ?.groupPolicy,
+      SlackConfigSchema,
+      {},
+      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
       "allowlist",
     ],
     [
       "defaults msteams.groupPolicy to allowlist when msteams section exists",
-      { channels: { msteams: {} } },
-      (config: unknown) =>
-        (config as { channels?: { msteams?: { groupPolicy?: string } } }).channels?.msteams
-          ?.groupPolicy,
+      MSTeamsConfigSchema,
+      {},
+      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
       "allowlist",
     ],
-  ])("defaults: %s", (_name, config, readValue, expectedValue) => {
-    expectValidConfigValue({ config, readValue, expectedValue });
+  ])("defaults: %s", (_name, schema, config, readValue, expectedValue) => {
+    expectSchemaConfigValue({ schema, config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", async () => {
     const res = validateConfigObject({
@@ -203,97 +217,17 @@ describe("legacy config detection", () => {
   });
   it("rejects legacy agent.model string", async () => {
     const res = validateConfigObject({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path === "agent.model")).toBe(true);
+      expect(res.issues[0]?.path).toBe("");
+      expect(res.issues[0]?.message).toContain('"agent"');
     }
   });
-  it("migrates telegram.requireMention to channels.telegram.groups.*.requireMention", async () => {
-    const res = migrateLegacyConfig({
-      telegram: { requireMention: false },
-    });
-    expect(res.changes).toContain(
-      'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(
-      (res.config?.channels?.telegram as { requireMention?: boolean } | undefined)?.requireMention,
-    ).toBeUndefined();
-  });
-  it("migrates messages.tts.enabled to messages.tts.auto", async () => {
-    const res = migrateLegacyConfig({
-      messages: { tts: { enabled: true } },
-    });
-    expect(res.changes).toContain("Moved messages.tts.enabled → messages.tts.auto (always).");
-    expect(res.config?.messages?.tts?.auto).toBe("always");
-    expect(res.config?.messages?.tts?.enabled).toBeUndefined();
-  });
-  it("migrates legacy model config to agent.models + model lists", async () => {
-    const res = migrateLegacyConfig({
-      agent: {
-        model: "anthropic/claude-opus-4-5",
-        modelFallbacks: ["openai/gpt-4.1-mini"],
-        imageModel: "openai/gpt-4.1-mini",
-        imageModelFallbacks: ["anthropic/claude-opus-4-5"],
-        allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
-        modelAliases: { Opus: "anthropic/claude-opus-4-5" },
-      },
-    });
-
-    expect(resolveAgentModelPrimaryValue(res.config?.agents?.defaults?.model)).toBe(
-      "anthropic/claude-opus-4-5",
-    );
-    expect(resolveAgentModelFallbackValues(res.config?.agents?.defaults?.model)).toEqual([
-      "openai/gpt-4.1-mini",
-    ]);
-    expect(resolveAgentModelPrimaryValue(res.config?.agents?.defaults?.imageModel)).toBe(
-      "openai/gpt-4.1-mini",
-    );
-    expect(resolveAgentModelFallbackValues(res.config?.agents?.defaults?.imageModel)).toEqual([
-      "anthropic/claude-opus-4-5",
-    ]);
-    expect(res.config?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]).toMatchObject({
-      alias: "Opus",
-    });
-    expect(res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
-    expect((res.config as { agent?: unknown } | undefined)?.agent).toBeUndefined();
-  });
-  it("flags legacy config in snapshot", async () => {
-    await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
-      expectRoutingAllowFromLegacySnapshot(ctx, ["+15555550123"]);
-    });
-  });
-  it("flags top-level memorySearch as legacy in snapshot", async () => {
-    await withSnapshotForConfig(
-      { memorySearch: { provider: "local", fallback: "none" } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      },
-    );
-  });
-  it("flags top-level heartbeat as legacy in snapshot", async () => {
-    await withSnapshotForConfig(
-      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      },
-    );
-  });
-  it("flags legacy provider sections in snapshot", async () => {
+  it("rejects removed legacy provider sections in snapshot", async () => {
     await withSnapshotForConfig({ whatsapp: { allowFrom: ["+1555"] } }, async (ctx) => {
-      expect(ctx.snapshot.valid).toBe(false);
-      expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "whatsapp")).toBe(true);
-
-      const parsed = ctx.parsed as {
-        channels?: unknown;
-        whatsapp?: unknown;
-      };
-      expect(parsed.channels).toBeUndefined();
-      expect(parsed.whatsapp).toBeTruthy();
+      expectSnapshotInvalidRootKey(ctx, "whatsapp");
     });
   });
   it("does not auto-migrate claude-cli auth profile mode on load", async () => {
@@ -324,11 +258,6 @@ describe("legacy config detection", () => {
         auth?: { profiles?: Record<string, { mode?: string }> };
       };
       expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
-    });
-  });
-  it("flags routing.allowFrom in snapshot", async () => {
-    await withSnapshotForConfig({ routing: { allowFrom: ["+1666"] } }, async (ctx) => {
-      expectRoutingAllowFromLegacySnapshot(ctx, ["+1666"]);
     });
   });
   it("rejects bindings[].match.provider on load", async () => {

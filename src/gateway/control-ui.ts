@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
@@ -10,13 +10,13 @@ import {
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
-import { buildControlUiCspHeader } from "./control-ui-csp.js";
+import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -221,7 +221,7 @@ export function handleControlUiAvatarRequest(
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
@@ -234,6 +234,13 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
 }
 
 function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+  const hashes = computeInlineScriptHashes(body);
+  if (hashes.length > 0) {
+    res.setHeader(
+      "Content-Security-Policy",
+      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
+    );
+  }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
@@ -271,10 +278,12 @@ function resolveSafeControlUiFile(
     rejectHardlinks,
   });
   if (!opened.ok) {
-    if (opened.reason === "io") {
-      throw opened.error;
-    }
-    return null;
+    return matchBoundaryFileOpenFailure(opened, {
+      io: (failure) => {
+        throw failure.error;
+      },
+      fallback: () => null,
+    });
   }
   return { path: opened.path, fd: opened.fd };
 }
@@ -356,8 +365,6 @@ export function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
-      assistantAgentId: identity.agentId,
-      serverVersion: resolveRuntimeServiceVersion(process.env),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -456,7 +463,7 @@ export function handleControlUiHttpRequest(
   // against the same set of extensions that contentTypeForExt() recognises so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+  if (STATIC_ASSET_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(fileRel)))) {
     respondControlUiNotFound(res);
     return true;
   }

@@ -6,7 +6,8 @@ import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -119,7 +120,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   }).sessionKey;
 
   const channel = normalizeMessageChannel(opts.channel);
-  const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
+  const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
 
   const response = await withProgress(
     {
@@ -156,7 +157,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   );
 
   if (opts.json) {
-    runtime.log(JSON.stringify(response, null, 2));
+    writeRuntimeJson(runtime, response);
     return response;
   }
 
@@ -183,6 +184,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    cleanupBundleMcpOnRunEnd: opts.local === true,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

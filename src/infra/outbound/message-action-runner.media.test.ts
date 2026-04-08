@@ -1,16 +1,50 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadWebMedia } from "../../media/web-media.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { runMessageAction } from "./message-action-runner.js";
+
+const onePixelPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+const channelResolutionMocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn(),
+  executeSendAction: vi.fn(),
+  executePollAction: vi.fn(),
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: channelResolutionMocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
+
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: channelResolutionMocks.executeSendAction,
+  executePollAction: channelResolutionMocks.executePollAction,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
 
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
@@ -56,6 +90,7 @@ const runDrySend = (params: {
 async function expectSandboxMediaRewrite(params: {
   sandboxDir: string;
   media?: string;
+  mediaField?: "media" | "mediaUrl" | "fileUrl";
   message?: string;
   expectedRelativePath: string;
 }) {
@@ -64,7 +99,11 @@ async function expectSandboxMediaRewrite(params: {
     actionParams: {
       channel: "slack",
       target: "#C12345678",
-      ...(params.media ? { media: params.media } : {}),
+      ...(params.media
+        ? {
+            [params.mediaField ?? "media"]: params.media,
+          }
+        : {}),
       ...(params.message ? { message: params.message } : {}),
     },
     sandboxRoot: params.sandboxDir,
@@ -79,11 +118,7 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
-type MessageActionRunnerModule = typeof import("./message-action-runner.js");
-type WebMediaModule = typeof import("../../media/web-media.js");
-
-let runMessageAction: MessageActionRunnerModule["runMessageAction"];
-let loadWebMedia: WebMediaModule["loadWebMedia"];
+let actualLoadWebMedia: typeof loadWebMedia;
 
 const slackPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -117,13 +152,55 @@ const slackPlugin: ChannelPlugin = {
 };
 
 describe("runMessageAction media behavior", () => {
-  beforeAll(async () => {
-    ({ runMessageAction } = await import("./message-action-runner.js"));
-    ({ loadWebMedia } = await import("../../media/web-media.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    actualLoadWebMedia ??= (
+      await vi.importActual<typeof import("../../media/web-media.js")>("../../media/web-media.js")
+    ).loadWebMedia;
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    channelResolutionMocks.resolveOutboundChannelPlugin.mockReset();
+    channelResolutionMocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+    );
+    channelResolutionMocks.executeSendAction.mockReset();
+    channelResolutionMocks.executeSendAction.mockImplementation(
+      async ({
+        ctx,
+        to,
+        message,
+        mediaUrl,
+        mediaUrls,
+      }: {
+        ctx: { channel: string; dryRun: boolean };
+        to: string;
+        message: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+      }) => ({
+        handledBy: "core" as const,
+        payload: {
+          channel: ctx.channel,
+          to,
+          message,
+          mediaUrl,
+          mediaUrls,
+          dryRun: ctx.dryRun,
+        },
+        sendResult: {
+          channel: ctx.channel,
+          messageId: "msg-test",
+          ...(mediaUrl ? { mediaUrl } : {}),
+          ...(mediaUrls ? { mediaUrls } : {}),
+        },
+      }),
+    );
+    channelResolutionMocks.executePollAction.mockReset();
+    channelResolutionMocks.executePollAction.mockImplementation(async () => {
+      throw new Error("executePollAction should not run in media tests");
+    });
+    vi.mocked(loadWebMedia).mockReset();
+    vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
   });
 
   describe("sendAttachment hydration", () => {
@@ -152,8 +229,9 @@ describe("runMessageAction media behavior", () => {
         isConfigured: () => true,
       },
       actions: {
-        describeMessageTool: () => ({ actions: ["sendAttachment", "setGroupIcon"] }),
-        supportsAction: ({ action }) => action === "sendAttachment" || action === "setGroupIcon",
+        describeMessageTool: () => ({ actions: ["sendAttachment", "upload-file", "setGroupIcon"] }),
+        supportsAction: ({ action }) =>
+          action === "sendAttachment" || action === "upload-file" || action === "setGroupIcon",
         handleAction: async ({ params }) =>
           jsonResult({
             ok: true,
@@ -196,8 +274,10 @@ describe("runMessageAction media behavior", () => {
     }
 
     async function expectRejectsLocalAbsolutePathWithoutSandbox(params: {
+      cfg?: OpenClawConfig;
       action: "sendAttachment" | "setGroupIcon";
       target: string;
+      mediaField?: "media" | "mediaUrl" | "fileUrl";
       message?: string;
       tempPrefix: string;
     }) {
@@ -211,7 +291,7 @@ describe("runMessageAction media behavior", () => {
         const actionParams: Record<string, unknown> = {
           channel: "bluebubbles",
           target: params.target,
-          media: outsidePath,
+          [params.mediaField ?? "media"]: outsidePath,
         };
         if (params.message) {
           actionParams.message = params.message;
@@ -219,7 +299,7 @@ describe("runMessageAction media behavior", () => {
 
         await expect(
           runMessageAction({
-            cfg,
+            cfg: params.cfg ?? cfg,
             action: params.action,
             params: actionParams,
           }),
@@ -254,11 +334,98 @@ describe("runMessageAction media behavior", () => {
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[1]).toEqual(
         expect.objectContaining({
-          localRoots: expect.any(Array),
+          localRoots: "any",
+          readFile: expect.any(Function),
+          hostReadCapability: true,
         }),
       );
       expect((call?.[1] as { sandboxValidated?: boolean } | undefined)?.sandboxValidated).not.toBe(
         true,
+      );
+    });
+
+    it("allows host-local image attachment paths when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-image-"));
+      try {
+        const outsidePath = path.join(tempDir, "photo.png");
+        await fs.writeFile(outsidePath, onePixelPng);
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "bluebubbles",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        expect(result.kind).toBe("action");
+        expect(result.payload).toMatchObject({
+          ok: true,
+          filename: "photo.png",
+          contentType: "image/png",
+        });
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects host-local text attachments even when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-text-"));
+      try {
+        const outsidePath = path.join(tempDir, "secret.txt");
+        await fs.writeFile(outsidePath, "secret", "utf8");
+
+        await expect(
+          runMessageAction({
+            cfg: {
+              ...cfg,
+              tools: { fs: { workspaceOnly: false } },
+            },
+            action: "sendAttachment",
+            params: {
+              channel: "bluebubbles",
+              target: "+15551234567",
+              media: outsidePath,
+              message: "caption",
+            },
+          }),
+        ).rejects.toThrow(/Host-local media sends only allow/i);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("hydrates buffer and filename from media for bluebubbles upload-file", async () => {
+      const result = await runMessageAction({
+        cfg,
+        action: "upload-file",
+        params: {
+          channel: "bluebubbles",
+          target: "+15551234567",
+          media: "https://example.com/pic.png",
+          message: "caption",
+        },
+      });
+
+      expect(result.kind).toBe("action");
+      expect(result.payload).toMatchObject({
+        ok: true,
+        filename: "pic.png",
+        caption: "caption",
+        contentType: "image/png",
+      });
+      expect((result.payload as { buffer?: string }).buffer).toBe(
+        Buffer.from("hello").toString("base64"),
       );
     });
 
@@ -271,6 +438,24 @@ describe("runMessageAction media behavior", () => {
           media: "./data/pic.png",
           message: "caption",
           expectedPath: path.join("data", "pic.png"),
+        },
+        {
+          name: "sendAttachment mediaUrl rewrite",
+          action: "sendAttachment" as const,
+          target: "+15551234567",
+          mediaField: "mediaUrl" as const,
+          media: "./data/pic.png",
+          message: "caption",
+          expectedPath: path.join("data", "pic.png"),
+        },
+        {
+          name: "sendAttachment fileUrl rewrite",
+          action: "sendAttachment" as const,
+          target: "+15551234567",
+          mediaField: "fileUrl" as const,
+          media: "/workspace/files/report.pdf",
+          message: "caption",
+          expectedPath: path.join("files", "report.pdf"),
         },
         {
           name: "setGroupIcon rewrite",
@@ -288,7 +473,7 @@ describe("runMessageAction media behavior", () => {
             params: {
               channel: "bluebubbles",
               target: testCase.target,
-              media: testCase.media,
+              [testCase.mediaField ?? "media"]: testCase.media,
               ...(testCase.message ? { message: testCase.message } : {}),
             },
             sandboxRoot: sandboxDir,
@@ -312,12 +497,29 @@ describe("runMessageAction media behavior", () => {
           tempPrefix: "msg-attachment-",
         },
         {
+          action: "sendAttachment" as const,
+          target: "+15551234567",
+          mediaField: "mediaUrl" as const,
+          message: "caption",
+          tempPrefix: "msg-attachment-media-url-",
+        },
+        {
+          action: "sendAttachment" as const,
+          target: "+15551234567",
+          mediaField: "fileUrl" as const,
+          message: "caption",
+          tempPrefix: "msg-attachment-file-url-",
+        },
+        {
           action: "setGroupIcon" as const,
           target: "group:123",
           tempPrefix: "msg-group-icon-",
         },
       ]) {
-        await expectRejectsLocalAbsolutePathWithoutSandbox(testCase);
+        await expectRejectsLocalAbsolutePathWithoutSandbox({
+          ...testCase,
+          cfg: { tools: { fs: { workspaceOnly: true } } },
+        });
       }
     });
   });
@@ -339,25 +541,43 @@ describe("runMessageAction media behavior", () => {
       setActivePluginRegistry(createTestRegistry([]));
     });
 
-    it.each(["/etc/passwd", "file:///etc/passwd"])(
-      "rejects out-of-sandbox media reference: %s",
-      async (media) => {
-        await withSandbox(async (sandboxDir) => {
-          await expect(
-            runDrySend({
-              cfg: slackConfig,
-              actionParams: {
-                channel: "slack",
-                target: "#C12345678",
-                media,
-                message: "",
-              },
-              sandboxRoot: sandboxDir,
-            }),
-          ).rejects.toThrow(/sandbox/i);
-        });
+    it.each([
+      {
+        name: "media absolute path",
+        mediaField: "media" as const,
+        media: "/etc/passwd",
       },
-    );
+      {
+        name: "mediaUrl absolute path",
+        mediaField: "mediaUrl" as const,
+        media: "/etc/passwd",
+      },
+      {
+        name: "mediaUrl file URL",
+        mediaField: "mediaUrl" as const,
+        media: "file:///etc/passwd",
+      },
+      {
+        name: "fileUrl file URL",
+        mediaField: "fileUrl" as const,
+        media: "file:///etc/passwd",
+      },
+    ])("rejects out-of-sandbox media reference: $name", async ({ mediaField, media }) => {
+      await withSandbox(async (sandboxDir) => {
+        await expect(
+          runDrySend({
+            cfg: slackConfig,
+            actionParams: {
+              channel: "slack",
+              target: "#C12345678",
+              [mediaField]: media,
+              message: "",
+            },
+            sandboxRoot: sandboxDir,
+          }),
+        ).rejects.toThrow(/sandbox/i);
+      });
+    });
 
     it("rejects data URLs in media params", async () => {
       await expect(
@@ -382,6 +602,20 @@ describe("runMessageAction media behavior", () => {
           expectedRelativePath: path.join("data", "file.txt"),
         },
         {
+          name: "relative mediaUrl path",
+          mediaField: "mediaUrl" as const,
+          media: "./data/file.txt",
+          message: "",
+          expectedRelativePath: path.join("data", "file.txt"),
+        },
+        {
+          name: "/workspace fileUrl path",
+          mediaField: "fileUrl" as const,
+          media: "/workspace/data/file.txt",
+          message: "",
+          expectedRelativePath: path.join("data", "file.txt"),
+        },
+        {
           name: "/workspace media path",
           media: "/workspace/data/file.txt",
           message: "",
@@ -392,17 +626,74 @@ describe("runMessageAction media behavior", () => {
           message: "Hello\nMEDIA: ./data/note.ogg",
           expectedRelativePath: path.join("data", "note.ogg"),
         },
-      ]) {
+      ] as const) {
         await withSandbox(async (sandboxDir) => {
           await expectSandboxMediaRewrite({
             sandboxDir,
             media: testCase.media,
+            mediaField: testCase.mediaField,
             message: testCase.message,
             expectedRelativePath: testCase.expectedRelativePath,
           });
         });
       }
     });
+
+    it("prefers media over mediaUrl when both aliases are present", async () => {
+      await withSandbox(async (sandboxDir) => {
+        const result = await runDrySend({
+          cfg: slackConfig,
+          actionParams: {
+            channel: "slack",
+            target: "#C12345678",
+            media: "./data/primary.txt",
+            mediaUrl: "./data/secondary.txt",
+            message: "",
+          },
+          sandboxRoot: sandboxDir,
+        });
+
+        expect(result.kind).toBe("send");
+        if (result.kind !== "send") {
+          throw new Error("expected send result");
+        }
+        expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "primary.txt"));
+      });
+    });
+
+    it.each([
+      {
+        name: "mediaUrl",
+        mediaField: "mediaUrl" as const,
+      },
+      {
+        name: "fileUrl",
+        mediaField: "fileUrl" as const,
+      },
+    ])(
+      "keeps remote HTTP $name aliases unchanged under sandbox validation",
+      async ({ mediaField }) => {
+        await withSandbox(async (sandboxDir) => {
+          const remoteUrl = "https://example.com/files/report.pdf?sig=1";
+          const result = await runDrySend({
+            cfg: slackConfig,
+            actionParams: {
+              channel: "slack",
+              target: "#C12345678",
+              [mediaField]: remoteUrl,
+              message: "",
+            },
+            sandboxRoot: sandboxDir,
+          });
+
+          expect(result.kind).toBe("send");
+          if (result.kind !== "send") {
+            throw new Error("expected send result");
+          }
+          expect(result.sendResult?.mediaUrl).toBe(remoteUrl);
+        });
+      },
+    );
 
     it("allows media paths under preferred OpenClaw tmp root", async () => {
       const tmpRoot = resolvePreferredOpenClawTmpDir();

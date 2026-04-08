@@ -2,24 +2,32 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import {
+  readLatestAssistantReplySnapshot,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "../run-wait.js";
+import {
+  describeSessionsSendTool,
+  SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  extractAssistantText,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSessionToolContext,
   resolveVisibleSessionReference,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
@@ -32,13 +40,17 @@ const SessionsSendToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+type GatewayCaller = typeof callGateway;
+const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
 async function startAgentRun(params: {
+  callGateway: GatewayCaller;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
 }): Promise<{ ok: true; runId: string } | { ok: false; result: ReturnType<typeof jsonResult> }> {
   try {
-    const response = await callGateway<{ runId: string }>({
+    const response = await params.callGateway<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
       timeoutMs: 10_000,
@@ -67,15 +79,17 @@ export function createSessionsSendTool(opts?: {
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Session Send",
     name: "sessions_send",
-    description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+    displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsSendTool(),
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
@@ -87,8 +101,8 @@ export function createSessionsSendTool(opts?: {
       });
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
-      const labelParam = readStringParam(params, "label")?.trim() || undefined;
-      const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
+      const labelParam = normalizeOptionalString(readStringParam(params, "label"));
+      const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
       if (sessionKeyParam && labelParam) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -137,14 +151,14 @@ export function createSessionsSendTool(opts?: {
         };
         let resolvedKey = "";
         try {
-          const resolved = await callGateway<{ key: string }>({
+          const resolved = await gatewayCall<{ key: string }>({
             method: "sessions.resolve",
             params: resolveParams,
             timeoutMs: 10_000,
           });
-          resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+          resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = formatErrorMessage(err);
           if (restrictToSpawned) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -238,6 +252,19 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
+      // Capture the pre-run assistant snapshot before starting the nested run.
+      // Fast in-process test doubles and short-circuit agent paths can finish
+      // before we reach the post-run read, which would otherwise make the new
+      // reply look like the baseline and hide it from the caller.
+      const baselineReply =
+        timeoutSeconds === 0
+          ? undefined
+          : await readLatestAssistantReplySnapshot({
+              sessionKey: resolvedKey,
+              limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+              callGateway: gatewayCall,
+            });
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
@@ -278,6 +305,7 @@ export function createSessionsSendTool(opts?: {
 
       if (timeoutSeconds === 0) {
         const start = await startAgentRun({
+          callGateway: gatewayCall,
           runId,
           sendParams,
           sessionKey: displayKey,
@@ -296,6 +324,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       const start = await startAgentRun({
+        callGateway: gatewayCall,
         runId,
         sendParams,
         sessionKey: displayKey,
@@ -304,55 +333,32 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+      const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+        runId,
+        sessionKey: resolvedKey,
+        timeoutMs,
+        limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+        baseline: baselineReply,
+        callGateway: gatewayCall,
+      });
 
-      let waitStatus: string | undefined;
-      let waitError: string | undefined;
-      try {
-        const wait = await callGateway<{ status?: string; error?: string }>({
-          method: "agent.wait",
-          params: {
-            runId,
-            timeoutMs,
-          },
-          timeoutMs: timeoutMs + 2000,
-        });
-        waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
-        waitError = typeof wait?.error === "string" ? wait.error : undefined;
-      } catch (err) {
-        const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-        return jsonResult({
-          runId,
-          status: messageText.includes("gateway timeout") ? "timeout" : "error",
-          error: messageText,
-          sessionKey: displayKey,
-        });
-      }
-
-      if (waitStatus === "timeout") {
+      if (result.status === "timeout") {
         return jsonResult({
           runId,
           status: "timeout",
-          error: waitError,
+          error: result.error,
           sessionKey: displayKey,
         });
       }
-      if (waitStatus === "error") {
+      if (result.status === "error") {
         return jsonResult({
           runId,
           status: "error",
-          error: waitError ?? "agent error",
+          error: result.error ?? "agent error",
           sessionKey: displayKey,
         });
       }
-
-      const history = await callGateway<{ messages: Array<unknown> }>({
-        method: "chat.history",
-        params: { sessionKey: resolvedKey, limit: 50 },
-      });
-      const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-      const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-      const reply = last ? extractAssistantText(last) : undefined;
+      const reply = result.replyText;
       startA2AFlow(reply ?? undefined);
 
       return jsonResult({

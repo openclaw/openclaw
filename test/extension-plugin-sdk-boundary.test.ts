@@ -3,42 +3,39 @@ import {
   collectExtensionPluginSdkBoundaryInventory,
   main,
 } from "../scripts/check-extension-plugin-sdk-boundary.mjs";
+import { createCapturedIo } from "./helpers/captured-io.js";
 
-function createCapturedIo() {
-  let stdout = "";
-  let stderr = "";
+const srcOutsideInventoryPromise =
+  collectExtensionPluginSdkBoundaryInventory("src-outside-plugin-sdk");
+const pluginSdkInternalInventoryPromise =
+  collectExtensionPluginSdkBoundaryInventory("plugin-sdk-internal");
+const relativeOutsidePackageInventoryPromise = collectExtensionPluginSdkBoundaryInventory(
+  "relative-outside-package",
+);
+const srcOutsideJsonOutputPromise = getJsonOutput("src-outside-plugin-sdk");
+const pluginSdkInternalJsonOutputPromise = getJsonOutput("plugin-sdk-internal");
+const relativeOutsidePackageJsonOutputPromise = getJsonOutput("relative-outside-package");
+
+async function getJsonOutput(
+  mode: Parameters<typeof collectExtensionPluginSdkBoundaryInventory>[0],
+) {
+  const captured = createCapturedIo();
+  const exitCode = await main([`--mode=${mode}`, "--json"], captured.io);
   return {
-    io: {
-      stdout: {
-        write(chunk) {
-          stdout += String(chunk);
-        },
-      },
-      stderr: {
-        write(chunk) {
-          stderr += String(chunk);
-        },
-      },
-    },
-    readStdout: () => stdout,
-    readStderr: () => stderr,
+    exitCode,
+    stderr: captured.readStderr(),
+    json: JSON.parse(captured.readStdout()),
   };
 }
 
 describe("extension src outside plugin-sdk boundary inventory", () => {
-  it("is currently empty", async () => {
-    const inventory = await collectExtensionPluginSdkBoundaryInventory("src-outside-plugin-sdk");
+  it("stays empty and sorted", async () => {
+    const inventory = await srcOutsideInventoryPromise;
+    const jsonResult = await srcOutsideJsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("produces stable sorted output", async () => {
-    const first = await collectExtensionPluginSdkBoundaryInventory("src-outside-plugin-sdk");
-    const second = await collectExtensionPluginSdkBoundaryInventory("src-outside-plugin-sdk");
-
-    expect(second).toEqual(first);
     expect(
-      [...first].toSorted(
+      [...inventory].toSorted(
         (left, right) =>
           left.file.localeCompare(right.file) ||
           left.line - right.line ||
@@ -47,49 +44,33 @@ describe("extension src outside plugin-sdk boundary inventory", () => {
           left.resolvedPath.localeCompare(right.resolvedPath) ||
           left.reason.localeCompare(right.reason),
       ),
-    ).toEqual(first);
-  });
-
-  it("script json output is empty", async () => {
-    const captured = createCapturedIo();
-    const exitCode = await main(["--mode=src-outside-plugin-sdk", "--json"], captured.io);
-
-    expect(exitCode).toBe(0);
-    expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual([]);
+    ).toEqual(inventory);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe("");
+    expect(jsonResult.json).toEqual([]);
   });
 });
 
 describe("extension plugin-sdk-internal boundary inventory", () => {
-  it("is currently empty", async () => {
-    const inventory = await collectExtensionPluginSdkBoundaryInventory("plugin-sdk-internal");
+  it("stays empty", async () => {
+    const inventory = await pluginSdkInternalInventoryPromise;
+    const jsonResult = await pluginSdkInternalJsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("script json output is empty", async () => {
-    const captured = createCapturedIo();
-    const exitCode = await main(["--mode=plugin-sdk-internal", "--json"], captured.io);
-
-    expect(exitCode).toBe(0);
-    expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual([]);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe("");
+    expect(jsonResult.json).toEqual([]);
   });
 });
 
 describe("extension relative-outside-package boundary inventory", () => {
-  it("is currently empty", async () => {
-    const inventory = await collectExtensionPluginSdkBoundaryInventory("relative-outside-package");
+  it("stays empty", async () => {
+    const inventory = await relativeOutsidePackageInventoryPromise;
+    const jsonResult = await relativeOutsidePackageJsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("script json output is empty", async () => {
-    const captured = createCapturedIo();
-    const exitCode = await main(["--mode=relative-outside-package", "--json"], captured.io);
-
-    expect(exitCode).toBe(0);
-    expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual([]);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe("");
+    expect(jsonResult.json).toEqual([]);
   });
 });

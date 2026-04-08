@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
@@ -15,9 +15,13 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
-import { createTelegramMessageProcessor } from "./bot-message.js";
+let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 
 describe("telegram bot message processor", () => {
+  beforeAll(async () => {
+    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
+  });
+
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
@@ -103,7 +107,7 @@ describe("telegram bot message processor", () => {
     const { processMessage, runtimeError } = createDispatchFailureHarness(
       {
         chatId: 123,
-        threadSpec: { id: 456 },
+        threadSpec: { id: 456, scope: "forum" },
         route: { sessionKey: "agent:main:main" },
       },
       sendMessage,
@@ -116,6 +120,25 @@ describe("telegram bot message processor", () => {
       { message_thread_id: 456 },
     );
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+  });
+
+  it("omits message_thread_id for General-topic fallback replies", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const { processMessage } = createDispatchFailureHarness(
+      {
+        chatId: 123,
+        threadSpec: { id: 1, scope: "forum" },
+        route: { sessionKey: "agent:main:main" },
+      },
+      sendMessage,
+    );
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Something went wrong while processing your request. Please try again.",
+      undefined,
+    );
   });
 
   it("swallows fallback delivery failures after dispatch throws", async () => {

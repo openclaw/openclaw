@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   connectReq,
@@ -6,7 +6,7 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getHandshakeTimeoutMs,
+  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   NODE_CLIENT,
@@ -20,6 +20,7 @@ import {
   startGatewayServer,
   TEST_OPERATOR_CLIENT,
   waitForWsClose,
+  withGatewayServer,
   withRuntimeVersionEnv,
 } from "./server.auth.shared.js";
 
@@ -28,12 +29,12 @@ export function registerDefaultAuthTokenSuite(): void {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
-    afterAll(async () => {
+    afterEach(async () => {
       await server.close();
     });
 
@@ -80,10 +81,12 @@ export function registerDefaultAuthTokenSuite(): void {
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        const ws = await openWs(port);
-        const handshakeTimeoutMs = getHandshakeTimeoutMs();
-        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
-        expect(closed).toBe(true);
+        await withGatewayServer(async ({ port: isolatedPort }) => {
+          const ws = await openWs(isolatedPort);
+          const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2500);
+          expect(closed).toBe(true);
+        });
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -99,9 +102,9 @@ export function registerDefaultAuthTokenSuite(): void {
       process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        expect(getHandshakeTimeoutMs()).toBe(75);
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
         process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
-        expect(getHandshakeTimeoutMs()).toBe(20);
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;

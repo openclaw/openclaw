@@ -38,6 +38,8 @@ export const EventType = {
   RoomMessage: "m.room.message",
 } as const;
 
+export const MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY = "com.openclaw.finalized_preview" as const;
+
 export type MatrixDirectAccountData = Record<string, string[]>;
 
 export type MatrixReplyRelation = {
@@ -82,18 +84,25 @@ export type ReactionEventContent = MatrixReactionEventContent;
 export type MatrixSendResult = {
   messageId: string;
   roomId: string;
+  primaryMessageId?: string;
+  messageIds?: string[];
 };
 
 export type MatrixSendOpts = {
   client?: import("../sdk.js").MatrixClient;
   cfg?: CoreConfig;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
-  /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
+  /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
 };
 
@@ -103,9 +112,13 @@ export type MatrixMediaMsgType =
   | typeof MsgType.Video
   | typeof MsgType.File;
 
+export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
+
 export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MatrixFormattedContent = MessageEventContent & {
   format?: string;
   formatted_body?: string;
 };
+
+export type MatrixExtraContentFields = Record<string, unknown>;

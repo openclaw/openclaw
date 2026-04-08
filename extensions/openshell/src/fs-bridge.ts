@@ -6,6 +6,7 @@ import type {
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
+import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
@@ -23,6 +24,11 @@ export function createOpenShellFsBridge(params: {
 }
 
 class OpenShellFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
     private readonly sandbox: SandboxContext,
     private readonly backend: OpenShellSandboxBackend,
@@ -140,12 +146,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<void> {
-    const from = this.resolveTarget({ filePath: params.from, cwd: params.cwd });
-    const to = this.resolveTarget({ filePath: params.to, cwd: params.cwd });
+    const { from, to } = this.resolveRenameTargets(params);
     const fromHostPath = this.requireHostPath(from);
     const toHostPath = this.requireHostPath(to);
-    this.ensureWritable(from, "rename files");
-    this.ensureWritable(to, "rename files");
     await assertLocalPathSafety({
       target: from,
       root: from.mountHostRoot,
@@ -318,7 +321,7 @@ async function assertLocalPathSafety(params: {
     .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
   let cursor = params.root;
   for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]!);
+    cursor = path.join(cursor, segments[index]);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {

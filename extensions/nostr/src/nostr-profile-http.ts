@@ -8,7 +8,12 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { z } from "zod";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
+import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
   isBlockedHostnameOrIp,
@@ -110,7 +115,7 @@ function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: s
       return { ok: false, error: "URL must use https:// protocol" };
     }
 
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
 
     if (isBlockedHostnameOrIp(hostname)) {
       return { ok: false, error: "URL must not point to private/internal addresses" };
@@ -193,7 +198,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
     return false;
   }
 
-  const ipLower = remoteAddress.toLowerCase().replace(/^\[|\]$/g, "");
+  const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
   // IPv6 loopback
   if (ipLower === "::1") {
@@ -217,7 +222,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
     return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   } catch {
     return false;
@@ -228,7 +233,7 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   if (Array.isArray(value)) {
     return value[0];
   }
-  return typeof value === "string" ? value : undefined;
+  return readStringValue(value);
 }
 
 function normalizeIpCandidate(raw: string): string {
@@ -290,7 +295,9 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
-  const secFetchSite = firstHeaderValue(req.headers["sec-fetch-site"])?.trim().toLowerCase();
+  const secFetchSite = normalizeOptionalLowercaseString(
+    firstHeaderValue(req.headers["sec-fetch-site"]),
+  );
   if (secFetchSite === "cross-site") {
     ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
     sendJson(res, 403, { ok: false, error: "Forbidden" });

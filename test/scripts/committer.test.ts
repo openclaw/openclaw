@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "committer");
-const tempRepos: string[] = [];
+const { createTempDir } = createScriptTestHarness();
 
 function run(cwd: string, command: string, args: string[]) {
   return execFileSync(command, args, {
@@ -19,8 +19,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function createRepo() {
-  const repo = mkdtempSync(path.join(tmpdir(), "committer-test-"));
-  tempRepos.push(repo);
+  const repo = createTempDir("committer-test-");
 
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
@@ -47,43 +46,63 @@ function committedPaths(repo: string) {
   return output.split("\n").filter(Boolean).toSorted();
 }
 
-afterEach(() => {
-  while (tempRepos.length > 0) {
-    const repo = tempRepos.pop();
-    if (repo) {
-      rmSync(repo, { force: true, recursive: true });
-    }
-  }
-});
-
 describe("scripts/committer", () => {
-  it("keeps plain argv paths working", () => {
-    const repo = createRepo();
-    writeRepoFile(repo, "alpha.txt", "alpha\n");
-    writeRepoFile(repo, "nested/file with spaces.txt", "beta\n");
+  it("accepts supported path argument shapes", () => {
+    const cases = [
+      {
+        commitMessage: "test: plain argv",
+        files: [
+          ["alpha.txt", "alpha\n"],
+          ["nested/file with spaces.txt", "beta\n"],
+        ] as const,
+        args: ["alpha.txt", "nested/file with spaces.txt"],
+        expected: ["alpha.txt", "nested/file with spaces.txt"],
+      },
+      {
+        commitMessage: "test: space blob",
+        files: [
+          ["alpha.txt", "alpha\n"],
+          ["beta.txt", "beta\n"],
+        ] as const,
+        args: ["alpha.txt beta.txt"],
+        expected: ["alpha.txt", "beta.txt"],
+      },
+      {
+        commitMessage: "test: newline blob",
+        files: [
+          ["alpha.txt", "alpha\n"],
+          ["nested/file with spaces.txt", "beta\n"],
+        ] as const,
+        args: ["alpha.txt\nnested/file with spaces.txt"],
+        expected: ["alpha.txt", "nested/file with spaces.txt"],
+      },
+    ] as const;
 
-    commitWithHelper(repo, "test: plain argv", "alpha.txt", "nested/file with spaces.txt");
+    for (const testCase of cases) {
+      const repo = createRepo();
+      for (const [file, contents] of testCase.files) {
+        writeRepoFile(repo, file, contents);
+      }
 
-    expect(committedPaths(repo)).toEqual(["alpha.txt", "nested/file with spaces.txt"]);
+      commitWithHelper(repo, testCase.commitMessage, ...testCase.args);
+
+      expect(committedPaths(repo)).toEqual(testCase.expected);
+    }
   });
 
-  it("accepts a single space-delimited path blob", () => {
+  it("commits changelog-only changes without pulling in unrelated dirty files", () => {
     const repo = createRepo();
-    writeRepoFile(repo, "alpha.txt", "alpha\n");
-    writeRepoFile(repo, "beta.txt", "beta\n");
+    writeRepoFile(repo, "CHANGELOG.md", "initial\n");
+    writeRepoFile(repo, "unrelated.ts", "export const ok = true;\n");
+    git(repo, "add", "CHANGELOG.md", "unrelated.ts");
+    git(repo, "commit", "-qm", "seed extra files");
 
-    commitWithHelper(repo, "test: space blob", "alpha.txt beta.txt");
+    writeRepoFile(repo, "CHANGELOG.md", "breaking note\n");
+    writeRepoFile(repo, "unrelated.ts", "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n");
 
-    expect(committedPaths(repo)).toEqual(["alpha.txt", "beta.txt"]);
-  });
+    commitWithHelper(repo, "docs(changelog): note breaking change", "CHANGELOG.md");
 
-  it("accepts a single newline-delimited path blob", () => {
-    const repo = createRepo();
-    writeRepoFile(repo, "alpha.txt", "alpha\n");
-    writeRepoFile(repo, "nested/file with spaces.txt", "beta\n");
-
-    commitWithHelper(repo, "test: newline blob", "alpha.txt\nnested/file with spaces.txt");
-
-    expect(committedPaths(repo)).toEqual(["alpha.txt", "nested/file with spaces.txt"]);
+    expect(committedPaths(repo)).toEqual(["CHANGELOG.md"]);
+    expect(git(repo, "status", "--short")).toContain("M unrelated.ts");
   });
 });

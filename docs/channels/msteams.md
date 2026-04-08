@@ -5,23 +5,21 @@ read_when:
 title: "Microsoft Teams"
 ---
 
-# Microsoft Teams (plugin)
+# Microsoft Teams
 
 > "Abandon all hope, ye who enter here."
 
 Updated: 2026-01-21
 
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
-## Plugin required
+## Bundled plugin
 
-Microsoft Teams ships as a plugin and is not bundled with the core install.
+Microsoft Teams ships as a bundled plugin in current OpenClaw releases, so no
+separate install is required in the normal packaged build.
 
-**Breaking change (2026.1.15):** Microsoft Teams moved out of core. If you use it, you must install the plugin.
-
-Explainable: keeps core installs lighter and lets Microsoft Teams dependencies update independently.
-
-Install via CLI (npm registry):
+If you are on an older build or a custom install that excludes bundled Teams,
+install it manually:
 
 ```bash
 openclaw plugins install @openclaw/msteams
@@ -30,17 +28,16 @@ openclaw plugins install @openclaw/msteams
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/msteams
+openclaw plugins install ./path/to/local/msteams-plugin
 ```
-
-If you choose Teams during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Install the Microsoft Teams plugin.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + client secret + tenant ID).
 3. Configure OpenClaw with those credentials.
 4. Expose `/api/messages` (port 3978 by default) via a public URL or tunnel.
@@ -141,7 +138,9 @@ Example:
 
 ## How it works
 
-1. Install the Microsoft Teams plugin.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + secret + tenant ID).
 3. Build a **Teams app package** that references the bot and includes the RSC permissions below.
 4. Upload/install the Teams app into a team (or personal scope for DMs).
@@ -240,9 +239,11 @@ This is often easier than hand-editing JSON manifests.
 
 ## Setup (minimal text-only)
 
-1. **Install the Microsoft Teams plugin**
-   - From npm: `openclaw plugins install @openclaw/msteams`
-   - From a local checkout: `openclaw plugins install ./extensions/msteams`
+1. **Ensure the Microsoft Teams plugin is available**
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually:
+     - From npm: `openclaw plugins install @openclaw/msteams`
+     - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
 
 2. **Bot registration**
    - Create an Azure Bot (see above) and note:
@@ -284,12 +285,26 @@ This is often easier than hand-editing JSON manifests.
      - `https://<host>:3978/api/messages` (or your chosen path/port).
 
 6. **Run the gateway**
-   - The Teams channel starts automatically when the plugin is installed and `msteams` config exists with credentials.
+   - The Teams channel starts automatically when the bundled or manually installed plugin is available and `msteams` config exists with credentials.
+
+## Member info action
+
+OpenClaw exposes a Graph-backed `member-info` action for Microsoft Teams so agents and automations can resolve channel member details (display name, email, role) directly from Microsoft Graph.
+
+Requirements:
+
+- `Member.Read.Group` RSC permission (already in the recommended manifest)
+- For cross-team lookups: `User.Read.All` Graph Application permission with admin consent
+
+The action is gated by `channels.msteams.actions.memberInfo` (default: enabled when Graph credentials are available).
 
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+- Fetched thread history is filtered by sender allowlists (`allowFrom` / `groupAllowFrom`), so thread context seeding only includes messages from allowed senders.
+- Quoted attachment context (`ReplyTo*` derived from Teams reply HTML) is currently passed as received.
+- In other words, allowlists gate who can trigger the agent; only specific supplemental context paths are filtered today.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Current Teams RSC Permissions (Manifest)
@@ -476,6 +491,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `toolsBySender` keys should use explicit prefixes:
   `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+- `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions
@@ -527,6 +543,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 - **DMs:** Images and file attachments work via Teams bot file APIs.
 - **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
+- For explicit file-first sends, use `action=upload-file` with `media` / `filePath` / `path`; optional `message` becomes the accompanying text/comment, and `filename` overrides the uploaded name.
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
@@ -778,3 +795,11 @@ Bots have limited support in private channels:
 - [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
 - [Teams bot file handling](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4) (channel/group requires Graph)
 - [Proactive messaging](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

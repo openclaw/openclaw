@@ -5,23 +5,22 @@ const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
-const getActivePluginRegistryVersionMock = vi.hoisted(() => vi.fn());
+const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
+const requireActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentConfig: (...args: unknown[]) => resolveAgentConfigMock(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveAgentConfig: resolveAgentConfigMock,
+  resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
 }));
 
 vi.mock("./index.js", () => ({
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  getChannelPlugin: getChannelPluginMock,
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
-  getActivePluginRegistryVersion: (...args: unknown[]) =>
-    getActivePluginRegistryVersionMock(...args),
+  getActivePluginChannelRegistryVersion: getActivePluginChannelRegistryVersionMock,
+  requireActivePluginChannelRegistry: requireActivePluginChannelRegistryMock,
 }));
 
 async function importConfiguredBindings() {
@@ -101,8 +100,8 @@ describe("configured binding registry", () => {
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
     getChannelPluginMock.mockReset();
-    getActivePluginRegistryMock.mockReset().mockReturnValue({ channels: [] });
-    getActivePluginRegistryVersionMock.mockReset().mockReturnValue(1);
+    getActivePluginChannelRegistryVersionMock.mockReset().mockReturnValue(1);
+    requireActivePluginChannelRegistryMock.mockReset().mockReturnValue({});
   });
 
   it("resolves configured ACP bindings from an already loaded channel plugin", async () => {
@@ -151,13 +150,10 @@ describe("configured binding registry", () => {
     });
   });
 
-  it("primes compiled ACP bindings from the already loaded active registry once", async () => {
+  it("primes compiled ACP bindings from the already loaded channel registry once", async () => {
     const plugin = createDiscordAcpPlugin();
     const cfg = createConfig({ bindingAgentId: "codex" });
-    getChannelPluginMock.mockReturnValue(undefined);
-    getActivePluginRegistryMock.mockReturnValue({
-      channels: [{ plugin }],
-    });
+    getChannelPluginMock.mockReturnValue(plugin);
     const bindingRegistry = await importConfiguredBindings();
 
     const primed = bindingRegistry.primeConfiguredBindingRegistry({
@@ -222,7 +218,7 @@ describe("configured binding registry", () => {
   it("rebuilds the compiled registry when the active plugin registry version changes", async () => {
     const plugin = createDiscordAcpPlugin();
     getChannelPluginMock.mockReturnValue(plugin);
-    getActivePluginRegistryVersionMock.mockReturnValue(10);
+    getActivePluginChannelRegistryVersionMock.mockReturnValue(10);
     const cfg = createConfig();
     const bindingRegistry = await importConfiguredBindings();
 
@@ -239,7 +235,7 @@ describe("configured binding registry", () => {
       conversationId: "1479098716916023408",
     });
 
-    getActivePluginRegistryVersionMock.mockReturnValue(11);
+    getActivePluginChannelRegistryVersionMock.mockReturnValue(11);
     bindingRegistry.resolveConfiguredBindingRecord({
       cfg: cfg as never,
       channel: "discord",

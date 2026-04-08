@@ -14,10 +14,8 @@ const mocks = vi.hoisted(() => ({
   applyMatrixProfileUpdate: vi.fn(),
 }));
 
-vi.mock("./matrix/actions.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/actions.js")>("./matrix/actions.js");
+vi.mock("./matrix/actions.js", () => {
   return {
-    ...actual,
     getMatrixMemberInfo: mocks.getMatrixMemberInfo,
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
     listMatrixReactions: mocks.listMatrixReactions,
@@ -28,10 +26,8 @@ vi.mock("./matrix/actions.js", async () => {
   };
 });
 
-vi.mock("./matrix/send.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/send.js")>("./matrix/send.js");
+vi.mock("./matrix/send.js", () => {
   return {
-    ...actual,
     reactMatrixMessage: mocks.reactMatrixMessage,
   };
 });
@@ -246,6 +242,31 @@ describe("handleMatrixAction pollVote", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
       replyToId: undefined,
       threadId: undefined,
+    });
+  });
+
+  it("accepts shared media aliases and voice-send flags", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    await handleMatrixAction(
+      {
+        action: "sendMessage",
+        accountId: "ops",
+        to: "room:!room:example",
+        path: "/tmp/clip.mp3",
+        asVoice: true,
+      },
+      cfg,
+      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+    );
+
+    expect(mocks.sendMatrixMessage).toHaveBeenCalledWith("room:!room:example", undefined, {
+      cfg,
+      accountId: "ops",
+      mediaUrl: "/tmp/clip.mp3",
+      mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+      replyToId: undefined,
+      threadId: undefined,
+      audioAsVoice: true,
     });
   });
 

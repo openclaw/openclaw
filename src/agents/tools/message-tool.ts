@@ -20,6 +20,7 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -30,10 +31,13 @@ import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const MESSAGE_TOOL_THREAD_READ_HINT =
+  ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
 const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "reply",
   "thread-reply",
   "broadcast",
@@ -120,6 +124,12 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
     forceDocument: Type.Optional(
       Type.Boolean({
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+      }),
+    ),
+    asDocument: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
     interactive: Type.Optional(interactiveMessageSchema),
@@ -273,6 +283,9 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
+    image: Type.Optional(
+      Type.String({ description: "Cover image URL or local file path for the event." }),
+    ),
     durationMin: Type.Optional(Type.Number()),
     until: Type.Optional(Type.String()),
   };
@@ -386,11 +399,14 @@ type MessageToolOptions = {
   agentSessionKey?: string;
   sessionId?: string;
   config?: OpenClawConfig;
+  loadConfig?: () => OpenClawConfig;
+  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
+  runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
@@ -535,7 +551,7 @@ function buildMessageToolSchema(params: {
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -574,7 +590,7 @@ function buildMessageToolDescription(options?: {
     });
     if (channelActions.length > 0) {
       // Always include "send" as a base action
-      const allActions = new Set(["send", ...channelActions]);
+      const allActions = new Set<ChannelMessageActionName | "send">(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
       let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
 
@@ -597,7 +613,7 @@ function buildMessageToolDescription(options?: {
           requesterSenderId: resolvedOptions.requesterSenderId,
         });
         if (actions.length > 0) {
-          const all = new Set(["send", ...actions]);
+          const all = new Set<ChannelMessageActionName | "send">(["send", ...actions]);
           otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
         }
       }
@@ -605,7 +621,10 @@ function buildMessageToolDescription(options?: {
         desc += ` Other configured channels: ${otherChannels.join(", ")}.`;
       }
 
-      return desc;
+      return appendMessageToolReadHint(
+        desc,
+        Array.from(allActions) as Iterable<ChannelMessageActionName | "send">,
+      );
     }
   }
 
@@ -613,14 +632,33 @@ function buildMessageToolDescription(options?: {
   if (resolvedOptions.config) {
     const actions = listChannelMessageActions(resolvedOptions.config);
     if (actions.length > 0) {
-      return `${baseDescription} Supports actions: ${actions.join(", ")}.`;
+      return appendMessageToolReadHint(
+        `${baseDescription} Supports actions: ${actions.join(", ")}.`,
+        actions,
+      );
     }
   }
 
   return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
 }
 
+function appendMessageToolReadHint(
+  description: string,
+  actions: Iterable<ChannelMessageActionName | "send">,
+): string {
+  for (const action of actions) {
+    if (action === "read") {
+      return `${description}${MESSAGE_TOOL_THREAD_READ_HINT}`;
+    }
+  }
+  return description;
+}
+
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
+  const loadConfigForTool = options?.loadConfig ?? loadConfig;
+  const resolveSecretRefsForTool =
+    options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
+  const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
   const resolvedAgentId = options?.agentSessionKey
     ? resolveSessionAgentId({
@@ -658,6 +696,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   return {
     label: "Message",
     name: "message",
+    displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
     execute: async (_toolCallId, args, signal) => {
@@ -683,7 +722,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }) as ChannelMessageActionName;
       let cfg = options?.config;
       if (!cfg) {
-        const loadedRaw = loadConfig();
+        const loadedRaw = loadConfigForTool();
         const scope = resolveMessageSecretScope({
           channel: params.channel,
           target: params.target,
@@ -698,7 +737,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           accountId: scope.accountId,
         });
         cfg = (
-          await resolveCommandSecretRefsViaGateway({
+          await resolveSecretRefsForTool({
             config: loadedRaw,
             commandName: "tools.message",
             targetIds: scopedTargets.targetIds,
@@ -765,7 +804,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      const result = await runMessageAction({
+      const result = await runMessageActionForTool({
         cfg,
         action,
         params,

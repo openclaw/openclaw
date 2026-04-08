@@ -1,11 +1,10 @@
 import {
   buildSingleChannelSecretPromptState,
-  createTopLevelChannelDmPolicy,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  normalizeAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   type ChannelSetupDmPolicy,
@@ -13,12 +12,16 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
-import { zaloSetupAdapter } from "./setup-core.js";
+import { resolveZaloAccount } from "./accounts.js";
+import { zaloDmPolicy } from "./setup-core.js";
 
 const channel = "zalo" as const;
 
 type UpdateMode = "polling" | "webhook";
+
+type ZaloAccountSetupConfig = {
+  enabled?: boolean;
+};
 
 function setZaloUpdateMode(
   cfg: OpenClawConfig,
@@ -151,6 +154,9 @@ async function promptZaloAllowFrom(params: {
     } as OpenClawConfig;
   }
 
+  const currentAccount = cfg.channels?.zalo?.accounts?.[accountId] as
+    | ZaloAccountSetupConfig
+    | undefined;
   return {
     ...cfg,
     channels: {
@@ -161,8 +167,8 @@ async function promptZaloAllowFrom(params: {
         accounts: {
           ...cfg.channels?.zalo?.accounts,
           [accountId]: {
-            ...cfg.channels?.zalo?.accounts?.[accountId],
-            enabled: cfg.channels?.zalo?.accounts?.[accountId]?.enabled ?? true,
+            ...currentAccount,
+            enabled: currentAccount?.enabled ?? true,
             dmPolicy: "allowlist",
             allowFrom: unique,
           },
@@ -172,54 +178,32 @@ async function promptZaloAllowFrom(params: {
   } as OpenClawConfig;
 }
 
-const zaloDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
-  label: "Zalo",
-  channel,
-  policyKey: "channels.zalo.dmPolicy",
-  allowFromKey: "channels.zalo.allowFrom",
-  getCurrent: (cfg) => (cfg.channels?.zalo?.dmPolicy ?? "pairing") as "pairing",
-  promptAllowFrom: async ({ cfg, prompter, accountId }) => {
-    const id =
-      accountId && normalizeAccountId(accountId)
-        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg as OpenClawConfig);
-    return await promptZaloAllowFrom({
-      cfg: cfg as OpenClawConfig,
-      prompter,
-      accountId: id,
-    });
-  },
-});
-
 export { zaloSetupAdapter } from "./setup-core.js";
 
 export const zaloSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Zalo",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token",
     configuredHint: "recommended · configured",
     unconfiguredHint: "recommended · newcomer-friendly",
     configuredScore: 1,
     unconfiguredScore: 10,
-    resolveConfigured: ({ cfg }) =>
-      listZaloAccountIds(cfg).some((accountId) => {
-        const account = resolveZaloAccount({
-          cfg,
-          accountId,
-          allowUnresolvedSecretRef: true,
-        });
-        return (
-          Boolean(account.token) ||
-          hasConfiguredSecretInput(account.config.botToken) ||
-          Boolean(account.config.tokenFile?.trim())
-        );
-      }),
-    resolveStatusLines: ({ cfg, configured }) => {
-      void cfg;
-      return [`Zalo: ${configured ? "configured" : "needs token"}`];
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg, accountId }) => {
+      const account = resolveZaloAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
+      return (
+        Boolean(account.token) ||
+        hasConfiguredSecretInput(account.config.botToken) ||
+        Boolean(account.config.tokenFile?.trim())
+      );
     },
-  },
+  }),
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {
     let next = cfg;
@@ -284,7 +268,9 @@ export const zaloSetupWizard: ChannelSetupWizard = {
                   accounts: {
                     ...currentCfg.channels?.zalo?.accounts,
                     [accountId]: {
-                      ...currentCfg.channels?.zalo?.accounts?.[accountId],
+                      ...(currentCfg.channels?.zalo?.accounts?.[accountId] as
+                        | Record<string, unknown>
+                        | undefined),
                       enabled: true,
                       botToken: value,
                     },
