@@ -1444,6 +1444,10 @@ describe("image tool response validation", () => {
 });
 
 describe("image tool timeout config", () => {
+  afterEach(() => {
+    __testing.setProviderDepsForTest();
+  });
+
   it("forwards tools.media.image.timeoutSeconds to the describe call", async () => {
     await withTempAgentDir(async (agentDir) => {
       const capturedTimeoutMs: number[] = [];
