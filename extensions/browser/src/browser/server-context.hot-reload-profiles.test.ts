@@ -61,19 +61,13 @@ vi.mock("./config-refresh-source.js", () => ({
   loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
 }));
 
-describe("server-context hot-reload profiles", () => {
-  let loadConfig: typeof import("../config/config.js").loadConfig;
-  let resolveBrowserConfig: typeof import("./config.js").resolveBrowserConfig;
-  let resolveProfile: typeof import("./config.js").resolveProfile;
-  let refreshResolvedBrowserConfigFromDisk: typeof import("./resolved-config-refresh.js").refreshResolvedBrowserConfigFromDisk;
-  let resolveBrowserProfileWithHotReload: typeof import("./resolved-config-refresh.js").resolveBrowserProfileWithHotReload;
+const { loadConfig } = await import("../config/config.js");
+const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
+const { refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
+  await import("./resolved-config-refresh.js");
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ loadConfig } = await import("../config/config.js"));
-    ({ resolveBrowserConfig, resolveProfile } = await import("./config.js"));
-    ({ refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
-      await import("./resolved-config-refresh.js"));
+describe("server-context hot-reload profiles", () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     mockState.cfgProfiles = {
       openclaw: { cdpPort: 18800, color: "#FF4500" },

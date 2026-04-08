@@ -1,5 +1,6 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { normalizeToolName } from "../../tool-policy.js";
@@ -12,10 +13,10 @@ function resolveCaseInsensitiveAllowedToolName(
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return null;
   }
-  const folded = rawName.toLowerCase();
+  const folded = normalizeLowercaseStringOrEmpty(rawName);
   let caseInsensitiveMatch: string | null = null;
   for (const name of allowedToolNames) {
-    if (name.toLowerCase() !== folded) {
+    if (normalizeLowercaseStringOrEmpty(name) !== folded) {
       continue;
     }
     if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
@@ -360,7 +361,7 @@ function sanitizeAnthropicReplayToolResults(messages: AgentMessage[]): AgentMess
             continue;
           }
           const typedBlock = block as { type?: unknown; id?: unknown };
-          if (typedBlock.type !== "toolUse" || typeof typedBlock.id !== "string") {
+          if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
             continue;
           }
           const trimmedId = typedBlock.id.trim();

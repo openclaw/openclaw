@@ -1,12 +1,11 @@
 import { rmSync } from "node:fs";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedTtsConfig } from "../tts/tts.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Public speech helpers for bundled or third-party plugins.
 //
-// Keep this surface neutral and import-light. Provider builders commonly import
-// this module just to get types and a few validation helpers, so avoid pulling
-// in the heavy TTS runtime graph at module load time.
+// Keep this surface provider-facing: types, validation, directive parsing, and
+// registry helpers. Runtime synthesis lives on `api.runtime.tts` or narrower
+// core/runtime seams, not here.
 
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type {
@@ -36,6 +35,8 @@ export {
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
 export {
+  asBoolean,
+  asFiniteNumber,
   asObject,
   readResponseTextLimited,
   trimToUndefined,
@@ -55,7 +56,7 @@ export function normalizeLanguageCode(code?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (!/^[a-z]{2}$/.test(normalized)) {
     throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
   }
@@ -67,7 +68,7 @@ export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | 
   if (!trimmed) {
     return undefined;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "auto" || normalized === "on" || normalized === "off") {
     return normalized;
   }
@@ -97,15 +98,4 @@ export function scheduleCleanup(
     }
   }, delayMs);
   timer.unref();
-}
-
-export async function summarizeText(params: {
-  text: string;
-  targetLength: number;
-  cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
-  timeoutMs: number;
-}) {
-  const { summarizeText: summarizeTextRuntime } = await import("../tts/tts-core.js");
-  return summarizeTextRuntime(params);
 }

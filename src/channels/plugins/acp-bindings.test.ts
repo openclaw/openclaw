@@ -6,20 +6,21 @@ const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
+const requireActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentConfig: (...args: unknown[]) => resolveAgentConfigMock(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveAgentConfig: resolveAgentConfigMock,
+  resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
 }));
 
 vi.mock("./index.js", () => ({
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  getChannelPlugin: getChannelPluginMock,
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-    getActivePluginChannelRegistryVersionMock(...args),
+  getActivePluginChannelRegistryVersion: getActivePluginChannelRegistryVersionMock,
+  requireActivePluginChannelRegistry: requireActivePluginChannelRegistryMock,
 }));
 
 async function importConfiguredBindings() {
@@ -100,6 +101,7 @@ describe("configured binding registry", () => {
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
     getChannelPluginMock.mockReset();
     getActivePluginChannelRegistryVersionMock.mockReset().mockReturnValue(1);
+    requireActivePluginChannelRegistryMock.mockReset().mockReturnValue({});
   });
 
   it("resolves configured ACP bindings from an already loaded channel plugin", async () => {

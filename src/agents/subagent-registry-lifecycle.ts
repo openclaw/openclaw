@@ -157,7 +157,9 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     try {
-      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey);
+      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
+        waitForReply: entry.expectsCompletionMessage === true,
+      });
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
       entry.frozenResultText = null;

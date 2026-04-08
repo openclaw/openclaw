@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_STORE_VERSION, EXTERNAL_CLI_SYNC_TTL_MS } from "./auth-profiles/constants.js";
+import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+
+const AUTH_STORE_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const mocks = vi.hoisted(() => ({
   syncExternalCliCredentials: vi.fn((_: AuthProfileStore) => false),
@@ -11,6 +13,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: mocks.syncExternalCliCredentials,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
@@ -138,7 +144,7 @@ describe("auth profile store cache", () => {
       expect(second.profiles["openai-codex:default"]).toMatchObject({ access: "access-1" });
       expect(mocks.syncExternalCliCredentials).toHaveBeenCalledTimes(1);
 
-      vi.advanceTimersByTime(EXTERNAL_CLI_SYNC_TTL_MS + 1);
+      vi.advanceTimersByTime(AUTH_STORE_CACHE_TTL_MS + 1);
 
       const third = ensureAuthProfileStore(agentDir);
 

@@ -1,42 +1,39 @@
-export function isLegacyGroupSessionKey(key: string): boolean {
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
+function extractLegacyWhatsAppGroupId(key: string): string | null {
   const trimmed = key.trim();
   if (!trimmed) {
-    return false;
+    return null;
   }
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (trimmed.startsWith("group:")) {
-    return true;
+    const id = trimmed.slice("group:".length).trim();
+    return normalizeLowercaseStringOrEmpty(id).includes("@g.us") ? id : null;
   }
-  const lower = trimmed.toLowerCase();
   if (!lower.includes("@g.us")) {
-    return false;
+    return null;
   }
   if (!trimmed.includes(":")) {
-    return true;
+    return trimmed;
   }
-  return lower.startsWith("whatsapp:") && !trimmed.includes(":group:");
+  if (lower.startsWith("whatsapp:") && !trimmed.includes(":group:")) {
+    const remainder = trimmed.slice("whatsapp:".length).trim();
+    const cleaned = remainder.replace(/^group:/i, "").trim();
+    return cleaned || null;
+  }
+  return null;
+}
+
+export function isLegacyGroupSessionKey(key: string): boolean {
+  return extractLegacyWhatsAppGroupId(key) !== null;
 }
 
 export function canonicalizeLegacySessionKey(params: {
   key: string;
   agentId: string;
 }): string | null {
-  const trimmed = params.key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("group:")) {
-    const id = trimmed.slice("group:".length).trim();
-    return id ? `agent:${params.agentId}:whatsapp:group:${id}`.toLowerCase() : null;
-  }
-  if (!trimmed.includes(":") && trimmed.toLowerCase().includes("@g.us")) {
-    return `agent:${params.agentId}:whatsapp:group:${trimmed}`.toLowerCase();
-  }
-  if (trimmed.toLowerCase().startsWith("whatsapp:") && trimmed.toLowerCase().includes("@g.us")) {
-    const remainder = trimmed.slice("whatsapp:".length).trim();
-    const cleaned = remainder.replace(/^group:/i, "").trim();
-    if (cleaned && !trimmed.includes(":group:")) {
-      return `agent:${params.agentId}:whatsapp:group:${cleaned}`.toLowerCase();
-    }
-  }
-  return null;
+  const legacyGroupId = extractLegacyWhatsAppGroupId(params.key);
+  return legacyGroupId
+    ? `agent:${normalizeLowercaseStringOrEmpty(params.agentId)}:whatsapp:group:${normalizeLowercaseStringOrEmpty(legacyGroupId)}`
+    : null;
 }

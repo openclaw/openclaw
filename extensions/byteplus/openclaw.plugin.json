@@ -20,6 +20,9 @@
       "cliDescription": "BytePlus API key"
     }
   ],
+  "contracts": {
+    "videoGenerationProviders": ["byteplus"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

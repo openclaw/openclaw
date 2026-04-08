@@ -42,7 +42,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    openclaw status --deep
    ```
 
-   Runs gateway health checks + provider probes (requires a reachable gateway). See [Health](/gateway/health).
+   Runs a live gateway health probe, including channel probes when supported
+   (requires a reachable gateway). See [Health](/gateway/health).
 
 5. **Tail the latest log**
 
@@ -127,6 +128,21 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
+    Common heartbeat skip reasons:
+
+    - `quiet-hours`: outside the configured active-hours window
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
+    - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
+
+    In task mode, due timestamps are only advanced after a real heartbeat run
+    completes. Skipped runs do not mark tasks as completed.
+
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation & Tasks](/automation).
+
+  </Accordion>
+
   <Accordion title="Recommended way to install and set up OpenClaw">
     The repo recommends running from source and using onboarding:
 
@@ -190,6 +206,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
     - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - When native approval cards/buttons are available, that native UI is the primary path; the agent should only include a manual `/approve` command if the tool result says chat approvals are unavailable or manual approval is the only path.
     - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
     - Plugin approvals are separate again: they use same-chat `/approve` by default, optional `approvals.plugin` forwarding, and only some native channels keep plugin-approval-native handling on top.
@@ -548,7 +565,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="What does onboarding actually do?">
     `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-    - **Model/auth setup** (provider OAuth, Claude CLI reuse, and API keys supported, plus local model options such as LM Studio)
+    - **Model/auth setup** (provider OAuth, API keys, Anthropic setup-token, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files
     - **Gateway settings** (bind/port/auth/tailscale)
     - **Channels** (WhatsApp, Telegram, Discord, Mattermost, Signal, iMessage, plus bundled channel plugins like QQ Bot)
@@ -564,50 +581,52 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **local-only models** so your data stays on your device. Subscriptions (Claude
     Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
-    Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
-    PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
-    OpenClaw, and Anthropic subscription auth in OpenClaw now requires **Extra
-    Usage** billed separately from the subscription. OpenAI Codex OAuth is
-    explicitly supported for external tools like OpenClaw.
+    For Anthropic in OpenClaw, the practical split is:
+
+    - **Anthropic API key**: normal Anthropic API billing
+    - **Claude CLI / Claude subscription auth in OpenClaw**: Anthropic staff
+      told us this usage is allowed again, and OpenClaw is treating `claude -p`
+      usage as sanctioned for this integration unless Anthropic publishes a new
+      policy
+
+    For long-lived gateway hosts, Anthropic API keys are still the more
+    predictable setup. OpenAI Codex OAuth is explicitly supported for external
+    tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
-    **Alibaba Cloud Model Studio Coding Plan**, **MiniMax Coding Plan**, and
+    **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
     **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
-    [Qwen / Model Studio](/providers/qwen_modelstudio),
+    [Qwen Cloud](/providers/qwen),
     [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes, via a local **Claude CLI** login on the gateway host.
+    Yes.
 
-    Claude Pro/Max subscriptions **do not include an API key**, so Claude CLI
-    reuse is the supported subscription-style path in OpenClaw. Anthropic
-    changed third-party harness billing on **April 4, 2026 at 12:00 PM PT /
-    8:00 PM BST**: Anthropic says OpenClaw now requires **Extra Usage** billed
-    separately from the subscription for this path. If you want the clearest
-    and safest supported path for production, use an Anthropic API key.
+    Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so
+    OpenClaw treats Claude subscription auth and `claude -p` usage as sanctioned
+    for this integration unless Anthropic publishes a new policy. If you want
+    the most predictable server-side setup, use an Anthropic API key instead.
 
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
+    Yes.
 
-    Existing legacy Anthropic token profiles still run if they are already configured, but OpenClaw no longer offers Anthropic setup-token as a new setup path. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Anthropic staff told us this usage is allowed again, so OpenClaw treats
+    Claude CLI reuse and `claude -p` usage as sanctioned for this integration
+    unless Anthropic publishes a new policy.
 
-    Important: Anthropic changed third-party harness billing on **April 4, 2026
-    at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
-    longer cover OpenClaw, and Anthropic now requires **Extra Usage** billed
-    separately from the subscription for Claude CLI traffic through OpenClaw.
-
-    For production or multi-user workloads, Anthropic API key auth is the
-    safer, recommended choice. If you want other subscription-style hosted
+    Anthropic setup-token is still available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
+    For production or multi-user workloads, Anthropic API key auth is still the
+    safer, more predictable choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Studio](/providers/qwen_modelstudio), [MiniMax](/providers/minimax), and
-    [GLM Models](/providers/glm).
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [GLM
+    Models](/providers/glm).
 
   </Accordion>
 
@@ -621,8 +640,8 @@ for usage/billing and raise limits as needed.
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
     Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or Claude
-    CLI with Extra Usage enabled).
+    credential is eligible for long-context billing (API key billing or the
+    OpenClaw Claude-login path with Extra Usage enabled).
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
@@ -631,11 +650,36 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is AWS Bedrock supported?">
-    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `models.bedrockDiscovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `plugins.entries.amazon-bedrock.config.discovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Onboarding can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
+  </Accordion>
+
+  <Accordion title="Why does ChatGPT GPT-5.4 not unlock openai/gpt-5.4 in OpenClaw?">
+    OpenClaw treats the two routes separately:
+
+    - `openai-codex/gpt-5.4` = ChatGPT/Codex OAuth
+    - `openai/gpt-5.4` = direct OpenAI Platform API
+
+    In OpenClaw, ChatGPT/Codex sign-in is wired to the `openai-codex/*` route,
+    not the direct `openai/*` route. If you want the direct API path in
+    OpenClaw, set `OPENAI_API_KEY` (or the equivalent OpenAI provider config).
+    If you want ChatGPT/Codex sign-in in OpenClaw, use `openai-codex/*`.
+
+  </Accordion>
+
+  <Accordion title="Why can Codex OAuth limits differ from ChatGPT web?">
+    `openai-codex/*` uses the Codex OAuth route, and its usable quota windows are
+    OpenAI-managed and plan-dependent. In practice, those limits can differ from
+    the ChatGPT website/app experience, even when both are tied to the same account.
+
+    OpenClaw can show the currently visible provider usage/quota windows in
+    `openclaw models status`, but it does not invent or normalize ChatGPT-web
+    entitlements into direct API access. If you want the direct OpenAI Platform
+    billing/limit path, use `openai/*` with an API key.
+
   </Accordion>
 
   <Accordion title="Do you support OpenAI subscription auth (Codex OAuth)?">
@@ -657,7 +701,7 @@ for usage/billing and raise limits as needed.
        - npm: `npm install -g @google/gemini-cli`
     2. Enable the plugin: `openclaw plugins enable google`
     3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. Default model after login: `google-gemini-cli/gemini-3-flash-preview`
     5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -1013,6 +1057,8 @@ for usage/billing and raise limits as needed.
     - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
     - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
     - Invalid or stale targets can still force queue fallback or final delivery failure.
+    - If the child's last visible assistant reply is the exact silent token `NO_REPLY` / `no_reply`, or exactly `ANNOUNCE_SKIP`, OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
+    - If the child timed out after only tool calls, the announce can collapse that into a short partial-progress summary instead of replaying raw tool output.
 
     Debug:
 
@@ -1214,6 +1260,12 @@ for usage/billing and raise limits as needed.
 
     This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
 
+    Current limits on `existing-session` / `user`:
+
+    - actions are ref-driven, not CSS-selector driven
+    - uploads require `ref` / `inputRef` and currently support one file at a time
+    - `responsebody`, PDF export, download interception, and batch actions still need a managed browser or raw CDP profile
+
   </Accordion>
 </AccordionGroup>
 
@@ -1250,7 +1302,12 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="How do I bind a host folder into the sandbox?">
-    Set `agents.defaults.sandbox.docker.binds` to `["host:path:mode"]` (e.g., `"/home/user/src:/src:ro"`). Global + per-agent binds merge; per-agent binds are ignored when `scope: "shared"`. Use `:ro` for anything sensitive and remember binds bypass the sandbox filesystem walls. See [Sandboxing](/gateway/sandboxing#custom-bind-mounts) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check) for examples and safety notes.
+    Set `agents.defaults.sandbox.docker.binds` to `["host:path:mode"]` (e.g., `"/home/user/src:/src:ro"`). Global + per-agent binds merge; per-agent binds are ignored when `scope: "shared"`. Use `:ro` for anything sensitive and remember binds bypass the sandbox filesystem walls.
+
+    OpenClaw validates bind sources against both the normalized path and the canonical path resolved through the deepest existing ancestor. That means symlink-parent escapes still fail closed even when the last path segment does not exist yet, and allowed-root checks still apply after symlink resolution.
+
+    See [Sandboxing](/gateway/sandboxing#custom-bind-mounts) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check) for examples and safety notes.
+
   </Accordion>
 
   <Accordion title="How does memory work?">
@@ -1438,7 +1495,10 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title='I set gateway.bind: "lan" (or "tailnet") and now nothing listens / the UI says unauthorized'>
-    Non-loopback binds **require auth**. Configure `gateway.auth.mode` + `gateway.auth.token` (or use `OPENCLAW_GATEWAY_TOKEN`).
+    Non-loopback binds **require a valid gateway auth path**. In practice that means:
+
+    - shared-secret auth: token or password
+    - `gateway.auth.mode: "trusted-proxy"` behind a correctly configured non-loopback identity-aware reverse proxy
 
     ```json5
     {
@@ -1456,8 +1516,10 @@ for usage/billing and raise limits as needed.
 
     - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
     - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+    - For password auth, set `gateway.auth.mode: "password"` plus `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`) instead.
     - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
     - Shared-secret Control UI setups authenticate via `connect.params.auth.token` or `connect.params.auth.password` (stored in app/UI settings). Identity-bearing modes such as Tailscale Serve or `trusted-proxy` use request headers instead. Avoid putting shared secrets in URLs.
+    - With `gateway.auth.mode: "trusted-proxy"`, same-host loopback reverse proxies still do **not** satisfy trusted-proxy auth. The trusted proxy must be a configured non-loopback source.
 
   </Accordion>
 
@@ -1531,29 +1593,32 @@ for usage/billing and raise limits as needed.
             },
           },
         },
-      },
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "brave",
-            maxResults: 5,
-          },
-          fetch: {
-            enabled: true,
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              maxResults: 5,
+            },
+            fetch: {
+              enabled: true,
+              provider: "firecrawl", // optional; omit for auto-detect
+            },
           },
         },
-      },
     }
     ```
 
     Provider-specific web-search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
     Legacy `tools.web.search.*` provider paths still load temporarily for compatibility, but they should not be used for new configs.
+    Firecrawl web-fetch fallback config lives under `plugins.entries.firecrawl.config.webFetch.*`.
 
     Notes:
 
-    - If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
+    - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. Today the bundled provider is Firecrawl.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).
@@ -1575,6 +1640,9 @@ for usage/billing and raise limits as needed.
 
     - Use `openclaw config set` for small changes.
     - Use `openclaw configure` for interactive edits.
+    - Use `config.schema.lookup` first when you are not sure about an exact path or field shape; it returns a shallow schema node plus immediate child summaries for drill-down.
+    - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
+    - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
     Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
@@ -1744,7 +1812,14 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is there an API / RPC way to apply config?">
-    Yes. `config.apply` validates + writes the full config and restarts the Gateway as part of the operation.
+    Yes.
+
+    - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
+    - `config.get`: fetch the current snapshot + hash
+    - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
+    - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
+    - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
+
   </Accordion>
 
   <Accordion title="Minimal sane config for a first install">
@@ -2130,7 +2205,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2165,6 +2240,8 @@ for usage/billing and raise limits as needed.
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json`
 
     Avoid `config.apply` with a partial object unless you intend to replace the whole config.
+    For RPC edits, inspect with `config.schema.lookup` first and prefer `config.patch`. The lookup payload gives you the normalized path, shallow schema docs/constraints, and immediate child summaries.
+    for partial updates.
     If you did overwrite config, restore from backup or re-run `openclaw doctor` to repair.
 
     Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
@@ -2177,7 +2254,7 @@ for usage/billing and raise limits as needed.
     Quickest setup:
 
     1. Install Ollama from `https://ollama.com/download`
-    2. Pull a local model such as `ollama pull glm-4.7-flash`
+    2. Pull a local model such as `ollama pull gemma4`
     3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
@@ -2258,6 +2335,42 @@ for usage/billing and raise limits as needed.
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
+
+  </Accordion>
+
+  <Accordion title="How do I configure fast mode for GPT 5.4?">
+    Use either a session toggle or a config default:
+
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.4` or `openai-codex/gpt-5.4`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.4"].params.fastMode` to `true`.
+    - **Codex OAuth too:** if you also use `openai-codex/gpt-5.4`, set the same flag there.
+
+    Example:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              params: {
+                fastMode: true,
+              },
+            },
+            "openai-codex/gpt-5.4": {
+              params: {
+                fastMode: true,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults.
+
+    See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#openai-fast-mode).
 
   </Accordion>
 
@@ -2439,32 +2552,39 @@ for usage/billing and raise limits as needed.
 
     The rate-limit bucket includes more than plain `429` responses. OpenClaw
     also treats messages like `Too many concurrent requests`,
-    `ThrottlingException`, `resource exhausted`, and periodic usage-window
-    limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
+    `ThrottlingException`, `concurrency limit reached`,
+    `workers_ai ... quota limit exceeded`, `resource exhausted`, and periodic
+    usage-window limits (`weekly/monthly limit reached`) as failover-worthy
+    rate limits.
 
     Some billing-looking responses are not `402`, and some HTTP `402`
     responses also stay in that transient bucket. If a provider returns
-    explicit billing text on `401` or `403` (for example OpenRouter
-    `Key limit exceeded`), OpenClaw keeps that in the billing lane. If a `402`
+    explicit billing text on `401` or `403`, OpenClaw can still keep that in
+    the billing lane, but provider-specific text matchers stay scoped to the
+    provider that owns them (for example OpenRouter `Key limit exceeded`). If a `402`
     message instead looks like a retryable usage-window or
     organization/workspace spend limit (`daily limit reached, resets tomorrow`,
     `organization spending limit exceeded`), OpenClaw treats it as
     `rate_limit`, not a long billing disable.
 
     Context-overflow errors are different: signatures such as
-    `request_too_large`, `input exceeds the maximum number of tokens`, or
-    `input is too long for the model` stay on the compaction/retry path instead
-    of advancing model fallback.
+    `request_too_large`, `input exceeds the maximum number of tokens`,
+    `input token count exceeds the maximum number of input tokens`,
+    `input is too long for the model`, or `ollama error: context length
+    exceeded` stay on the compaction/retry path instead of advancing model
+    fallback.
 
     Generic server-error text is intentionally narrower than "anything with
     unknown/error in it". OpenClaw does treat provider-scoped transient shapes
-    such as Anthropic bare `An unknown error occurred`, stop-reason errors like
-    `Unhandled stop reason: error`, and JSON `api_error` payloads with
-    transient server text (`internal server error`, `unknown error, 520`,
-    `upstream error`, `backend error`) as timeout/failover signals. But generic
-    internal fallback text like `LLM request failed with an unknown error.` or
-    a bare `Provider returned error` stays conservative and does not trigger
-    model fallback by itself.
+    such as Anthropic bare `An unknown error occurred`, OpenRouter bare
+    `Provider returned error`, stop-reason errors like `Unhandled stop reason:
+    error`, JSON `api_error` payloads with transient server text
+    (`internal server error`, `unknown error, 520`, `upstream error`, `backend
+    error`), and provider-busy errors such as `ModelNotReadyException` as
+    failover-worthy timeout/overloaded signals when the provider context
+    matches.
+    Generic internal fallback text like `LLM request failed with an unknown
+    error.` stays conservative and does not trigger model fallback by itself.
 
   </Accordion>
 
@@ -2546,7 +2666,11 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     OpenClaw may temporarily skip a profile if it's in a short **cooldown** (rate limits/timeouts/auth failures) or a longer **disabled** state (billing/insufficient credits). To inspect this, run `openclaw models status --json` and check `auth.unusableProfiles`. Tuning: `auth.cooldowns.billingBackoffHours*`.
 
-    You can also set a **per-agent** order override (stored in that agent's `auth-profiles.json`) via the CLI:
+    Rate-limit cooldowns can be model-scoped. A profile that is cooling down
+    for one model can still be usable for a sibling model on the same provider,
+    while billing/disabled windows still block the whole profile.
+
+    You can also set a **per-agent** order override (stored in that agent's `auth-state.json`) via the CLI:
 
     ```bash
     # Defaults to the configured default agent (omit --agent)
@@ -2567,6 +2691,15 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     ```bash
     openclaw models auth order set --provider anthropic --agent main anthropic:default
     ```
+
+    To verify what will actually be tried, use:
+
+    ```bash
+    openclaw models status --probe
+    ```
+
+    If a stored profile is omitted from the explicit order, probe reports
+    `excluded_by_auth_order` for that profile instead of trying it silently.
 
   </Accordion>
 
@@ -2980,6 +3113,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - using a read-only or tool-disabled "reader" agent to summarize untrusted content
     - keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents
+    - treating decoded file/document text as untrusted too: OpenResponses
+      `input_file` and media-attachment extraction both wrap extracted text in
+      explicit external-content boundary markers instead of passing raw file text
     - sandboxing and strict tool allowlists
 
     Details: [Security](/gateway/security).

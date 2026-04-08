@@ -2,6 +2,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -13,11 +14,11 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  resolveAnnounceOrigin,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,
@@ -102,7 +103,7 @@ export function buildSubagentSystemPrompt(params: {
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
     "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
-    "6. **Recover from compacted/truncated tool output** - If you see `[compacted: tool output removed to free context]` or `[truncated: output exceeded context limit]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
+    "6. **Recover from truncated tool output** - If you see a notice like `[... N more characters truncated]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
@@ -281,7 +282,7 @@ async function wakeSubagentRunAfterDescendants(params: {
           timeoutMs: announceTimeoutMs,
         }),
     });
-    wakeRunId = typeof wakeResponse?.runId === "string" ? wakeResponse.runId.trim() : "";
+    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
     return false;
   }
@@ -447,7 +448,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!childCompletionFindings) {
-      const fallbackReply = params.fallbackReply?.trim() ? params.fallbackReply.trim() : undefined;
+      const fallbackReply = normalizeOptionalString(params.fallbackReply);
       const fallbackIsSilent =
         Boolean(fallbackReply) &&
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));

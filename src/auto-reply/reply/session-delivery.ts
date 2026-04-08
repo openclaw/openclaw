@@ -2,6 +2,11 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import {
   deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
@@ -23,7 +28,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   if (!parsed?.rest) {
     return undefined;
   }
-  const head = parsed.rest.split(":")[0]?.trim().toLowerCase();
+  const head = normalizeOptionalLowercaseString(parsed.rest.split(":")[0]);
   if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
     return undefined;
   }
@@ -33,16 +38,16 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
-    return (sessionKey ?? "").trim().toLowerCase() === "main";
+    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
   }
-  return parsed.rest.trim().toLowerCase() === "main";
+  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
 const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
 
 function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
-  const peerId = parts[markerIndex + 1]?.trim();
+  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
   if (!peerId) {
     return false;
   }
@@ -50,11 +55,15 @@ function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boole
   if (tail.length === 0) {
     return true;
   }
-  return tail.length === 2 && THREAD_SESSION_MARKERS.has(tail[0] ?? "") && Boolean(tail[1]?.trim());
+  return (
+    tail.length === 2 &&
+    THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
+    Boolean(normalizeOptionalString(tail[1]))
+  );
 }
 
 function isDirectSessionKey(sessionKey?: string): boolean {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return false;
   }
@@ -73,7 +82,7 @@ function isDirectSessionKey(sessionKey?: string): boolean {
   if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
     return hasStrictDirectSessionTail(parts, 1);
   }
-  return Boolean(parts[1]?.trim()) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
+  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
     ? hasStrictDirectSessionTail(parts, 2)
     : false;
 }
@@ -170,7 +179,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   const canonicalMainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: params.mainKey,
-  }).toLowerCase();
+  });
   if (params.sessionKey === canonicalMainSessionKey) {
     return undefined;
   }

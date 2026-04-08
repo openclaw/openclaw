@@ -1,5 +1,5 @@
 import { ChannelType, type Client, type Message } from "@buape/carbon";
-import { StickerFormatType } from "discord-api-types/v10";
+import { MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
@@ -16,9 +16,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  logVerbose: () => {},
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: () => {},
+  };
+});
 
 let __resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").__resetDiscordChannelInfoCacheForTest;
 let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
@@ -126,6 +132,35 @@ function asForwardedSnapshotMessage(params: {
         },
       ],
     },
+  });
+}
+
+function asReferencedForwardMessage(params: {
+  content?: string;
+  embeds?: Array<{ title?: string; description?: string }>;
+  attachments?: Array<Record<string, unknown>>;
+  messageReferenceType?: MessageReferenceType;
+}) {
+  return asMessage({
+    content: "",
+    messageReference: {
+      type: params.messageReferenceType ?? MessageReferenceType.Forward,
+      message_id: "m0",
+      channel_id: "c1",
+    },
+    referencedMessage: asMessage({
+      id: "m0",
+      channelId: "c1",
+      content: params.content ?? "",
+      attachments: params.attachments ?? [],
+      embeds: params.embeds ?? [],
+      stickers: [],
+      author: {
+        id: "u2",
+        username: "Bob",
+        discriminator: "0",
+      },
+    }),
   });
 }
 
@@ -287,6 +322,38 @@ describe("resolveForwardedMediaList", () => {
 
     expect(result).toEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("downloads forwarded referenced attachments when snapshots are absent", async () => {
+    const attachment = {
+      id: "att-ref-1",
+      url: "https://cdn.discordapp.com/attachments/1/ref-image.png",
+      filename: "ref-image.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/ref-image.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveForwardedMediaList(
+      asReferencedForwardMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: attachment.url,
+      filePathHint: attachment.filename,
+      expectedPath: "/tmp/ref-image.png",
+      placeholder: "<media:image>",
+    });
   });
 
   it("skips snapshots without attachments", async () => {
@@ -767,6 +834,30 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("forwarded hello");
+  });
+
+  it("falls back to referenced forward message text when snapshots are absent", () => {
+    const text = resolveDiscordMessageText(
+      asReferencedForwardMessage({
+        content: "forwarded from referenced message",
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("forwarded from referenced message");
+  });
+
+  it("does not treat ordinary replies as forwarded context", () => {
+    const text = resolveDiscordMessageText(
+      asReferencedForwardMessage({
+        content: "quoted reply content",
+        messageReferenceType: MessageReferenceType.Default,
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe("");
   });
 
   it("resolves user mentions in content", () => {

@@ -29,8 +29,11 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.password`
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
-  The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  Onboarding generates a gateway token by default, so shared-secret setups usually paste that here on first connect.
+
+The dashboard settings panel keeps a token for the current browser tab session
+and selected gateway URL; passwords are not persisted. Onboarding usually
+generates a gateway token for shared-secret auth on first connect, but password
+auth works too when `gateway.auth.mode` is `"password"`.
 
 ## Device pairing (first connection)
 
@@ -70,9 +73,11 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 ## Language support
 
-The Control UI can localize itself on first load based on your browser locale, and you can override it later from the language picker in the Access card.
+The Control UI can localize itself on first load based on your browser locale.
+To override it later, open **Overview -> Gateway Access -> Language**. The
+locale picker lives in the Gateway Access card, not under Appearance.
 
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
@@ -84,6 +89,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session model/thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
@@ -92,7 +98,11 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config writes include a base-hash guard to prevent clobbering concurrent edits
 - Config writes (`config.set`/`config.apply`/`config.patch`) also preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write
-- Config schema + form rendering (`config.schema`, including plugin + channel schemas); Raw JSON editor is available only when the snapshot has a safe raw round-trip
+- Config schema + form rendering (`config.schema` / `config.schema.lookup`,
+  including field `title` / `description`, matched UI hints, immediate child
+  summaries, docs metadata on nested object/wildcard/array/composition nodes,
+  plus plugin + channel schemas when available); Raw JSON editor is
+  available only when the snapshot has a safe raw round-trip
 - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
 - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
@@ -116,6 +126,7 @@ Cron jobs panel notes:
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
 - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
+- `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
 - Stop:

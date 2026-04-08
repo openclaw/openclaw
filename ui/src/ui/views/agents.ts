@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -196,7 +197,7 @@ export function renderAgents(props: AgentsProps) {
               ?disabled=${props.loading}
               @click=${props.onRefresh}
             >
-              ${props.loading ? "Loading…" : "Refresh"}
+              ${props.loading ? t("common.loading") : t("common.refresh")}
             </button>
           </div>
         </div>

@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => ({
   convertMarkdownTables: vi.fn((text: string) => text),
   record: vi.fn(),
   resolveNextcloudTalkAccount: vi.fn(),
+  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
   generateNextcloudTalkSignature: vi.fn(() => ({
     random: "r",
     signature: "s",
@@ -26,10 +27,26 @@ vi.mock("./send.runtime.js", () => {
     getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
     resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+    ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
   };
 });
 
 const { sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js");
+
+function expectProvidedMessageCfgThreading(cfg: unknown): void {
+  expectProvidedCfgSkipsRuntimeLoad({
+    loadConfig: hoisted.loadConfig,
+    resolveAccount: hoisted.resolveNextcloudTalkAccount,
+    cfg,
+    accountId: "work",
+  });
+  expect(hoisted.resolveMarkdownTableMode).toHaveBeenCalledWith({
+    cfg,
+    channel: "nextcloud-talk",
+    accountId: "default",
+  });
+  expect(hoisted.convertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
+}
 
 describe("nextcloud-talk send cfg threading", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -38,6 +55,17 @@ describe("nextcloud-talk send cfg threading", () => {
     baseUrl: "https://nextcloud.example.com",
     secret: "secret-value",
   };
+
+  function mockNextcloudMessageResponse(messageId: number, timestamp: number): void {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ocs: { data: { id: messageId, timestamp } },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+  }
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
@@ -50,6 +78,7 @@ describe("nextcloud-talk send cfg threading", () => {
     hoisted.resolveMarkdownTableMode.mockClear();
     hoisted.convertMarkdownTables.mockClear();
     hoisted.record.mockReset();
+    hoisted.ssrfPolicyFromPrivateNetworkOptIn.mockClear();
     hoisted.generateNextcloudTalkSignature.mockClear();
     hoisted.resolveNextcloudTalkAccount.mockReset();
     hoisted.resolveNextcloudTalkAccount.mockReturnValue(defaultAccount);
@@ -63,32 +92,14 @@ describe("nextcloud-talk send cfg threading", () => {
 
   it("uses provided cfg for sendMessage and skips runtime loadConfig", async () => {
     const cfg = { source: "provided" } as const;
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          ocs: { data: { id: 12345, timestamp: 1_706_000_000 } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+    mockNextcloudMessageResponse(12345, 1_706_000_000);
 
     const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
       cfg,
       accountId: "work",
     });
 
-    expectProvidedCfgSkipsRuntimeLoad({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
-      cfg,
-      accountId: "work",
-    });
-    expect(hoisted.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg,
-      channel: "nextcloud-talk",
-      accountId: "default",
-    });
-    expect(hoisted.convertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
+    expectProvidedMessageCfgThreading(cfg);
     expect(hoisted.record).toHaveBeenCalledWith({
       channel: "nextcloud-talk",
       accountId: "default",
@@ -107,32 +118,14 @@ describe("nextcloud-talk send cfg threading", () => {
     hoisted.record.mockImplementation(() => {
       throw new Error("Nextcloud Talk runtime not initialized");
     });
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          ocs: { data: { id: 12346, timestamp: 1_706_000_001 } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+    mockNextcloudMessageResponse(12346, 1_706_000_001);
 
     const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
       cfg,
       accountId: "work",
     });
 
-    expectProvidedCfgSkipsRuntimeLoad({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
-      cfg,
-      accountId: "work",
-    });
-    expect(hoisted.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg,
-      channel: "nextcloud-talk",
-      accountId: "default",
-    });
-    expect(hoisted.convertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
+    expectProvidedMessageCfgThreading(cfg);
     expect(result).toEqual({
       messageId: "12346",
       roomToken: "abc123",

@@ -1,25 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  installRemoteProfileTestLifecycle,
   loadRemoteProfileTestDeps,
   type RemoteProfileTestDeps,
-} from "./server-context.remote-profile-tab-ops.shared.js";
+} from "./server-context.remote-profile-tab-ops.test-helpers.js";
 
-let deps: RemoteProfileTestDeps;
-
-beforeAll(async () => {
-  deps = await loadRemoteProfileTestDeps();
-});
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  globalThis.fetch = deps.originalFetch;
-});
-
-afterEach(async () => {
-  await deps.closePlaywrightBrowserConnection().catch(() => {});
-  globalThis.fetch = deps.originalFetch;
-  vi.restoreAllMocks();
-});
+const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
+installRemoteProfileTestLifecycle(deps);
 
 describe("browser remote profile tab ops via Playwright", () => {
   it("uses Playwright tab operations when available", async () => {

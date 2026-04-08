@@ -8,6 +8,7 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -114,7 +115,18 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   }
 
   const normalized = normalizeHostPath(sourceRaw);
-  return getBlockedReasonForSourcePath(normalized, getBlockedHostPaths());
+  const blockedHostPaths = getBlockedHostPaths();
+  const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
+  if (directReason) {
+    return directReason;
+  }
+
+  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+  if (canonical !== normalized) {
+    return getBlockedReasonForSourcePath(canonical, blockedHostPaths);
+  }
+
+  return null;
 }
 
 export function getBlockedReasonForSourcePath(
@@ -355,7 +367,7 @@ export function validateNetworkMode(
 }
 
 export function validateSeccompProfile(profile: string | undefined): void {
-  if (profile && BLOCKED_SECCOMP_PROFILES.has(profile.trim().toLowerCase())) {
+  if (profile && BLOCKED_SECCOMP_PROFILES.has(normalizeOptionalLowercaseString(profile) ?? "")) {
     throw new Error(
       `Sandbox security: seccomp profile "${profile}" is blocked. ` +
         "Disabling seccomp removes syscall filtering and weakens sandbox isolation. " +
@@ -365,7 +377,7 @@ export function validateSeccompProfile(profile: string | undefined): void {
 }
 
 export function validateApparmorProfile(profile: string | undefined): void {
-  if (profile && BLOCKED_APPARMOR_PROFILES.has(profile.trim().toLowerCase())) {
+  if (profile && BLOCKED_APPARMOR_PROFILES.has(normalizeOptionalLowercaseString(profile) ?? "")) {
     throw new Error(
       `Sandbox security: apparmor profile "${profile}" is blocked. ` +
         "Disabling AppArmor removes mandatory access controls and weakens sandbox isolation. " +

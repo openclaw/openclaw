@@ -12,6 +12,10 @@ import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -200,7 +204,7 @@ export async function agentsAddCommand(
         },
       }));
 
-    const agentName = String(name ?? "").trim();
+    const agentName = normalizeOptionalString(String(name ?? "")) ?? "";
     const agentId = normalizeAgentId(agentName);
     if (agentName !== agentId) {
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
@@ -226,7 +230,9 @@ export async function agentsAddCommand(
       initialValue: workspaceDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    const workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || workspaceDefault);
+    const workspaceDir = resolveUserPath(
+      normalizeOptionalString(String(workspaceInput ?? "")) || workspaceDefault,
+    );
     const agentDir = resolveAgentDir(cfg, agentId);
 
     let nextConfig = applyAgentConfig(cfg, {
@@ -241,7 +247,8 @@ export async function agentsAddCommand(
       const sourceAuthPath = resolveAuthStorePath(resolveAgentDir(cfg, defaultAgentId));
       const destAuthPath = resolveAuthStorePath(agentDir);
       const sameAuthPath =
-        path.resolve(sourceAuthPath).toLowerCase() === path.resolve(destAuthPath).toLowerCase();
+        normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
+        normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));
       if (
         !sameAuthPath &&
         (await fileExists(sourceAuthPath)) &&

@@ -176,7 +176,7 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("does not pin connected node commands to the approved pairing record", async () => {
+  test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
     const started = await startServerWithClient("secret");
     const pairedNode = await pairDeviceIdentity({
       name: "node-command-pin",
@@ -226,8 +226,7 @@ describe("gateway node pairing authorization", () => {
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
         if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) ===
-          JSON.stringify(["canvas.snapshot", "system.run"])
+          JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify(["canvas.snapshot"])
         ) {
           break;
         }
@@ -238,7 +237,18 @@ describe("gateway node pairing authorization", () => {
           .find((entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected)
           ?.commands?.toSorted(),
         JSON.stringify(lastNodes),
-      ).toEqual(["canvas.snapshot", "system.run"]);
+      ).toEqual(["canvas.snapshot"]);
+
+      await expect(listNodePairing()).resolves.toEqual(
+        expect.objectContaining({
+          pending: [
+            expect.objectContaining({
+              nodeId: pairedNode.identity.deviceId,
+              commands: ["canvas.snapshot", "system.run"],
+            }),
+          ],
+        }),
+      );
     } finally {
       controlWs?.close();
       await firstClient?.stopAndWait();
@@ -249,7 +259,7 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("does not request repair pairing when a paired node reconnects with more commands", async () => {
+  test("requests re-pairing when a commandless paired node reconnects with system.run", async () => {
     const started = await startServerWithClient("secret");
     const pairedNode = await pairDeviceIdentity({
       name: "node-command-empty",
@@ -289,10 +299,7 @@ describe("gateway node pairing authorization", () => {
         const node = lastNodes.find(
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
-        if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) ===
-          JSON.stringify(["canvas.snapshot", "system.run"])
-        ) {
+        if (JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify([])) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -300,14 +307,16 @@ describe("gateway node pairing authorization", () => {
       const repairedNode = lastNodes.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
       );
-      expect(repairedNode?.commands?.toSorted(), JSON.stringify(lastNodes)).toEqual([
-        "canvas.snapshot",
-        "system.run",
-      ]);
+      expect(repairedNode?.commands?.toSorted(), JSON.stringify(lastNodes)).toEqual([]);
 
       await expect(listNodePairing()).resolves.toEqual(
         expect.objectContaining({
-          pending: [],
+          pending: [
+            expect.objectContaining({
+              nodeId: pairedNode.identity.deviceId,
+              commands: ["canvas.snapshot", "system.run"],
+            }),
+          ],
         }),
       );
     } finally {

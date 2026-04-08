@@ -1,44 +1,53 @@
 import { describe, expect, it } from "vitest";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-} from "./bundled-capability-metadata.js";
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
-
-function uniqueStrings(values: readonly string[] | undefined): string[] {
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values ?? []) {
-    const normalized = value.trim();
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    result.push(normalized);
-  }
-  return result;
-}
+} from "./contracts/inventory/bundled-capability-metadata.js";
+import { uniqueStrings } from "./contracts/shared.js";
 
 describe("bundled capability metadata", () => {
   it("keeps contract snapshots aligned with bundled plugin manifests", () => {
     const expected = listBundledPluginMetadata()
       .map(({ manifest }) => ({
         pluginId: manifest.id,
-        cliBackendIds: uniqueStrings(manifest.cliBackends),
-        providerIds: uniqueStrings(manifest.providers),
-        speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+        cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
+        providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
+        speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) =>
+          value.trim(),
+        ),
         realtimeTranscriptionProviderIds: uniqueStrings(
           manifest.contracts?.realtimeTranscriptionProviders,
+          (value) => value.trim(),
         ),
-        realtimeVoiceProviderIds: uniqueStrings(manifest.contracts?.realtimeVoiceProviders),
+        realtimeVoiceProviderIds: uniqueStrings(
+          manifest.contracts?.realtimeVoiceProviders,
+          (value) => value.trim(),
+        ),
         mediaUnderstandingProviderIds: uniqueStrings(
           manifest.contracts?.mediaUnderstandingProviders,
+          (value) => value.trim(),
         ),
-        imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
-        webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
-        webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
-        toolNames: uniqueStrings(manifest.contracts?.tools),
+        imageGenerationProviderIds: uniqueStrings(
+          manifest.contracts?.imageGenerationProviders,
+          (value) => value.trim(),
+        ),
+        videoGenerationProviderIds: uniqueStrings(
+          manifest.contracts?.videoGenerationProviders,
+          (value) => value.trim(),
+        ),
+        musicGenerationProviderIds: uniqueStrings(
+          manifest.contracts?.musicGenerationProviders,
+          (value) => value.trim(),
+        ),
+        webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders, (value) =>
+          value.trim(),
+        ),
+        webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
+          value.trim(),
+        ),
+        toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
       }))
       .filter(
         (entry) =>
@@ -49,6 +58,8 @@ describe("bundled capability metadata", () => {
           entry.realtimeVoiceProviderIds.length > 0 ||
           entry.mediaUnderstandingProviderIds.length > 0 ||
           entry.imageGenerationProviderIds.length > 0 ||
+          entry.videoGenerationProviderIds.length > 0 ||
+          entry.musicGenerationProviderIds.length > 0 ||
           entry.webFetchProviderIds.length > 0 ||
           entry.webSearchProviderIds.length > 0 ||
           entry.toolNames.length > 0,

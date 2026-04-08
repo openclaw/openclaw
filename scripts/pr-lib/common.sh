@@ -74,6 +74,10 @@ changelog_required_for_changed_files() {
 print_review_stdout_summary() {
   require_artifact .local/review.md
   require_artifact .local/review.json
+  require_artifact .local/pr-meta.env
+
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
 
   local recommendation
   recommendation=$(jq -r '.recommendation // ""' .local/review.json)
@@ -81,6 +85,7 @@ print_review_stdout_summary() {
   finding_count=$(jq '[.findings[]?] | length' .local/review.json)
 
   echo "review summary:"
+  echo "pr_url=${PR_URL:-}"
   echo "recommendation: $recommendation"
   echo "findings: $finding_count"
   cat .local/review.md

@@ -4,10 +4,10 @@ import path from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
+import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
 import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,

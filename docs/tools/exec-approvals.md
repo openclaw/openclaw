@@ -24,6 +24,11 @@ host policy sources, and the effective result.
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).
 
+Native chat approval clients can also expose channel-specific affordances on the
+pending approval message. For example, Matrix can seed reaction shortcuts on the
+approval prompt (`✅` allow once, `❌` deny, and `♾️` allow always when available)
+while still leaving the `/approve ...` commands in the message as a fallback.
+
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:
@@ -108,6 +113,7 @@ Important distinction:
 
 - `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
+- In YOLO mode, OpenClaw does not add a separate heuristic command-obfuscation approval gate on top of the configured host exec policy.
 - `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`, and `host=gateway` is only allowed from `auto` when no sandbox runtime is active. If you want a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 If you want a more conservative setup, tighten either layer back to `allowlist` / `on-miss`
@@ -509,6 +515,11 @@ Some channels can also act as native approval clients. Native clients add approv
 fanout, and channel-specific interactive approval UX on top of the shared same-chat `/approve`
 flow.
 
+When native approval cards/buttons are available, that native UI is the primary
+agent-facing path. The agent should not also echo a duplicate plain chat
+`/approve` command unless the tool result says chat approvals are unavailable or
+manual approval is the only remaining path.
+
 Generic model:
 
 - host exec policy still decides whether exec approval is required
@@ -546,8 +557,8 @@ Shared behavior:
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
-- Matrix native DM/channel routing is exec-only; Matrix plugin approvals stay on the shared
-  same-chat `/approve` and optional `approvals.plugin` forwarding paths
+- Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
+  plugin authorization still comes from `channels.matrix.dm.allowFrom`
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - native Discord approval buttons route by approval id kind: `plugin:` ids go

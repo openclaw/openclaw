@@ -1,6 +1,6 @@
 ---
 title: "Configuration Reference"
-summary: "Complete reference for every OpenClaw config key, defaults, and channel settings"
+summary: "Gateway config reference for core OpenClaw keys, defaults, and links to dedicated subsystem references"
 read_when:
   - You need exact field-level config semantics or defaults
   - You are validating channel, model, gateway, or tool config blocks
@@ -8,7 +8,21 @@ read_when:
 
 # Configuration Reference
 
-Every field available in `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
+Core config reference for `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
+
+This page covers the main OpenClaw config surfaces and links out when a subsystem has its own deeper reference. It does **not** try to inline every channel/plugin-owned command catalog or every deep memory/QMD knob on one page.
+
+Code truth:
+
+- `openclaw config schema` prints the live JSON Schema used for validation and Control UI, with bundled/plugin/channel metadata merged in when available
+- `config.schema.lookup` returns one path-scoped schema node for drill-down tooling
+- `pnpm config:docs:check` / `pnpm config:docs:gen` validate the config-doc baseline hash against the current schema surface
+
+Dedicated deep references:
+
+- [Memory configuration reference](/reference/memory-config) for `agents.defaults.memorySearch.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`
+- [Slash Commands](/tools/slash-commands) for the current built-in + bundled command catalog
+- owning channel/plugin pages for channel-specific command surfaces
 
 Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
 
@@ -73,6 +87,7 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
   channels: {
     defaults: {
       groupPolicy: "allowlist", // open | allowlist | disabled
+      contextVisibility: "all", // all | allowlist | allowlist_quote
       heartbeat: {
         showOk: false,
         showAlerts: true,
@@ -84,6 +99,7 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
 ```
 
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
+- `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
 - `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output.
 - `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output.
 - `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output.
@@ -177,7 +193,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         { command: "generate", description: "Create an image" },
       ],
       historyLimit: 50,
-      replyToMode: "first", // off | first | all
+      replyToMode: "first", // off | first | all | batched
       linkPreview: true,
       streaming: "partial", // off | partial | block | progress (default: off; opt in explicitly to avoid preview-edit rate limits)
       actions: { reactions: true, sendMessage: true },
@@ -218,7 +234,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     discord: {
       enabled: true,
       token: "your-bot-token",
-      mediaMaxMb: 8,
+      mediaMaxMb: 100,
       allowBots: false,
       actions: {
         reactions: true,
@@ -237,7 +253,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         events: true,
         moderation: false,
       },
-      replyToMode: "off", // off | first | all
+      replyToMode: "off", // off | first | all | batched
       dmPolicy: "pairing",
       allowFrom: ["1234567890", "123456789012345678"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
@@ -291,6 +307,14 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
           openai: { voice: "alloy" },
         },
       },
+      execApprovals: {
+        enabled: "auto", // true | false | "auto"
+        approvers: ["987654321098765432"],
+        agentFilter: ["default"],
+        sessionFilter: ["discord:"],
+        target: "dm", // dm | channel | both
+        cleanupAfterResolve: false,
+      },
       retry: {
         attempts: 3,
         minDelayMs: 500,
@@ -323,6 +347,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
+- `channels.discord.execApprovals`: Discord-native exec approval delivery and approver authorization.
+  - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
+  - `approvers`: Discord user IDs allowed to approve exec requests. Falls back to `commands.ownerAllowFrom` when omitted.
+  - `agentFilter`: optional agent ID allowlist. Omit to forward approvals for all agents.
+  - `sessionFilter`: optional session key patterns (substring or regex).
+  - `target`: where to send approval prompts. `"dm"` (default) sends to approver DMs, `"channel"` sends to the originating channel, `"both"` sends to both. When target includes `"channel"`, buttons are only usable by resolved approvers.
+  - `cleanupAfterResolve`: when `true`, deletes approval DMs after approval, denial, or timeout.
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -388,7 +419,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       allowBots: false,
       reactionNotifications: "own",
       reactionAllowlist: ["U123"],
-      replyToMode: "off", // off | first | all
+      replyToMode: "off", // off | first | all | batched
       thread: {
         historyScope: "thread", // thread | channel
         inheritParent: false,
@@ -409,9 +440,18 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       typingReaction: "hourglass_flowing_sand",
       textChunkLimit: 4000,
       chunkMode: "length",
-      streaming: "partial", // off | partial | block | progress (preview mode)
-      nativeStreaming: true, // use Slack native streaming API when streaming=partial
+      streaming: {
+        mode: "partial", // off | partial | block | progress
+        nativeTransport: true, // use Slack native streaming API when mode=partial
+      },
       mediaMaxMb: 20,
+      execApprovals: {
+        enabled: "auto", // true | false | "auto"
+        approvers: ["U123"],
+        agentFilter: ["default"],
+        sessionFilter: ["slack:"],
+        target: "dm", // dm | channel | both
+      },
     },
   },
 }
@@ -419,16 +459,25 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+  strings or SecretRef objects.
+- Slack account snapshots expose per-credential source/status fields such as
+  `botTokenSource`, `botTokenStatus`, `appTokenStatus`, and, in HTTP mode,
+  `signingSecretStatus`. `configured_unavailable` means the account is
+  configured through SecretRef but the current command/runtime path could not
+  resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
-- `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `channels.slack.streaming.mode` is the canonical Slack stream mode key. `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport. Legacy `streamMode`, boolean `streaming`, and `nativeStreaming` values are auto-migrated.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
 
 **Thread session isolation:** `thread.historyScope` is per-thread (default) or shared across channel. `thread.inheritParent` copies parent channel transcript to new threads.
 
+- Slack native streaming plus the Slack assistant-style "is typing..." thread status require a reply thread target. Top-level DMs stay off-thread by default, so they use `typingReaction` or normal delivery instead of the thread-style preview.
 - `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Use a Slack emoji shortcode such as `"hourglass_flowing_sand"`.
+- `channels.slack.execApprovals`: Slack-native exec approval delivery and approver authorization. Same schema as Discord: `enabled` (`true`/`false`/`"auto"`), `approvers` (Slack user IDs), `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`).
 
 | Action group | Default | Notes                  |
 | ------------ | ------- | ---------------------- |
@@ -614,8 +663,17 @@ Matrix is extension-backed and configured under `channels.matrix`.
 
 - Token auth uses `accessToken`; password auth uses `userId` + `password`.
 - `channels.matrix.proxy` routes Matrix HTTP traffic through an explicit HTTP(S) proxy. Named accounts can override it with `channels.matrix.accounts.<id>.proxy`.
-- `channels.matrix.allowPrivateNetwork` allows private/internal homeservers. `proxy` and `allowPrivateNetwork` are independent controls.
+- `channels.matrix.network.dangerouslyAllowPrivateNetwork` allows private/internal homeservers. `proxy` and this network opt-in are independent controls.
 - `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
+- `channels.matrix.autoJoin` defaults to `off`, so invited rooms and fresh DM-style invites are ignored until you set `autoJoin: "allowlist"` with `autoJoinAllowlist` or `autoJoin: "always"`.
+- `channels.matrix.execApprovals`: Matrix-native exec approval delivery and approver authorization.
+  - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
+  - `approvers`: Matrix user IDs (e.g. `@owner:example.org`) allowed to approve exec requests.
+  - `agentFilter`: optional agent ID allowlist. Omit to forward approvals for all agents.
+  - `sessionFilter`: optional session key patterns (substring or regex).
+  - `target`: where to send approval prompts. `"dm"` (default), `"channel"` (originating room), or `"both"`.
+  - Per-account overrides: `channels.matrix.accounts.<id>.execApprovals`.
+- `channels.matrix.dm.sessionScope` controls how Matrix DMs group into sessions: `per-user` (default) shares by routed peer, while `per-room` isolates each DM room.
 - Matrix status probes and live directory lookups use the same proxy policy as runtime traffic.
 - Full Matrix configuration, targeting rules, and setup examples are documented in [Matrix](/channels/matrix).
 
@@ -773,12 +831,18 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 {
   commands: {
     native: "auto", // register native commands when supported
+    nativeSkills: "auto", // register native skill commands when supported
     text: true, // parse /commands in chat messages
     bash: false, // allow ! (alias: /bash)
     bashForegroundMs: 2000,
     config: false, // allow /config
+    mcp: false, // allow /mcp
+    plugins: false, // allow /plugins
     debug: false, // allow /debug
-    restart: false, // allow /restart + gateway restart tool
+    restart: true, // allow /restart + gateway restart tool
+    ownerAllowFrom: ["discord:123456789012345678"],
+    ownerDisplay: "raw", // raw | hash
+    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
@@ -790,16 +854,32 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 
 <Accordion title="Command details">
 
+- This block configures command surfaces. For the current built-in + bundled command catalog, see [Slash Commands](/tools/slash-commands).
+- This page is a **config-key reference**, not the full command catalog. Channel/plugin-owned commands such as QQ Bot `/bot-ping` `/bot-help` `/bot-logs`, LINE `/card`, device-pair `/pair`, memory `/dreaming`, phone-control `/phone`, and Talk `/voice` are documented in their channel/plugin pages plus [Slash Commands](/tools/slash-commands).
 - Text commands must be **standalone** messages with leading `/`.
 - `native: "auto"` turns on native commands for Discord/Telegram, leaves Slack off.
+- `nativeSkills: "auto"` turns on native skill commands for Discord/Telegram, leaves Slack off.
 - Override per channel: `channels.discord.commands.native` (bool or `"auto"`). `false` clears previously registered commands.
+- Override native skill registration per channel with `channels.<provider>.commands.nativeSkills`.
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries.
 - `bash: true` enables `! <cmd>` for host shell. Requires `tools.elevated.enabled` and sender in `tools.elevated.allowFrom.<channel>`.
 - `config: true` enables `/config` (reads/writes `openclaw.json`). For gateway `chat.send` clients, persistent `/config set|unset` writes also require `operator.admin`; read-only `/config show` stays available to normal write-scoped operator clients.
+- `mcp: true` enables `/mcp` for OpenClaw-managed MCP server config under `mcp.servers`.
+- `plugins: true` enables `/plugins` for plugin discovery, install, and enable/disable controls.
 - `channels.<provider>.configWrites` gates config mutations per channel (default: true).
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
+- `restart: false` disables `/restart` and gateway restart tool actions. Default: `true`.
+- `ownerAllowFrom` is the explicit owner allowlist for owner-only commands/tools. It is separate from `allowFrom`.
+- `ownerDisplay: "hash"` hashes owner ids in the system prompt. Set `ownerDisplaySecret` to control hashing.
 - `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
 - `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+- Command docs map:
+  - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)
+  - channel-specific command surfaces: [Channels](/channels)
+  - QQ Bot commands: [QQ Bot](/channels/qqbot)
+  - pairing commands: [Pairing](/channels/pairing)
+  - LINE card command: [LINE](/channels/line)
+  - memory dreaming: [Dreaming](/concepts/dreaming)
 
 </Accordion>
 
@@ -858,6 +938,18 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 ```json5
 {
   agents: { defaults: { skipBootstrap: true } },
+}
+```
+
+### `agents.defaults.contextInjection`
+
+Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+
+- `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
+
+```json5
+{
+  agents: { defaults: { contextInjection: "continuation-skip" } },
 }
 ```
 
@@ -952,6 +1044,10 @@ Time format in system prompt. Default: `auto` (OS preference).
         primary: "openai/gpt-image-1",
         fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
+      videoGenerationModel: {
+        primary: "qwen/wan2.6-t2v",
+        fallbacks: ["qwen/wan2.6-i2v"],
+      },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["openai/gpt-5.4-mini"],
@@ -982,6 +1078,17 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
+- `musicGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared music-generation capability and the built-in `music_generate` tool.
+  - Typical values: `google/lyria-3-clip-preview`, `google/lyria-3-pro-preview`, or `minimax/music-2.5+`.
+  - If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order.
+  - If you select a provider/model directly, configure the matching provider auth/API key too.
+- `videoGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared video-generation capability and the built-in `video_generate` tool.
+  - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
+  - If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order.
+  - If you select a provider/model directly, configure the matching provider auth/API key too.
+  - The bundled Qwen video-generation provider currently supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
@@ -989,7 +1096,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`).
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
@@ -1024,8 +1131,8 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   agents: {
     defaults: {
       cliBackends: {
-        "claude-cli": {
-          command: "/opt/homebrew/bin/claude",
+        "codex-cli": {
+          command: "/opt/homebrew/bin/codex",
         },
         "my-cli": {
           command: "my-cli",
@@ -1049,6 +1156,20 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
 - Sessions supported when `sessionArg` is set.
 - Image pass-through supported when `imageArg` accepts file paths.
 
+### `agents.defaults.systemPromptOverride`
+
+Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at the default level (`agents.defaults.systemPromptOverride`) or per agent (`agents.list[].systemPromptOverride`). Per-agent values take precedence; an empty or whitespace-only value is ignored. Useful for controlled prompt experiments.
+
+```json5
+{
+  agents: {
+    defaults: {
+      systemPromptOverride: "You are a helpful assistant.",
+    },
+  },
+}
+```
+
 ### `agents.defaults.heartbeat`
 
 Periodic heartbeat runs.
@@ -1061,6 +1182,7 @@ Periodic heartbeat runs.
         every: "30m", // 0m disables
         model: "openai/gpt-5.4-mini",
         includeReasoning: false,
+        includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         session: "main",
@@ -1077,6 +1199,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
+- `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
@@ -1092,6 +1215,7 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        provider: "my-provider", // id of a registered compaction provider plugin (optional)
         timeoutSeconds: 900,
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
@@ -1103,7 +1227,7 @@ Periodic heartbeat runs.
           enabled: true,
           softThresholdTokens: 6000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with the exact silent token NO_REPLY if nothing to store.",
         },
       },
     },
@@ -1112,6 +1236,7 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
@@ -1834,7 +1959,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 }
 ```
 
-- `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
+- `auto` controls the default auto-TTS mode: `off`, `always`, `inbound`, or `tagged`. `/tts on|off` can override local prefs, and `/tts status` shows the effective state.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
@@ -1887,27 +2012,29 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 
-| Profile     | Includes                                                                                  |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                     |
-| `coding`    | `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`                    |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status` |
-| `full`      | No restriction (same as unset)                                                            |
+| Profile     | Includes                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                                           |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                       |
+| `full`      | No restriction (same as unset)                                                                                                  |
 
 ### Tool groups
 
-| Group              | Tools                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process` (`bash` is accepted as an alias for `exec`)                            |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                   |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                                            |
-| `group:web`        | `web_search`, `web_fetch`                                                                |
-| `group:ui`         | `browser`, `canvas`                                                                      |
-| `group:automation` | `cron`, `gateway`                                                                        |
-| `group:messaging`  | `message`                                                                                |
-| `group:nodes`      | `nodes`                                                                                  |
-| `group:openclaw`   | All built-in tools (excludes provider plugins)                                           |
+| Group              | Tools                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                           |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
+| `group:ui`         | `browser`, `canvas`                                                                                                     |
+| `group:automation` | `cron`, `gateway`                                                                                                       |
+| `group:messaging`  | `message`                                                                                                               |
+| `group:nodes`      | `nodes`                                                                                                                 |
+| `group:agents`     | `agents_list`                                                                                                           |
+| `group:media`      | `image`, `image_generate`, `video_generate`, `tts`                                                                      |
+| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
 
 ### `tools.allow` / `tools.deny`
 
@@ -2025,10 +2152,14 @@ Settings can be defined globally in `tools.loopDetection` and overridden per-age
       },
       fetch: {
         enabled: true,
+        provider: "firecrawl", // optional; omit for auto-detect
         maxChars: 50000,
         maxCharsCap: 50000,
+        maxResponseBytes: 2000000,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
+        maxRedirects: 3,
+        readability: true,
         userAgent: "custom-ua",
       },
     },
@@ -2045,6 +2176,9 @@ Configures inbound media understanding (image/audio/video):
   tools: {
     media: {
       concurrency: 2,
+      asyncCompletion: {
+        directSend: false, // opt-in: send finished async music/video directly to the channel
+      },
       audio: {
         enabled: true,
         maxBytes: 20971520,
@@ -2087,6 +2221,12 @@ Configures inbound media understanding (image/audio/video):
 - Failures fall back to the next entry.
 
 Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+
+**Async completion fields:**
+
+- `asyncCompletion.directSend`: when `true`, completed async `music_generate`
+  and `video_generate` tasks try direct channel delivery first. Default: `false`
+  (legacy requester-session wake/model-delivery path).
 
 </Accordion>
 
@@ -2156,6 +2296,26 @@ Notes:
 - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+
+### `tools.experimental`
+
+Experimental built-in tool flags. Default off unless a runtime-specific auto-enable rule applies.
+
+```json5
+{
+  tools: {
+    experimental: {
+      planTool: true, // enable experimental update_plan
+    },
+  },
+}
+```
+
+Notes:
+
+- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
+- Default: `false` for non-OpenAI providers. OpenAI and OpenAI Codex runs auto-enable it when unset; set `false` to disable that auto-enable.
+- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
 
 ### `agents.defaults.subagents`
 
@@ -2237,17 +2397,23 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
+- `models.providers.*.request`: transport overrides for model-provider HTTP requests.
+  - `request.headers`: extra headers (merged with provider defaults). Values accept SecretRef.
+  - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`).
+  - `request.proxy`: HTTP proxy override. Modes: `"env-proxy"` (use `HTTP_PROXY`/`HTTPS_PROXY` env vars), `"explicit-proxy"` (with `url`). Both modes accept an optional `tls` sub-object.
+  - `request.tls`: TLS override for direct connections. Fields: `ca`, `cert`, `key`, `passphrase` (all accept SecretRef), `serverName`, `insecureSkipVerify`.
 - `models.providers.*.models`: explicit provider model catalog entries.
 - `models.providers.*.models.*.contextWindow`: native model context window metadata.
 - `models.providers.*.models.*.contextTokens`: optional runtime context cap. Use this when you want a smaller effective context budget than the model's native `contextWindow`.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
-- `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
-- `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
-- `models.bedrockDiscovery.region`: AWS region for discovery.
-- `models.bedrockDiscovery.providerFilter`: optional provider-id filter for targeted discovery.
-- `models.bedrockDiscovery.refreshInterval`: polling interval for discovery refresh.
-- `models.bedrockDiscovery.defaultContextWindow`: fallback context window for discovered models.
-- `models.bedrockDiscovery.defaultMaxTokens`: fallback max output tokens for discovered models.
+- `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
+- `plugins.entries.amazon-bedrock.config.discovery`: Bedrock auto-discovery settings root.
+- `plugins.entries.amazon-bedrock.config.discovery.enabled`: turn implicit discovery on/off.
+- `plugins.entries.amazon-bedrock.config.discovery.region`: AWS region for discovery.
+- `plugins.entries.amazon-bedrock.config.discovery.providerFilter`: optional provider-id filter for targeted discovery.
+- `plugins.entries.amazon-bedrock.config.discovery.refreshInterval`: polling interval for discovery refresh.
+- `plugins.entries.amazon-bedrock.config.discovery.defaultContextWindow`: fallback context window for discovered models.
+- `plugins.entries.amazon-bedrock.config.discovery.defaultMaxTokens`: fallback max output tokens for discovered models.
 
 ### Provider examples
 
@@ -2552,6 +2718,25 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
+- `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
+  - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
+  - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`).
+  - `onlyMainContent`: extract only the main content from pages (default: `true`).
+  - `maxAgeMs`: maximum cache age in milliseconds (default: `172800000` / 2 days).
+  - `timeoutSeconds`: scrape request timeout in seconds (default: `60`).
+- `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
+  - `enabled`: enable the X Search provider.
+  - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
+- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+  - `enabled`: master dreaming switch (default `false`).
+  - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
+  - phase policy and thresholds are implementation details (not user-facing config keys).
+- Full memory config lives in [Memory configuration reference](/reference/memory-config):
+  - `agents.defaults.memorySearch.*`
+  - `memory.backend`
+  - `memory.citations`
+  - `memory.qmd.*`
+  - `plugins.entries.memory-core.config.dreaming`
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
@@ -2612,6 +2797,10 @@ See [Plugins](/tools/plugin).
 - `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles keep the current Chrome MCP route limits:
+  snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
+  hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
+  `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
@@ -3131,7 +3320,8 @@ Notes:
 
 - `billingBackoffHours`: base backoff in hours when a profile fails due to true
   billing/insufficient-credit errors (default: `5`). Explicit billing text can
-  still land here even on `401`/`403` responses (for example OpenRouter
+  still land here even on `401`/`403` responses, but provider-specific text
+  matchers stay scoped to the provider that owns them (for example OpenRouter
   `Key limit exceeded`). Retryable HTTP `402` usage-window or
   organization/workspace spend-limit messages stay in the `rate_limit` path
   instead.
@@ -3140,9 +3330,9 @@ Notes:
 - `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
 - `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
-- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
+- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`). Provider-busy shapes such as `ModelNotReadyException` land here.
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
-- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`).
+- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`). That rate-limit bucket includes provider-shaped text such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, and `resource exhausted`.
 
 ---
 
@@ -3192,6 +3382,7 @@ Notes:
 
     cacheTrace: {
       enabled: false,
+      filePath: "~/.openclaw/logs/cache-trace.jsonl",
       includeMessages: true,
       includePrompt: true,
       includeSystem: true,
@@ -3212,6 +3403,7 @@ Notes:
 - `otel.sampleRate`: trace sampling rate `0`–`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
+- `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).
 - `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).
 
 ---
@@ -3285,7 +3477,9 @@ Notes:
 - `stream.hiddenBoundarySeparator`: separator before visible text after hidden tool events (default: `"paragraph"`).
 - `stream.maxOutputChars`: maximum assistant output characters projected per ACP turn.
 - `stream.maxSessionUpdateChars`: maximum characters for projected ACP status/update lines.
+- `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
 - `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
+- `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.
 
 ---
 

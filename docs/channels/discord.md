@@ -571,8 +571,14 @@ Default slash command settings:
     - `off` (default)
     - `first`
     - `all`
+    - `batched`
 
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+    `first` always attaches the implicit native reply reference to the first outbound Discord message for the turn.
+    `batched` only attaches Discord's implicit native reply reference when the
+    inbound turn was a debounced batch of multiple messages. This is useful
+    when you want native replies mainly for ambiguous bursty chats, not every
+    single-message turn.
 
     Message IDs are surfaced in context/history so agents can target specific messages.
 
@@ -959,6 +965,9 @@ Default slash command settings:
     When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 
     Discord also renders the shared approval buttons used by other chat channels. The native Discord adapter mainly adds approver DM routing and channel fanout.
+    When those buttons are present, they are the primary approval UX; OpenClaw
+    should only include a manual `/approve` command when the tool result says
+    chat approvals are unavailable or manual approval is the only path.
 
     Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
 
@@ -993,6 +1002,8 @@ Core examples:
 - reactions: `react`, `reactions`, `emojiList`
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
+
+The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
 
 Action gates live under `channels.discord.actions.*`.
 
@@ -1228,7 +1239,7 @@ High-signal Discord fields:
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
-  - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
+  - `mediaMaxMb` caps outbound Discord uploads (default: `100MB`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`

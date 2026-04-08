@@ -105,6 +105,7 @@ export function makeEmbeddedRunnerAttempt(
     timedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "session:test",
     systemPromptReport: undefined,
     messagesSnapshot: [],
@@ -123,6 +124,7 @@ export function makeEmbeddedRunnerAttempt(
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,
   };
 }

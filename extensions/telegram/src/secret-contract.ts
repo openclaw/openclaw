@@ -6,7 +6,15 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 export const secretTargetRegistryEntries = [
   {
@@ -65,9 +73,9 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: telegram, surface } = resolved;
-  const baseTokenFile = typeof telegram.tokenFile === "string" ? telegram.tokenFile.trim() : "";
+  const baseTokenFile = normalizeOptionalString(telegram.tokenFile) ?? "";
   const accountTokenFile = (account: Record<string, unknown>) =>
-    typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
+    normalizeOptionalString(account.tokenFile) ?? "";
   collectConditionalChannelFieldAssignments({
     channelKey: "telegram",
     field: "botToken",
@@ -91,12 +99,10 @@ export function collectRuntimeConfigAssignments(params: {
       "no enabled Telegram surface inherits this top-level botToken (tokenFile is configured).",
     accountInactiveReason: "Telegram account is disabled or tokenFile is configured.",
   });
-  const baseWebhookUrl = typeof telegram.webhookUrl === "string" ? telegram.webhookUrl.trim() : "";
+  const baseWebhookUrl = normalizeOptionalString(telegram.webhookUrl) ?? "";
   const accountWebhookUrl = (account: Record<string, unknown>) =>
     hasOwnProperty(account, "webhookUrl")
-      ? typeof account.webhookUrl === "string"
-        ? account.webhookUrl.trim()
-        : ""
+      ? (normalizeOptionalString(account.webhookUrl) ?? "")
       : baseWebhookUrl;
   collectConditionalChannelFieldAssignments({
     channelKey: "telegram",
@@ -115,3 +121,8 @@ export function collectRuntimeConfigAssignments(params: {
       "Telegram account is disabled or webhook mode is not active for this account.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

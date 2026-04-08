@@ -1,3 +1,4 @@
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
@@ -6,11 +7,32 @@ import {
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { zaloPlugin } from "./channel.js";
+import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 import { zaloDmPolicy } from "./setup-core.js";
-import { zaloSetupWizard } from "./setup-surface.js";
+import { zaloSetupAdapter, zaloSetupWizard } from "./setup-surface.js";
 
-const zaloConfigure = createPluginSetupWizardConfigure(zaloPlugin);
+const zaloSetupPlugin = {
+  id: "zalo",
+  meta: {
+    id: "zalo",
+    label: "Zalo",
+    selectionLabel: "Zalo (Bot API)",
+    docsPath: "/channels/zalo",
+    blurb: "Vietnam-focused messaging platform with Bot API.",
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"] as Array<"direct" | "group">,
+  },
+  config: {
+    listAccountIds: (cfg: unknown) => listZaloAccountIds(cfg as never),
+    defaultAccountId: (cfg: unknown) => resolveDefaultZaloAccountId(cfg as never),
+    resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
+  },
+  setup: zaloSetupAdapter,
+  setupWizard: zaloSetupWizard,
+} as const;
+
+const zaloConfigure = createPluginSetupWizardConfigure(zaloSetupPlugin);
 
 describe("zalo setup wizard", () => {
   it("configures a polling token flow", async () => {
@@ -96,7 +118,10 @@ describe("zalo setup wizard", () => {
 
     const next = zaloDmPolicy.setPolicy(cfg, "open");
     expect(next.channels?.zalo?.dmPolicy).toBe("disabled");
-    expect(next.channels?.zalo?.accounts?.work?.dmPolicy).toBe("open");
+    const workAccount = next.channels?.zalo?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
@@ -118,8 +143,11 @@ describe("zalo setup wizard", () => {
     );
 
     expect(next.channels?.zalo?.dmPolicy).toBeUndefined();
-    expect(next.channels?.zalo?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.zalo?.accounts?.work?.allowFrom).toEqual(["123456789", "*"]);
+    const workAccount = next.channels?.zalo?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {

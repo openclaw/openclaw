@@ -6,10 +6,7 @@
  * yet ship a dedicated provider plugin hook surface.
  */
 
-import {
-  classifyProviderFailoverReasonWithPlugin,
-  matchesProviderContextOverflowWithPlugin,
-} from "../../plugins/provider-runtime.js";
+import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
 import type { FailoverReason } from "./types.js";
 
 type ProviderErrorPattern = {
@@ -25,6 +22,16 @@ type ProviderErrorPattern = {
  * to catch provider-specific wording that the generic regex misses.
  */
 export const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
+  // AWS Bedrock validation / stream errors use provider-specific wording.
+  /\binput token count exceeds the maximum number of input tokens\b/i,
+  /\binput is too long for this model\b/i,
+
+  // Google Vertex / Gemini REST surfaces this wording.
+  /\binput exceeds the maximum number of tokens\b/i,
+
+  // Ollama may append a provider prefix and extra token wording.
+  /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
+
   // Cohere does not currently ship a bundled provider hook.
   /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i,
 
@@ -38,6 +45,22 @@ export const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
  * produce wrong results for specific providers.
  */
 export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
+  {
+    test: /\bthrottlingexception\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bconcurrency limit(?: has been)? reached\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bworkers_ai\b.*\bquota limit exceeded\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bmodelnotreadyexception\b/i,
+    reason: "overloaded",
+  },
   // Groq does not currently ship a bundled provider hook.
   {
     test: /model(?:_is)?_deactivated|model has been deactivated/i,
@@ -45,15 +68,68 @@ export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
   },
 ];
 
+type ProviderRuntimeHooks = {
+  classifyProviderFailoverReasonWithPlugin: (params: {
+    context: { errorMessage: string };
+  }) => FailoverReason | null;
+  matchesProviderContextOverflowWithPlugin: (params: {
+    context: { errorMessage: string };
+  }) => boolean;
+};
+
+type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
+
+const requireProviderRuntime = resolveNodeRequireFromMeta(import.meta.url);
+let cachedProviderRuntimeHooks: ProviderRuntimeHooks | null | undefined;
+
+const PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE =
+  /\b(?:context|window|prompt|token|tokens|input|request|model)\b/i;
+const PROVIDER_CONTEXT_OVERFLOW_ACTION_RE =
+  /\b(?:too\s+(?:large|long|many)|exceed(?:s|ed|ing)?|overflow|limit|maximum|max)\b/i;
+
+function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
+  if (cachedProviderRuntimeHooks !== undefined) {
+    return cachedProviderRuntimeHooks;
+  }
+  if (!requireProviderRuntime) {
+    cachedProviderRuntimeHooks = null;
+    return cachedProviderRuntimeHooks;
+  }
+  try {
+    const loaded = requireProviderRuntime(
+      "../../plugins/provider-runtime.js",
+    ) as unknown as ProviderRuntimeModule;
+    cachedProviderRuntimeHooks = {
+      classifyProviderFailoverReasonWithPlugin: ({ context }) =>
+        loaded.classifyProviderFailoverReasonWithPlugin({ context }) ?? null,
+      matchesProviderContextOverflowWithPlugin: loaded.matchesProviderContextOverflowWithPlugin,
+    };
+  } catch {
+    cachedProviderRuntimeHooks = null;
+  }
+  return cachedProviderRuntimeHooks ?? null;
+}
+
+function looksLikeProviderContextOverflowCandidate(errorMessage: string): boolean {
+  return (
+    PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE.test(errorMessage) &&
+    PROVIDER_CONTEXT_OVERFLOW_ACTION_RE.test(errorMessage)
+  );
+}
+
 /**
  * Check if an error message matches any provider-specific context overflow pattern.
  * Called from `isContextOverflowError()` to catch provider-specific wording.
  */
 export function matchesProviderContextOverflow(errorMessage: string): boolean {
+  if (!looksLikeProviderContextOverflowCandidate(errorMessage)) {
+    return false;
+  }
+  const runtimeHooks = resolveProviderRuntimeHooks();
   return (
-    matchesProviderContextOverflowWithPlugin({
+    runtimeHooks?.matchesProviderContextOverflowWithPlugin({
       context: { errorMessage },
-    }) || PROVIDER_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))
+    }) === true || PROVIDER_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage))
   );
 }
 
@@ -62,9 +138,11 @@ export function matchesProviderContextOverflow(errorMessage: string): boolean {
  * Returns null if no provider-specific pattern matches (fall through to generic classification).
  */
 export function classifyProviderSpecificError(errorMessage: string): FailoverReason | null {
-  const pluginReason = classifyProviderFailoverReasonWithPlugin({
-    context: { errorMessage },
-  });
+  const runtimeHooks = resolveProviderRuntimeHooks();
+  const pluginReason =
+    runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
+      context: { errorMessage },
+    }) ?? null;
   if (pluginReason) {
     return pluginReason;
   }

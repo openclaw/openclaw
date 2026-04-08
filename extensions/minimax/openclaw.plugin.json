@@ -64,7 +64,12 @@
     "speechProviders": ["minimax"],
     "mediaUnderstandingProviders": ["minimax", "minimax-portal"],
     "imageGenerationProviders": ["minimax", "minimax-portal"],
+    "musicGenerationProviders": ["minimax"],
+    "videoGenerationProviders": ["minimax"],
     "webSearchProviders": ["minimax"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "uiHints": {
     "webSearch.apiKey": {

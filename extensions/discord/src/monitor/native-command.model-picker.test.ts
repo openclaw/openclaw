@@ -18,6 +18,14 @@ import {
 } from "./native-command.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveDefaultModelForAgent: () => ({
+    provider: "anthropic",
+    model: "claude-sonnet-4.5",
+  }),
+  resolveHumanDelayConfig: () => undefined,
+}));
+
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
 type PickerSelect = ReturnType<typeof createDiscordModelPickerFallbackSelect>;
@@ -240,9 +248,7 @@ function createDispatchSpy() {
   const dispatchSpy = vi
     .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
     .mockResolvedValue({} as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(
-    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
-  );
+  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
   return dispatchSpy;
 }
 
@@ -251,7 +257,7 @@ describe("Discord model picker interactions", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     nativeCommandTesting.setDispatchReplyWithDispatcher(
-      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+      dispatcherModule.dispatchReplyWithDispatcher,
     );
   });
 

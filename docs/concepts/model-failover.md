@@ -59,6 +59,7 @@ happened while the attempt was running.
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
 - Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
+- Runtime auth-routing state lives in `~/.openclaw/agents/<agentId>/agent/auth-state.json`.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
 
@@ -122,6 +123,7 @@ When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 That rate-limit bucket is broader than plain `429`: it also includes provider
 messages such as `Too many concurrent requests`, `ThrottlingException`,
+`concurrency limit reached`, `workers_ai ... quota limit exceeded`,
 `throttled`, `resource exhausted`, and periodic usage-window limits such as
 `weekly/monthly limit reached`.
 Format/invalid‑request errors (for example Cloud Code Assist tool call ID
@@ -133,10 +135,19 @@ Provider-scoped generic server text can also land in that timeout bucket when
 the source matches a known transient pattern. For example, Anthropic bare
 `An unknown error occurred` and JSON `api_error` payloads with transient server
 text such as `internal server error`, `unknown error, 520`, `upstream error`,
-or `backend error` are treated as failover-worthy timeouts. Generic internal
-fallback text such as `LLM request failed with an unknown error.` or a bare
-`Provider returned error` stays conservative and does not trigger failover by
-itself.
+or `backend error` are treated as failover-worthy timeouts. OpenRouter-specific
+generic upstream text such as bare `Provider returned error` is also treated as
+timeout only when the provider context is actually OpenRouter. Generic internal
+fallback text such as `LLM request failed with an unknown error.` stays
+conservative and does not trigger failover by itself.
+
+Rate-limit cooldowns can also be model-scoped:
+
+- OpenClaw records `cooldownModel` for rate-limit failures when the failing
+  model id is known.
+- A sibling model on the same provider can still be tried when the cooldown is
+  scoped to a different model.
+- Billing/disabled windows still block the whole profile across models.
 
 Cooldowns use exponential backoff:
 
@@ -145,7 +156,7 @@ Cooldowns use exponential backoff:
 - 25 minutes
 - 1 hour (cap)
 
-State is stored in `auth-profiles.json` under `usageStats`:
+State is stored in `auth-state.json` under `usageStats`:
 
 ```json
 {
@@ -165,7 +176,8 @@ Billing/credit failures (for example “insufficient credits” / “credit bala
 
 Not every billing-shaped response is `402`, and not every HTTP `402` lands
 here. OpenClaw keeps explicit billing text in the billing lane even when a
-provider returns `401` or `403` instead (for example OpenRouter `403 Key limit
+provider returns `401` or `403` instead, but provider-specific matchers stay
+scoped to the provider that owns them (for example OpenRouter `403 Key limit
 exceeded`). Meanwhile temporary `402` usage-window and
 organization/workspace spend-limit errors are classified as `rate_limit` when
 the message looks retryable (for example `weekly usage limit exhausted`, `daily
@@ -173,7 +185,7 @@ limit reached, resets tomorrow`, or `organization spending limit exceeded`).
 Those stay on the short cooldown/failover path instead of the long
 billing-disable path.
 
-State is stored in `auth-profiles.json`:
+State is stored in `auth-state.json`:
 
 ```json
 {
@@ -201,8 +213,9 @@ timeouts that exhausted profile rotation (other errors do not advance fallback).
 
 Overloaded and rate-limit errors are handled more aggressively than billing
 cooldowns. By default, OpenClaw allows one same-provider auth-profile retry,
-then switches to the next configured model fallback without waiting. Tune this
-with `auth.cooldowns.overloadedProfileRotations`,
+then switches to the next configured model fallback without waiting.
+Provider-busy signals such as `ModelNotReadyException` land in that overloaded
+bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`,
 `auth.cooldowns.overloadedBackoffMs`, and
 `auth.cooldowns.rateLimitedProfileRotations`.
 
@@ -246,7 +259,9 @@ Model fallback does not continue on:
 - explicit aborts that are not timeout/failover-shaped
 - context overflow errors that should stay inside compaction/retry logic
   (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum
-number of tokens`, or `The input is too long for the model`)
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `The input is too long for the model`, or `ollama error: context
+length exceeded`)
 - a final unknown error when there are no candidates left
 
 ### Cooldown skip vs probe behavior
@@ -260,7 +275,9 @@ not automatically skip that provider forever. It makes a per-candidate decision:
 - The primary candidate may be probed near cooldown expiry, with a per-provider
   throttle.
 - Same-provider fallback siblings can be attempted despite cooldown when the
-  failure looks transient (`rate_limit`, `overloaded`, or unknown).
+  failure looks transient (`rate_limit`, `overloaded`, or unknown). This is
+  especially relevant when a rate limit is model-scoped and a sibling model may
+  still recover immediately.
 - Transient cooldown probes are limited to one per provider per fallback run so
   a single provider does not stall cross-provider fallback.
 
@@ -310,6 +327,13 @@ When every candidate fails, OpenClaw throws `FallbackSummaryError`. The outer
 reply runner can use that to build a more specific message such as "all models
 are temporarily rate-limited" and include the soonest cooldown expiry when one
 is known.
+
+That cooldown summary is model-aware:
+
+- unrelated model-scoped rate limits are ignored for the attempted
+  provider/model chain
+- if the remaining block is a matching model-scoped rate limit, OpenClaw
+  reports the last matching expiry that still blocks that model
 
 ## Related config
 

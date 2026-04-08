@@ -42,23 +42,24 @@ Client                    Gateway
 
 Common methods + events:
 
-| Category  | Examples                                                  | Notes                              |
-| --------- | --------------------------------------------------------- | ---------------------------------- |
-| Core      | `connect`, `health`, `status`                             | `connect` must be first            |
-| Messaging | `send`, `agent`, `agent.wait`, `system-event`             | side-effects need `idempotencyKey` |
-| Chat      | `chat.history`, `chat.send`, `chat.abort`                 | WebChat uses these                 |
-| Sessions  | `sessions.list`, `sessions.patch`, `sessions.delete`      | session admin                      |
-| Nodes     | `node.list`, `node.invoke`, `node.pair.*`                 | Gateway WS + node actions          |
-| Events    | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | server push                        |
+| Category   | Examples                                                   | Notes                              |
+| ---------- | ---------------------------------------------------------- | ---------------------------------- |
+| Core       | `connect`, `health`, `status`                              | `connect` must be first            |
+| Messaging  | `send`, `agent`, `agent.wait`, `system-event`, `logs.tail` | side-effects need `idempotencyKey` |
+| Chat       | `chat.history`, `chat.send`, `chat.abort`                  | WebChat uses these                 |
+| Sessions   | `sessions.list`, `sessions.patch`, `sessions.delete`       | session admin                      |
+| Automation | `wake`, `cron.list`, `cron.run`, `cron.runs`               | wake + cron control                |
+| Nodes      | `node.list`, `node.invoke`, `node.pair.*`                  | Gateway WS + node actions          |
+| Events     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown`  | server push                        |
 
-Authoritative advertised method/event inventory lives in
+Authoritative advertised **discovery** inventory lives in
 `src/gateway/server-methods-list.ts` (`listGatewayMethods`, `GATEWAY_EVENTS`).
 
 ## Where the schemas live
 
 - Source: `src/gateway/protocol/schema.ts`
 - Runtime validators (AJV): `src/gateway/protocol/index.ts`
-- Advertised method/event registry: `src/gateway/server-methods-list.ts`
+- Advertised feature/discovery registry: `src/gateway/server-methods-list.ts`
 - Server handshake + method dispatch: `src/gateway/server.impl.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json`
@@ -79,8 +80,13 @@ Authoritative advertised method/event inventory lives in
   accepts a `connect` request whose params match `ConnectParams`.
 - **Client side**: the JS client validates event and response frames before
   using them.
-- **Method surface**: the Gateway advertises the supported `methods` and
-  `events` in `hello-ok` from `listGatewayMethods()` and `GATEWAY_EVENTS`.
+- **Feature discovery**: the Gateway sends a conservative `features.methods`
+  and `features.events` list in `hello-ok` from `listGatewayMethods()` and
+  `GATEWAY_EVENTS`.
+- That discovery list is not a generated dump of every callable helper in
+  `coreGatewayHandlers`; some helper RPCs are implemented in
+  `src/gateway/server-methods/*.ts` without being enumerated in the advertised
+  feature list.
 
 ## Example frames
 

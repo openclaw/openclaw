@@ -50,6 +50,12 @@ Notes:
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
   effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
   that file.
+- For long-running work that starts now, start it once and rely on automatic
+  completion wake when it is enabled and the command emits output or fails.
+  Use `process` for logs, status, input, or intervention; do not emulate
+  scheduling with sleep loops, timeout loops, or repeated polling.
+- For work that should happen later or on a schedule, use cron instead of
+  `exec` sleep/delay patterns.
 
 ## Config
 
@@ -60,6 +66,7 @@ Notes:
 - `tools.exec.ask` (default: `off`)
 - No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#no-approval-yolo-mode).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
+- In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter.
 - `tools.exec.node` (default: unset)
 - `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms still prompt each time.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
@@ -128,6 +135,10 @@ When approvals are required, the exec tool returns immediately with
 `status: "approval-pending"` and an approval id. Once approved (or denied / timed out),
 the Gateway emits system events (`Exec finished` / `Exec denied`). If the command is still
 running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` notice is emitted.
+On channels with native approval cards/buttons, the agent should rely on that
+native UI first and only include a manual `/approve` command when the tool
+result explicitly says chat approvals are unavailable or manual approval is the
+only path.
 
 ## Allowlist + safe bins
 
@@ -170,6 +181,9 @@ Background + poll:
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
+
+Polling is for on-demand status, not waiting loops. If automatic completion wake
+is enabled, the command can wake the session when it emits output or fails.
 
 Send keys (tmux-style):
 

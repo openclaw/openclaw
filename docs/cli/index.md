@@ -35,7 +35,9 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`logs`](/cli/logs)
 - [`system`](/cli/system)
 - [`models`](/cli/models)
+- [`infer`](/cli/infer)
 - [`memory`](/cli/memory)
+- [`wiki`](/cli/wiki)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
 - [`devices`](/cli/devices)
@@ -161,6 +163,19 @@ openclaw [--dev] [--profile <name>] <command>
     status
     index
     search
+  wiki
+    status
+    doctor
+    init
+    ingest
+    compile
+    lint
+    search
+    get
+    apply
+    bridge import
+    unsafe-local import
+    obsidian status|search|open|command|daily
   message
     send
     broadcast
@@ -248,6 +263,16 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
+  infer (alias: capability)
+    list
+    inspect
+    model run|list|inspect|providers|auth login|logout|status
+    image generate|edit|describe|describe-many|providers
+    audio transcribe|providers
+    tts convert|voices|providers|status|enable|disable|set-provider
+    video generate|describe|providers
+    web search|fetch|providers
+    embedding create|providers
     auth add|login|login-github-copilot|setup-token|paste-token
     auth order get|set|clear
   sandbox
@@ -421,7 +446,7 @@ Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 Vector search over `MEMORY.md` + `memory/*.md`:
 
-- `openclaw memory status` — show index stats; use `--deep` for provider probes or `--fix` to repair stale recall/promotion artifacts.
+- `openclaw memory status` — show index stats; use `--deep` for vector + embedding readiness checks or `--fix` to repair stale recall/promotion artifacts.
 - `openclaw memory index` — reindex memory files.
 - `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 - `openclaw memory promote` — rank short-term recalls and optionally append top entries into `MEMORY.md`.
@@ -506,8 +531,11 @@ Options:
   `minimax-global-oauth`, `minimax-global-api`, `minimax-cn-oauth`, `minimax-cn-api`,
   `opencode-zen`, `opencode-go`, `github-copilot`, `copilot-proxy`, `xai-api-key`,
   `mistral-api-key`, `volcengine-api-key`, `byteplus-api-key`, `qianfan-api-key`,
+  `qwen-standard-api-key-cn`, `qwen-standard-api-key`, `qwen-api-key-cn`, `qwen-api-key`,
   `modelstudio-standard-api-key-cn`, `modelstudio-standard-api-key`,
   `modelstudio-api-key-cn`, `modelstudio-api-key`, `custom-api-key`, `skip`
+- Qwen note: `qwen-*` is the canonical auth-choice family. `modelstudio-*`
+  ids remain accepted as legacy compatibility aliases only.
 - `--secret-input-mode <plaintext|ref>` (default `plaintext`; use `ref` to store provider default env refs instead of plaintext keys)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
@@ -576,7 +604,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
-- `config schema`: print the generated JSON schema for `openclaw.json`.
+- `config schema`: print the generated JSON schema for `openclaw.json`, including propagated field `title` / `description` docs metadata across nested object, wildcard, array-item, and composition branches, plus best-effort live plugin/channel schema metadata.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -669,7 +697,7 @@ Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Matter
 Subcommands:
 
 - `channels list`: show configured channels and auth profiles.
-- `channels status`: check gateway reachability and channel health (`--probe` runs extra checks; use `openclaw health` or `openclaw status --deep` for gateway health probes).
+- `channels status`: check gateway reachability and channel health (`--probe` runs live per-account probe/audit checks when the gateway is reachable; if not, it falls back to config-only channel summaries. Use `openclaw health` or `openclaw status --deep` for broader gateway health probes).
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
@@ -733,6 +761,7 @@ Notes:
 
 - `channels login` supports `--verbose`.
 - `channels capabilities --account` only applies when `--channel` is set.
+- `channels status --probe` can show transport state plus probe/audit results such as `works`, `probe failed`, `audit ok`, or `audit failed`, depending on channel support.
 
 More detail: [/concepts/oauth](/concepts/oauth)
 
@@ -1202,7 +1231,7 @@ Options:
 
 - `--json`
 - `--all` (full diagnosis; read-only, pasteable)
-- `--deep` (probe channels)
+- `--deep` (ask the gateway for a live health probe, including channel probes when supported)
 - `--usage` (show model provider usage/quota)
 - `--timeout <ms>`
 - `--verbose`
@@ -1240,8 +1269,13 @@ Options:
 
 - `--json`
 - `--timeout <ms>`
-- `--verbose`
+- `--verbose` (force a live probe and print gateway connection details)
 - `--debug` (alias for `--verbose`)
+
+Notes:
+
+- Default `health` can return a fresh cached gateway snapshot.
+- `health --verbose` forces a live probe and expands human-readable output across all configured accounts and agents.
 
 ### `sessions`
 
@@ -1310,7 +1344,7 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
-- `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
+- `tasks maintenance [--apply] [--json]` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
 - `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
@@ -1345,7 +1379,6 @@ Options:
 - `--force` (kill existing listener on port)
 - `--verbose`
 - `--cli-backend-logs`
-- `--claude-cli-logs` (deprecated alias)
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 - `--raw-stream`
@@ -1446,8 +1479,15 @@ Subcommands:
 - `gateway install|uninstall|start|stop|restart`
 - `gateway run`
 
+Notes:
+
+- `gateway status --deep` adds a system-level service scan. Use `gateway probe`,
+  `health --verbose`, or top-level `status --deep` for deeper runtime probe detail.
+
 Common RPCs:
 
+- `config.schema.lookup` (inspect one config subtree with a shallow schema node, matched hint metadata, and immediate child summaries)
+- `config.get` (read current config snapshot + hash)
 - `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge a partial update + restart + wake)
@@ -1455,33 +1495,22 @@ Common RPCs:
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
 `config.get` if a config already exists.
+Tip: for partial edits, inspect with `config.schema.lookup` first and prefer `config.patch`.
 Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
+Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 ## Models
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Billing note: Anthropic changed third-party harness billing on **April 4, 2026
-at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
-longer cover OpenClaw, and Claude CLI usage in OpenClaw now requires **Extra
-Usage** billed separately from the subscription. For production, prefer an
-Anthropic API key or another supported subscription-style provider such as
-OpenAI Codex, Alibaba Cloud Model Studio Coding Plan, MiniMax Coding Plan, or
-Z.AI / GLM Coding Plan.
+Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is
+allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as
+sanctioned for this integration unless Anthropic publishes a new policy. For
+production, prefer an Anthropic API key or another supported
+subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
+Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
 
-Anthropic Claude CLI migration:
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
-
-Existing legacy Anthropic token profiles still run if already configured, but
-OpenClaw no longer offers Anthropic setup-token as a new auth path.
-
-Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
-Use `anthropic-cli` for onboarding, or use `models auth login` directly.
+Anthropic setup-token remains available as a supported token-auth path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ### `models` (root)
 
@@ -1515,9 +1544,15 @@ Options:
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
+- `--agent <id>`
 
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 `--probe` runs live requests (may consume tokens and trigger rate limits).
+Probe rows can come from auth profiles, env credentials, or `models.json`.
+Expect probe statuses like `ok`, `auth`, `rate_limit`, `billing`, `timeout`,
+`format`, `unknown`, and `no_model`.
+When an explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of silently trying that profile.
 
 ### `models set <model>`
 
@@ -1583,7 +1618,9 @@ Options:
 Notes:
 
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
-- Anthropic legacy token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- `setup-token` requires an interactive TTY and runs the provider's token-auth method.
+- `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
+- Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ### `models auth order get|set|clear`
 

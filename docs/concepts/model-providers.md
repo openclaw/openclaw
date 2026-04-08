@@ -28,14 +28,23 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeConfig`, `resolveDynamicModel`, `prepareDynamicModel`,
-  `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
-  `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
+  `normalizeModelId`, `normalizeTransport`, `normalizeConfig`,
+  `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `resolveSyntheticAuth`, `shouldDeferSyntheticProfileAuth`,
+  `resolveDynamicModel`, `prepareDynamicModel`,
+  `normalizeResolvedModel`, `contributeResolvedModelCompat`,
+  `capabilities`, `normalizeToolSchemas`,
+  `inspectToolSchemas`, `resolveReasoningOutputMode`,
+  `prepareExtraParams`, `createStreamFn`, `wrapStreamFn`,
+  `resolveTransportTurnState`, `resolveWebSocketSessionPolicy`,
+  `createEmbeddingProvider`, `formatApiKey`, `refreshOAuth`,
+  `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
   `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
-  `prepareRuntimeAuth`, `resolveUsageAuth`, and `fetchUsageSnapshot`.
+  `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
+  `onModelSelected`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
@@ -53,15 +62,50 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
-- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it
+- `normalizeModelId`: provider normalizes legacy/preview model ids before
+  lookup or canonicalization
+- `normalizeTransport`: provider normalizes transport-family `api` / `baseUrl`
+  before generic model assembly; OpenClaw checks the matched provider first,
+  then other hook-capable provider plugins until one actually changes the
+  transport
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before
+  runtime uses it; OpenClaw checks the matched provider first, then other
+  hook-capable provider plugins until one actually changes the config. If no
+  provider hook rewrites the config, bundled Google-family helpers still
+  normalize supported Google provider entries.
+- `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
+- `resolveConfigApiKey`: provider resolves env-marker auth for config providers
+  without forcing full runtime auth loading. `amazon-bedrock` also has a
+  built-in AWS env-marker resolver here, even though Bedrock runtime auth uses
+  the AWS SDK default chain.
+- `resolveSyntheticAuth`: provider can expose local/self-hosted or other
+  config-backed auth availability without persisting plaintext secrets
+- `shouldDeferSyntheticProfileAuth`: provider can mark stored synthetic profile
+  placeholders as lower precedence than env/config-backed auth
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
   dynamic resolution
 - `normalizeResolvedModel`: provider needs transport or base URL rewrites
+- `contributeResolvedModelCompat`: provider contributes compat flags for its
+  vendor models even when they arrive through another compatible transport
 - `capabilities`: provider publishes transcript/tooling/provider-family quirks
+- `normalizeToolSchemas`: provider cleans tool schemas before the embedded
+  runner sees them
+- `inspectToolSchemas`: provider surfaces transport-specific schema warnings
+  after normalization
+- `resolveReasoningOutputMode`: provider chooses native vs tagged
+  reasoning-output contracts
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
+- `createStreamFn`: provider replaces the normal stream path with a fully
+  custom transport
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `resolveTransportTurnState`: provider supplies per-turn native transport
+  headers or metadata
+- `resolveWebSocketSessionPolicy`: provider supplies native WebSocket session
+  headers or session cool-down policy
+- `createEmbeddingProvider`: provider owns memory embedding behavior when it
+  belongs with the provider plugin instead of the core embedding switchboard
 - `formatApiKey`: provider formats stored auth profiles into the runtime
   `apiKey` string expected by the transport
 - `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
@@ -92,6 +136,8 @@ Typical split:
   and related status/reporting surfaces
 - `fetchUsageSnapshot`: provider owns the usage endpoint fetch/parsing while
   core still owns the summary shell and formatting
+- `onModelSelected`: provider runs post-selection side effects such as
+  telemetry or provider-owned session bookkeeping
 
 Current bundled examples:
 
@@ -116,11 +162,15 @@ Current bundled examples:
   OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
   normalization (`input` / `output` and `prompt` / `completion` families), the
   shared `openai-responses-defaults` stream family for native OpenAI/Codex
-  wrappers, and provider-family metadata
+  wrappers, provider-family metadata, bundled image-generation provider
+  registration for `gpt-image-1`, and bundled video-generation provider
+  registration for `sora-2`
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged
-  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also owns
-  auth-profile token formatting, usage-token parsing, and quota endpoint
+  reasoning-output mode, modern-model matching, bundled image-generation
+  provider registration for Gemini image-preview models, and bundled
+  video-generation provider registration for Veo models; Gemini CLI OAuth also
+  owns auth-profile token formatting, usage-token parsing, and quota endpoint
   fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
@@ -130,16 +180,34 @@ Current bundled examples:
   policy, binary-thinking/live-model policy, and usage auth + quota fetching;
   unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
 - `xai`: native Responses transport normalization, `/fast` alias rewrites for
-  Grok fast variants, default `tool_stream`, and xAI-specific tool-schema /
-  reasoning-payload cleanup
+  Grok fast variants, default `tool_stream`, xAI-specific tool-schema /
+  reasoning-payload cleanup, and bundled video-generation provider
+  registration for `grok-imagine-video`
 - `mistral`: plugin-owned capability metadata
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
-- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
-  `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
+- `alibaba`: plugin-owned video-generation catalog for direct Wan model refs
+  such as `alibaba/wan2.6-t2v`
+- `byteplus`: plugin-owned catalogs plus bundled video-generation provider
+  registration for Seedance text-to-video/image-to-video models
+- `fal`: bundled video-generation provider registration for hosted third-party
+  image-generation provider registration for FLUX image models plus bundled
+  video-generation provider registration for hosted third-party video models
+- `cloudflare-ai-gateway`, `huggingface`, `kimi`, `nvidia`, `qianfan`,
+  `stepfun`, `synthetic`, `venice`, `vercel-ai-gateway`, and `volcengine`:
+  plugin-owned catalogs only
+- `qwen`: plugin-owned catalogs for text models plus shared
+  media-understanding and video-generation provider registrations for its
+  multimodal surfaces; Qwen video generation uses the Standard DashScope video
+  endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
+- `runway`: plugin-owned video-generation provider registration for native
+  Runway task-based models such as `gen4.5`
+- `minimax`: plugin-owned catalogs, bundled video-generation provider
+  registration for Hailuo video models, bundled image-generation provider
+  registration for `image-01`, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
+- `together`: plugin-owned catalogs plus bundled video-generation provider
+  registration for Wan video models
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
@@ -161,8 +229,8 @@ surface.
 - Key selection order preserves priority and deduplicates values.
 - Requests are retried with the next key only on rate-limit responses (for
   example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
-concurrent requests`, `ThrottlingException`, or periodic usage-limit
-  messages).
+concurrent requests`, `ThrottlingException`, `concurrency limit reached`,
+  `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 
@@ -203,10 +271,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice apiKey` or `openclaw onboard --auth-choice anthropic-cli`
+- CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Claude CLI traffic now requires **Extra Usage** billed separately from the subscription.
-- Existing legacy Anthropic token profiles still run if already configured, but new setup is no longer offered through onboarding or auth commands.
+- Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
+- Anthropic setup-token remains available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ```json5
 {
@@ -251,7 +319,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ### Other subscription-style hosted options
 
-- [Qwen / Model Studio](/providers/qwen_modelstudio): Alibaba Cloud Standard pay-as-you-go and Coding Plan subscription endpoints
+- [Qwen Cloud](/providers/qwen): Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping
 - [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
 - [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
@@ -292,7 +360,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
     - or `npm install -g @google/gemini-cli`
   - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
+  - Default model: `google-gemini-cli/gemini-3-flash-preview`
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
   - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
@@ -303,7 +371,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5`
+- Example model: `zai/glm-5.1`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
@@ -360,8 +428,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Example model: `qianfan/deepseek-v3.2`
-- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
-- Example model: `modelstudio/qwen3.5-plus`
+- Qwen Cloud: `qwen` (`QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, or `DASHSCOPE_API_KEY`)
+- Example model: `qwen/qwen3.5-plus`
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
 - Example model: `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)

@@ -460,41 +460,65 @@ API key auth, and dynamic model resolution.
       | --- | --- | --- |
       | 1 | `catalog` | Model catalog or base URL defaults |
       | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
-      | 3 | `normalizeConfig` | Normalize `models.providers.<id>` config |
-      | 4 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
-      | 5 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
-      | 6 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 7 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 8 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 9 | `capabilities` | Legacy static capability bag; compatibility only |
-      | 10 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 11 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 12 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 13 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 14 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
-      | 15 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 16 | `prepareExtraParams` | Default request params |
-      | 17 | `createStreamFn` | Fully custom StreamFn transport |
-      | 18 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 19 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 20 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 21 | `formatApiKey` | Custom runtime token shape |
-      | 22 | `refreshOAuth` | Custom OAuth refresh |
-      | 23 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 24 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 25 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 26 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 27 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 28 | `suppressBuiltInModel` | Hide stale upstream rows |
-      | 29 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 30 | `isBinaryThinking` | Binary thinking on/off |
-      | 31 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 32 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 33 | `isModernModelRef` | Live/smoke model matching |
-      | 34 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 35 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 36 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 37 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 3 | `normalizeModelId` | Legacy/preview model-id alias cleanup before lookup |
+      | 4 | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
+      | 5 | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | 6 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
+      | 7 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
+      | 8 | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
+      | 9 | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
+      | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
+
+    Runtime fallback notes:
+
+    - `normalizeConfig` checks the matched provider first, then other
+      hook-capable provider plugins until one actually changes the config.
+      If no provider hook rewrites a supported Google-family config entry, the
+      bundled Google config normalizer still applies.
+    - `resolveConfigApiKey` uses the provider hook when exposed. The bundled
+      `amazon-bedrock` path also has a built-in AWS env-marker resolver here,
+      even though Bedrock runtime auth itself still uses the AWS SDK default
+      chain.
+      | 13 | `contributeResolvedModelCompat` | Compat flags for vendor models behind another compatible transport |
+      | 14 | `capabilities` | Legacy static capability bag; compatibility only |
+      | 15 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | 17 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | 18 | `prepareExtraParams` | Default request params |
+      | 19 | `createStreamFn` | Fully custom StreamFn transport |
+      | 20 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | 21 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 22 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 23 | `formatApiKey` | Custom runtime token shape |
+      | 24 | `refreshOAuth` | Custom OAuth refresh |
+      | 25 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 26 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 27 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 28 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 29 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 30 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 32 | `isBinaryThinking` | Binary thinking on/off |
+      | 33 | `supportsXHighThinking` | `xhigh` reasoning support |
+      | 34 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 35 | `isModernModelRef` | Live/smoke model matching |
+      | 36 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 37 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 38 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 39 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 40 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+
+      Prompt tuning note:
+
+      - `resolveSystemPromptContribution` lets a provider inject cache-aware
+        system-prompt guidance for a model family. Prefer it over
+        `before_prompt_build` when the behavior belongs to one provider/model
+        family and should preserve the stable/dynamic cache split.
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
@@ -504,8 +528,9 @@ API key auth, and dynamic model resolution.
 
   <Step title="Add extra capabilities (optional)">
     <a id="step-5-add-extra-capabilities"></a>
-    A provider plugin can register speech, realtime transcription, realtime voice, media
-    understanding, image generation, and web search alongside text inference:
+    A provider plugin can register speech, realtime transcription, realtime
+    voice, media understanding, image generation, video generation, web fetch,
+    and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -562,12 +587,71 @@ API key auth, and dynamic model resolution.
         label: "Acme Images",
         generate: async (req) => ({ /* image result */ }),
       });
+
+      api.registerVideoGenerationProvider({
+        id: "acme-ai",
+        label: "Acme Video",
+        capabilities: {
+          generate: {
+            maxVideos: 1,
+            maxDurationSeconds: 10,
+            supportsResolution: true,
+          },
+          imageToVideo: {
+            enabled: true,
+            maxVideos: 1,
+            maxInputImages: 1,
+            maxDurationSeconds: 5,
+          },
+          videoToVideo: {
+            enabled: false,
+          },
+        },
+        generateVideo: async (req) => ({ videos: [] }),
+      });
+
+      api.registerWebFetchProvider({
+        id: "acme-ai-fetch",
+        label: "Acme Fetch",
+        hint: "Fetch pages through Acme's rendering backend.",
+        envVars: ["ACME_FETCH_API_KEY"],
+        placeholder: "acme-...",
+        signupUrl: "https://acme.example.com/fetch",
+        credentialPath: "plugins.entries.acme.config.webFetch.apiKey",
+        getCredentialValue: (fetchConfig) => fetchConfig?.acme?.apiKey,
+        setCredentialValue: (fetchConfigTarget, value) => {
+          const acme = (fetchConfigTarget.acme ??= {});
+          acme.apiKey = value;
+        },
+        createTool: () => ({
+          description: "Fetch a page through Acme Fetch.",
+          parameters: {},
+          execute: async (args) => ({ content: [] }),
+        }),
+      });
+
+      api.registerWebSearchProvider({
+        id: "acme-ai-search",
+        label: "Acme Search",
+        search: async (req) => ({ content: [] }),
+      });
     }
     ```
 
     OpenClaw classifies this as a **hybrid-capability** plugin. This is the
     recommended pattern for company plugins (one plugin per vendor). See
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
+
+    For video generation, prefer the mode-aware capability shape shown above:
+    `generate`, `imageToVideo`, and `videoToVideo`. Flat aggregate fields such
+    as `maxInputImages`, `maxInputVideos`, and `maxDurationSeconds` are not
+    enough to advertise transform-mode support or disabled modes cleanly.
+
+    Music-generation providers should follow the same pattern:
+    `generate` for prompt-only generation and `edit` for reference-image-based
+    generation. Flat aggregate fields such as `maxInputImages`,
+    `supportsLyrics`, and `supportsFormat` are not enough to advertise edit
+    support; explicit `generate` / `edit` blocks are the expected contract.
 
   </Step>
 

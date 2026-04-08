@@ -11,6 +11,10 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -62,7 +66,7 @@ export async function buildModelsProviderData(
   };
 
   const addRawModelRef = (raw?: string) => {
-    const trimmed = raw?.trim();
+    const trimmed = normalizeOptionalString(raw);
     if (!trimmed) {
       return;
     }
@@ -143,12 +147,12 @@ function parseModelsArgs(raw: string): {
   }
 
   const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const provider = tokens[0]?.trim();
+  const provider = normalizeOptionalString(tokens[0]);
 
   let page = 1;
   let all = false;
   for (const token of tokens.slice(1)) {
-    const lower = token.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower === "all" || lower === "--all") {
       all = true;
       continue;
@@ -170,7 +174,7 @@ function parseModelsArgs(raw: string): {
 
   let pageSize = PAGE_SIZE_DEFAULT;
   for (const token of tokens) {
-    const lower = token.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
       const value = Number.parseInt(rawValue, 10);

@@ -78,7 +78,10 @@ resets on each deploy).
 
 The web dashboard is available at `https://<your-service>.onrender.com/`.
 
-Connect using the `OPENCLAW_GATEWAY_TOKEN` value that was auto-generated during deploy (find it in **Dashboard → your service → Environment**).
+Connect using the configured shared secret. This deploy template auto-generates
+`OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service →
+Environment**); if you replace it with password auth, use that password
+instead.
 
 ## Render Dashboard features
 

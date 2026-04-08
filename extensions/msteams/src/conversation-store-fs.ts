@@ -76,7 +76,7 @@ export function createMSTeamsConversationStoreFs(params?: {
   const empty: ConversationStoreData = { version: 1, conversations: {} };
 
   const readStore = async (): Promise<ConversationStoreData> => {
-    const { value } = await readJsonFile<ConversationStoreData>(filePath, empty);
+    const { value } = await readJsonFile(filePath, empty);
     if (
       value.version !== 1 ||
       !value.conversations ||

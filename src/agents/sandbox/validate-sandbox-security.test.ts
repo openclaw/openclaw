@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
   validateBindMounts,
@@ -298,7 +299,7 @@ describe("validateBindMounts", () => {
 });
 
 function normalizePathForSnapshot(input: string): string {
-  return input.replaceAll("\\", "/");
+  return resolveSandboxHostPathViaExistingAncestor(input).replaceAll("\\", "/");
 }
 
 describe("validateNetworkMode", () => {
