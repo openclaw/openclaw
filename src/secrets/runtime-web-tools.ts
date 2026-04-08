@@ -107,6 +107,19 @@ function inferSingleBundledPluginScopedWebToolConfigOwner(
   return matches[0];
 }
 
+function inferExactBundledPluginScopedWebToolConfigOwner(params: {
+  config: OpenClawConfig;
+  key: "webSearch" | "webFetch";
+  pluginId: string;
+}): string | undefined {
+  const entry = params.config.plugins?.entries?.[params.pluginId];
+  if (!isRecord(entry) || entry.enabled === false) {
+    return undefined;
+  }
+  const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+  return isRecord(pluginConfig?.[params.key]) ? params.pluginId : undefined;
+}
+
 function hasCustomWebSearchPluginRisk(config: OpenClawConfig): boolean {
   const plugins = config.plugins;
   if (!plugins) {
@@ -459,6 +472,11 @@ export async function resolveRuntimeWebTools(params: {
     ? params.resolvedConfig.tools
     : undefined;
   const resolvedWeb = isRecord(resolvedTools?.web) ? resolvedTools.web : undefined;
+  let hasCustomWebSearchRisk: boolean | undefined;
+  const getHasCustomWebSearchRisk = (): boolean => {
+    hasCustomWebSearchRisk ??= hasCustomWebSearchPluginRisk(params.sourceConfig);
+    return hasCustomWebSearchRisk;
+  };
   const legacyXSearchSource = isRecord(sourceWeb?.x_search) ? sourceWeb.x_search : undefined;
   const legacyXSearchResolved = isRecord(resolvedWeb?.x_search) ? resolvedWeb.x_search : undefined;
 
@@ -501,7 +519,6 @@ export async function resolveRuntimeWebTools(params: {
   }
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
-  const hasCustomWebSearchRisk = hasCustomWebSearchPluginRisk(params.sourceConfig);
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
     return {
       search: {
@@ -517,8 +534,15 @@ export async function resolveRuntimeWebTools(params: {
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   const configuredBundledWebSearchPluginIdHint =
-    rawProvider && hasPluginWebSearchConfig && !hasCustomWebSearchRisk
-      ? inferSingleBundledPluginScopedWebToolConfigOwner(params.sourceConfig, "webSearch")
+    rawProvider && hasPluginWebSearchConfig
+      ? (inferExactBundledPluginScopedWebToolConfigOwner({
+          config: params.sourceConfig,
+          key: "webSearch",
+          pluginId: rawProvider,
+        }) ??
+        (!getHasCustomWebSearchRisk()
+          ? inferSingleBundledPluginScopedWebToolConfigOwner(params.sourceConfig, "webSearch")
+          : undefined))
       : undefined;
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
@@ -557,10 +581,10 @@ export async function resolveRuntimeWebTools(params: {
           onlyPluginIds:
             configuredBundledPluginId === undefined &&
             searchCompatibilityOnlyPluginIds.length > 0 &&
-            !hasCustomWebSearchRisk
+            !getHasCustomWebSearchRisk()
               ? searchCompatibilityOnlyPluginIds
               : undefined,
-          hasCustomWebSearchPluginRisk: hasCustomWebSearchRisk,
+          hasCustomWebSearchPluginRisk: getHasCustomWebSearchRisk(),
         }),
       sortProviders: sortWebSearchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>

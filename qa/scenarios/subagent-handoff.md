@@ -19,4 +19,6 @@ execution:
   kind: custom
   handler: subagent-handoff
   summary: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
+  config:
+    prompt: "Delegate one bounded QA task to a subagent. Wait for the subagent to finish. Then reply with three labeled sections exactly once: Delegated task, Result, Evidence. Include the child result itself, not 'waiting'."
 ```

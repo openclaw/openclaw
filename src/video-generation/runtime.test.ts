@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetGenerationRuntimeMocks } from "../../test/helpers/media-generation/runtime-test-mocks.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "./runtime.js";
 import type { VideoGenerationProvider } from "./types.js";
@@ -68,23 +69,12 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("video-generation runtime", () => {
   beforeEach(() => {
-    mocks.createSubsystemLogger.mockClear();
-    mocks.describeFailoverError.mockReset();
-    mocks.getProviderEnvVars.mockReset();
-    mocks.getProviderEnvVars.mockReturnValue([]);
-    mocks.resolveProviderAuthEnvVarCandidates.mockReset();
-    mocks.resolveProviderAuthEnvVarCandidates.mockReturnValue({});
-    mocks.getVideoGenerationProvider.mockReset();
-    mocks.isFailoverError.mockReset();
-    mocks.isFailoverError.mockReturnValue(false);
-    mocks.listVideoGenerationProviders.mockReset();
-    mocks.listVideoGenerationProviders.mockReturnValue([]);
-    mocks.parseVideoGenerationModelRef.mockClear();
-    mocks.resolveAgentModelFallbackValues.mockReset();
-    mocks.resolveAgentModelFallbackValues.mockReturnValue([]);
-    mocks.resolveAgentModelPrimaryValue.mockReset();
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
-    mocks.debug.mockReset();
+    resetGenerationRuntimeMocks({
+      ...mocks,
+      getProvider: mocks.getVideoGenerationProvider,
+      listProviders: mocks.listVideoGenerationProviders,
+      parseModelRef: mocks.parseVideoGenerationModelRef,
+    });
   });
 
   it("generates videos through the active video-generation provider", async () => {

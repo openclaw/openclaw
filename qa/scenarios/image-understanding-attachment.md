@@ -20,4 +20,9 @@ execution:
   kind: custom
   handler: image-understanding-attachment
   summary: Verify an attached image reaches the agent model and the agent can describe what it sees.
+  config:
+    prompt: "Image understanding check: describe the top and bottom colors in the attached image in one short sentence."
+    requiredColorGroups:
+      - [red, scarlet, crimson]
+      - [blue, azure, teal, cyan, aqua]
 ```

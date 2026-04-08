@@ -19,4 +19,8 @@ execution:
   kind: custom
   handler: cron-one-minute-ping
   summary: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
+  config:
+    channelId: qa-room
+    channelTitle: QA Room
+    reminderPromptTemplate: "A QA cron just fired. Send a one-line ping back to the room containing this exact marker: {{marker}}"
 ```

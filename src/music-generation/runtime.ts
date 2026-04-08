@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
@@ -124,13 +125,9 @@ export async function generateMusic(
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,
-          ...(sanitized.normalization?.durationSeconds?.requested !== undefined &&
-          sanitized.normalization.durationSeconds.applied !== undefined
-            ? {
-                requestedDurationSeconds: sanitized.normalization.durationSeconds.requested,
-                normalizedDurationSeconds: sanitized.normalization.durationSeconds.applied,
-              }
-            : {}),
+          ...buildMediaGenerationNormalizationMetadata({
+            normalization: sanitized.normalization,
+          }),
         },
         ignoredOverrides: sanitized.ignoredOverrides,
       };

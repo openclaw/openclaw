@@ -19,4 +19,13 @@ execution:
   kind: custom
   handler: config-patch-hot-apply
   summary: Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.
+  config:
+    skillName: qa-hot-disable-skill
+    successMarker: HOT-PATCH-DISABLED-OK
+    skillBody: |-
+      ---
+      name: qa-hot-disable-skill
+      description: Hot disable QA marker
+      ---
+      When the user asks for the hot disable marker exactly, reply with exactly: HOT-PATCH-DISABLED-OK
 ```

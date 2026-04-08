@@ -20,6 +20,13 @@ execution:
   handler: skill-install-hot-availability
   summary: Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.
   config:
+    skillName: qa-hot-install-skill
+    skillBody: |-
+      ---
+      name: qa-hot-install-skill
+      description: Hot install QA marker
+      ---
+      When the user asks for the hot install marker exactly, reply with exactly: HOT-INSTALL-OK
     prompt: "Hot install marker: give me the hot install marker exactly."
     expectedContains: "HOT-INSTALL-OK"
 ```

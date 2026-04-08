@@ -103,6 +103,7 @@ vi.mock("./agent-runner-utils.js", () => ({
         params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
     },
   }),
+  resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(() => ({})),
 }));
 
@@ -1376,7 +1377,8 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("keeps same-provider auth profile when fallback only changes model", async () => {
-    const applyFallbackCandidateSelectionToEntry = await getApplyFallbackCandidateSelectionToEntry();
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
     const entry = {
       sessionId: "session",
       updatedAt: 1,

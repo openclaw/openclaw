@@ -20,5 +20,6 @@ execution:
   handler: config-apply-restart-wakeup
   summary: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
   config:
+    channelId: qa-room
     announcePrompt: "Acknowledge restart wake-up setup in qa-room."
 ```
