@@ -701,15 +701,11 @@ importers:
         specifier: ^0.26.2
         version: 0.26.2(apache-arrow@18.1.0)
       '@sinclair/typebox':
-        specifier: 0.34.48
-        version: 0.34.48
+        specifier: 0.34.49
+        version: 0.34.49
       openai:
         specifier: ^6.22.0
-        version: 6.25.0(ws@8.19.0)(zod@4.3.6)
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
+        version: 6.33.0(ws@8.20.0)(zod@4.3.6)
 
   extensions/memory-lancedb:
     dependencies:
@@ -2214,11 +2210,24 @@ packages:
   '@kwsites/promise-deferred@1.1.1':
     resolution: {integrity: sha512-GaHYm+c0O9MjZRu0ongGBRbinu8gVAMd2UZjji6jVmqKtZluZnptXGWhz1E8j8D2HJ3f/yMxKAUC0b+57wncIw==}
 
+  '@lancedb/lancedb-darwin-arm64@0.26.2':
+    resolution: {integrity: sha512-LAZ/v261eTlv44KoEm+AdqGnohS9IbVVVJkH9+8JTqwhe/k4j4Af8X9cD18tsaJAAtrGxxOCyIJ3wZTiBqrkCw==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@lancedb/lancedb-darwin-arm64@0.27.2':
     resolution: {integrity: sha512-+XM68V/Rou8kKWDnUeKvg9ChKS0zGeQC2sKAop+06Ty4LwIjEGkeYBYrK0vMhZkBN5EFaOjTOp8E8hGQxdFwXA==}
     engines: {node: '>= 18'}
     cpu: [arm64]
     os: [darwin]
+
+  '@lancedb/lancedb-linux-arm64-gnu@0.26.2':
+    resolution: {integrity: sha512-guHKm+zvuQB22dgyn6/sYZJvD6IL9lC24cl6ZuzVX/jYgag/gNLHT86HongrcBjgdjI6+YIGmdfD6b/iAKxn3Q==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
 
   '@lancedb/lancedb-linux-arm64-gnu@0.27.2':
     resolution: {integrity: sha512-laiTTDeMUTzm7t+t6ME5nNQMDoERjmkeuWAFWekbXiFdmp62Dqu34Lvf2BvpWnKwxLMZ5JcBJFIw32WS8/8Jnw==}
@@ -2227,12 +2236,26 @@ packages:
     os: [linux]
     libc: [glibc]
 
+  '@lancedb/lancedb-linux-arm64-musl@0.26.2':
+    resolution: {integrity: sha512-pR6Hs/0iphItrJYYLf/yrqCC+scPcHpCGl6rHqcU2GHxo5RFpzlMzqW1DiXScGiBRuCcD9HIMec+kBsOgXv4GQ==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
   '@lancedb/lancedb-linux-arm64-musl@0.27.2':
     resolution: {integrity: sha512-bK5Mc50EvwGZaaiym5CoPu8Y4GNSyEEvTQ0dTC2AUIm83qdQu1rGw6kkYtc/rTH/hbvAvPQot4agHDZfMVxfYw==}
     engines: {node: '>= 18'}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
+
+  '@lancedb/lancedb-linux-x64-gnu@0.26.2':
+    resolution: {integrity: sha512-u4UUSPwd2YecgGqWjh9W0MHKgsVwB2Ch2ROpF8AY+IA7kpGsbB18R1/t7v2B0q7pahRy20dgsaku5LH1zuzMRQ==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
 
   '@lancedb/lancedb-linux-x64-gnu@0.27.2':
     resolution: {integrity: sha512-qe+ML0YmPru0o84f33RBHqoNk6zsHBjiXTLKsEBDiiFYKks/XMsrkKy9NQYcTxShBrg/nx/MLzCzd7dihqgNYw==}
@@ -2241,6 +2264,13 @@ packages:
     os: [linux]
     libc: [glibc]
 
+  '@lancedb/lancedb-linux-x64-musl@0.26.2':
+    resolution: {integrity: sha512-XIS4qkVfGlzmsUPqAG2iKt8ykuz28GfemGC0ijXwu04kC1pYiCFzTpB3UIZjm5oM7OTync1aQ3mGTj1oCciSPA==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
   '@lancedb/lancedb-linux-x64-musl@0.27.2':
     resolution: {integrity: sha512-ZpX6Oxn06qvzAdm+D/gNb3SRp/A9lgRAPvPg6nnMmSQk5XamC/hbGO07uK1wwop7nlqXUH/thk4is2y2ieWdTw==}
     engines: {node: '>= 18'}
@@ -2248,10 +2278,22 @@ packages:
     os: [linux]
     libc: [musl]
 
+  '@lancedb/lancedb-win32-arm64-msvc@0.26.2':
+    resolution: {integrity: sha512-//tZDPitm2PxNvalHP+m+Pf6VvFAeQgcht1+HJnutjH4gp6xYW6ynQlWWFDBmz9WRkUT+mXu2O4FUIhbdNaJSQ==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [win32]
+
   '@lancedb/lancedb-win32-arm64-msvc@0.27.2':
     resolution: {integrity: sha512-4ffpFvh49MiUtkdFJOmBytXEbgUPXORphTOuExnJAgT1VAKwQcu4ZzdsgNoK6mumKBaU+pYQU/MedNkgTzx/Lw==}
     engines: {node: '>= 18'}
     cpu: [arm64]
+    os: [win32]
+
+  '@lancedb/lancedb-win32-x64-msvc@0.26.2':
+    resolution: {integrity: sha512-GH3pfyzicgPGTb84xMXgujlWDaAnBTmUyjooYiCE2tC24BaehX4hgFhXivamzAEsF5U2eVsA/J60Ppif+skAbA==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
     os: [win32]
 
   '@lancedb/lancedb-win32-x64-msvc@0.27.2':
@@ -2259,6 +2301,14 @@ packages:
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [win32]
+
+  '@lancedb/lancedb@0.26.2':
+    resolution: {integrity: sha512-umk4WMCTwJntLquwvUbpqE+TXREolcQVL9MHcxr8EhRjsha88+ATJ4QuS/hpyiE1CG3R/XcgrMgJAGkziPC/gA==}
+    engines: {node: '>= 18'}
+    cpu: [x64, arm64]
+    os: [darwin, linux, win32]
+    peerDependencies:
+      apache-arrow: '>=15.0.0 <=18.1.0'
 
   '@lancedb/lancedb@0.27.2':
     resolution: {integrity: sha512-JQpZHV5KzUzDI3flYCjtZcfHlEbL8lM54E0NT+jrRYe29aKYegfavvPsAsuZp0VdcMwFMZcpMkaBhjQMo/fwvg==}
@@ -8738,26 +8788,60 @@ snapshots:
 
   '@kwsites/promise-deferred@1.1.1': {}
 
+  '@lancedb/lancedb-darwin-arm64@0.26.2':
+    optional: true
+
   '@lancedb/lancedb-darwin-arm64@0.27.2':
+    optional: true
+
+  '@lancedb/lancedb-linux-arm64-gnu@0.26.2':
     optional: true
 
   '@lancedb/lancedb-linux-arm64-gnu@0.27.2':
     optional: true
 
+  '@lancedb/lancedb-linux-arm64-musl@0.26.2':
+    optional: true
+
   '@lancedb/lancedb-linux-arm64-musl@0.27.2':
+    optional: true
+
+  '@lancedb/lancedb-linux-x64-gnu@0.26.2':
     optional: true
 
   '@lancedb/lancedb-linux-x64-gnu@0.27.2':
     optional: true
 
+  '@lancedb/lancedb-linux-x64-musl@0.26.2':
+    optional: true
+
   '@lancedb/lancedb-linux-x64-musl@0.27.2':
+    optional: true
+
+  '@lancedb/lancedb-win32-arm64-msvc@0.26.2':
     optional: true
 
   '@lancedb/lancedb-win32-arm64-msvc@0.27.2':
     optional: true
 
+  '@lancedb/lancedb-win32-x64-msvc@0.26.2':
+    optional: true
+
   '@lancedb/lancedb-win32-x64-msvc@0.27.2':
     optional: true
+
+  '@lancedb/lancedb@0.26.2(apache-arrow@18.1.0)':
+    dependencies:
+      apache-arrow: 18.1.0
+      reflect-metadata: 0.2.2
+    optionalDependencies:
+      '@lancedb/lancedb-darwin-arm64': 0.26.2
+      '@lancedb/lancedb-linux-arm64-gnu': 0.26.2
+      '@lancedb/lancedb-linux-arm64-musl': 0.26.2
+      '@lancedb/lancedb-linux-x64-gnu': 0.26.2
+      '@lancedb/lancedb-linux-x64-musl': 0.26.2
+      '@lancedb/lancedb-win32-arm64-msvc': 0.26.2
+      '@lancedb/lancedb-win32-x64-msvc': 0.26.2
 
   '@lancedb/lancedb@0.27.2(apache-arrow@18.1.0)':
     dependencies:
