@@ -1579,13 +1579,27 @@ function Invoke-Logged {
 
 try {
   $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps') 'portable-git') ''
-  $env:PATH = "$portableGit\cmd;$portableGit\mingw64\bin;$portableGit\usr\bin;$env:PATH"
+  $shortRoot = 'C:\ocu'
+  $shortTemp = Join-Path $shortRoot 'tmp'
+  $bootstrapRoot = Join-Path $shortRoot 'bootstrap'
+  $bootstrapBin = Join-Path $bootstrapRoot 'node_modules\.bin'
+  $env:PATH = "$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
+  $env:ComSpec = Join-Path $env:SystemRoot 'System32\cmd.exe'
+  $env:npm_config_script_shell = $env:ComSpec
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   $gitRoot = Join-Path $env:USERPROFILE 'openclaw'
   $gitEntry = Join-Path $gitRoot 'openclaw.mjs'
 
   Remove-Item $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
   Write-ProgressLog 'update.start'
+
+  Write-ProgressLog 'update.short-temp'
+  New-Item -ItemType Directory -Path $shortTemp -Force | Out-Null
+  New-Item -ItemType Directory -Path $bootstrapRoot -Force | Out-Null
+  $env:TEMP = $shortTemp
+  $env:TMP = $shortTemp
+  Write-LoggedLine ("TEMP=" + $env:TEMP)
+  Write-LoggedLine ("npm_config_script_shell=" + $env:npm_config_script_shell)
 
   Write-ProgressLog 'update.where-pnpm-pre'
   $pnpmPre = Get-Command pnpm -ErrorAction SilentlyContinue
@@ -1602,6 +1616,19 @@ try {
     Invoke-Logged 'corepack --version' { & corepack --version }
   } else {
     Write-LoggedLine 'corepack=missing-pre'
+  }
+
+  Write-ProgressLog 'update.bootstrap-toolchain'
+  Invoke-Logged 'npm bootstrap node-gyp pnpm' {
+    & npm install --prefix $bootstrapRoot --no-save node-gyp pnpm@10
+  }
+
+  Write-ProgressLog 'update.where-node-gyp-pre'
+  $nodeGypPre = Get-Command node-gyp -ErrorAction SilentlyContinue
+  if ($null -ne $nodeGypPre) {
+    Write-LoggedLine $nodeGypPre.Source
+  } else {
+    throw 'node-gyp missing before dev update'
   }
 
   Write-ProgressLog 'update.reset-git-root'

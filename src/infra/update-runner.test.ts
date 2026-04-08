@@ -581,6 +581,7 @@ describe("runGatewayUpdate", () => {
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
     let preflightInstallAttempts = 0;
+    let preflightIgnoreScriptsAttempts = 0;
     let finalInstallAttempts = 0;
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
@@ -649,6 +650,9 @@ describe("runGatewayUpdate", () => {
           }
         }
         if (key === "pnpm install --ignore-scripts") {
+          if (options?.cwd && /(?:openclaw-update-preflight-|ocu-pf-)/.test(options.cwd)) {
+            preflightIgnoreScriptsAttempts += 1;
+          }
           return { stdout: "", stderr: "", code: 0 };
         }
         if (key === "pnpm build" || key === "pnpm lint" || key === "pnpm ui:build") {
@@ -675,7 +679,8 @@ describe("runGatewayUpdate", () => {
       const result = await runWithCommand(runCommand, { channel: "dev" });
 
       expect(result.status).toBe("ok");
-      expect(preflightInstallAttempts).toBe(1);
+      expect(preflightInstallAttempts).toBe(0);
+      expect(preflightIgnoreScriptsAttempts).toBe(1);
       expect(finalInstallAttempts).toBe(1);
       expect(result.steps.map((step) => step.name)).toContain(
         "preflight deps install (ignore scripts) (upstream)",

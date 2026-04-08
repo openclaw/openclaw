@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/github-copilot-provider",
-  "version": "2026.4.6",
+  "version": "2026.4.7",
   "private": true,
   "description": "OpenClaw GitHub Copilot provider plugin",
   "type": "module",

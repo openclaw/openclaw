@@ -358,6 +358,10 @@ function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm
   return process.platform === "win32" && manager === "pnpm";
 }
 
+function shouldPreferIgnoreScriptsForWindowsPreflight(manager: "pnpm" | "bun" | "npm"): boolean {
+  return process.platform === "win32" && manager === "pnpm";
+}
+
 function isSupersededInstallFailure(
   step: UpdateStepResult,
   steps: readonly UpdateStepResult[],
@@ -670,20 +674,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
+          const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
+            manager.manager,
+          );
+          const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+          const depsStepArgv =
+            preflightIgnoreScripts && preflightIgnoreScriptsArgv
+              ? preflightIgnoreScriptsArgv
+              : managerInstallArgs(manager.manager, {
+                  compatFallback: manager.fallback && manager.manager === "npm",
+                });
+          const depsStepName = preflightIgnoreScripts
+            ? `preflight deps install (ignore scripts) (${shortSha})`
+            : `preflight deps install (${shortSha})`;
           const depsStep = await runStep(
-            step(
-              `preflight deps install (${shortSha})`,
-              managerInstallArgs(manager.manager, {
-                compatFallback: manager.fallback && manager.manager === "npm",
-              }),
-              worktreeDir,
-              manager.env,
-            ),
+            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
           );
           steps.push(depsStep);
           let finalDepsStep = depsStep;
           if (
             depsStep.exitCode !== 0 &&
+            !preflightIgnoreScripts &&
             shouldRetryWindowsInstallIgnoringScripts(manager.manager)
           ) {
             const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
