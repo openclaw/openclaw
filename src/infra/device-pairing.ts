@@ -101,6 +101,21 @@ const OPERATOR_SCOPE_PREFIX = "operator.";
 
 const withLock = createAsyncLock();
 
+/**
+ * Coerce a value read from a state JSON file to a plain object.
+ * JSON.stringify silently drops all non-numeric keys from arrays, so if
+ * pending.json / paired.json were written as `[]` (e.g. from a corrupted
+ * or migrated init), every persist cycle would write `[]` back — destroying
+ * all pairing state. Treat an array-typed value the same as a missing file
+ * and fall back to an empty object.
+ */
+function toStateRecord<T>(value: Record<string, T> | null | undefined): Record<string, T> {
+  if (value === null || value === undefined || Array.isArray(value)) {
+    return {};
+  }
+  return value;
+}
+
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   const [pending, paired] = await Promise.all([
@@ -108,8 +123,8 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
     readJsonFile<Record<string, PairedDevice>>(pairedPath),
   ]);
   const state: DevicePairingStateFile = {
-    pendingById: pending ?? {},
-    pairedByDeviceId: paired ?? {},
+    pendingById: toStateRecord(pending),
+    pairedByDeviceId: toStateRecord(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
