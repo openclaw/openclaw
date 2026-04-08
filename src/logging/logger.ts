@@ -198,14 +198,16 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
 
-  // Open file descriptor for efficient writes and proper rotation handling
+  // Each buildLogger call gets its own fd state so stale logger instances cannot
+  // corrupt the active logger's fd, byte counter, or rotation decisions.
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  const fdState: LogFileFd = { fd: null, path: null };
+  latestLogFileFd = fdState;
   try {
-    currentLogFileFd = fs.openSync(settings.file, "a");
-    currentLogFilePath = settings.file;
+    fdState.fd = fs.openSync(settings.file, "a");
+    fdState.path = settings.file;
   } catch {
-    currentLogFileFd = null;
-    currentLogFilePath = null; // Will fall back to appendFileSync
+    // Will fall back to appendFileSync
   }
 
   let warnedAboutSizeCap = false;
@@ -218,7 +220,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   // Attempt rotation; returns true on success and resets byte counters + warn flag.
   // On failure (e.g. EXDEV) leaves state unchanged so the size cap fires normally.
   const maybeRotate = (): boolean => {
-    const rotated = rotateLogFile(settings.file);
+    const rotated = rotateLogFile(settings.file, fdState);
     if (rotated === settings.file) {
       return false;
     }
@@ -271,7 +273,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
             subsystem: "logging",
             message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
           });
-          appendLogLine(settings.file, `${warningLine}\n`);
+          appendLogLine(settings.file, `${warningLine}\n`, fdState);
           process.stderr.write(
             `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
           );
@@ -279,7 +281,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         return;
       }
 
-      if (appendLogLine(settings.file, payload)) {
+      if (appendLogLine(settings.file, payload, fdState)) {
         currentFileBytes = nextBytes;
       }
     } catch {
@@ -311,22 +313,29 @@ function getCurrentLogFileBytes(file: string): number {
   }
 }
 
-// File descriptor for the log file opened by the most recently built file logger only.
-// Long-lived logger instances may outlive a rebuild; their transports must not write through
-// this FD unless the path matches (see appendLogLine / rotateLogFile).
-let currentLogFileFd: number | null = null;
-let currentLogFilePath: string | null = null;
+// Per-logger-instance file descriptor state. Each buildLogger call owns one LogFileFd so
+// that stale logger instances can never read or mutate the active logger's fd or byte counters.
+type LogFileFd = { fd: number | null; path: string | null };
 
-function releaseCurrentLogFileFd(): void {
-  if (currentLogFileFd !== null) {
+// Points to the fd state of the most recently built logger; used only by
+// releaseCurrentLogFileFd (called from setLoggerOverride / resetLogger / process-exit cleanup).
+// Stale loggers hold their own LogFileFd references and must not touch this pointer.
+let latestLogFileFd: LogFileFd = { fd: null, path: null };
+
+function releaseLogFileFd(state: LogFileFd): void {
+  if (state.fd !== null) {
     try {
-      fs.closeSync(currentLogFileFd);
+      fs.closeSync(state.fd);
     } catch {
       // Ignore errors during release
     }
-    currentLogFileFd = null;
+    state.fd = null;
   }
-  currentLogFilePath = null;
+  state.path = null;
+}
+
+function releaseCurrentLogFileFd(): void {
+  releaseLogFileFd(latestLogFileFd);
 }
 
 /**
@@ -334,12 +343,11 @@ function releaseCurrentLogFileFd(): void {
  * Returns the path to the rotated file.
  * Time complexity: O(1) - rename is metadata-only, independent of file size.
  */
-function rotateLogFile(basePath: string): string {
-  const ownsGlobalFd =
-    currentLogFileFd !== null && currentLogFilePath !== null && basePath === currentLogFilePath;
+function rotateLogFile(basePath: string, fdState: LogFileFd): string {
+  const ownsFd = fdState.fd !== null && fdState.path !== null && basePath === fdState.path;
 
-  if (ownsGlobalFd) {
-    releaseCurrentLogFileFd();
+  if (ownsFd) {
+    releaseLogFileFd(fdState);
   }
 
   // Find the next rotation number
@@ -359,27 +367,26 @@ function rotateLogFile(basePath: string): string {
     return basePath;
   }
 
-  if (ownsGlobalFd) {
+  if (ownsFd) {
     try {
-      currentLogFileFd = fs.openSync(basePath, "a");
-      currentLogFilePath = basePath;
+      fdState.fd = fs.openSync(basePath, "a");
+      fdState.path = basePath;
     } catch {
-      currentLogFileFd = null;
-      currentLogFilePath = null;
+      // fall back to appendFileSync
     }
   }
   return rotatedPath;
 }
 
-function appendLogLine(file: string, line: string): boolean {
+function appendLogLine(file: string, line: string, fdState: LogFileFd): boolean {
   try {
-    if (currentLogFileFd !== null && file === currentLogFilePath) {
+    if (fdState.fd !== null && file === fdState.path) {
       // writeSync may write fewer bytes than requested (e.g. low-disk, interrupted write).
       // Loop until all bytes land or a zero-progress write signals a permanent stall.
       const buf = Buffer.from(line, "utf8");
       let offset = 0;
       while (offset < buf.byteLength) {
-        const written = fs.writeSync(currentLogFileFd, buf, offset, buf.byteLength - offset);
+        const written = fs.writeSync(fdState.fd, buf, offset, buf.byteLength - offset);
         if (written === 0) {
           return false;
         }
