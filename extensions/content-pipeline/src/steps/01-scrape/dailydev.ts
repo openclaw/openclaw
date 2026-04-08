@@ -1,5 +1,5 @@
 import { chromium, type Browser } from "playwright";
-import type { Article, SourceConfig } from "../types.js";
+import type { Article, SourceConfig } from "../../types.js";
 
 export async function scrapeDailyDev(source: SourceConfig): Promise<Article[]> {
   let browser: Browser | undefined;

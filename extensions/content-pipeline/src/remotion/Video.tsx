@@ -1,5 +1,13 @@
 import React from "react";
-import { AbsoluteFill, Audio, Sequence, staticFile, interpolate, useCurrentFrame } from "remotion";
+import {
+  AbsoluteFill,
+  Audio,
+  OffthreadVideo,
+  Sequence,
+  staticFile,
+  interpolate,
+  useCurrentFrame,
+} from "remotion";
 import { IntroSlide } from "./components/IntroSlide";
 import { OutroSlide } from "./components/OutroSlide";
 import { StorySlide } from "./components/StorySlide";
@@ -84,10 +92,63 @@ const FadeSlide: React.FC<{ children: React.ReactNode; durationInFrames: number 
   return <AbsoluteFill style={{ opacity: Math.min(fadeIn, fadeOut) }}>{children}</AbsoluteFill>;
 };
 
+/** A glassmorphic chip showing the slide title — overlaid on B-roll backgrounds. */
+const TitleChip: React.FC<{ title: string }> = ({ title }) => {
+  if (!title) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 80,
+        left: 80,
+        padding: "20px 36px",
+        background: "rgba(0, 0, 0, 0.55)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        borderRadius: 16,
+        border: "1px solid rgba(255,255,255,0.18)",
+        maxWidth: "70%",
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "Helvetica, sans-serif",
+          fontWeight: 800,
+          color: "white",
+          fontSize: 64,
+          lineHeight: 1.1,
+          letterSpacing: -1,
+          textShadow: "0 4px 24px rgba(0,0,0,0.6)",
+        }}
+      >
+        {title}
+      </div>
+    </div>
+  );
+};
+
+/** B-roll background slide: full-bleed video + dark vignette + title chip. */
+const BrollSlide: React.FC<{ brollPath: string; title: string }> = ({ brollPath, title }) => {
+  return (
+    <AbsoluteFill>
+      <OffthreadVideo src={staticFile(brollPath)} muted />
+      {/* Dark gradient at top + bottom for caption + title readability */}
+      <AbsoluteFill
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 25%, rgba(0,0,0,0) 70%, rgba(0,0,0,0.7) 100%)",
+        }}
+      />
+      <TitleChip title={title} />
+    </AbsoluteFill>
+  );
+};
+
 export const NewsVideo: React.FC<VideoProps> = ({
   slides,
   audioPath,
   words,
+  brollPaths,
   musicPath,
   musicVolume = 0.15,
 }) => {
@@ -102,20 +163,27 @@ export const NewsVideo: React.FC<VideoProps> = ({
       {/* Background music */}
       {musicPath && <Audio src={staticFile(musicPath)} volume={musicVolume} loop />}
 
-      {/* Slides with fade transitions */}
+      {/* Slides with fade transitions. If a per-slide brollPath is provided,
+          render the b-roll clip as a full-bleed background with a title chip;
+          otherwise fall back to the branded slide components. */}
       {slides.map((slide, i) => {
         const from = frameOffset;
         frameOffset += slide.durationFrames;
+        const brollPath = brollPaths?.[i];
         return (
           <Sequence key={i} from={from} durationInFrames={slide.durationFrames}>
             <FadeSlide durationInFrames={slide.durationFrames}>
-              {renderSlide(slide, i, slides.length)}
+              {brollPath ? (
+                <BrollSlide brollPath={brollPath} title={slide.title} />
+              ) : (
+                renderSlide(slide, i, slides.length)
+              )}
             </FadeSlide>
           </Sequence>
         );
       })}
 
-      {/* Word-level captions overlay */}
+      {/* Word-level captions overlay (works for both slide modes) */}
       {words.length > 0 && <WordCaption words={words} />}
     </AbsoluteFill>
   );

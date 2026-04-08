@@ -1,5 +1,5 @@
 import Parser from "rss-parser";
-import type { Article, SourceConfig } from "../types.js";
+import type { Article, SourceConfig } from "../../types.js";
 
 const parser = new Parser({
   timeout: 15_000,

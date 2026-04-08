@@ -13,7 +13,7 @@
 import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { runPipeline, loadConfig } from "../pipeline.js";
-import { scrapeAll } from "../scraper/index.js";
+import { scrapeAll } from "../steps/01-scrape/index.js";
 import { sendMessage } from "./notifier.js";
 
 interface BotConfig {

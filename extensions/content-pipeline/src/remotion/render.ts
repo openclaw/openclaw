@@ -133,7 +133,13 @@ async function main() {
   console.log(`\n✅ Done! Open: ${outputPath}`);
 }
 
-main().catch((err) => {
-  console.error("❌ Render failed:", err.message);
-  process.exit(1);
-});
+// CLI entry point — only runs when this file is executed directly, NOT on import.
+// Without this guard, every `await import("./remotion/render.js")` from
+// pipeline.ts would kick off a parallel test render with default props that
+// fights the real pipeline render for resources.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error("❌ Render failed:", err.message);
+    process.exit(1);
+  });
+}

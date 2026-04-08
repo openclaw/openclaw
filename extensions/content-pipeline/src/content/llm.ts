@@ -222,7 +222,7 @@ async function generateWithGoogle(model: string, message: LlmMessage): Promise<s
   const body = {
     systemInstruction: { parts: [{ text: message.system }] },
     contents: [{ role: "user", parts: [{ text: message.prompt }] }],
-    generationConfig: { maxOutputTokens: 4096, temperature: 0.7 },
+    generationConfig: { maxOutputTokens: 8192, temperature: 0.7 },
   };
 
   const resp = await fetch(url, {
@@ -277,7 +277,7 @@ async function generateWithOpenAICompat(
         { role: "system", content: message.system },
         { role: "user", content: message.prompt },
       ],
-      max_tokens: 4096,
+      max_tokens: 8192,
       temperature: 0.7,
     }),
   });

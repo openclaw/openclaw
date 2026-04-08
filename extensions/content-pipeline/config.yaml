@@ -1,8 +1,16 @@
-# ── News Sources ──
+# ── News Sources (RSS only — daily.dev Playwright was dropped) ──
+# 12 sources spanning HN/dev/mainstream/AI-research. The candidate pool is then
+# balanced + truncated by content.poolSize / content.maxPerSource below.
 sources:
+  # General developer news
   - name: "Hacker News"
     type: rss
     url: "https://hnrss.org/frontpage"
+    maxItems: 10
+
+  - name: "Lobsters"
+    type: rss
+    url: "https://lobste.rs/rss"
     maxItems: 10
 
   - name: "Dev.to"
@@ -10,6 +18,7 @@ sources:
     url: "https://dev.to/feed"
     maxItems: 10
 
+  # Mainstream tech press
   - name: "TechCrunch"
     type: rss
     url: "https://techcrunch.com/feed/"
@@ -20,15 +29,41 @@ sources:
     url: "https://www.theverge.com/rss/index.xml"
     maxItems: 10
 
-  - name: "Lobsters"
+  - name: "Ars Technica"
     type: rss
-    url: "https://lobste.rs/rss"
-    maxItems: 10
+    url: "https://feeds.arstechnica.com/arstechnica/index"
+    maxItems: 5
 
-  - name: "daily.dev"
-    type: scrape
-    url: "https://app.daily.dev"
-    maxItems: 20
+  - name: "Wired"
+    type: rss
+    url: "https://www.wired.com/feed/rss"
+    maxItems: 5
+
+  - name: "Engadget"
+    type: rss
+    url: "https://www.engadget.com/rss.xml"
+    maxItems: 5
+
+  - name: "404 Media"
+    type: rss
+    url: "https://www.404media.co/rss/"
+    maxItems: 5
+
+  # AI / research
+  - name: "HuggingFace"
+    type: rss
+    url: "https://huggingface.co/blog/feed.xml"
+    maxItems: 5
+
+  - name: "Google AI"
+    type: rss
+    url: "https://blog.google/technology/ai/rss/"
+    maxItems: 5
+
+  - name: "MIT Technology Review"
+    type: rss
+    url: "https://www.technologyreview.com/feed/"
+    maxItems: 5
 
 # ── Content Generation ──
 # Model format: "provider/model-name"
@@ -43,6 +78,20 @@ content:
   topStories: 5
   language: "en"
   tone: "energetic"
+  # Candidate-pool sizing (Step 1)
+  poolSize: 30          # final pool after dedup + per-source cap
+  maxPerSource: 3       # max articles per source after dedup
+  # Concept-selection score weights (Step 2) — defaults are 1:1:1:1
+  scoreWeights:
+    necessity: 1.0       # how important the audience NEEDS to know this story
+    attractiveness: 1.0  # hook / clickability / viral potential
+    novelty: 1.0         # fresh angle vs. recycled
+    depth: 1.0           # enough material for a 2-3 min single-concept video
+  # Related-source aggregation (Step 3)
+  relatedSources: 5      # how many full-text articles to fetch per concept
+  maxFullTextChars: 3000 # cap per article body — keeps Step 4 prompt costs sane
+  # Script mode (Step 4) — "single-concept" is the 7-slide deep dive, "multi-story" is the legacy Top-N recap
+  mode: "single-concept"
 
 # ── Auto Key Generation (optional) ──
 keyManager:
@@ -68,17 +117,57 @@ slides:
     heading: "Inter"
     code: "JetBrains Mono"
 
-# ── Video ──
+# ── Video (Step 6) ──
 video:
+  # Engine: "remotion" (slides, always works) | "pexels" (B-roll stock) | "ltx" (local AI) | "hybrid" (Remotion + Pexels)
+  # Default: "pexels" — free, fast, real footage, no GPU. Falls back to Remotion automatically on Pexels failure.
+  engine: "pexels"
   durationPerSlide: 8
-  ttsEngine: "kokoro"          # "kokoro" (local, natural) | "edge-tts" (cloud, fallback)
-  ttsVoice: "af_heart"         # Kokoro: af_heart, am_michael | edge-tts: en-US-AndrewNeural
+  # TTS (Step 5) — split per engine so Kokoro and edge-tts voices don't collide
+  tts:
+    engine: "kokoro"             # "kokoro" (local, natural) | "edge-tts" (cloud, fallback)
+    kokoro:
+      voice: "af_heart"          # af_heart, am_michael, bf_emma, bm_george
+      speed: 1.0
+    edgeTts:
+      voice: "en-US-AndrewNeural"
+    chunkBySentence: true        # split long narration into sentence-sized TTS calls
+  # Legacy flat fields kept for back-compat — read only when `tts` is not set
+  ttsEngine: "kokoro"
+  ttsVoice: "af_heart"
   ttsSpeed: 1.0
   width: 1920
   height: 1080
   fps: 30
   backgroundMusic: ""          # Path to background music MP3 (optional)
   musicVolume: 0.15
+  optimizePrompts: true        # Use LLM to convert slides into cinematic video prompts
+
+  # ── Pexels B-roll engine (Step 6, free, no GPU) ──
+  # Free API key from https://www.pexels.com/api/ (no card)
+  # 200 req/hour, 20,000/month — way more than a daily pipeline needs
+  pexels:
+    apiKeyEnv: "PEXELS_API_KEY"
+    size: "medium"             # "small" | "medium" | "large"
+    perPage: 10                # results to inspect per slide
+
+  # ── Subtitles (Step 6) ──
+  # Replaces the old WhisperX Python script with whisper.cpp (brew install whisper-cpp)
+  subtitles:
+    engine: "whisper.cpp"
+    modelPath: "~/.openclaw/models/whisper/ggml-base.en.bin"
+    bin: "whisper-cli"
+
+  # ── LTX-Video local AI (Step 6, free, slow on Mac) ──
+  # Replaces the broken Wan 2.1 path. Requires:
+  #   pip3 install diffusers torch==2.4.1 transformers accelerate imageio imageio-ffmpeg sentencepiece
+  # Model auto-downloads from HF on first run (~6GB)
+  ltx:
+    path: ""                   # unused (kept for type compat with Wan2gpConfig shape)
+    model: "1.3B"              # label only
+    resolution: "480p"         # "480p" | "720p"
+    clipDuration: 5            # seconds per generated clip
+    concurrency: 1             # MPS 16GB requires concurrency=1
 
 # ── Upload ──
 upload:

@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runPipeline, loadConfig, type Stage } from "../pipeline.js";
-import { scrapeAll } from "../scraper/index.js";
+import { scrapeAll } from "../steps/01-scrape/index.js";
 import type { UploadResult } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

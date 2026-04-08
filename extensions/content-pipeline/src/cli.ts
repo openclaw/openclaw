@@ -22,7 +22,7 @@ const __cliDir = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(__cliDir, "..", ".env") });
 
 import { runPipeline, loadConfig, type Stage } from "./pipeline.js";
-import { scrapeAll } from "./scraper/index.js";
+import { scrapeAll } from "./steps/01-scrape/index.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -108,13 +108,16 @@ async function handleRun(args: string[]) {
 
 async function handlePreview() {
   const config = loadConfig();
-  const articles = await scrapeAll(config.sources);
+  const articles = await scrapeAll(config.sources, {
+    poolSize: config.content.poolSize,
+    maxPerSource: config.content.maxPerSource,
+  });
 
   console.log("\n┌────┬────────────────────────────────────────────────┬───────────────┬───────┐");
   console.log("│  # │ Title                                          │ Source        │ Score │");
   console.log("├────┼────────────────────────────────────────────────┼───────────────┼───────┤");
 
-  for (const [i, article] of articles.slice(0, 15).entries()) {
+  for (const [i, article] of articles.entries()) {
     const title = article.title.slice(0, 46).padEnd(46);
     const source = article.source.slice(0, 13).padEnd(13);
     const score = String(article.score).padStart(5);
@@ -122,9 +125,17 @@ async function handlePreview() {
   }
 
   console.log("└────┴────────────────────────────────────────────────┴───────────────┴───────┘");
-  console.log(
-    `\nTotal: ${articles.length} articles from ${new Set(articles.map((a) => a.source)).size} sources`,
-  );
+
+  // Source distribution
+  const dist = new Map<string, number>();
+  for (const a of articles) dist.set(a.source, (dist.get(a.source) ?? 0) + 1);
+  const distLine = [...dist.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `${s}: ${n}`)
+    .join(", ");
+
+  console.log(`\nTotal: ${articles.length} articles from ${dist.size} sources`);
+  console.log(`  ${distLine}`);
 }
 
 async function handleList() {

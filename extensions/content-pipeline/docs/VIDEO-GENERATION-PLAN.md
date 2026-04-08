@@ -1,134 +1,127 @@
-# Video Generation Integration Plan
+# Video Generation Integration Plan (Free-First)
 
 ## Goal
 
-Add AI video generation (Google Veo, Runway, etc.) as an alternative to the current Remotion slide-based video pipeline. Users can choose between `"ai"` (AI-generated clips) and `"remotion"` (HTML slide renders) via `config.yaml`.
+Add AI video generation as an alternative to the current Remotion slide-based pipeline, prioritizing **free, local-first** tools. Users choose between engines via `config.yaml`.
 
 ## Current Architecture
 
 ```
-Scrape → Script → Remotion Slides (PNG) → TTS Audio → ffmpeg Compose → Upload
+Scrape → Script (Ollama, free) → Remotion Slides (PNG) → TTS Audio (Kokoro, free) → ffmpeg Compose → Upload
 ```
 
 ## New Architecture
 
 ```
-Scrape → Script → [AI Video Gen OR Remotion Slides] → TTS Audio → ffmpeg Compose → Upload
-                        │                                    │
-                  Google Veo 3.1                    HTML → PNG (existing)
-                  Runway gen4.5
-                  fal, etc.
+Scrape → Script (Ollama, free) → LLM Prompt Optimizer (Ollama, free)
+                                        │
+                              ┌─────────┼──────────┐
+                              │         │          │
+                          "remotion"  "hybrid"    "wan2gp"
+                              │         │          │
+                         HTML→PNG   PNG+Prompt   Prompt only
+                              │         │          │
+                         Remotion    img2video   txt2video
+                              │      (Wan2GP)    (Wan2GP)
+                              └─────────┼──────────┘
+                                        │
+                                   TTS Audio (Kokoro, free)
+                                        │
+                                   Duration Match (loop/extend clips)
+                                        │
+                                   ffmpeg Compose (strip AI audio + overlay TTS)
+                                        │
+                                   Portrait Version (ffmpeg)
+                                        │
+                                   R2 Upload → Approval → Publish
 ```
 
-## References
+## Engine Modes
 
-- OpenClaw video_generation docs: https://docs.openclaw.ai/tools/video-generation
-- YouTube demo: https://www.youtube.com/watch?v=Yt6imPC1FhA ("OpenClaw Just Replaced 1,000 Hours of Video Editing Tutorials")
-- Superskills registry: https://superskills.vibecode.run/
+| Mode       | Flow                                                 | Cost | Best for                     |
+| ---------- | ---------------------------------------------------- | ---- | ---------------------------- |
+| `remotion` | HTML slides → TTS → ffmpeg (current)                 | Free | Fast, branded, no GPU needed |
+| `wan2gp`   | Text-to-video via Wan2GP local → TTS overlay         | Free | Cinematic look, requires GPU |
+| `hybrid`   | Remotion slide → Wan2GP image-to-video → TTS overlay | Free | Best quality + branding      |
+| `cloud`    | Cloud API (fal/Google/Replicate) → TTS overlay       | Paid | No GPU, highest quality      |
 
 ---
 
-## Phase 1: Configure OpenClaw video_generation tool
+## Phase 1: Install Wan2GP locally
 
-**What:** Register video generation provider in the gateway config.
+**What:** Set up Wan2GP as the local video generation engine.
 
-**File:** `~/.openclaw/openclaw.json`
+**Requirements:**
 
-```json5
-{
-  agents: {
-    defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
-        fallbacks: [
-          "google/veo-3.1-generate-preview",
-          // Add more as needed: "runway/gen4.5", "fal/minimax-video"
-        ]
-      }
-    }
-  }
-}
+- GPU with 8GB+ VRAM (RTX 2060+ or equivalent)
+- Python 3.10+
+- ~10GB disk space for model weights
+
+**Install:**
+
+```bash
+git clone https://github.com/deepbeepmeep/Wan2GP ~/Wan2GP
+cd ~/Wan2GP
+# Follow Wan2GP installation instructions
+# Models download automatically on first run
 ```
-
-**Auth:** Uses existing `GEMINI_API_KEY` from `~/.openclaw/.env`. No extra setup needed.
 
 **Verify:**
-- Gateway logs should show video generation model available
-- Agent can call `video_generation({ prompt: "test" })` tool
 
----
-
-## Phase 2: Add AI video generation module
-
-**What:** Create `src/video/ai-video.ts` that generates video clips using OpenClaw's async video_generation tool.
-
-**File:** `extensions/content-pipeline/src/video/ai-video.ts`
-
-**Design:**
-
-```typescript
-export async function generateAiVideoClips(
-  slides: SlideContent[],
-  outputDir: string,
-  config: PipelineConfig,
-): Promise<string[]> {
-  // For each slide/story:
-  // 1. Build prompt from slide title + body + speaker notes
-  // 2. Submit video_generation task via OpenClaw gateway API
-  // 3. Poll for completion (30s - 5min per clip)
-  // 4. Download generated video to outputDir
-  // 5. Return array of video clip paths
-}
-```
-
-**Key details:**
-- OpenClaw video_generation is async: submit → get taskId → poll status → download
-- Task states: `queued` → `running` → `succeeded` / `failed`
-- Generate one clip per story (5-15 seconds each)
-- Aspect ratio: 16:9 for YouTube, 9:16 for TikTok
-- Fallback: if AI generation fails for a slide, fall back to Remotion for that slide
-
-**API interaction:**
-- Gateway endpoint: `http://127.0.0.1:18789` (local gateway)
-- Auth: gateway token from `~/.openclaw/openclaw.json`
-- Tool call via gateway RPC or direct OpenClaw CLI
-
-**Alternative approach:** Instead of calling the gateway API, use the OpenClaw CLI:
 ```bash
-openclaw agent --local -m "Generate a 10-second video: [prompt]"
+cd ~/Wan2GP
+python wgp.py --prompt "A futuristic city at sunset" --output test.mp4 --size 480p --duration 5
 ```
-This is simpler but less controllable.
 
 ---
 
-## Phase 3: Update config.yaml
+## Phase 2: AI video generation module (DONE)
 
-**What:** Add `videoEngine` toggle to choose between AI and Remotion.
+**Files created:**
 
-**File:** `extensions/content-pipeline/config.yaml`
+- `src/video/ai-video.ts` — Wan2GP integration with parallel generation, caching, i2v support
+- `src/video/prompt-optimizer.ts` — LLM converts slide content into cinematic video prompts
+
+**Key features:**
+
+- Calls Wan2GP via CLI (`python wgp.py --prompt "..." --output clip.mp4`)
+- Parallel clip generation with configurable concurrency
+- Content-hash caching (skip already-generated clips on retry)
+- Image-to-video support for hybrid mode
+- Per-slide fallback on failure
+- Audio handling: strips AI audio, overlays TTS narration, loops clips to match duration
+
+---
+
+## Phase 3: Config + pipeline wiring (DONE)
+
+**config.yaml additions:**
 
 ```yaml
-# ── Video ──
 video:
-  engine: "remotion"          # "remotion" (slides) | "ai" (AI-generated clips)
-  aiProvider: "google"        # Provider for AI video: google, runway, fal
-  aiModel: "veo-3.1-fast-generate-preview"
-  aiClipDuration: 10          # Seconds per clip
-  aiAspectRatio: "16:9"       # "16:9" | "9:16" | "1:1"
-  durationPerSlide: 8
-  ttsEngine: "kokoro"
-  ttsVoice: "af_heart"
-  ttsSpeed: 1.0
-  width: 1920
-  height: 1080
-  fps: 30
+  engine: "remotion" # "remotion" | "wan2gp" | "hybrid" | "cloud"
+  optimizePrompts: true
+
+  wan2gp:
+    path: "~/Wan2GP"
+    model: "1.3B" # 8GB VRAM
+    resolution: "480p"
+    clipDuration: 5
+    concurrency: 2
+
+  cloud:
+    provider: "fal"
+    model: "wan-2.1"
+    apiKeyEnv: "FAL_KEY"
 ```
 
-**File:** `extensions/content-pipeline/src/pipeline.ts`
+**pipeline.ts** — engine switch routes to:
 
-- Read `config.video.engine`
-- If `"ai"`: call `generateAiVideoClips()` → compose with TTS audio via ffmpeg
-- If `"remotion"`: use existing Remotion slide render flow (unchanged)
+- `remotion` → existing Remotion path (unchanged)
+- `wan2gp` → prompt optimizer → Wan2GP text-to-video → compose with TTS
+- `hybrid` → prompt optimizer → Remotion slides as reference → Wan2GP image-to-video → compose with TTS
+- `cloud` → prompt optimizer → cloud API → compose with TTS
+- All AI engines fall back to Remotion on failure
 
 ---
 
@@ -136,76 +129,93 @@ video:
 
 ### kai (video-producer) — `skills/video-producer/SKILL.md`
 
-Add section for AI video generation:
+Add:
 
 ```markdown
-## AI Video Generation (Alternative)
+## AI Video Generation (Free, Local)
 
-When config.yaml has `video.engine: "ai"`, the pipeline generates AI video clips
-instead of Remotion slides.
+When config.yaml has `video.engine: "wan2gp"` or `"hybrid"`, the pipeline generates
+AI video clips locally using Wan2GP instead of Remotion slides.
 
-Each story gets a 10-second AI-generated clip using Google Veo 3.1.
-Clips are composed with TTS narration and concatenated into final video.
+- "wan2gp": Text-to-video from cinematic prompts (LLM-optimized)
+- "hybrid": Remotion slides as reference images → AI-animated clips (best quality)
+
+Requirements: GPU with 8GB+ VRAM, Wan2GP installed at ~/Wan2GP
 
 To use AI video for a single run:
-npx tsx src/cli.ts run news --engine ai --skip-upload
+npx tsx src/cli.ts run news --engine wan2gp --skip-upload
 ```
 
 ### nhu.tuyet (pipeline-manager) — `skills/pipeline-manager/SKILL.md`
 
-Add video engine option to workflow:
+Add:
 
 ```markdown
-When the user says "start news with AI video" or "use AI for video":
-- Set video engine to "ai" before spawning kai
-- Report: "Using AI video generation (Google Veo)"
+When the user says "start news with AI video":
+
+- Set video engine to "wan2gp" before spawning kai
+- Report: "Using Wan2GP local AI video (free, 8GB VRAM)"
+
+When the user says "use hybrid video":
+
+- Set video engine to "hybrid"
+- Report: "Using hybrid mode (Remotion slides + Wan2GP animation)"
 ```
 
 ---
 
 ## Phase 5: Test end-to-end
 
-1. Set `video.engine: "ai"` in config.yaml
-2. Run: `npx tsx src/cli.ts run news --skip-upload`
-3. Verify:
-   - Script generated with ollama/gemma4
-   - AI video clips generated via Google Veo
-   - TTS audio generated
+1. Install Wan2GP at `~/Wan2GP`
+2. Set `video.engine: "wan2gp"` in config.yaml
+3. Run: `npx tsx src/cli.ts run news --skip-upload`
+4. Verify:
+   - Script generated with Ollama/gemma4
+   - Video prompts optimized by LLM
+   - AI video clips generated locally via Wan2GP
+   - Clips cached in `output/<run-id>/clips/cache.json`
+   - TTS audio overlaid on clips
    - Final video composed with ffmpeg
-   - Output in `output/<run-id>/`
-4. Commit and push
+   - Portrait version created
+5. Test hybrid mode: set `engine: "hybrid"`, verify reference images extracted
+6. Test fallback: temporarily break Wan2GP path, verify Remotion fallback works
+7. Test caching: re-run same content, verify clips loaded from cache
 
 ---
 
-## Provider Comparison
+## Provider Comparison (Free-Focused)
 
-| Provider | Model | Cost | Speed | Quality | Auth |
-|----------|-------|------|-------|---------|------|
-| **Google** | veo-3.1-fast | Free tier | ~30s | Good | GEMINI_API_KEY |
-| **Google** | veo-3.1 | Free tier | ~2min | Best | GEMINI_API_KEY |
-| Runway | gen4.5 | Paid | ~1min | Excellent | RUNWAY_API_KEY |
-| fal | minimax-video | Paid | ~1min | Good | FAL_KEY |
-| Together | wan2.1-t2v | Low cost | ~2min | Good | TOGETHER_API_KEY |
+| Provider      | Model        | Cost           | Speed    | Quality   | VRAM  | Notes                  |
+| ------------- | ------------ | -------------- | -------- | --------- | ----- | ---------------------- |
+| **Wan2GP**    | Wan 2.1 1.3B | **Free**       | ~4min/5s | Good      | 8GB   | Daily pipeline default |
+| **Wan2GP**    | Wan 2.1 14B  | **Free**       | ~4min/5s | Very good | 24GB+ | Better GPU             |
+| **LTX Video** | LTX-2        | **Free**       | ~1min/5s | Decent    | 6GB   | Weakest GPU option     |
+| fal.ai        | Wan/Kling    | Signup credits | ~30s     | Very good | None  | No GPU needed          |
+| Google        | Veo 3.1 Lite | $0.05/s        | ~15s     | Best      | None  | Quality priority       |
+| Replicate     | Wan 2.1      | ~$0.05/s       | ~30s     | Very good | None  | Simple API             |
 
-**Recommendation:** Start with Google Veo 3.1 Fast — free tier, uses existing GEMINI_API_KEY.
+**Default:** Wan2GP 1.3B — free, local, no API keys, no rate limits, 8GB VRAM.
 
 ---
 
 ## Risk & Fallback
 
-- **Rate limits:** Google Veo has rate limits on free tier. If hit, fall back to Remotion slides for that run.
-- **Generation failure:** If any clip fails, substitute with a Remotion-rendered slide for that story.
-- **Long generation times:** Veo 3.1 Fast ~30s, regular ~2-5min. Total for 5 clips: 2.5-25min. Acceptable for daily pipeline.
-- **Quality:** AI clips may not always match the prompt perfectly. The narration + subtitles overlay provides continuity regardless.
+- **No GPU:** Fall back to `remotion` engine (slides, always works)
+- **Wan2GP not installed:** Error with install link, suggest `remotion` fallback
+- **Clip generation fails:** Per-slide fallback to static color frame with TTS audio
+- **All AI fails:** Entire engine falls back to Remotion automatically
+- **Slow generation:** ~4min per 5s clip on RTX 4090. 5 clips = ~20min. Acceptable for daily pipeline. Use `concurrency: 2` to parallelize.
+- **Low VRAM OOM:** Reduce `concurrency: 1` and use `model: "1.3B"` with `resolution: "480p"`
+- **Cache invalidation:** Clips cached by content hash. Change prompt → regenerate.
 
 ---
 
-## Timeline
+## Files Changed
 
-| Phase | Effort | Dependencies |
-|-------|--------|-------------|
-| Phase 1 | 5 min | GEMINI_API_KEY already configured |
-| Phase 2 | 30 min | Phase 1 |
-| Phase 3 | 10 min | Phase 2 |
-| Phase 4 | 10 min | Phase 3 |
-| Phase 5 | 15 min | All above |
+| File                            | Change                                                        |
+| ------------------------------- | ------------------------------------------------------------- |
+| `src/types.ts`                  | Added `VideoEngine`, `Wan2gpConfig`, `CloudVideoConfig` types |
+| `src/video/ai-video.ts`         | **New** — Wan2GP integration, parallel gen, caching, compose  |
+| `src/video/prompt-optimizer.ts` | **New** — LLM converts slides → cinematic video prompts       |
+| `src/pipeline.ts`               | Engine switch, AI path, Remotion extracted to helper          |
+| `config.yaml`                   | Added `engine`, `wan2gp`, `cloud`, `optimizePrompts` config   |

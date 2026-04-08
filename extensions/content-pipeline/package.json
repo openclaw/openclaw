@@ -8,7 +8,8 @@
     "pipeline": "bun run src/cli.ts",
     "preview": "bun run src/cli.ts preview",
     "run:news": "bun run src/cli.ts run news",
-    "run:tutorial": "bun run src/cli.ts run tutorial"
+    "run:tutorial": "bun run src/cli.ts run tutorial",
+    "test": "node --import tsx --test --test-reporter=spec src/steps/**/*.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1025.0",
