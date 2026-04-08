@@ -31,8 +31,10 @@ function isHostExcludedByNoProxy(
     if (entry === "*") {
       return true;
     }
-    // Exact match or suffix match (with leading dot)
-    if (lower === entry || lower.endsWith(entry.startsWith(".") ? entry : `.${entry}`)) {
+    // Strip optional leading dot for comparison so `.slack.com` matches both
+    // `slack.com` (apex) and `wss-primary.slack.com` (subdomain).
+    const bare = entry.startsWith(".") ? entry.slice(1) : entry;
+    if (lower === bare || lower.endsWith(`.${bare}`)) {
       return true;
     }
   }
