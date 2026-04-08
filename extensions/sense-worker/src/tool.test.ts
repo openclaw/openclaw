@@ -131,7 +131,7 @@ describe("sense worker tool", () => {
           },
         ],
       },
-    });
+    } as any);
 
     const tool = createSenseWorkerTool(fakeApi());
     const result = await tool.execute("id", {
@@ -146,5 +146,56 @@ describe("sense worker tool", () => {
     expect((result as any).content[0].text).toContain("50.0%");
     expect((result as any).content[0].text).toContain("Leader ★");
     expect((result as any).content[0].text).toContain("share=0.5");
+  });
+
+  it("falls back to existing digest fields when summary_parts is missing", async () => {
+    callSenseMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      url: "http://sense/execute",
+      body: {
+        notification_digest_summary: [
+          {
+            notification_group_key: "owner.high.route",
+            notification_title_short: "Owner recovery",
+            digest_bucket_percent: "25.0%",
+            digest_bucket_share: 0.25,
+            digest_bucket_badge_short: "SPL",
+            digest_bucket_ui_layouts: {
+              meta: {
+                display_parts: {
+                  badge: {
+                    label: "Split",
+                    short: "SPL",
+                    palette: "accent",
+                    order: 2,
+                  },
+                  leader: {
+                    label: "Follower",
+                    symbol: "",
+                    compact: "Follower",
+                    tokens: ["Follower"],
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as any);
+
+    const tool = createSenseWorkerTool(fakeApi());
+    const result = await tool.execute("id", {
+      action: "execute",
+      task: "summarize",
+      input: "digest",
+      params: {},
+    });
+
+    expect((result as any).content[0].text).toContain("Owner recovery");
+    expect((result as any).content[0].text).toContain("SPL");
+    expect((result as any).content[0].text).toContain("25.0%");
+    expect((result as any).content[0].text).toContain("Follower");
+    expect((result as any).content[0].text).toContain("share=0.25");
   });
 });

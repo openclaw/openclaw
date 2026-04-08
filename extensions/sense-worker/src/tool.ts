@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { callSense, checkSenseHealth, getSenseJobStatus } from "./client.js";
+import { selectDigestBucketSummaryParts } from "./digest-summary.js";
 
 type SensePluginConfig = {
   baseUrl?: string;
@@ -35,26 +36,11 @@ function summarizeNotificationDigestBody(body: unknown): string | undefined {
 
   const layouts = asRecord(firstItem.digest_bucket_ui_layouts);
   const meta = asRecord(layouts?.meta);
-  const summary = asRecord(meta?.summary_parts);
-  const display = asRecord(summary?.display);
-  const badge = asRecord(display?.badge) ?? asRecord(meta?.badge_parts);
-  const leader = asRecord(display?.leader) ?? asRecord(meta?.leader_parts);
-  const percent =
-    typeof summary?.percent === "string"
-      ? summary.percent
-      : typeof meta?.percent === "string"
-        ? meta.percent
-        : typeof firstItem.digest_bucket_percent === "string"
-          ? firstItem.digest_bucket_percent
-          : "0.0%";
-  const share =
-    typeof summary?.share === "number"
-      ? summary.share
-      : typeof meta?.share === "number"
-        ? meta.share
-        : typeof firstItem.digest_bucket_share === "number"
-          ? firstItem.digest_bucket_share
-          : undefined;
+  const summary = selectDigestBucketSummaryParts(firstItem);
+  const badge = summary.badge ? asRecord(summary.badge) : asRecord(meta?.badge_parts);
+  const leader = summary.leader ? asRecord(summary.leader) : asRecord(meta?.leader_parts);
+  const percent = summary.percent ?? "0.0%";
+  const share = typeof summary.share === "number" ? summary.share : undefined;
   const title =
     typeof firstItem.digest_title === "string"
       ? firstItem.digest_title
