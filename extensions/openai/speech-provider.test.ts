@@ -103,6 +103,26 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("maps Talk speak params onto OpenAI speech overrides", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: {},
+        params: {
+          text: "Hello from talk mode.",
+          voiceId: "nova",
+          modelId: "tts-1",
+          speed: 218 / 175,
+        },
+      }),
+    ).toEqual({
+      voice: "nova",
+      model: "tts-1",
+      speed: 218 / 175,
+    });
+  });
+
   it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {

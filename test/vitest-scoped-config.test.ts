@@ -548,6 +548,11 @@ describe("scoped vitest configs", () => {
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultGatewayConfig.test?.exclude).toContain("gateway.test.ts");
+    expect(defaultGatewayConfig.test?.exclude).toContain(
+      "server.startup-matrix-migration.integration.test.ts",
+    );
+    expect(defaultGatewayConfig.test?.exclude).toContain("sessions-history-http.test.ts");
   });
 
   it("normalizes infra include patterns relative to the scoped dir", () => {
