@@ -1,6 +1,8 @@
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
+const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
+
 export class BrowserError extends Error {
   status: number;
 
@@ -76,7 +78,7 @@ export function toBrowserErrorResponse(err: unknown): {
     return { status: 409, message: err.message };
   }
   if (err instanceof SsrFBlockedError) {
-    return { status: 400, message: err.message };
+    return { status: 400, message: BROWSER_ENDPOINT_BLOCKED_MESSAGE };
   }
   if (
     err instanceof InvalidBrowserNavigationUrlError ||

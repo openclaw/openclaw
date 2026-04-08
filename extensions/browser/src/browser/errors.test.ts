@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { BrowserValidationError, toBrowserErrorResponse } from "./errors.js";
 
 describe("browser error mapping", () => {
@@ -18,6 +19,17 @@ describe("browser error mapping", () => {
     expect(toBrowserErrorResponse(new BrowserValidationError("bad input"))).toEqual({
       status: 400,
       message: "bad input",
+    });
+  });
+
+  it("sanitizes SSRF policy errors before returning them to callers", () => {
+    expect(
+      toBrowserErrorResponse(
+        new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+      ),
+    ).toEqual({
+      status: 400,
+      message: "browser endpoint blocked by policy",
     });
   });
 });
