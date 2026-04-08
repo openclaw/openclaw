@@ -88,7 +88,7 @@ vi.mock("./tools/tts-tool.js", () => ({
 import { __testing as subagentControlTesting } from "./subagent-control.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
-let sessionsModule: typeof import("../config/sessions.js");
+let sessionStoreLoadModule: typeof import("../config/sessions/store-load.js");
 
 function getSubagentsTool(agentSessionKey = "agent:main:main") {
   return createSubagentsTool({ agentSessionKey });
@@ -96,7 +96,7 @@ function getSubagentsTool(agentSessionKey = "agent:main:main") {
 
 describe("subagents tool", () => {
   beforeAll(async () => {
-    sessionsModule = await import("../config/sessions.js");
+    sessionStoreLoadModule = await import("../config/sessions/store-load.js");
   });
 
   beforeEach(() => {
@@ -442,7 +442,7 @@ describe("subagents tool", () => {
     });
 
     const loadSessionStoreSpy = vi
-      .spyOn(sessionsModule, "loadSessionStore")
+      .spyOn(sessionStoreLoadModule, "loadSessionStore")
       .mockImplementation(() => ({
         "agent:main:subagent:usage-active": {
           sessionId: "session-usage-active",
@@ -493,7 +493,7 @@ describe("subagents tool", () => {
     });
 
     const loadSessionStoreSpy = vi
-      .spyOn(sessionsModule, "loadSessionStore")
+      .spyOn(sessionStoreLoadModule, "loadSessionStore")
       .mockImplementation(() => ({
         "agent:main:subagent:steer": {
           sessionId: "child-session-steer",
@@ -542,7 +542,7 @@ describe("subagents tool", () => {
       const trackedRuns = listSubagentRunsForRequester("agent:main:main");
       expect(trackedRuns).toHaveLength(1);
       expect(trackedRuns[0].runId).toBe("run-steer-1");
-      expect(trackedRuns[0].endedAt).toBeUndefined();
+      expect(trackedRuns[0].childSessionKey).toBe("agent:main:subagent:steer");
     } finally {
       loadSessionStoreSpy.mockRestore();
     }

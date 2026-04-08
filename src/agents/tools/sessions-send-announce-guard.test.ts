@@ -544,6 +544,7 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
     );
     const agentStepModule =
       await vi.importActual<typeof import("./agent-step.js")>("./agent-step.js");
+    const runWaitModule = await vi.importActual<typeof import("../run-wait.js")>("../run-wait.js");
     const a2aGatewayMock = vi.fn(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "send") {
@@ -577,6 +578,9 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
       callGateway: a2aGatewayMock as typeof callGatewayMock,
     });
     agentStepModule.__testing.setDepsForTest({
+      callGateway: agentStepGatewayMock as typeof callGatewayMock,
+    });
+    runWaitModule.__testing.setDepsForTest({
       callGateway: agentStepGatewayMock as typeof callGatewayMock,
     });
 
@@ -615,6 +619,7 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
     } finally {
       a2aModule.__testing.setDepsForTest();
       agentStepModule.__testing.setDepsForTest();
+      runWaitModule.__testing.setDepsForTest();
     }
   });
 
@@ -624,6 +629,7 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
     );
     const agentStepModule =
       await vi.importActual<typeof import("./agent-step.js")>("./agent-step.js");
+    const runWaitModule = await vi.importActual<typeof import("../run-wait.js")>("../run-wait.js");
     const a2aGatewayMock = vi.fn(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "send") {
@@ -657,6 +663,9 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
       callGateway: a2aGatewayMock as typeof callGatewayMock,
     });
     agentStepModule.__testing.setDepsForTest({
+      callGateway: agentStepGatewayMock as typeof callGatewayMock,
+    });
+    runWaitModule.__testing.setDepsForTest({
       callGateway: agentStepGatewayMock as typeof callGatewayMock,
     });
 
@@ -696,6 +705,7 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
     } finally {
       a2aModule.__testing.setDepsForTest();
       agentStepModule.__testing.setDepsForTest();
+      runWaitModule.__testing.setDepsForTest();
     }
   });
 });
