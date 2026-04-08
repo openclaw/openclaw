@@ -498,6 +498,7 @@ export function registerBrowserAgentSnapshotRoutes(
           selector: plan.selectorValue,
           frameSelector: plan.frameSelectorValue,
           refsMode: plan.refsMode,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           options: {
             interactive: plan.interactive ?? undefined,
             compact: plan.compact ?? undefined,
@@ -511,6 +512,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 ...(typeof plan.resolvedMaxChars === "number"
                   ? { maxChars: plan.resolvedMaxChars }
                   : {}),
@@ -579,6 +581,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 limit: plan.limit,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               });
             });
           })()

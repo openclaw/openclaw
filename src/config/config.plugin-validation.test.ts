@@ -331,7 +331,9 @@ describe("config plugin validation", () => {
     }
     expect(res.warnings).toContainEqual({
       path: "plugins.entries.google",
-      message: "plugin disabled (not in allowlist) but config is present",
+      message: expect.stringContaining(
+        "plugin google: duplicate plugin id detected; bundled plugin will be overridden by config plugin",
+      ),
     });
   });
 
@@ -443,11 +445,13 @@ describe("config plugin validation", () => {
           "voice-call-schema-fixture": {
             config: {
               tts: {
-                openai: {
-                  baseUrl: "http://localhost:8880/v1",
-                  voice: "alloy",
-                  speed: 1.5,
-                  instructions: "Speak in a cheerful tone",
+                providers: {
+                  openai: {
+                    baseUrl: "http://localhost:8880/v1",
+                    voice: "alloy",
+                    speed: 1.5,
+                    instructions: "Speak in a cheerful tone",
+                  },
                 },
               },
             },
@@ -456,6 +460,74 @@ describe("config plugin validation", () => {
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects out-of-range voice-call OpenAI TTS speed values", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  openai: {
+                    speed: 10,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+            "plugins.entries.voice-call-schema-fixture.config.tts.providers.openai.speed",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects out-of-range voice-call ElevenLabs voice settings", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    voiceSettings: {
+                      stability: 5,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+            "plugins.entries.voice-call-schema-fixture.config.tts.providers.elevenlabs.voiceSettings.stability",
+        ),
+      ).toBe(true);
+    }
   });
 
   it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
@@ -467,7 +539,7 @@ describe("config plugin validation", () => {
       channels: {
         modelByChannel: {
           openai: {
-            whatsapp: "openai/gpt-5.2",
+            whatsapp: "openai/gpt-5.4",
           },
         },
       },

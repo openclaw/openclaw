@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { __testing, resolveCliChannelOptions } from "./channel-options.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -15,16 +16,9 @@ vi.mock("node:fs", async () => {
   };
 });
 
-vi.mock("../channels/registry.js", () => ({
+vi.mock("../channels/ids.js", () => ({
   CHAT_CHANNEL_ORDER: ["telegram", "discord"],
 }));
-
-let resolveCliChannelOptions: typeof import("./channel-options.js").resolveCliChannelOptions;
-let __testing: typeof import("./channel-options.js").__testing;
-
-beforeAll(async () => {
-  ({ resolveCliChannelOptions, __testing } = await import("./channel-options.js"));
-});
 
 describe("resolveCliChannelOptions", () => {
   afterEach(() => {

@@ -1,17 +1,33 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import { buildProviderRegistry, runCapability } from "./runner.js";
 import type { AudioTranscriptionRequest } from "./types.js";
+
+const modelAuthMocks = vi.hoisted(() => ({
+  hasAvailableAuthForProvider: vi.fn(() => true),
+  resolveApiKeyForProvider: vi.fn(async () => ({
+    apiKey: "test-key",
+    source: "test",
+    mode: "api-key",
+  })),
+  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
+  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
+  requireApiKey: modelAuthMocks.requireApiKey,
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: () => [],
+}));
 
 async function withAudioFixture(params: {
   filePrefix: string;
@@ -37,6 +53,7 @@ async function withAudioFixture(params: {
   const media = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(media, {
     localPathRoots: [path.dirname(tmpPath)],
+    includeDefaultLocalPathRoots: false,
   });
 
   try {

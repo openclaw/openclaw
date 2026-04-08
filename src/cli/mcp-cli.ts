@@ -1,11 +1,16 @@
 import { Command } from "commander";
+import { readSecretFromFile } from "../acp/secret-file.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
+import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 
 function fail(message: string): never {
   defaultRuntime.error(message);
@@ -17,8 +22,91 @@ function printJson(value: unknown): void {
   defaultRuntime.writeJson(value);
 }
 
+function resolveSecretOption(params: {
+  direct?: string;
+  file?: string;
+  directFlag: string;
+  fileFlag: string;
+  label: string;
+}) {
+  const direct = normalizeOptionalString(params.direct);
+  const file = normalizeOptionalString(params.file);
+  if (direct && file) {
+    throw new Error(`Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`);
+  }
+  if (file) {
+    return readSecretFromFile(file, params.label);
+  }
+  return direct || undefined;
+}
+
+function warnSecretCliFlag(flag: "--token" | "--password") {
+  defaultRuntime.error(
+    `Warning: ${flag} can be exposed via process listings. Prefer ${flag}-file or environment variables.`,
+  );
+}
+
 export function registerMcpCli(program: Command) {
-  const mcp = program.command("mcp").description("Manage OpenClaw MCP server config");
+  const mcp = program.command("mcp").description("Manage OpenClaw MCP config and channel bridge");
+
+  mcp
+    .command("serve")
+    .description("Expose OpenClaw channels over MCP stdio")
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--token-file <path>", "Read gateway token from file")
+    .option("--password <password>", "Gateway password (if required)")
+    .option("--password-file <path>", "Read gateway password from file")
+    .option(
+      "--claude-channel-mode <mode>",
+      "Claude channel notification mode: auto, on, or off",
+      "auto",
+    )
+    .option("-v, --verbose", "Verbose logging to stderr", false)
+    .action(async (opts) => {
+      try {
+        const gatewayToken = resolveSecretOption({
+          direct: opts.token as string | undefined,
+          file: opts.tokenFile as string | undefined,
+          directFlag: "--token",
+          fileFlag: "--token-file",
+          label: "Gateway token",
+        });
+        const gatewayPassword = resolveSecretOption({
+          direct: opts.password as string | undefined,
+          file: opts.passwordFile as string | undefined,
+          directFlag: "--password",
+          fileFlag: "--password-file",
+          label: "Gateway password",
+        });
+        if (opts.token) {
+          warnSecretCliFlag("--token");
+        }
+        if (opts.password) {
+          warnSecretCliFlag("--password");
+        }
+        const claudeChannelMode = normalizeLowercaseStringOrEmpty(
+          normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
+        );
+        if (
+          claudeChannelMode !== "auto" &&
+          claudeChannelMode !== "on" &&
+          claudeChannelMode !== "off"
+        ) {
+          throw new Error("Invalid --claude-channel-mode value. Use auto, on, or off.");
+        }
+        await serveOpenClawChannelMcp({
+          gatewayUrl: opts.url as string | undefined,
+          gatewayToken,
+          gatewayPassword,
+          claudeChannelMode,
+          verbose: Boolean(opts.verbose),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 
   mcp
     .command("list")

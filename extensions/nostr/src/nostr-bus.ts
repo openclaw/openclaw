@@ -7,6 +7,7 @@ import {
   type Event,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
@@ -64,7 +65,7 @@ export interface NostrBusOptions {
     reply: (text: string) => Promise<void>,
     meta: { eventId: string; createdAt: number },
   ) => Promise<void>;
-  /** Called before expensive crypto to allow sender policy checks (optional) */
+  /** Called after signature verification and before decrypt to allow sender policy checks (optional) */
   authorizeSender?: (params: {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
@@ -553,33 +554,44 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
-      if (authorizeSender) {
-        const decision = await authorizeSender({
-          senderPubkey: event.pubkey,
-          reply: replyTo,
-        });
-        if (decision !== "allow") {
-          return;
+      const rejectIfGlobalRateLimited = (): boolean => {
+        updateRateLimiterSizeMetric();
+        if (globalRateLimiter.isRateLimited("global")) {
+          metrics.emit("rate_limit.global");
+          metrics.emit("event.rejected.rate_limited");
+          updateRateLimiterSizeMetric();
+          return true;
         }
-      }
+        updateRateLimiterSizeMetric();
+        return false;
+      };
 
-      updateRateLimiterSizeMetric();
-      if (globalRateLimiter.isRateLimited("global")) {
-        metrics.emit("rate_limit.global");
-        metrics.emit("event.rejected.rate_limited");
+      const rejectIfVerifiedSenderRateLimited = (): boolean => {
         updateRateLimiterSizeMetric();
-        return;
-      }
-      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
-        metrics.emit("rate_limit.per_sender");
-        metrics.emit("event.rejected.rate_limited");
+        if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+          metrics.emit("rate_limit.per_sender");
+          metrics.emit("event.rejected.rate_limited");
+          updateRateLimiterSizeMetric();
+          return true;
+        }
         updateRateLimiterSizeMetric();
-        return;
-      }
-      updateRateLimiterSizeMetric();
+        return false;
+      };
+
+      const markSeen = () => {
+        seen.add(event.id);
+        metrics.emit("memory.seen_tracker_size", seen.size());
+      };
 
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
+        if (rejectIfGlobalRateLimited()) {
+          return;
+        }
         metrics.emit("event.rejected.oversized_ciphertext");
+        return;
+      }
+
+      if (rejectIfGlobalRateLimited()) {
         return;
       }
 
@@ -590,9 +602,23 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
+      if (rejectIfVerifiedSenderRateLimited()) {
+        return;
+      }
+
+      if (authorizeSender) {
+        const decision = await authorizeSender({
+          senderPubkey: event.pubkey,
+          reply: replyTo,
+        });
+        if (decision !== "allow") {
+          markSeen();
+          return;
+        }
+      }
+
       // Mark seen AFTER verify (don't cache invalid IDs)
-      seen.add(event.id);
-      metrics.emit("memory.seen_tracker_size", seen.size());
+      markSeen();
 
       // Decrypt the message
       let plaintext: string;
@@ -775,8 +801,11 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
-      await pool.publish([relay], reply);
+      const [publishPromise] = pool.publish([relay], reply);
+      if (!publishPromise) {
+        throw new Error(`Failed to create publish promise for relay ${relay}`);
+      }
+      await publishPromise;
       const latency = Date.now() - startTime;
 
       // Record success
@@ -849,7 +878,7 @@ export function normalizePubkey(input: string): string {
   if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
     throw new Error("Pubkey must be 64 hex characters or npub format");
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 /**

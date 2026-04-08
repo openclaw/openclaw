@@ -1,4 +1,5 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -33,6 +34,7 @@ type EventHandlerContext = {
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
+  noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
@@ -50,6 +52,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
+    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -95,6 +98,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
+    state.pendingOptimisticUserMessage = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
@@ -189,8 +193,8 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
-    const normalizedLeft = (left ?? "").trim().toLowerCase();
-    const normalizedRight = (right ?? "").trim().toLowerCase();
+    const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
+    const normalizedRight = normalizeLowercaseStringOrEmpty(right);
     if (!normalizedLeft || !normalizedRight) {
       return false;
     }
@@ -231,6 +235,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
+      if (state.pendingOptimisticUserMessage) {
+        noteLocalRunId?.(evt.runId);
+        state.pendingOptimisticUserMessage = false;
+      }
     }
     if (evt.state === "delta") {
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);

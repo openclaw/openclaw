@@ -1,5 +1,6 @@
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "./gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 type ErrorWithMessageAndDetails = {
   message?: unknown;
@@ -39,7 +40,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
       break;
   }
 
-  const normalized = message.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(message);
   if (
     normalized === "fetch failed" ||
     normalized === "failed to fetch" ||

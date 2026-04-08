@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyAuthorizationHeaderForUrl,
+  extractInlineImageCandidates,
   isPrivateOrReservedIP,
   isUrlAllowed,
   resolveAndValidateIP,
@@ -216,7 +217,9 @@ describe("safeFetch", () => {
     const rebindingResolve = async () => {
       callCount++;
       // First call (initial URL) resolves to public IP
-      if (callCount === 1) return { address: "13.107.136.10" };
+      if (callCount === 1) {
+        return { address: "13.107.136.10" };
+      }
       // Second call (redirect target) resolves to private IP
       return { address: "169.254.169.254" };
     };
@@ -389,5 +392,55 @@ describe("attachment fetch auth helpers", () => {
     });
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("msteams inline image limits", () => {
+  const smallPngDataUrl = "data:image/png;base64,aGVsbG8="; // "hello" (5 bytes)
+
+  it("rejects inline data images above per-image limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
+    expect(out).toEqual([]);
+  });
+
+  it("accepts inline data images within limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
+    if (out[0]?.kind === "data") {
+      expect(out[0].data.byteLength).toBeGreaterThan(0);
+      expect(out[0].contentType).toBe("image/png");
+    }
+  });
+
+  it("enforces cumulative inline size limit across attachments", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, {
+      maxInlineBytes: 10,
+      maxInlineTotalBytes: 6,
+    });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
   });
 });

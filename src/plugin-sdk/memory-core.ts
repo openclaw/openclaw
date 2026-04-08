@@ -1,5 +1,5 @@
 // Narrow plugin-sdk surface for the bundled memory-core plugin.
-// Keep this list additive and scoped to symbols used under extensions/memory-core.
+// Keep this list additive and scoped to the bundled memory-core surface.
 
 export { getMemorySearchManager, MemoryIndexManager } from "./memory-core-engine-runtime.js";
 export {
@@ -24,6 +24,9 @@ export type {
   MemoryCitationsMode,
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
   OpenClawConfig,
@@ -46,6 +49,20 @@ export {
   withProgress,
   withProgressTotals,
 } from "./memory-core-host-runtime-cli.js";
+export {
+  appendMemoryHostEvent,
+  readMemoryHostEvents,
+  resolveMemoryHostEventLogPath,
+} from "./memory-core-host-events.js";
+export type { MemoryHostEvent } from "./memory-core-host-events.js";
+export {
+  resolveMemoryCorePluginConfig,
+  formatMemoryDreamingDay,
+  isSameMemoryDreamingDay,
+  resolveMemoryDeepDreamingConfig,
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaces,
+} from "./memory-core-host-status.js";
 export {
   listMemoryFiles,
   normalizeExtraMemoryPaths,

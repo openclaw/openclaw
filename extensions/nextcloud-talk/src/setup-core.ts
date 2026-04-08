@@ -2,26 +2,17 @@ import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
-  applyAccountNameToChannelSection,
   createSetupInputPresenceValidator,
-  patchScopedAccountConfig,
-} from "openclaw/plugin-sdk/setup";
-import {
   mergeAllowFromEntries,
-  createTopLevelChannelDmPolicy,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
-  setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import {
-  listNextcloudTalkAccountIds,
-  resolveDefaultNextcloudTalkAccountId,
-  resolveNextcloudTalkAccount,
-} from "./accounts.js";
+  type ChannelSetupDmPolicy,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { applyAccountNameToChannelSection, patchScopedAccountConfig } from "../runtime-api.js";
+import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "nextcloud-talk" as const;
@@ -32,6 +23,10 @@ type NextcloudSetupInput = ChannelSetupInput & {
   secretFile?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
+
+function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
+  return mergeAllowFromEntries(allowFrom, ["*"]);
+}
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, "") ?? "";
@@ -78,7 +73,7 @@ export function clearNextcloudTalkAccountFields(
     return {
       ...cfg,
       channels: {
-        ...(cfg.channels ?? {}),
+        ...cfg.channels,
         "nextcloud-talk": nextSection as NextcloudTalkSection,
       },
     } as CoreConfig;
@@ -96,7 +91,7 @@ export function clearNextcloudTalkAccountFields(
   return {
     ...cfg,
     channels: {
-      ...(cfg.channels ?? {}),
+      ...cfg.channels,
       "nextcloud-talk": {
         ...section,
         accounts: {
@@ -130,14 +125,14 @@ async function promptNextcloudTalkAllowFrom(params: {
     parseEntries: (raw) => ({
       entries: String(raw)
         .split(/[\n,;]+/g)
-        .map((value) => value.trim().toLowerCase())
+        .map(normalizeLowercaseStringOrEmpty)
         .filter(Boolean),
     }),
     getExistingAllowFrom: ({ cfg, accountId }) =>
       resolveNextcloudTalkAccount({ cfg, accountId }).config.allowFrom ?? [],
     mergeEntries: ({ existing, parsed }) =>
       mergeAllowFromEntries(
-        existing.map((value) => String(value).trim().toLowerCase()),
+        existing.map((value) => normalizeLowercaseStringOrEmpty(String(value))),
         parsed,
       ),
     applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
@@ -164,14 +159,39 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
+export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   label: "Nextcloud Talk",
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",
   allowFromKey: "channels.nextcloud-talk.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.["nextcloud-talk"]?.dmPolicy ?? "pairing",
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)) !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.dmPolicy`,
+          allowFromKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.nextcloud-talk.dmPolicy",
+          allowFromKey: "channels.nextcloud-talk.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    resolveNextcloudTalkAccount({
+      cfg: cfg as CoreConfig,
+      accountId: accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig),
+    }).config.dmPolicy ?? "pairing",
+  setPolicy: (cfg, policy, accountId) => {
+    const resolvedAccountId = accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
+    const resolved = resolveNextcloudTalkAccount({
+      cfg: cfg as CoreConfig,
+      accountId: resolvedAccountId,
+    });
+    return setNextcloudTalkAccountConfig(cfg as CoreConfig, resolvedAccountId, {
+      dmPolicy: policy,
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
+    });
+  },
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
-});
+};
 
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -185,7 +205,7 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   validateInput: createSetupInputPresenceValidator({
     defaultAccountOnlyEnvError:
       "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.",
-    validate: ({ accountId, input }) => {
+    validate: ({ input }) => {
       const setupInput = input as NextcloudSetupInput;
       if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
         return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";

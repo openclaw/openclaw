@@ -1,17 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeSecurityAccount, registerPluginHttpRouteMock } from "./channel.test-mocks.js";
-import { sendMessage } from "./client.js";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
+import type { ResolvedSynologyChatAccount } from "./types.js";
+
+function makeSecurityAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    token: "t",
+    incomingUrl: "https://nas/incoming",
+    nasHost: "h",
+    webhookPath: "/w",
+    webhookPathSource: "default" as const,
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
+    dmPolicy: "allowlist" as const,
+    allowedUserIds: [],
+    rateLimitPerMinute: 30,
+    botName: "Bot",
+    allowInsecureSsl: false,
+    ...overrides,
+  };
+}
+
+const clientModule = await import("./client.js");
+const gatewayRuntimeModule = await import("./gateway-runtime.js");
+const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const registerSynologyWebhookRouteMock = vi
+  .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
+  .mockImplementation(() => vi.fn());
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
-const { createSynologyChatPlugin } = await import("./channel.js");
-const mockSendMessage = vi.mocked(sendMessage);
+const freshChannelModulePath = "./channel.js?channel-test";
+const { createSynologyChatPlugin } = await import(freshChannelModulePath);
+const { synologyChatPlugin } = await import("./channel.js");
+const getSynologyChatSetupStatus = createPluginSetupWizardStatus(synologyChatPlugin);
 
 describe("createSynologyChatPlugin", () => {
   beforeEach(() => {
     mockSendMessage.mockClear();
+    registerSynologyWebhookRouteMock.mockClear();
+    mockSendMessage.mockResolvedValue(true);
+    registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
   });
 
   describe("meta", () => {
@@ -84,6 +118,35 @@ describe("createSynologyChatPlugin", () => {
     it("defaultAccountId returns 'default'", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.config.defaultAccountId?.({})).toBe("default");
+    });
+
+    it("setup status honors the selected named account", async () => {
+      const status = await getSynologyChatSetupStatus({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              accounts: {
+                ops: {
+                  token: "ops-token",
+                  incomingUrl: "https://nas/ops",
+                },
+                work: {
+                  token: "work-token",
+                },
+              },
+            },
+          },
+        },
+        accountOverrides: {
+          "synology-chat": "work",
+        },
+      });
+
+      expect(status.configured).toBe(false);
+      expect(status.statusLines).toEqual([
+        "Synology Chat: needs token + incoming webhook",
+        "Accounts: 2",
+      ]);
     });
 
     it("formats allowFrom entries through the shared adapter", () => {
@@ -442,7 +505,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       registerMock.mockClear();
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeStartAccountCtx({
@@ -460,7 +523,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeNamedStartAccountCtx({
         dmPolicy: "allowlist",
@@ -476,7 +539,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses duplicate exact webhook paths across accounts", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeNamedStartAccountCtx({
         webhookPath: "/webhook/synology-shared",
@@ -491,10 +554,10 @@ describe("createSynologyChatPlugin", () => {
       expect(registerMock).not.toHaveBeenCalled();
     });
 
-    it("deregisters stale route before re-registering same account/path", async () => {
+    it("re-registers same account/path through the route registrar", async () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
 
       const plugin = createSynologyChatPlugin();
@@ -518,19 +581,15 @@ describe("createSynologyChatPlugin", () => {
         abortSignal: abortCtrl.signal,
       });
 
-      // Start first account (returns a pending promise)
       const firstPromise = plugin.gateway.startAccount(makeCtx(abortFirst));
-      // Start second account on same path — should deregister the first route
       const secondPromise = plugin.gateway.startAccount(makeCtx(abortSecond));
 
-      // Give microtasks time to settle
       await new Promise((r) => setTimeout(r, 10));
 
       expect(registerMock).toHaveBeenCalledTimes(2);
-      expect(unregisterFirst).toHaveBeenCalledTimes(1);
+      expect(unregisterFirst).not.toHaveBeenCalled();
       expect(unregisterSecond).not.toHaveBeenCalled();
 
-      // Clean up: abort both to resolve promises and prevent test leak
       abortFirst.abort();
       abortSecond.abort();
       await Promise.allSettled([firstPromise, secondPromise]);

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "../../../../src/infra/errors.js";
 
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
@@ -6,6 +7,7 @@ export function ensureMemoryIndexSchema(params: {
   cacheEnabled: boolean;
   ftsTable: string;
   ftsEnabled: boolean;
+  ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
   params.db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
@@ -58,6 +60,8 @@ export function ensureMemoryIndexSchema(params: {
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
     try {
+      const tokenizer = params.ftsTokenizer ?? "unicode61";
+      const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
       params.db.exec(
         `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
           `  text,\n` +
@@ -67,11 +71,11 @@ export function ensureMemoryIndexSchema(params: {
           `  model UNINDEXED,\n` +
           `  start_line UNINDEXED,\n` +
           `  end_line UNINDEXED\n` +
-          `);`,
+          `${tokenizeClause});`,
       );
       ftsAvailable = true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       ftsAvailable = false;
       ftsError = message;
     }

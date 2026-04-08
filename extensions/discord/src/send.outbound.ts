@@ -6,17 +6,19 @@ import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
+import { resolveDiscordClientAccountContext } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -24,7 +26,6 @@ import {
   createDiscordClient,
   normalizeDiscordPollInput,
   normalizeStickerIds,
-  parseAndResolveRecipient,
   resolveChannelId,
   resolveDiscordChannelType,
   resolveDiscordSendComponents,
@@ -49,7 +50,12 @@ type DiscordSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   filename?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
@@ -60,6 +66,8 @@ type DiscordSendOpts = {
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
+
+const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
 type DiscordChannelMessageResult = {
   id?: string | null;
@@ -97,10 +105,7 @@ const DISCORD_THREAD_NAME_LIMIT = 100;
 /** Derive a thread title from the first non-empty line of the message text. */
 function deriveForumThreadName(text: string): string {
   const firstLine =
-    text
-      .split("\n")
-      .find((l) => l.trim())
-      ?.trim() ?? "";
+    normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
   return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
 }
 
@@ -149,7 +154,7 @@ export async function sendMessageDiscord(
   const mediaMaxBytes =
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
-      : 8 * 1024 * 1024;
+      : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
   const textWithTables = convertMarkdownTables(text ?? "", tableMode);
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,
@@ -217,6 +222,7 @@ export async function sendMessageDiscord(
           opts.mediaUrl,
           opts.filename,
           opts.mediaLocalRoots,
+          opts.mediaReadFile,
           mediaMaxBytes,
           undefined,
           request,
@@ -279,6 +285,7 @@ export async function sendMessageDiscord(
         opts.mediaUrl,
         opts.filename,
         opts.mediaLocalRoots,
+        opts.mediaReadFile,
         mediaMaxBytes,
         opts.replyTo,
         request,
@@ -351,19 +358,23 @@ export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookSendOpts,
 ): Promise<DiscordSendResult> {
-  const webhookId = opts.webhookId.trim();
-  const webhookToken = opts.webhookToken.trim();
+  const webhookId = normalizeOptionalString(opts.webhookId) ?? "";
+  const webhookToken = normalizeOptionalString(opts.webhookToken) ?? "";
   if (!webhookId || !webhookToken) {
     throw new Error("Discord webhook id/token are required");
   }
 
-  const rewrittenText = rewriteDiscordKnownMentions(text, {
+  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
+  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const { account, proxyFetch } = resolveDiscordClientAccountContext({
+    cfg: opts.cfg,
     accountId: opts.accountId,
   });
-  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
-  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const rewrittenText = rewriteDiscordKnownMentions(text, {
+    accountId: account.accountId,
+  });
 
-  const response = await fetch(
+  const response = await (proxyFetch ?? fetch)(
     resolveWebhookExecutionUrl({
       webhookId,
       webhookToken,
@@ -377,8 +388,8 @@ export async function sendWebhookMessageDiscord(
       },
       body: JSON.stringify({
         content: rewrittenText,
-        username: opts.username?.trim() || undefined,
-        avatar_url: opts.avatarUrl?.trim() || undefined,
+        username: normalizeOptionalString(opts.username),
+        avatar_url: normalizeOptionalString(opts.avatarUrl),
         ...(messageReference ? { message_reference: messageReference } : {}),
       }),
     },
@@ -395,10 +406,6 @@ export async function sendWebhookMessageDiscord(
     channel_id?: string;
   };
   try {
-    const account = resolveDiscordAccount({
-      cfg: opts.cfg ?? loadConfig(),
-      accountId: opts.accountId,
-    });
     recordChannelActivity({
       channel: "discord",
       accountId: account.accountId,
@@ -422,13 +429,10 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
-  const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
-  const content = opts.content?.trim();
-  const rewrittenContent = content
-    ? rewriteDiscordKnownMentions(content, {
-        accountId: opts.accountId,
-      })
-    : undefined;
+  const { rest, request, channelId, rewrittenContent } = await resolveDiscordStructuredSendContext(
+    to,
+    opts,
+  );
   const stickers = normalizeStickerIds(stickerIds);
   const res = (await request(
     () =>
@@ -448,13 +452,10 @@ export async function sendPollDiscord(
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
-  const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
-  const content = opts.content?.trim();
-  const rewrittenContent = content
-    ? rewriteDiscordKnownMentions(content, {
-        accountId: opts.accountId,
-      })
-    : undefined;
+  const { rest, request, channelId, rewrittenContent } = await resolveDiscordStructuredSendContext(
+    to,
+    opts,
+  );
   if (poll.durationSeconds !== undefined) {
     throw new Error("Discord polls do not support durationSeconds; use durationHours");
   }
@@ -472,6 +473,30 @@ export async function sendPollDiscord(
     "poll",
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId);
+}
+
+async function resolveDiscordStructuredSendContext(
+  to: string,
+  opts: DiscordSendOpts & { content?: string },
+): Promise<{
+  rest: RequestClient;
+  request: DiscordClientRequest;
+  channelId: string;
+  rewrittenContent?: string;
+}> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
+  const content = opts.content?.trim();
+  const rewrittenContent = content
+    ? rewriteDiscordKnownMentions(content, {
+        accountId: accountInfo.accountId,
+      })
+    : undefined;
+  return { rest, request, channelId, rewrittenContent };
 }
 
 type VoiceMessageOpts = {
