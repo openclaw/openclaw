@@ -196,7 +196,8 @@ function createYepSchema() {
     ),
     search_mode: Type.Optional(
       Type.String({
-        description: "Search mode: 'fast' or 'balanced' (default). Balanced combines speed and relevance.",
+        description:
+          "Search mode: 'fast' or 'balanced' (default). Balanced combines speed and relevance.",
       }),
     ),
     language: Type.Optional(
@@ -300,8 +301,7 @@ function createYepToolDefinition(
         };
       }
       const contentType = readStringParam(params, "content_type");
-      const safeSearch =
-        typeof params.safe_search === "boolean" ? params.safe_search : undefined;
+      const safeSearch = typeof params.safe_search === "boolean" ? params.safe_search : undefined;
       const rawIncludeDomains = readStringParam(params, "include_domains");
       const rawExcludeDomains = readStringParam(params, "exclude_domains");
       const includeDomains = rawIncludeDomains

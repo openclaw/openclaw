@@ -2,6 +2,7 @@ import { BUNDLED_PLUGIN_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import { extensionExcludedChannelTestGlobs } from "./vitest.channel-paths.mjs";
 import { acpxExtensionTestRoots } from "./vitest.extension-acpx-paths.mjs";
 import { blueBubblesExtensionTestRoots } from "./vitest.extension-bluebubbles-paths.mjs";
+import { browserExtensionTestRoots } from "./vitest.extension-browser-paths.mjs";
 import { diffsExtensionTestRoots } from "./vitest.extension-diffs-paths.mjs";
 import { feishuExtensionTestRoots } from "./vitest.extension-feishu-paths.mjs";
 import { ircExtensionTestRoots } from "./vitest.extension-irc-paths.mjs";
@@ -39,6 +40,7 @@ export function createExtensionsVitestConfig(
       ...extensionExcludedChannelTestGlobs,
       ...acpxExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...blueBubblesExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
+      ...browserExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...diffsExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...feishuExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...ircExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),

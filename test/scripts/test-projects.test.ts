@@ -210,6 +210,9 @@ describe("scripts/test-projects full-suite sharding", () => {
       "vitest.full-core-runtime.config.ts",
       "vitest.full-agentic.config.ts",
       "vitest.full-auto-reply.config.ts",
+      "vitest.full-extension-channel-roots.config.ts",
+      "vitest.full-extension-browser.config.ts",
+      "vitest.full-extension-providers.config.ts",
       "vitest.full-extensions.config.ts",
     ]);
   });
@@ -295,11 +298,12 @@ describe("scripts/test-projects full-suite sharding", () => {
       "vitest.extension-memory.config.ts",
       "vitest.extension-messaging.config.ts",
       "vitest.extension-msteams.config.ts",
-      "vitest.extension-providers.config.ts",
       "vitest.extension-telegram.config.ts",
       "vitest.extension-voice-call.config.ts",
       "vitest.extension-whatsapp.config.ts",
       "vitest.extension-zalo.config.ts",
+      "vitest.extension-browser.config.ts",
+      "vitest.extension-providers.config.ts",
       "vitest.extensions.config.ts",
     ]);
     expect(plans).toEqual(

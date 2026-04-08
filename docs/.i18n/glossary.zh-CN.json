@@ -362,5 +362,21 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Yep",
+    "target": "Yep"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "Web Search 概览"
+  },
+  {
+    "source": "Brave Search",
+    "target": "Brave Search"
+  },
+  {
+    "source": "Exa Search",
+    "target": "Exa Search"
   }
 ]

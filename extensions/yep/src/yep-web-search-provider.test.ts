@@ -99,12 +99,12 @@ describe("yep web search provider", () => {
       throw new Error("Expected tool definition");
     }
 
-    const result = (await tool.execute({
+    const result = await tool.execute({
       query: "test query",
       count: 3,
       language: "en",
       include_domains: "example.com",
-    }));
+    });
 
     expect(result.provider).toBe("yep");
     expect(result.query).toBe("test query");
@@ -170,10 +170,10 @@ describe("yep web search provider", () => {
       throw new Error("Expected tool definition");
     }
 
-    const result = (await tool.execute({
+    const result = await tool.execute({
       query: "machine learning",
       result_type: "highlights",
-    }));
+    });
 
     // Verify request body uses highlights type
     const fetchInit = mockFetch.mock.calls[0]?.[1] as RequestInit;
@@ -321,7 +321,7 @@ describe("yep web search provider", () => {
       throw new Error("Expected tool definition");
     }
 
-    const result = (await tool.execute({ query: "test" }));
+    const result = await tool.execute({ query: "test" });
     const results = result.results as Array<Record<string, unknown>>;
     expect(results).toHaveLength(3);
     // description field takes priority, snippet is fallback

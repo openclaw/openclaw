@@ -95,8 +95,8 @@ export const fullSuiteVitestShards = [
     ],
   },
   {
-    config: "vitest.full-extensions.config.ts",
-    name: "extensions",
+    config: "vitest.full-extension-channel-roots.config.ts",
+    name: "extension-channel-roots",
     projects: [
       "vitest.extension-acpx.config.ts",
       "vitest.extension-bluebubbles.config.ts",
@@ -109,12 +109,25 @@ export const fullSuiteVitestShards = [
       "vitest.extension-memory.config.ts",
       "vitest.extension-messaging.config.ts",
       "vitest.extension-msteams.config.ts",
-      "vitest.extension-providers.config.ts",
       "vitest.extension-telegram.config.ts",
       "vitest.extension-voice-call.config.ts",
       "vitest.extension-whatsapp.config.ts",
       "vitest.extension-zalo.config.ts",
-      "vitest.extensions.config.ts",
     ],
+  },
+  {
+    config: "vitest.full-extension-browser.config.ts",
+    name: "extension-browser",
+    projects: ["vitest.extension-browser.config.ts"],
+  },
+  {
+    config: "vitest.full-extension-providers.config.ts",
+    name: "extension-providers",
+    projects: ["vitest.extension-providers.config.ts"],
+  },
+  {
+    config: "vitest.full-extensions.config.ts",
+    name: "extensions",
+    projects: ["vitest.extensions.config.ts"],
   },
 ];

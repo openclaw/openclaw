@@ -53,6 +53,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "daemon",
     "extension-acpx",
     "extension-bluebubbles",
+    "extension-browser",
     "extension-channels",
     "extension-diffs",
     "extension-feishu",
