@@ -31,7 +31,7 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if !overwrite {
-		skip, err := shouldSkipDoc(outputPath, currentHash)
+		skip, err := shouldSkipDoc(outputPath, currentHash, tgtLang)
 		if err != nil {
 			return false, "", err
 		}
@@ -223,7 +223,7 @@ func setReadWhenValue(existing any, index int, value string) []any {
 	return readWhen
 }
 
-func shouldSkipDoc(outputPath string, sourceHash string) (bool, error) {
+func shouldSkipDoc(outputPath string, sourceHash string, targetLang string) (bool, error) {
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -243,11 +243,18 @@ func shouldSkipDoc(outputPath string, sourceHash string) (bool, error) {
 	if storedHash == "" {
 		return false, nil
 	}
+	if strings.EqualFold(strings.TrimSpace(targetLang), "en") {
+		return strings.EqualFold(storedHash, sourceHash), nil
+	}
+	postprocessVersion := extractPostprocessVersion(frontData)
+	if !strings.EqualFold(postprocessVersion, localizedLinkPostprocessVersion) {
+		return false, nil
+	}
 	return strings.EqualFold(storedHash, sourceHash), nil
 }
 
 func extractSourceHash(frontData map[string]any) string {
-	xi, ok := frontData["x-i18n"].(map[string]any)
+	xi, ok := extractXI18N(frontData)
 	if !ok {
 		return ""
 	}
@@ -256,6 +263,26 @@ func extractSourceHash(frontData map[string]any) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func extractPostprocessVersion(frontData map[string]any) string {
+	xi, ok := extractXI18N(frontData)
+	if !ok {
+		return ""
+	}
+	value, ok := xi["postprocess_version"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func extractXI18N(frontData map[string]any) (map[string]any, bool) {
+	xi, ok := frontData["x-i18n"].(map[string]any)
+	if ok {
+		return xi, true
+	}
+	return nil, false
 }
 
 func resolveDocsPath(docsRoot, filePath string) (string, string, error) {

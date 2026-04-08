@@ -325,7 +325,7 @@ func filterDocQueue(docsRoot, targetLang string, ordered []string) ([]string, in
 		}
 		sourceHash := hashBytes(content)
 		outputPath := filepath.Join(docsRoot, targetLang, relPath)
-		skip, err := shouldSkipDoc(outputPath, sourceHash)
+		skip, err := shouldSkipDoc(outputPath, sourceHash, targetLang)
 		if err != nil {
 			return nil, skipped, err
 		}
