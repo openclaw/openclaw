@@ -338,6 +338,7 @@ def derive_digest_bucket_ui_layouts(
     digest_bucket_badge_order: object,
     digest_bucket_percent: object,
     digest_bucket_share: object,
+    digest_bucket_dominance_band: object,
 ) -> dict[str, object]:
     badge = (
         dict(digest_bucket_badge_tuple)
@@ -379,6 +380,11 @@ def derive_digest_bucket_ui_layouts(
         'order': int(digest_bucket_badge_order) if isinstance(digest_bucket_badge_order, int) else 0,
         'percent': digest_bucket_percent if isinstance(digest_bucket_percent, str) else '0.0%',
         'share': float(digest_bucket_share) if isinstance(digest_bucket_share, (int, float)) else 0.0,
+        'dominance_band': (
+            digest_bucket_dominance_band
+            if isinstance(digest_bucket_dominance_band, str)
+            else 'minor'
+        ),
     }
     return {
         'badge': badge,
@@ -829,6 +835,7 @@ def main() -> int:
                 item.get('digest_bucket_badge_order'),
                 item.get('digest_bucket_percent'),
                 item.get('digest_bucket_share'),
+                item.get('digest_bucket_dominance_band'),
             )
 
     notification_digest_summary.sort(key=derive_digest_order_key)
