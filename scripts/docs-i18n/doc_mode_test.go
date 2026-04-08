@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,56 @@ func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 }
 
 func (docLeafFallbackTranslator) Close() {}
+
+type docFrontmatterTranslator struct{}
+
+func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	replacer := strings.NewReplacer(
+		"Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS", "在 Fly.io 上逐步部署 OpenClaw，包含持久化存储和 HTTPS",
+		"Deploying OpenClaw on Fly.io", "在 Fly.io 上部署 OpenClaw",
+		"Setting up Fly volumes, secrets, and first-run config", "设置 Fly volume、密钥和首次运行配置",
+	)
+	return replacer.Replace(text), nil
+}
+
+func (docFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return "extra text outside tagged sections", nil
+}
+
+func (docFrontmatterTranslator) Close() {}
+
+type docFrontmatterFallbackTranslator struct{}
+
+func (docFrontmatterFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	switch text {
+	case "Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS":
+		return strings.Join([]string{
+			"<frontmatter>",
+			"title: Fly.io",
+			"summary: \"在 Fly.io 上部署 OpenClaw 的逐步指南，包含持久化存储和 HTTPS 设置\"",
+			"read_when:",
+			"  - 在 Fly.io 上部署 OpenClaw",
+			"  - 设置 Fly 卷、机密和初始运行配置",
+			"</frontmatter>",
+			"",
+			"<body>",
+			"# Fly.io 部署",
+			"</body>",
+		}, "\n"), nil
+	case "Deploying OpenClaw on Fly.io":
+		return "在 Fly.io 上部署 OpenClaw", nil
+	case "Setting up Fly volumes, secrets, and first-run config":
+		return "设置 Fly 卷、机密和初始运行配置", nil
+	default:
+		return text, nil
+	}
+}
+
+func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (docFrontmatterFallbackTranslator) Close() {}
 
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
@@ -169,5 +221,97 @@ func TestTranslateDocBodyChunkedFallsBackToMaskedTranslateForLeafValidationFailu
 	}
 	if !strings.Contains(translated, "Gateway 只有在 `local` 时才会启动。") {
 		t.Fatalf("expected fallback translation to be applied:\n%s", translated)
+	}
+}
+
+func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "install")
+	if err := os.MkdirAll(sourcePath, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	sourceFile := filepath.Join(sourcePath, "fly.md")
+	source := strings.Join([]string{
+		"---",
+		"title: Fly.io",
+		"summary: \"Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS\"",
+		"read_when:",
+		"  - Deploying OpenClaw on Fly.io",
+		"  - Setting up Fly volumes, secrets, and first-run config",
+		"---",
+		"",
+	}, "\n")
+	if err := os.WriteFile(sourceFile, []byte(source), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	skipped, outputPath, err := processFileDoc(context.Background(), docFrontmatterTranslator{}, docsRoot, sourceFile, "en", "zh-CN", true)
+	if err != nil {
+		t.Fatalf("processFileDoc returned error: %v", err)
+	}
+	if skipped {
+		t.Fatal("expected file to be processed")
+	}
+	if outputPath == "" {
+		t.Fatal("expected output path")
+	}
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output failed: %v", err)
+	}
+	text := string(output)
+	if !strings.Contains(text, "在 Fly.io 上逐步部署 OpenClaw，包含持久化存储和 HTTPS") {
+		t.Fatalf("expected translated summary in output:\n%s", text)
+	}
+	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
+		t.Fatalf("expected translated read_when entry in output:\n%s", text)
+	}
+}
+
+func TestProcessFileDocRejectsSuspiciousFrontmatterScalarExpansion(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "install")
+	if err := os.MkdirAll(sourcePath, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	sourceFile := filepath.Join(sourcePath, "fly.md")
+	source := strings.Join([]string{
+		"---",
+		"title: Fly.io",
+		"summary: \"Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS\"",
+		"read_when:",
+		"  - Deploying OpenClaw on Fly.io",
+		"  - Setting up Fly volumes, secrets, and first-run config",
+		"---",
+		"",
+	}, "\n")
+	if err := os.WriteFile(sourceFile, []byte(source), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	skipped, outputPath, err := processFileDoc(context.Background(), docFrontmatterFallbackTranslator{}, docsRoot, sourceFile, "en", "zh-CN", true)
+	if err != nil {
+		t.Fatalf("processFileDoc returned error: %v", err)
+	}
+	if skipped {
+		t.Fatal("expected file to be processed")
+	}
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output failed: %v", err)
+	}
+	text := string(output)
+	if strings.Contains(text, "<frontmatter>") || strings.Contains(text, "<body>") {
+		t.Fatalf("expected suspicious frontmatter expansion to be rejected:\n%s", text)
+	}
+	if !strings.Contains(text, "summary: Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS") {
+		t.Fatalf("expected original summary to be preserved after fallback:\n%s", text)
+	}
+	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
+		t.Fatalf("expected read_when translation to survive fallback:\n%s", text)
 	}
 }
