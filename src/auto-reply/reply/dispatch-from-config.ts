@@ -136,15 +136,18 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
+  preferredSessionKey?: string,
 ): {
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
 } => {
+  const preferred = normalizeOptionalString(preferredSessionKey);
   const targetSessionKey =
-    ctx.CommandSource === "native"
+    preferred ??
+    (ctx.CommandSource === "native"
       ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
+      : undefined);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
     return {};
@@ -263,7 +266,38 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
-  const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  // Extract message context for hooks (plugin and internal)
+  const timestamp =
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+  const messageIdForHook =
+    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
+  const inboundClaimContext = toPluginInboundClaimContext(hookContext);
+  const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
+    commandAuthorized:
+      typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+    wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+  });
+  const boundSessionRecord =
+    inboundClaimContext.conversationId && inboundClaimContext.channelId
+      ? resolveConversationBindingRecord({
+          channel: inboundClaimContext.channelId,
+          accountId:
+            inboundClaimContext.accountId ??
+            ((
+              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
+            "default",
+          conversationId: inboundClaimContext.conversationId,
+          parentConversationId: inboundClaimContext.parentConversationId,
+        })
+      : null;
+  const effectiveBoundSessionKey =
+    boundSessionRecord && !isPluginOwnedSessionBindingRecord(boundSessionRecord)
+      ? normalizeOptionalString(boundSessionRecord.targetSessionKey)
+      : undefined;
+
+  const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg, effectiveBoundSessionKey);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
@@ -289,20 +323,7 @@ export async function dispatchReplyFromConfig(params: {
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
-
-  // Extract message context for hooks (plugin and internal)
-  const timestamp =
-    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
-  const messageIdForHook =
-    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
-  const inboundClaimContext = toPluginInboundClaimContext(hookContext);
-  const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
-    commandAuthorized:
-      typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-    wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-  });
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -391,22 +412,8 @@ export async function dispatchReplyFromConfig(params: {
       : dispatcher.sendFinalReply(payload);
   };
 
-  const pluginOwnedBindingRecord =
-    inboundClaimContext.conversationId && inboundClaimContext.channelId
-      ? resolveConversationBindingRecord({
-          channel: inboundClaimContext.channelId,
-          accountId:
-            inboundClaimContext.accountId ??
-            ((
-              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
-            "default",
-          conversationId: inboundClaimContext.conversationId,
-          parentConversationId: inboundClaimContext.parentConversationId,
-        })
-      : null;
-  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
-    ? toPluginConversationBinding(pluginOwnedBindingRecord)
+  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(boundSessionRecord)
+    ? toPluginConversationBinding(boundSessionRecord)
     : null;
 
   let pluginFallbackReason:
