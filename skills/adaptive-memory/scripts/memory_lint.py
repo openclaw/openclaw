@@ -24,6 +24,11 @@ from pathlib import Path
 JST = timezone(timedelta(hours=9))
 
 
+def now_local() -> datetime:
+    """Current local time with timezone awareness."""
+    return datetime.now().astimezone()
+
+
 def parse_iso_datetime(value: str) -> datetime:
     """Parse ISO datetime and normalize Z suffix / naive values."""
     dt = datetime.fromisoformat(value.replace("Z", "+00:00") if value.endswith("Z") else value)
@@ -89,8 +94,9 @@ def check_active_context(workspace: Path):
         warn("memory/active_context.md", "File is nearly empty — may need updating")
 
     # Check modification time
-    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=JST)
-    age = datetime.now(JST) - mtime
+    current = now_local()
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=current.tzinfo)
+    age = current - mtime
     if age > timedelta(days=3):
         warn("memory/active_context.md", f"Not updated in {age.days} days — may be stale")
     else:
@@ -121,7 +127,7 @@ def check_daily_notes(workspace: Path):
         warn("daily notes", f"{len(empty)} nearly empty notes: {', '.join(n.stem for n in empty[:5])}")
 
     # Check today's note exists
-    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    today = now_local().strftime("%Y-%m-%d")
     today_path = memory_dir / f"{today}.md"
     if not today_path.exists():
         warn(f"memory/{today}.md", "Today's daily note doesn't exist yet")
@@ -182,7 +188,7 @@ def check_pending_tasks(workspace: Path):
     print(f"  📊 {len(tasks)} tasks: {by_status}")
 
     # Check for old non-done tasks
-    now = datetime.now(JST)
+    now = now_local()
     for t in tasks:
         if t.get("status") in ("pending", "in_progress"):
             try:
@@ -194,11 +200,17 @@ def check_pending_tasks(workspace: Path):
                 pass
 
     # Old done tasks
-    done_old = [
-        t for t in tasks
-        if t.get("status") == "done" and t.get("completedAt")
-        and (now - parse_iso_datetime(t["completedAt"])) > timedelta(days=7)
-    ]
+    done_old = []
+    for t in tasks:
+        if t.get("status") != "done" or not t.get("completedAt"):
+            continue
+        try:
+            completed = parse_iso_datetime(t["completedAt"])
+        except (ValueError, TypeError):
+            warn("pending_tasks.json", f"Task '{t.get('title', '(untitled)')[:40]}' has invalid completedAt")
+            continue
+        if (now - completed) > timedelta(days=7):
+            done_old.append(t)
     if done_old:
         warn("pending_tasks.json", f"{len(done_old)} completed tasks older than 7 days — run prune", fixable=True)
 
@@ -226,7 +238,7 @@ def check_distillation_state(workspace: Path):
 
     try:
         last_dt = parse_iso_datetime(last)
-        age = datetime.now(JST) - last_dt
+        age = now_local() - last_dt
         if age > timedelta(hours=96):
             warn("distillation-state.json", f"Last distillation was {age.days}d ago — may be overdue")
         else:

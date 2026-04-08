@@ -111,15 +111,23 @@ def cmd_update(args):
     path = get_tasks_path(args.memory_dir)
     data = load_tasks(path)
 
-    found = None
-    for t in data["tasks"]:
-        if t["id"].startswith(args.id):
-            found = t
-            break
+    matches = [t for t in data["tasks"] if t["id"] == args.id]
+    if not matches:
+        matches = [t for t in data["tasks"] if t["id"].startswith(args.id)]
 
-    if not found:
+    if not matches:
         print(f"Task not found: {args.id}", file=sys.stderr)
         sys.exit(1)
+
+    if len(matches) > 1:
+        print(f"Ambiguous task id prefix: {args.id}", file=sys.stderr)
+        print("Matches:", file=sys.stderr)
+        for task in matches:
+            print(f"  {task['id']}  {task['title']}", file=sys.stderr)
+        print("Use a longer prefix or the full id.", file=sys.stderr)
+        sys.exit(1)
+
+    found = matches[0]
 
     changes = []
     if args.status:

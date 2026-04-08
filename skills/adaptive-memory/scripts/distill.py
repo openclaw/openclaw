@@ -59,6 +59,13 @@ def save_state(workspace: Path, state: dict) -> None:
         json.dump(state, f, indent=2, ensure_ascii=False)
 
 
+def mark_consolidation_complete(workspace: Path) -> None:
+    """Record a successful consolidation handoff/completion."""
+    state = load_state(workspace)
+    state["lastConsolidatedAt"] = datetime.now(JST).isoformat()
+    save_state(workspace, state)
+
+
 def get_daily_notes(workspace: Path) -> list[Path]:
     """Find all daily note files sorted by date."""
     memory_dir = workspace / "memory"
@@ -182,6 +189,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="Check if distillation is needed (exit 0=yes, 1=no)")
     parser.add_argument("--dry-run", action="store_true", help="Show report without writing")
     parser.add_argument("--force", action="store_true", help="Run regardless of staleness conditions")
+    parser.add_argument("--mark-done", action="store_true", help="Mark consolidation complete after MEMORY.md was actually updated")
     parser.add_argument("--staleness-hours", type=int, default=None)
     parser.add_argument("--min-notes", type=int, default=None)
     args = parser.parse_args()
@@ -195,6 +203,12 @@ def main():
         needed, reason = should_distill(workspace, staleness, min_notes)
         print(reason)
         sys.exit(0 if needed else 1)
+
+    if args.mark_done:
+        mark_consolidation_complete(workspace)
+        state = load_state(workspace)
+        print(f"Marked consolidation complete: {state['lastConsolidatedAt']}")
+        sys.exit(0)
 
     if not args.force:
         needed, reason = should_distill(workspace, staleness, min_notes)
@@ -246,10 +260,8 @@ def main():
     print("\n[Phase 4: Prune]")
     print("  Agent should review MEMORY.md for outdated entries")
 
-    # Update state after the script reaches the end successfully.
-    state["lastConsolidatedAt"] = datetime.now(JST).isoformat()
-    save_state(workspace, state)
-    print(f"\n  Updated lastConsolidatedAt: {state['lastConsolidatedAt']}")
+    print("\nNo state was updated yet.")
+    print("After MEMORY.md is actually consolidated, rerun with --mark-done to record completion.")
     print("Done.")
 
 
