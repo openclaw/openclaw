@@ -111,6 +111,38 @@ describe("rolling log file size rotation", () => {
     expect(finalSize).toBeLessThanOrEqual(maxFileBytes * 1.15);
   });
 
+  it("prunes stale rotated segments after a successful rotation in a long-lived process", () => {
+    const today = formatLocalDate(new Date());
+    logDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-log-rot-"));
+    rollingPath = path.join(logDir, `openclaw-${today}.log`);
+    rmRollingLogFamily(rollingPath);
+
+    setLoggerOverride({ level: "info", file: rollingPath, maxFileBytes: 4096 });
+    // buildLogger runs its own prune pass on construction; create the stale file after
+    // so only the rotation-triggered prune can remove it.
+    const logger = getLogger();
+
+    const staleSegment = `${rollingPath}.1`;
+    fs.writeFileSync(staleSegment, "old-segment\n");
+    // Back-date mtime by 25 hours so it falls outside the 24h retention window.
+    const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    fs.utimesSync(staleSegment, staleTime, staleTime);
+
+    // Fill the active log past the rotation threshold.
+    for (let i = 0; i < 80; i++) {
+      logger.error(`prune-test-${i}-${"z".repeat(120)}`);
+    }
+
+    // The stale .1 content should be gone. A second rotation may have re-created .1 with
+    // fresh content, so check the sentinel string rather than file existence.
+    const segment1Content = fs.existsSync(staleSegment)
+      ? fs.readFileSync(staleSegment, "utf8")
+      : "";
+    expect(segment1Content).not.toContain("old-segment");
+    // Active log must still be present.
+    expect(fs.existsSync(rollingPath)).toBe(true);
+  });
+
   it("does not rotate when a single serialized line exceeds maxFileBytes", () => {
     const today = formatLocalDate(new Date());
     logDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-log-rot-"));

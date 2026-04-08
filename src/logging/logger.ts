@@ -211,6 +211,27 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   let warnedAboutSizeCap = false;
   // Rotation threshold at 95% of maxFileBytes to avoid hitting the cap exactly
   const rotationThreshold = settings.maxFileBytes * 0.95;
+  // Debounce pruning so it runs at most once per hour across rotations in long-lived processes.
+  let lastPruneMs = 0;
+  const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+  // Attempt rotation; returns true on success and resets byte counters + warn flag.
+  // On failure (e.g. EXDEV) leaves state unchanged so the size cap fires normally.
+  const maybeRotate = (): boolean => {
+    const rotated = rotateLogFile(settings.file);
+    if (rotated === settings.file) {
+      return false;
+    }
+    currentFileBytes = 0;
+    warnedAboutSizeCap = false;
+    // Prune stale rotated segments in long-lived processes; debounced to at most once/hour.
+    const now = Date.now();
+    if (now - lastPruneMs >= PRUNE_INTERVAL_MS) {
+      lastPruneMs = now;
+      pruneOldRollingLogs(path.dirname(settings.file));
+    }
+    return true;
+  };
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -228,21 +249,15 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         pendingBytes + payloadBytes > settings.maxFileBytes &&
         payloadBytes <= settings.maxFileBytes
       ) {
-        const rotated = rotateLogFile(settings.file);
-        if (rotated !== settings.file) {
+        if (maybeRotate()) {
           pendingBytes = 0;
-          currentFileBytes = 0;
-          warnedAboutSizeCap = false;
         }
       }
 
       // Proactive rotation once the file is near capacity so the next lines land in a fresh file.
       if (isRollingPath(settings.file) && pendingBytes > rotationThreshold) {
-        const rotated = rotateLogFile(settings.file);
-        if (rotated !== settings.file) {
+        if (maybeRotate()) {
           pendingBytes = 0;
-          currentFileBytes = 0;
-          warnedAboutSizeCap = false;
         }
       }
 
