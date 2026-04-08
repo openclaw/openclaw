@@ -383,7 +383,7 @@ export async function fetchMinimaxUsage(
   })();
 
   const res = await fetchJson(
-    `${origin}/api/openplatform/coding_plan/remains`,
+    `${origin}/v1/api/openplatform/coding_plan/remains`,
     {
       method: "GET",
       headers: {
