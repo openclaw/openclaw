@@ -31,6 +31,8 @@ const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
   /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*\.[cm]?[jt]s$/u,
 ] as const;
 const EXPORT_FROM_RE = /\bexport\b[\s\S]*?\bfrom\s*["']([^"']+)["']/gu;
+const IMPORT_FROM_RE = /\bimport\b[\s\S]*?\bfrom\s*["']([^"']+)["']/gu;
+const IMPORT_ONLY_RE = /\bimport\s*["']([^"']+)["']/gu;
 
 function listBundledPluginRoots() {
   return loadPluginManifestRegistry({})
@@ -59,15 +61,19 @@ function resolvePublicSurfaceSourcePath(
   return null;
 }
 
-function collectProductionContractEntryPaths(): Array<{ pluginId: string; entryPath: string }> {
+function collectProductionContractEntryPaths(): Array<{
+  pluginId: string;
+  entryPath: string;
+  pluginRoot: string;
+}> {
   return listBundledPluginMetadata({ rootDir: REPO_ROOT }).flatMap((plugin) => {
-    const pluginDir = resolve(REPO_ROOT, "extensions", plugin.dirName);
+    const pluginRoot = resolve(REPO_ROOT, "extensions", plugin.dirName);
     const entryPaths = new Set<string>();
     for (const artifact of plugin.publicSurfaceArtifacts ?? []) {
       if (!GUARDED_CONTRACT_ARTIFACT_BASENAMES.has(artifact)) {
         continue;
       }
-      const sourcePath = resolvePublicSurfaceSourcePath(pluginDir, artifact);
+      const sourcePath = resolvePublicSurfaceSourcePath(pluginRoot, artifact);
       if (sourcePath) {
         entryPaths.add(sourcePath);
       }
@@ -75,6 +81,7 @@ function collectProductionContractEntryPaths(): Array<{ pluginId: string; entryP
     return [...entryPaths].map((entryPath) => ({
       pluginId: plugin.manifest.id,
       entryPath,
+      pluginRoot,
     }));
   });
 }
@@ -83,13 +90,15 @@ function formatRepoRelativePath(filePath: string): string {
   return relative(REPO_ROOT, filePath).replaceAll(path.sep, "/");
 }
 
-function collectRelativeReExportSpecifiers(source: string): string[] {
+function collectRelativeDependencySpecifiers(source: string): string[] {
   const specifiers = new Set<string>();
-  EXPORT_FROM_RE.lastIndex = 0;
-  for (const match of source.matchAll(EXPORT_FROM_RE)) {
-    const specifier = match[1];
-    if (specifier?.startsWith(".")) {
-      specifiers.add(specifier);
+  for (const pattern of [EXPORT_FROM_RE, IMPORT_FROM_RE, IMPORT_ONLY_RE]) {
+    pattern.lastIndex = 0;
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1];
+      if (specifier?.startsWith(".")) {
+        specifiers.add(specifier);
+      }
     }
   }
   return [...specifiers];
@@ -123,7 +132,7 @@ function resolveRelativeSourceModulePath(fromPath: string, specifier: string): s
 
 function findForbiddenContractModuleGraphPaths(params: {
   entryPath: string;
-  pluginDir: string;
+  pluginRoot: string;
 }): string[] {
   const failures: string[] = [];
   const visited = new Set<string>();
@@ -150,7 +159,7 @@ function findForbiddenContractModuleGraphPaths(params: {
       }
     }
 
-    for (const specifier of collectRelativeReExportSpecifiers(source)) {
+    for (const specifier of collectRelativeDependencySpecifiers(source)) {
       const resolvedModulePath = resolveRelativeSourceModulePath(currentPath, specifier);
       if (!resolvedModulePath) {
         continue;
@@ -158,7 +167,7 @@ function findForbiddenContractModuleGraphPaths(params: {
       if (resolvedModulePath === currentPath) {
         continue;
       }
-      if (!resolvedModulePath.startsWith(params.pluginDir + path.sep)) {
+      if (!resolvedModulePath.startsWith(params.pluginRoot + path.sep)) {
         continue;
       }
       pending.push(resolvedModulePath);
@@ -213,13 +222,26 @@ describe("plugin entry guardrails", () => {
   });
 
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
-    const failures = collectProductionContractEntryPaths().flatMap(({ pluginId, entryPath }) =>
-      findForbiddenContractModuleGraphPaths({
-        entryPath,
-        pluginDir: dirname(entryPath),
-      }).map((failure) => `${pluginId}: ${failure}`),
+    const failures = collectProductionContractEntryPaths().flatMap(
+      ({ pluginId, entryPath, pluginRoot }) =>
+        findForbiddenContractModuleGraphPaths({
+          entryPath,
+          pluginRoot,
+        }).map((failure) => `${pluginId}: ${failure}`),
     );
 
     expect(failures).toEqual([]);
+  });
+
+  it("follows relative import edges while scanning guarded contract graphs", () => {
+    expect(
+      collectRelativeDependencySpecifiers(`
+        import { x } from "./safe.js";
+        import "./setup.js";
+        export { x };
+        export * from "./barrel.js";
+        import { y } from "openclaw/plugin-sdk/testing";
+      `).toSorted(),
+    ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);
   });
 });
