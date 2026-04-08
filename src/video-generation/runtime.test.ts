@@ -135,12 +135,18 @@ describe("video-generation runtime", () => {
     ]);
   });
 
-  it("forwards providerOptions to the provider unchanged", async () => {
+  it("forwards providerOptions to providers that declare the matching schema", async () => {
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
     let seenProviderOptions: unknown;
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
-      capabilities: {},
+      capabilities: {
+        providerOptions: {
+          seed: "number",
+          draft: "boolean",
+          camerafixed: "boolean",
+        },
+      },
       async generateVideo(req) {
         seenProviderOptions = req.providerOptions;
         return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
@@ -157,6 +163,137 @@ describe("video-generation runtime", () => {
     });
 
     expect(seenProviderOptions).toEqual({ seed: 42, draft: true, camerafixed: false });
+  });
+
+  it("skips candidates that do not declare any providerOptions schema", async () => {
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    const provider: VideoGenerationProvider = {
+      id: "video-plugin",
+      capabilities: {}, // no providerOptions declared
+      async generateVideo() {
+        throw new Error("should not be called");
+      },
+    };
+    mocks.getVideoGenerationProvider.mockReturnValue(provider);
+
+    await expect(
+      generateVideo({
+        cfg: {
+          agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
+        } as OpenClawConfig,
+        prompt: "test",
+        providerOptions: { seed: 42 },
+      }),
+    ).rejects.toThrow(/does not accept providerOptions/);
+  });
+
+  it("skips candidates that declare a providerOptions schema missing the requested key", async () => {
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    const provider: VideoGenerationProvider = {
+      id: "video-plugin",
+      capabilities: {
+        providerOptions: { draft: "boolean" },
+      },
+      async generateVideo() {
+        throw new Error("should not be called");
+      },
+    };
+    mocks.getVideoGenerationProvider.mockReturnValue(provider);
+
+    await expect(
+      generateVideo({
+        cfg: {
+          agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
+        } as OpenClawConfig,
+        prompt: "test",
+        providerOptions: { seed: 42 },
+      }),
+    ).rejects.toThrow(/does not accept providerOptions keys: seed \(accepted: draft\)/);
+  });
+
+  it("skips candidates when providerOptions values do not match the declared type", async () => {
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    const provider: VideoGenerationProvider = {
+      id: "video-plugin",
+      capabilities: {
+        providerOptions: { seed: "number" },
+      },
+      async generateVideo() {
+        throw new Error("should not be called");
+      },
+    };
+    mocks.getVideoGenerationProvider.mockReturnValue(provider);
+
+    await expect(
+      generateVideo({
+        cfg: {
+          agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
+        } as OpenClawConfig,
+        prompt: "test",
+        providerOptions: { seed: "forty-two" },
+      }),
+    ).rejects.toThrow(/expects providerOptions\.seed to be a finite number, got string/);
+  });
+
+  it("falls over from a provider without providerOptions support to one that has it", async () => {
+    mocks.getVideoGenerationProvider.mockImplementation((providerId: string) => {
+      if (providerId === "openai") {
+        return {
+          id: "openai",
+          defaultModel: "sora-2",
+          capabilities: {}, // no providerOptions
+          isConfigured: () => true,
+          async generateVideo() {
+            throw new Error("should not be called");
+          },
+        };
+      }
+      if (providerId === "byteplus") {
+        return {
+          id: "byteplus",
+          defaultModel: "seedance-1-0-pro-250528",
+          capabilities: {
+            providerOptions: { seed: "number" },
+          },
+          isConfigured: () => true,
+          async generateVideo(req) {
+            expect(req.providerOptions).toEqual({ seed: 42 });
+            return {
+              videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+              model: "seedance-1-0-pro-250528",
+            };
+          },
+        };
+      }
+      return undefined;
+    });
+    mocks.listVideoGenerationProviders.mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "sora-2",
+        capabilities: {},
+        isConfigured: () => true,
+        generateVideo: async () => ({ videos: [] }),
+      },
+      {
+        id: "byteplus",
+        defaultModel: "seedance-1-0-pro-250528",
+        capabilities: { providerOptions: { seed: "number" } },
+        isConfigured: () => true,
+        generateVideo: async () => ({ videos: [] }),
+      },
+    ]);
+
+    const result = await generateVideo({
+      cfg: {} as OpenClawConfig,
+      prompt: "animate a cat",
+      providerOptions: { seed: 42 },
+    });
+
+    expect(result.provider).toBe("byteplus");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.provider).toBe("openai");
+    expect(result.attempts[0]?.error).toMatch(/does not accept providerOptions/);
   });
 
   it("lists runtime video-generation providers through the provider registry", () => {
