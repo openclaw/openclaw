@@ -535,6 +535,7 @@ export function createSlackMonitorContext(params: {
         channels: params.channelsConfig,
         channelKeys: channelsConfigKeys,
         defaultRequireMention,
+        defaultThreadRequireExplicitMention: params.threadRequireExplicitMention,
         allowNameMatching: params.allowNameMatching,
       });
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);

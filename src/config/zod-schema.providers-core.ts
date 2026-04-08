@@ -909,10 +909,17 @@ export const SlackDmSchema = z
   })
   .strict();
 
+export const SlackChannelThreadSchema = z
+  .object({
+    requireExplicitMention: z.boolean().optional(),
+  })
+  .strict();
+
 export const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    thread: SlackChannelThreadSchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
