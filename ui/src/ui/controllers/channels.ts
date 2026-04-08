@@ -51,23 +51,57 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
   }
 }
 
-export async function waitWhatsAppLogin(state: ChannelsState) {
+async function refreshActiveWhatsAppQr(state: ChannelsState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const res = await state.client.request<{ message?: string; qrDataUrl?: string }>(
+    "web.login.start",
+    {
+      force: false,
+      timeoutMs: 5000,
+    },
+  );
+  if (res.qrDataUrl) {
+    state.whatsappLoginQrDataUrl = res.qrDataUrl;
+  }
+  if (res.message) {
+    state.whatsappLoginMessage = res.message;
+  }
+}
+
+export async function waitWhatsAppLogin(
+  state: ChannelsState,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+) {
   if (!state.client || !state.connected || state.whatsappBusy) {
     return;
   }
   state.whatsappBusy = true;
   try {
-    const res = await state.client.request<{ message?: string; connected?: boolean }>(
-      "web.login.wait",
-      {
-        timeoutMs: 120000,
-      },
-    );
-    state.whatsappLoginMessage = res.message ?? null;
-    state.whatsappLoginConnected = res.connected ?? null;
-    if (res.connected) {
-      state.whatsappLoginQrDataUrl = null;
+    const timeoutMs = Math.max(opts.timeoutMs ?? 120000, 1000);
+    const pollMs = Math.max(opts.pollMs ?? 2500, 500);
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const remaining = Math.max(deadline - Date.now(), pollMs);
+      const res = await state.client.request<{ message?: string; connected?: boolean }>(
+        "web.login.wait",
+        {
+          timeoutMs: remaining,
+        },
+      );
+      state.whatsappLoginMessage = res.message ?? null;
+      state.whatsappLoginConnected = res.connected ?? null;
+      if (res.connected) {
+        state.whatsappLoginQrDataUrl = null;
+        return;
+      }
+      await refreshActiveWhatsAppQr(state).catch(() => {});
     }
+    state.whatsappLoginConnected = false;
+    state.whatsappLoginMessage =
+      "Still waiting for the QR scan. Let me know when you’ve scanned it.";
   } catch (err) {
     state.whatsappLoginMessage = String(err);
     state.whatsappLoginConnected = null;
