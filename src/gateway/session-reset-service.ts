@@ -540,11 +540,19 @@ export async function performGatewaySessionReset(params: {
       execAsk: currentEntry?.execAsk,
       execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
-      providerOverride: currentEntry?.providerOverride,
-      modelOverride: currentEntry?.modelOverride,
-      authProfileOverride: currentEntry?.authProfileOverride,
-      authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
-      authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
+      // Only preserve model/provider/auth overrides across reset when they were
+      // explicitly chosen by the user (e.g. /model command). System-driven
+      // overrides (fallback rotation, auto-selection) should not survive reset
+      // so the session returns to the configured default model.
+      ...(currentEntry?.authProfileOverrideSource === "user"
+        ? {
+            providerOverride: currentEntry?.providerOverride,
+            modelOverride: currentEntry?.modelOverride,
+            authProfileOverride: currentEntry?.authProfileOverride,
+            authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
+            authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
+          }
+        : {}),
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,
