@@ -543,16 +543,16 @@ export async function performGatewaySessionReset(params: {
       providerOverride: currentEntry?.providerOverride,
       modelOverride: currentEntry?.modelOverride,
       authProfileOverride:
-        currentEntry?.authProfileOverrideSource === "user"
-          ? currentEntry.authProfileOverride
+        currentEntry?.authProfileOverrideSource !== "auto"
+          ? currentEntry?.authProfileOverride
           : undefined,
       authProfileOverrideSource:
-        currentEntry?.authProfileOverrideSource === "user"
-          ? currentEntry.authProfileOverrideSource
+        currentEntry?.authProfileOverrideSource !== "auto"
+          ? currentEntry?.authProfileOverrideSource
           : undefined,
       authProfileOverrideCompactionCount:
-        currentEntry?.authProfileOverrideSource === "user"
-          ? currentEntry.authProfileOverrideCompactionCount
+        currentEntry?.authProfileOverrideSource !== "auto"
+          ? currentEntry?.authProfileOverrideCompactionCount
           : undefined,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,

@@ -119,7 +119,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("new session with user override round-robins from current position", async () => {
+  it("new session with user override preserves the user's explicit choice", async () => {
     await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
       const agentDir = path.join(stateDir, "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -151,9 +151,8 @@ describe("resolveSessionAuthProfileOverride", () => {
         isNewSession: true,
       });
 
-      // User-set overrides should round-robin: backup1 → backup2
-      expect(resolved).toBe("zai:backup2");
-      // Source must stay "user" so subsequent /new commands still carry it over
+      // User's explicit /auth choice persists across /new without rotation
+      expect(resolved).toBe("zai:backup1");
       expect(sessionEntry.authProfileOverrideSource).toBe("user");
     });
   });
@@ -179,8 +178,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      // First /new
-      await resolveSessionAuthProfileOverride({
+      // First /new — user override stays
+      const first = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
         provider: "zai",
         agentDir,
@@ -191,8 +190,10 @@ describe("resolveSessionAuthProfileOverride", () => {
         isNewSession: true,
       });
 
-      // Simulate second /new with the mutated session entry
-      const resolved = await resolveSessionAuthProfileOverride({
+      expect(first).toBe("zai:backup1");
+
+      // Second /new — still stays
+      const second = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
         provider: "zai",
         agentDir,
@@ -203,8 +204,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         isNewSession: true,
       });
 
-      // Should still round-robin (not drop the override)
-      expect(resolved).toBeDefined();
+      expect(second).toBe("zai:backup1");
       expect(sessionEntry.authProfileOverrideSource).toBe("user");
     });
   });
@@ -334,6 +334,43 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       // All in cooldown → pickFirstAvailable falls back to order[0]
       expect(resolved).toBe("zai:default");
+    });
+  });
+
+  it("legacy entry without source field preserves override on new session", async () => {
+    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await writeAuthStore(agentDir, {
+        profiles: {
+          "zai:default": { type: "api_key", provider: "zai", key: "sk-default" },
+          "zai:backup1": { type: "api_key", provider: "zai", key: "sk-backup1" },
+        },
+        order: { zai: ["zai:default", "zai:backup1"] },
+      });
+
+      // Legacy session entry: has override but no source and no compaction count.
+      // The fallback inference treats this as "user" — must not be dropped on /new.
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        authProfileOverride: "zai:backup1",
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "zai",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: true,
+      });
+
+      // Inferred as "user" → preserves the explicit choice
+      expect(resolved).toBe("zai:backup1");
     });
   });
 

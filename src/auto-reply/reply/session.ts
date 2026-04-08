@@ -456,7 +456,7 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
-      if (entry.authProfileOverrideSource === "user") {
+      if (entry.authProfileOverrideSource !== "auto") {
         persistedAuthProfileOverride = entry.authProfileOverride;
         persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
         persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;

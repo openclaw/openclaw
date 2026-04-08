@@ -140,10 +140,13 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   let next = current;
   if (isNewSession) {
-    // User-set overrides round-robin from the current position; auto-selected
-    // overrides (from failover) are discarded so the new session picks the best
-    // available profile fresh — avoiding sticky cooldown/rate-limited profiles.
-    next = current && source === "user" ? pickNextAvailable(current) : pickFirstAvailable();
+    if (source === "user" && current) {
+      // User's explicit /auth choice persists across /new without rotation.
+      return current;
+    }
+    // Auto-selected overrides (from failover) are discarded so the new session
+    // picks the best available profile fresh — avoiding sticky cooldown/rate-limited profiles.
+    next = pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
   } else if (!current || isProfileInCooldown(store, current)) {
@@ -159,7 +162,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
   if (shouldPersist) {
     sessionEntry.authProfileOverride = next;
-    sessionEntry.authProfileOverrideSource = source === "user" ? "user" : "auto";
+    sessionEntry.authProfileOverrideSource = "auto";
     sessionEntry.authProfileOverrideCompactionCount = compactionCount;
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
