@@ -51,7 +51,12 @@ These commands sit beside the main test suites when you need QA-lab realism:
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
-  - Reuses the same provider/model selection flags as `qa suite`; the runner only changes where the suite executes.
+  - Reuses the same provider/model selection flags as `qa suite`.
+  - Live runs forward the supported QA auth inputs that are practical for the guest:
+    env-based provider keys, the QA live provider config path, and `CODEX_HOME`
+    when present.
+  - Output dirs must stay under the repo root so the guest can write back through
+    the mounted workspace.
   - Writes the normal QA report + summary plus Multipass logs under
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
