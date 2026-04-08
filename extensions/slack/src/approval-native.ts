@@ -54,7 +54,7 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
 
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  const turnSourceTo = request.request.turnSourceTo?.trim() || "";
+  const turnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
   if (turnSourceChannel !== "slack" || !turnSourceTo) {
     return null;
   }
@@ -67,7 +67,7 @@ function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOrig
   }
   const threadId =
     typeof request.request.turnSourceThreadId === "string"
-      ? request.request.turnSourceThreadId.trim() || undefined
+      ? normalizeOptionalString(request.request.turnSourceThreadId)
       : typeof request.request.turnSourceThreadId === "number"
         ? String(request.request.turnSourceThreadId)
         : undefined;
@@ -85,7 +85,7 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
     to: sessionTarget.to,
     threadId:
       typeof sessionTarget.threadId === "string"
-        ? sessionTarget.threadId.trim() || undefined
+        ? normalizeOptionalString(sessionTarget.threadId)
         : typeof sessionTarget.threadId === "number"
           ? String(sessionTarget.threadId)
           : undefined,

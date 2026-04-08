@@ -750,7 +750,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     if (!args.config || !entry) {
       return undefined;
     }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+    if (
+      normalizeOptionalString(entry.modelOverride) ||
+      normalizeOptionalString(entry.providerOverride)
+    ) {
       return undefined;
     }
     const channelOverride = resolveChannelModelOverride({
@@ -997,7 +1000,7 @@ export function buildToolsMessage(
 function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
     ? `/${command.nativeName}`
-    : command.textAliases[0]?.trim() || `/${command.key}`;
+    : normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
   const seen = new Set<string>();
   const aliases = command.textAliases
     .map((alias) => alias.trim())

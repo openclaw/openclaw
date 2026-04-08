@@ -49,6 +49,17 @@ type ReactionTargetRef = {
   roomId: string;
   eventId: string;
 };
+type MatrixRawApprovalTarget = {
+  to: string;
+  threadId?: string | number | null;
+};
+type MatrixPrepareTargetParams = {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  gatewayUrl?: string;
+  context?: unknown;
+  rawTarget: MatrixRawApprovalTarget;
+};
 
 export type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
@@ -95,12 +106,7 @@ function normalizeThreadId(value?: string | number | null): string | undefined {
 }
 
 async function prepareTarget(
-  params: ChannelApprovalCapabilityHandlerContext & {
-    rawTarget: {
-      to: string;
-      threadId?: string | number | null;
-    };
-  },
+  params: MatrixPrepareTargetParams,
 ): Promise<PreparedMatrixTarget | null> {
   const resolved = resolveHandlerContext(params);
   if (!resolved) {
@@ -113,7 +119,7 @@ async function prepareTarget(
   const threadId = normalizeThreadId(params.rawTarget.threadId);
   if (target.kind === "user") {
     const account = resolveMatrixAccount({
-      cfg: params.cfg as CoreConfig,
+      cfg: params.cfg,
       accountId: resolved.accountId,
     });
     const repairDirectRooms = resolved.context.deps?.repairDirectRooms ?? repairMatrixDirectRooms;

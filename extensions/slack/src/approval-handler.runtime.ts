@@ -13,7 +13,7 @@ import {
   buildApprovalInteractiveReplyFromActionDescriptors,
   type ExecApprovalRequest,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { slackNativeApprovalAdapter } from "./approval-native.js";
 import {
   isSlackExecApprovalClientEnabled,
@@ -47,7 +47,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   context: SlackApprovalHandlerContext;
 } | null {
   const context = params.context as SlackApprovalHandlerContext | undefined;
-  const accountId = params.accountId?.trim() || "";
+  const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!context?.app || !accountId) {
     return null;
   }
@@ -71,7 +71,7 @@ function formatSlackApprover(resolvedBy?: string | null): string | null {
   if (normalized) {
     return `<@${normalized}>`;
   }
-  const trimmed = resolvedBy?.trim();
+  const trimmed = normalizeOptionalString(resolvedBy);
   return trimmed ? trimmed : null;
 }
 

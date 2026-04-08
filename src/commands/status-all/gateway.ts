@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
@@ -115,8 +118,8 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
             return null;
           }
         })();
-        const code = parsed?.error?.code?.trim() || null;
-        const msg = parsed?.error?.message?.trim() || null;
+        const code = normalizeOptionalString(parsed?.error?.code) ?? null;
+        const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
         const msgShort = msg
           ? normalizeLowercaseStringOrEmpty(msg).includes("signing in again")
             ? "re-auth required"
@@ -133,7 +136,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );
     if (embedded) {
-      const provider = embedded[1]?.trim() || "unknown";
+      const provider = normalizeOptionalString(embedded[1]) || "unknown";
       addGroup(`embedded:${provider}`, `Embedded agent: OAuth token refresh failed (${provider})`);
       continue;
     }

@@ -1225,7 +1225,8 @@ export function buildGatewaySessionRow(params: {
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const subagentRun = getSessionDisplaySubagentRunByChildSessionKey(key);
   const subagentOwner =
-    subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
+    normalizeOptionalString(subagentRun?.controllerSessionKey) ||
+    normalizeOptionalString(subagentRun?.requesterSessionKey);
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
@@ -1454,7 +1455,8 @@ export function listSessionsFromStore(params: {
       const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
       if (latest) {
         const latestControllerSessionKey =
-          latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+          normalizeOptionalString(latest.controllerSessionKey) ||
+          normalizeOptionalString(latest.requesterSessionKey);
         return latestControllerSessionKey === spawnedBy;
       }
       return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;

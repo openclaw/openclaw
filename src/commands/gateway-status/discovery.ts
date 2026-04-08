@@ -76,7 +76,7 @@ export async function resolveSshTarget(params: {
   }
   const identityFile =
     params.identity ??
-    config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ??
+    config.identityFiles.find((entry) => normalizeOptionalString(entry)) ??
     undefined;
   return { target, identity: identityFile };
 }

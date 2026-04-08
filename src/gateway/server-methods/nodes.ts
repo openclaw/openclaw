@@ -198,8 +198,8 @@ function shouldQueueAsPendingForegroundAction(params: {
     params.error && typeof params.error === "object"
       ? (params.error as { code?: unknown; message?: unknown })
       : null;
-  const code = typeof error?.code === "string" ? error.code.trim().toUpperCase() : "";
-  const message = typeof error?.message === "string" ? error.message.trim().toUpperCase() : "";
+  const code = normalizeOptionalString(error?.code)?.toUpperCase() ?? "";
+  const message = normalizeOptionalString(error?.message)?.toUpperCase() ?? "";
   return code === "NODE_BACKGROUND_UNAVAILABLE" || message.includes("BACKGROUND_UNAVAILABLE");
 }
 

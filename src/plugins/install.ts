@@ -8,6 +8,7 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -624,7 +625,7 @@ async function installPluginFromPackageDir(
   }
   const extensions = extensionsResult.entries;
 
-  const pkgName = typeof manifest.name === "string" ? manifest.name.trim() : "";
+  const pkgName = normalizeOptionalString(manifest.name) ?? "";
   const npmPluginId = pkgName || "plugin";
 
   // Prefer the canonical `id` from openclaw.plugin.json over the npm package name.

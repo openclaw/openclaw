@@ -9,6 +9,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
@@ -855,8 +856,8 @@ function buildProvenanceIndex(params: {
       matcher: createPathMatcher(),
     };
     const trackedPaths = [install.installPath, install.sourcePath]
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter(Boolean);
+      .map((entry) => normalizeOptionalString(entry))
+      .filter((entry): entry is string => Boolean(entry));
     if (trackedPaths.length === 0) {
       rule.trackedWithoutPaths = true;
     } else {

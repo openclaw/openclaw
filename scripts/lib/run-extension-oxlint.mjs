@@ -20,6 +20,8 @@ export function runExtensionOxlint(params) {
   const tempConfigPath = path.join(tempDir, "oxlint.json");
 
   try {
+    prepareExtensionPackageBoundaryArtifacts(repoRoot);
+
     const extensionFiles = params.roots.flatMap((root) =>
       collectTypeScriptFiles(path.resolve(repoRoot, root)),
     );
@@ -46,6 +48,37 @@ export function runExtensionOxlint(params) {
     process.exit(result.status ?? 1);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    releaseLock();
+  }
+}
+
+function prepareExtensionPackageBoundaryArtifacts(repoRoot) {
+  const releaseLock = acquireLocalHeavyCheckLockSync({
+    cwd: repoRoot,
+    env: process.env,
+    toolName: "extension-package-boundary-artifacts",
+    lockName: "extension-package-boundary-artifacts",
+  });
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve(repoRoot, "scripts", "prepare-extension-package-boundary-artifacts.mjs")],
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if ((result.status ?? 1) !== 0) {
+      process.exit(result.status ?? 1);
+    }
+  } finally {
     releaseLock();
   }
 }

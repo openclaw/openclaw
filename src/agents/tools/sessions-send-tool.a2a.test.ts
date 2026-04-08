@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { runSessionsSendA2AFlow, __testing } from "./sessions-send-tool.a2a.js";
@@ -13,15 +14,17 @@ vi.mock("./agent-step.js", () => ({
 }));
 
 describe("runSessionsSendA2AFlow announce delivery", () => {
-  type CallGatewayDep = NonNullable<
-    NonNullable<Parameters<typeof __testing.setDepsForTest>[0]>["callGateway"]
-  >;
-  let mockCallGateway: ReturnType<typeof vi.fn> & CallGatewayDep;
+  let gatewayCalls: CallGatewayOptions[];
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    mockCallGateway = vi.fn().mockResolvedValue({}) as ReturnType<typeof vi.fn> & CallGatewayDep;
-    __testing.setDepsForTest({ callGateway: mockCallGateway });
+    gatewayCalls = [];
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions) => {
+        gatewayCalls.push(opts);
+        return {} as T;
+      },
+    });
   });
 
   afterEach(() => {
@@ -40,11 +43,9 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
 
     // Find the gateway send call (not the waitForAgentRun call)
-    const sendCall = mockCallGateway.mock.calls.find(
-      (call: unknown[]) => (call[0] as { method: string }).method === "send",
-    );
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
     expect(sendCall).toBeDefined();
-    const sendParams = (sendCall![0] as { params: Record<string, unknown> }).params;
+    const sendParams = sendCall?.params as Record<string, unknown>;
     expect(sendParams.to).toBe("-100123");
     expect(sendParams.channel).toBe("telegram");
     expect(sendParams.threadId).toBe("554");
@@ -60,11 +61,9 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    const sendCall = mockCallGateway.mock.calls.find(
-      (call: unknown[]) => (call[0] as { method: string }).method === "send",
-    );
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
     expect(sendCall).toBeDefined();
-    const sendParams = (sendCall![0] as { params: Record<string, unknown> }).params;
+    const sendParams = sendCall?.params as Record<string, unknown>;
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.threadId).toBeUndefined();
   });

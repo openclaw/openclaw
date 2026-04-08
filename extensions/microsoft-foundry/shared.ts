@@ -5,7 +5,10 @@ import {
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -162,7 +165,7 @@ export function isFoundryProviderApi(value?: string | null): value is FoundryPro
 }
 
 export function normalizeFoundryEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim();
+  const trimmed = normalizeOptionalString(endpoint) ?? "";
   if (!trimmed) {
     return trimmed;
   }
@@ -256,11 +259,11 @@ export function resolveConfiguredModelNameHint(
   modelId: string,
   modelNameHint?: string | null,
 ): string | undefined {
-  const trimmedName = typeof modelNameHint === "string" ? modelNameHint.trim() : "";
+  const trimmedName = normalizeOptionalString(modelNameHint) ?? "";
   if (trimmedName) {
     return trimmedName;
   }
-  const trimmedId = modelId.trim();
+  const trimmedId = normalizeOptionalString(modelId) ?? "";
   return trimmedId ? trimmedId : undefined;
 }
 
@@ -482,7 +485,7 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
   }
   // Prefer the explicitly ordered profile; fall back to the sole entry when there is exactly one.
   return (
-    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => profileId.trim().length > 0) ??
+    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => normalizeOptionalString(profileId)) ??
     (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
   );
 }

@@ -24,8 +24,11 @@ import {
   type BackoffPolicy,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeE164,
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
@@ -164,7 +167,10 @@ function isSignalReactionMessage(
   }
   const emoji = reaction.emoji?.trim();
   const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim());
+  const hasTarget = Boolean(
+    normalizeOptionalString(reaction.targetAuthor) ||
+    normalizeOptionalString(reaction.targetAuthorUuid),
+  );
   return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
 }
 
@@ -356,8 +362,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
   const chunkMode = resolveChunkMode(cfg, "signal", accountInfo.accountId);
-  const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
-  const account = opts.account?.trim() || accountInfo.config.account?.trim();
+  const baseUrl = normalizeOptionalString(opts.baseUrl) ?? accountInfo.baseUrl;
+  const account =
+    normalizeOptionalString(opts.account) ?? normalizeOptionalString(accountInfo.config.account);
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
   const groupAllowFrom = normalizeAllowList(

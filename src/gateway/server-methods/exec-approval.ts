@@ -241,11 +241,9 @@ export function createExecApprovalHandlers(
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
-        turnSourceChannel:
-          typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
-        turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,
-        turnSourceAccountId:
-          typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
+        turnSourceChannel: normalizeOptionalString(p.turnSourceChannel) ?? null,
+        turnSourceTo: normalizeOptionalString(p.turnSourceTo) ?? null,
+        turnSourceAccountId: normalizeOptionalString(p.turnSourceAccountId) ?? null,
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);

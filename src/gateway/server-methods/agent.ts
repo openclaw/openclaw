@@ -541,7 +541,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       isNewSession = !entry;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      const labelValue = request.label?.trim() || entry?.label;
+      const labelValue = normalizeOptionalString(request.label) || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:

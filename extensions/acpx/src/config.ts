@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { z } from "openclaw/plugin-sdk/zod";
-import { AcpxPluginConfigSchema } from "./config-schema.js";
+import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
   AcpxPermissionMode,
@@ -238,7 +238,7 @@ export function resolveAcpxPluginConfig(params: {
     pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
-    timeoutSeconds: normalized.timeoutSeconds,
+    timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
     legacyCompatibilityConfig: {
       strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,

@@ -266,12 +266,9 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   }
 
   const existing = params.channelConfigs[channelId];
-  const label =
-    existing.label ??
-    (typeof params.packageChannel?.label === "string" ? params.packageChannel.label.trim() : "");
+  const label = existing.label ?? normalizeOptionalString(params.packageChannel?.label) ?? "";
   const description =
-    existing.description ??
-    (typeof params.packageChannel?.blurb === "string" ? params.packageChannel.blurb.trim() : "");
+    existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
 

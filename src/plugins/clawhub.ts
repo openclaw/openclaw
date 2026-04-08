@@ -25,6 +25,7 @@ import {
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
@@ -164,7 +165,7 @@ function resolveRequestedVersion(params: {
 }
 
 function readTrimmedString(value: unknown): string | null {
-  return typeof value === "string" ? value.trim() : null;
+  return normalizeOptionalString(value) ?? null;
 }
 
 function normalizeClawHubRelativePath(value: unknown): string | null {
@@ -894,8 +895,8 @@ export async function installPluginFromClawHub(
       clawhub: {
         source: "clawhub",
         clawhubUrl:
-          params.baseUrl?.trim() ||
-          process.env.OPENCLAW_CLAWHUB_URL?.trim() ||
+          normalizeOptionalString(params.baseUrl) ||
+          normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
           "https://clawhub.ai",
         clawhubPackage: parsed.name,
         clawhubFamily,

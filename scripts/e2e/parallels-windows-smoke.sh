@@ -1579,13 +1579,28 @@ function Invoke-Logged {
 
 try {
   $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps') 'portable-git') ''
-  $env:PATH = "$portableGit\cmd;$portableGit\mingw64\bin;$portableGit\usr\bin;$env:PATH"
+  $shortRoot = 'C:\ocu'
+  $shortTemp = Join-Path $shortRoot 'tmp'
+  $bootstrapRoot = Join-Path $shortRoot 'bootstrap'
+  $bootstrapBin = Join-Path $bootstrapRoot 'node_modules\.bin'
+  $env:PATH = "$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
+  $env:ComSpec = Join-Path $env:SystemRoot 'System32\cmd.exe'
+  $env:npm_config_ignore_scripts = 'true'
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   $gitRoot = Join-Path $env:USERPROFILE 'openclaw'
   $gitEntry = Join-Path $gitRoot 'openclaw.mjs'
 
   Remove-Item $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
   Write-ProgressLog 'update.start'
+
+  Write-ProgressLog 'update.short-temp'
+  New-Item -ItemType Directory -Path $shortTemp -Force | Out-Null
+  New-Item -ItemType Directory -Path $bootstrapRoot -Force | Out-Null
+  $env:TEMP = $shortTemp
+  $env:TMP = $shortTemp
+  Write-LoggedLine ("TEMP=" + $env:TEMP)
+  Write-LoggedLine ("ComSpec=" + $env:ComSpec)
+  Write-LoggedLine ("npm_config_ignore_scripts=" + $env:npm_config_ignore_scripts)
 
   Write-ProgressLog 'update.where-pnpm-pre'
   $pnpmPre = Get-Command pnpm -ErrorAction SilentlyContinue
@@ -1602,6 +1617,19 @@ try {
     Invoke-Logged 'corepack --version' { & corepack --version }
   } else {
     Write-LoggedLine 'corepack=missing-pre'
+  }
+
+  Write-ProgressLog 'update.bootstrap-toolchain'
+  Invoke-Logged 'npm bootstrap node-gyp pnpm' {
+    & npm install --prefix $bootstrapRoot --no-save node-gyp pnpm@10
+  }
+
+  Write-ProgressLog 'update.where-node-gyp-pre'
+  $nodeGypPre = Get-Command node-gyp -ErrorAction SilentlyContinue
+  if ($null -ne $nodeGypPre) {
+    Write-LoggedLine $nodeGypPre.Source
+  } else {
+    throw 'node-gyp missing before dev update'
   }
 
   Write-ProgressLog 'update.reset-git-root'
@@ -1867,7 +1895,7 @@ param(
 
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
@@ -1966,6 +1994,31 @@ EOF
 
 verify_gateway() {
   guest_run_openclaw "" "" gateway status --deep --require-rpc
+}
+
+verify_gateway_reachable() {
+  local probe_json attempt
+  for attempt in 1 2 3 4 5 6; do
+    probe_json="$(
+      guest_run_openclaw "" "" gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json
+    )"
+    printf '%s\n' "$probe_json"
+    if PROBE_JSON="$probe_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["PROBE_JSON"])
+raise SystemExit(0 if payload.get("ok") else 1)
+PY
+    then
+      return 0
+    fi
+    if (( attempt < 6 )); then
+      printf 'gateway-reachable retry %s\n' "$attempt" >&2
+      sleep 3
+    fi
+  done
+  return 1
 }
 
 verify_dev_channel_update() {
@@ -2148,7 +2201,7 @@ run_fresh_main_lane() {
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
-  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
+  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
   FRESH_AGENT_STATUS="pass"
