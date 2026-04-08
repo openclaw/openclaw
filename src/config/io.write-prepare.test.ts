@@ -346,18 +346,18 @@ describe("config io write prepare", () => {
     const nextConfig: OpenClawConfig = {
       plugins: {
         slots: {
-          memory: "libravdb-memory",
+          memory: "replacement-memory-plugin",
         },
         entries: {
           "memory-core": {
             enabled: false,
             config: {},
           },
-          "memory-lancedb": {
+          "disabled-memory-plugin": {
             enabled: false,
             config: {},
           },
-          "libravdb-memory": {
+          "replacement-memory-plugin": {
             enabled: true,
           },
         },
@@ -375,10 +375,10 @@ describe("config io write prepare", () => {
       };
     };
 
-    expect(persisted.plugins?.slots?.memory).toBe("libravdb-memory");
-    expect(persisted.plugins?.entries?.["libravdb-memory"]).toEqual({ enabled: true });
+    expect(persisted.plugins?.slots?.memory).toBe("replacement-memory-plugin");
+    expect(persisted.plugins?.entries?.["replacement-memory-plugin"]).toEqual({ enabled: true });
     expect(persisted.plugins?.entries?.["memory-core"]).toEqual({ enabled: false });
-    expect(persisted.plugins?.entries?.["memory-lancedb"]).toEqual({ enabled: false });
+    expect(persisted.plugins?.entries?.["disabled-memory-plugin"]).toEqual({ enabled: false });
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
