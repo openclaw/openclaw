@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Agents/model resolution: keep explicit-model runtime comparisons on the configured workspace plugin registry, so workspace-installed providers do not silently fall back to stale explicit metadata during runtime model lookup.
 - Providers/Z.AI: default onboarding and endpoint detection to GLM-5.1 instead of GLM-5. (#61998) Thanks @serg0x.
 - Telegram/setup: load setup and secret contracts through packaged top-level sidecars so installed 2026.4.7 npm builds no longer try to import missing `dist/extensions/telegram/src/*` files during gateway startup.
+- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across BlueBubbles, Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
 - Auth/profiles: stop new sessions from inheriting auto-selected auth profile overrides from rate-limited or cooldown backup profiles, so new sessions pick the best available profile instead of staying pinned to a stale failover choice. (#62412)
 
 ## 2026.4.5
