@@ -43,10 +43,11 @@ export function createMatrixMonitorSyncLifecycle(params: {
   };
 
   const onUnexpectedError = (error: Error) => {
-    params.statusController.noteUnexpectedError(error);
-    if (!params.isStopping?.()) {
-      settleFatal(error);
+    if (params.isStopping?.()) {
+      return;
     }
+    params.statusController.noteUnexpectedError(error);
+    settleFatal(error);
   };
 
   params.client.on("sync.state", onSyncState);
@@ -56,6 +57,9 @@ export function createMatrixMonitorSyncLifecycle(params: {
     async waitForFatalStop(): Promise<void> {
       if (fatalError) {
         throw fatalError;
+      }
+      if (resolveFatalWait || rejectFatalWait) {
+        throw new Error("Matrix fatal-stop wait already in progress");
       }
       await new Promise<void>((resolve, reject) => {
         resolveFatalWait = resolve;

@@ -536,6 +536,7 @@ export class MatrixClient {
       clearInterval(this.idbPersistTimer);
       this.idbPersistTimer = null;
     }
+    this.currentSyncState = null;
     this.client.stopClient();
     this.started = false;
   }

@@ -90,6 +90,8 @@ export function createMatrixMonitorStatusController(params: {
         noteDisconnected({ state, at, error });
         return;
       }
+      // Unknown future SDK states inherit the current connectivity bit until the
+      // SDK classifies them as ready or disconnected. Avoid guessing here.
       status.lastEventAt = at;
       status.healthState = state.toLowerCase();
       emit();

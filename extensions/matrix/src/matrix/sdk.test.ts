@@ -1070,6 +1070,36 @@ describe("MatrixClient event bridge", () => {
     await startExpectation;
   });
 
+  it("clears stale sync state before a restarted sync session waits for fresh readiness", async () => {
+    matrixJsClient.startClient = vi
+      .fn(async () => {
+        queueMicrotask(() => {
+          matrixJsClient.emit("sync", "PREPARED", null, undefined);
+        });
+      })
+      .mockImplementationOnce(async () => {
+        queueMicrotask(() => {
+          matrixJsClient.emit("sync", "PREPARED", null, undefined);
+        });
+      })
+      .mockImplementationOnce(async () => {});
+
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await client.start();
+    client.stopSyncWithoutPersist();
+
+    vi.useFakeTimers();
+    const restartPromise = client.start();
+    const restartExpectation = expect(restartPromise).rejects.toThrow(
+      "Matrix client did not reach a ready sync state within 30000ms",
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await restartExpectation;
+  });
+
   it("replays outstanding invite rooms at startup", async () => {
     matrixJsClient.getRooms = vi.fn(() => [
       {

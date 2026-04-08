@@ -62,4 +62,50 @@ describe("createMatrixMonitorSyncLifecycle", () => {
       }),
     );
   });
+
+  it("ignores unexpected sync errors emitted during intentional shutdown", async () => {
+    const client = createClientEmitter();
+    const setStatus = vi.fn();
+    let stopping = false;
+    const lifecycle = createMatrixMonitorSyncLifecycle({
+      client: client as never,
+      statusController: createMatrixMonitorStatusController({
+        accountId: "default",
+        statusSink: setStatus,
+      }),
+      isStopping: () => stopping,
+    });
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    stopping = true;
+    client.emit("sync.unexpected_error", new Error("shutdown noise"));
+    lifecycle.dispose();
+
+    await expect(waitPromise).resolves.toBeUndefined();
+    expect(setStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        healthState: "error",
+      }),
+    );
+  });
+
+  it("rejects a second concurrent fatal-stop waiter", async () => {
+    const client = createClientEmitter();
+    const lifecycle = createMatrixMonitorSyncLifecycle({
+      client: client as never,
+      statusController: createMatrixMonitorStatusController({
+        accountId: "default",
+      }),
+    });
+
+    const firstWait = lifecycle.waitForFatalStop();
+
+    await expect(lifecycle.waitForFatalStop()).rejects.toThrow(
+      "Matrix fatal-stop wait already in progress",
+    );
+
+    lifecycle.dispose();
+    await expect(firstWait).resolves.toBeUndefined();
+  });
 });
