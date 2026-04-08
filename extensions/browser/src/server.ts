@@ -1,5 +1,6 @@
 import type { Server } from "node:http";
 import express from "express";
+import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./browser/bridge-auth-registry.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import {
   ensureBrowserControlAuth,
@@ -51,7 +52,17 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const browserAuthRequired =
     browserAuthBootstrapFailed || shouldAutoGenerateBrowserAuth(process.env);
-  if (browserAuthRequired && !browserAuth.token && !browserAuth.password) {
+  const allowLegacyPasswordModeWithoutSecret =
+    !browserAuthBootstrapFailed &&
+    cfg.gateway?.auth?.mode === "password" &&
+    !browserAuth.token &&
+    !browserAuth.password;
+  if (
+    browserAuthRequired &&
+    !allowLegacyPasswordModeWithoutSecret &&
+    !browserAuth.token &&
+    !browserAuth.password
+  ) {
     if (browserAuthBootstrapFailed) {
       logServer.error(
         "browser control startup aborted: authentication bootstrap failed " +
@@ -92,6 +103,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     resolved,
     onWarn: (message) => logServer.warn(message),
   });
+  setBridgeAuthForPort(port, browserAuth);
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
@@ -100,6 +112,9 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
 export async function stopBrowserControlServer(): Promise<void> {
   const current = state;
+  if (current?.port) {
+    deleteBridgeAuthForPort(current.port);
+  }
   await stopBrowserRuntime({
     current,
     getState: () => state,

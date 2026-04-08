@@ -14,7 +14,7 @@ export type BrowserControlAuth = {
 };
 
 export function resolveBrowserControlAuth(
-  cfg: OpenClawConfig,
+  cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): BrowserControlAuth {
   const auth = resolveGatewayAuth({
@@ -42,6 +42,10 @@ export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
   return true;
 }
 
+function generateBrowserControlToken(): string {
+  return crypto.randomBytes(24).toString("hex");
+}
+
 async function generateAndPersistBrowserControlToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -49,7 +53,7 @@ async function generateAndPersistBrowserControlToken(params: {
   auth: BrowserControlAuth;
   generatedToken?: string;
 }> {
-  const token = crypto.randomBytes(24).toString("hex");
+  const token = generateBrowserControlToken();
   const nextCfg: OpenClawConfig = {
     ...params.cfg,
     gateway: {
@@ -108,6 +112,11 @@ export async function ensureBrowserControlAuth(params: {
     latestCfg.gateway?.auth?.mode === "none" ||
     latestCfg.gateway?.auth?.mode === "trusted-proxy"
   ) {
+    if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
+      // gateway.auth.mode=trusted-proxy must never be persisted with gateway.auth.token.
+      const generatedToken = generateBrowserControlToken();
+      return { auth: { token: generatedToken }, generatedToken };
+    }
     return await generateAndPersistBrowserControlToken({ cfg: latestCfg, env });
   }
 

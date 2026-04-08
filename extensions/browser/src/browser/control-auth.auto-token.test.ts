@@ -159,34 +159,48 @@ describe("ensureBrowserControlAuth", () => {
     await expectExplicitModeSkipsAutoAuth("password");
   });
 
-  it.each(["none", "trusted-proxy"] as const)(
-    "auto-generates and persists browser auth token in %s mode",
-    async (mode) => {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          auth:
-            mode === "trusted-proxy"
-              ? { mode, trustedProxy: { userHeader: "x-forwarded-user" } }
-              : { mode },
-        },
-        browser: {
-          enabled: true,
-        },
-      };
-      mocks.loadConfig.mockReturnValue(cfg);
+  it("auto-generates and persists browser auth token in none mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: { mode: "none" },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
 
-      const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
-      expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
-      expect(result.auth.token).toBe(result.generatedToken);
-      expect(result.auth.password).toBeUndefined();
-      expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-      const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
-      expect(persistedCfg?.gateway?.auth?.mode).toBe(mode);
-      expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
-      expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
+    expect(result.auth.token).toBe(result.generatedToken);
+    expect(result.auth.password).toBeUndefined();
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+    expect(persistedCfg?.gateway?.auth?.mode).toBe("none");
+    expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
+    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
+  it("auto-generates in trusted-proxy mode without persisting gateway.auth.token", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
+    expect(result.auth.token).toBe(result.generatedToken);
+    expect(result.auth.password).toBeUndefined();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
 
   it("reuses auth from latest config snapshot", async () => {
     const cfg: OpenClawConfig = {
