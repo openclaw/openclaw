@@ -89,6 +89,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       params.runtime.exit(1);
       return null;
     }
+    // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
     const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
       config: params.nextConfig,
       workspaceDir,
