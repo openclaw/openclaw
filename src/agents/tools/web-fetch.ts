@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -248,6 +248,7 @@ type WebFetchRuntimeParams = {
   userAgent: string;
   readabilityEnabled: boolean;
   lookupFn?: LookupFn;
+  ssrfPolicy?: SsrFPolicy;
   resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
 };
 
@@ -388,6 +389,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      policy: params.ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -618,6 +620,7 @@ export function createWebFetchTool(options?: {
         userAgent,
         readabilityEnabled,
         lookupFn: options?.lookupFn,
+        ssrfPolicy: fetch?.ssrfPolicy,
         resolveProviderFallback,
       });
       return jsonResult(result);

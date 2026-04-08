@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -550,6 +551,8 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy for web fetch requests. */
+      ssrfPolicy?: SsrFPolicy;
     };
   };
   media?: MediaToolsConfig;

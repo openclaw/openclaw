@@ -7347,6 +7347,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
                   },
+                  ssrfPolicy: {
+                    type: "object",
+                    properties: {
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Web Fetch Allow Private Network",
+                        description:
+                          "Allows access to private-network address ranges from web fetch requests.",
+                      },
+                      dangerouslyAllowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Web Fetch Dangerously Allow Private Network",
+                        description:
+                          "Allows access to private-network address ranges from web fetch tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+                      },
+                      allowRfc2544BenchmarkRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow RFC2544 Benchmark Range",
+                        description:
+                          "Allows access to RFC2544 benchmark IP ranges (198.18.0/15) used for network device testing.",
+                      },
+                      allowedHostnames: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Web Fetch Allowed Hostnames",
+                        description:
+                          "Explicit hostname allowlist exceptions for SSRF policy checks on web fetch requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
+                      },
+                      hostnameAllowlist: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Web Fetch Hostname Allowlist",
+                        description:
+                          "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Web Fetch SSRF Policy",
+                    description:
+                      "Server-side request forgery guardrail settings for web fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
+                  },
                   firecrawl: {
                     type: "object",
                     properties: {
@@ -23878,6 +23923,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
+    },
+    "tools.web.fetch.ssrfPolicy": {
+      label: "Web Fetch SSRF Policy",
+      help: "SSRF guardrail settings for web fetch paths that could reach internal hosts.",
+      tags: ["tools", "security"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowPrivateNetwork": {
+      label: "Web Fetch Allow Private Network",
+      help: "Allows access to private-network address ranges from web fetch requests.",
+      tags: ["tools", "security"],
+    },
+    "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Web Fetch Dangerously Allow Private Network",
+      help: "Allows access to private-network address ranges from web fetch tooling.",
+      tags: ["tools", "security"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Web Fetch Allow RFC2544 Benchmark Range",
+      help: "Allows access to RFC2544 benchmark IP ranges (198.18.0/15) used for network device testing.",
+      tags: ["tools", "security"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowedHostnames": {
+      label: "Web Fetch Allowed Hostnames",
+      help: "Explicit hostname allowlist exceptions for SSRF policy checks.",
+      tags: ["tools", "security"],
+    },
+    "tools.web.fetch.ssrfPolicy.hostnameAllowlist": {
+      label: "Web Fetch Hostname Allowlist",
+      help: "Legacy hostname allowlist field for explicit host exceptions.",
+      tags: ["tools", "security"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
