@@ -993,6 +993,43 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("skips synthesized wake context for metadata-free sessions", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "child finished",
+      sessionKey: "agent:main:main",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fix the cache bug",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Patched and tested.",
+          replyInstruction: "Reply in your normal assistant voice now.",
+        },
+      ],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      idempotencyKey: "inter-session-context-metadata-free",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(callArgs.extraSystemPrompt).toBeUndefined();
+  });
+
   it("keeps explicit extraSystemPrompt on inter-session completion wakes", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({

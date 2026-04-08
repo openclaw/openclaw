@@ -198,6 +198,27 @@ function hasTaskCompletionInternalEvent(events?: AgentInternalEvent[]): boolean 
   return Array.isArray(events) && events.some((event) => event.type === "task_completion");
 }
 
+function hasPersistedCompletionWakeDeliveryMetadata(entry: SessionEntry): boolean {
+  if (normalizeOptionalString(entry.lastChannel) || normalizeOptionalString(entry.lastTo)) {
+    return true;
+  }
+  const origin = entry.origin;
+  if (!origin) {
+    return false;
+  }
+  return Boolean(
+    normalizeOptionalString(origin.provider) ||
+    normalizeOptionalString(origin.surface) ||
+    normalizeOptionalString(origin.to) ||
+    normalizeOptionalString(origin.from) ||
+    normalizeOptionalString(origin.accountId) ||
+    normalizeOptionalString(origin.chatType) ||
+    normalizeOptionalString(origin.nativeChannelId) ||
+    normalizeOptionalString(origin.nativeDirectUserId) ||
+    (origin.threadId != null ? String(origin.threadId) : undefined),
+  );
+}
+
 function buildPersistedCompletionWakeExtraSystemPrompt(
   entry: SessionEntry | undefined,
   inputProvenance: InputProvenance | undefined,
@@ -211,7 +232,8 @@ function buildPersistedCompletionWakeExtraSystemPrompt(
   if (
     inputProvenance?.kind !== "inter_session" ||
     !hasTaskCompletionInternalEvent(events) ||
-    !entry
+    !entry ||
+    !hasPersistedCompletionWakeDeliveryMetadata(entry)
   ) {
     return undefined;
   }
