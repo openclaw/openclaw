@@ -21,8 +21,20 @@ const SKILL_STATUS_FIXTURE = {
       blockedByAllowlist: false,
       eligible: true,
       primaryEnv: "CALENDAR_API_KEY",
-      requirements: { bins: [], anyBins: [], env: ["CALENDAR_API_KEY"], config: [], os: [] },
-      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+      requirements: {
+        bins: [],
+        anyBins: [],
+        env: ["CALENDAR_API_KEY"],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      },
       configChecks: [],
       install: [],
     },
@@ -34,6 +46,9 @@ const mocks = vi.hoisted(() => {
   const runtimeStdout: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
     }),
     error: vi.fn((...args: unknown[]) => {
       runtimeErrors.push(stringifyArgs(args));
