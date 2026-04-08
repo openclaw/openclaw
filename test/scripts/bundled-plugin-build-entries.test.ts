@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   listBundledPluginBuildEntries,
@@ -46,5 +47,17 @@ describe("bundled plugin build entries", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
+  });
+
+  it("keeps the Telegram setup entry on packed top-level sidecars", () => {
+    const setupEntry = fs.readFileSync("extensions/telegram/setup-entry.ts", "utf8");
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(setupEntry).toContain('specifier: "./setup-plugin-api.js"');
+    expect(setupEntry).toContain('specifier: "./secret-contract-api.js"');
+    expect(setupEntry).not.toContain("./src/channel.setup.js");
+    expect(setupEntry).not.toContain("./src/secret-contract.js");
+    expect(artifacts).toContain("dist/extensions/telegram/setup-plugin-api.js");
+    expect(artifacts).toContain("dist/extensions/telegram/secret-contract-api.js");
   });
 });

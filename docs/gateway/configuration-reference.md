@@ -2259,7 +2259,7 @@ Experimental built-in tool flags. Default off unless a runtime-specific auto-ena
 Notes:
 
 - `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` for non-OpenAI providers. OpenAI and OpenAI Codex runs auto-enable it.
+- Default: `false` for non-OpenAI providers. OpenAI and OpenAI Codex runs auto-enable it when unset; set `false` to disable that auto-enable.
 - When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
 
 ### `agents.defaults.subagents`

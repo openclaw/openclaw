@@ -49,8 +49,12 @@ function isOpenAIProvider(provider?: string): boolean {
   return normalized === "openai" || normalized === "openai-codex";
 }
 
-function isExperimentalPlanToolEnabled(config?: OpenClawConfig): boolean {
-  return config?.tools?.experimental?.planTool === true;
+function isUpdatePlanToolEnabled(config: OpenClawConfig | undefined, provider?: string): boolean {
+  const configured = config?.tools?.experimental?.planTool;
+  if (configured !== undefined) {
+    return configured;
+  }
+  return isOpenAIProvider(provider);
 }
 
 export function createOpenClawTools(
@@ -242,7 +246,7 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
-    ...(isExperimentalPlanToolEnabled(resolvedConfig) || isOpenAIProvider(options?.modelProvider)
+    ...(isUpdatePlanToolEnabled(resolvedConfig, options?.modelProvider)
       ? [createUpdatePlanTool()]
       : []),
     createSessionsListTool({
