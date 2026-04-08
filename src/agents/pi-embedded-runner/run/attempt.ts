@@ -155,6 +155,10 @@ import {
 } from "./attempt.sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
+  stripTrailingErrorFileEntries,
+  stripTrailingErrorTurns,
+} from "./attempt.strip-error-turns.js";
+import {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
@@ -1073,6 +1077,22 @@ export async function runEmbeddedAttempt(
       );
 
       try {
+        // ── QUEUEFLOOD-02: Strip trailing infrastructure-error turns ────────
+        // See attempt.strip-error-turns.ts for full documentation.
+        // Runs pre-sanitize so error turns don't consume token budget in the
+        // sanitize→validate→limit→context pipeline. After stripping, the
+        // orphan-user repair (~line 1470) handles the exposed trailing user.
+        {
+          const strippedCount = stripTrailingErrorTurns(activeSession);
+          if (strippedCount > 0) {
+            log.warn(
+              `Stripped ${strippedCount} infrastructure-error assistant turn(s) from session. ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            stripTrailingErrorFileEntries(sessionManager);
+          }
+        }
+
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
