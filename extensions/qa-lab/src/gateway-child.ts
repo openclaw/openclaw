@@ -48,6 +48,20 @@ const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
   "VOYAGE_API_KEY",
 ]);
 
+const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
+  /^DISCORD_/i,
+  /^TELEGRAM_/i,
+  /^SLACK_/i,
+  /^MATRIX_/i,
+  /^SIGNAL_/i,
+  /^WHATSAPP_/i,
+  /^IMESSAGE_/i,
+  /^ZALO/i,
+  /^TWILIO_/i,
+  /^PLIVO_/i,
+  /^NGROK_/i,
+]);
+
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
@@ -70,6 +84,11 @@ export function normalizeQaProviderModeEnv(
   if (providerMode === "mock-openai") {
     for (const key of QA_MOCK_BLOCKED_ENV_VARS) {
       delete env[key];
+    }
+    for (const key of Object.keys(env)) {
+      if (QA_MOCK_BLOCKED_ENV_KEY_PATTERNS.some((pattern) => pattern.test(key))) {
+        delete env[key];
+      }
     }
     return env;
   }
@@ -250,14 +269,24 @@ async function createQaBundledPluginsDir(params: {
     await fs.rm(stagedRoot, { recursive: true, force: true });
     await fs.mkdir(stagedRoot, { recursive: true });
     const stagedTreeRoot = path.join(stagedRoot, path.basename(sourceTreeRoot));
-    await fs.cp(sourceTreeRoot, stagedTreeRoot, { recursive: true });
-    const stagedExtensionsDir = path.join(stagedTreeRoot, "extensions");
-    for (const entry of await fs.readdir(stagedExtensionsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || params.allowedPluginIds.includes(entry.name)) {
+    await fs.mkdir(stagedTreeRoot, { recursive: true });
+    for (const entry of await fs.readdir(sourceTreeRoot, { withFileTypes: true })) {
+      const sourcePath = path.join(sourceTreeRoot, entry.name);
+      const targetPath = path.join(stagedTreeRoot, entry.name);
+      if (entry.name === "extensions") {
+        await fs.mkdir(targetPath, { recursive: true });
+        for (const pluginId of params.allowedPluginIds) {
+          const sourceDir = path.join(sourceRoot, pluginId);
+          if (!existsSync(sourceDir)) {
+            throw new Error(`qa bundled plugin not found: ${pluginId} (${sourceDir})`);
+          }
+          await fs.cp(sourceDir, path.join(targetPath, pluginId), { recursive: true });
+        }
         continue;
       }
-      await fs.rm(path.join(stagedExtensionsDir, entry.name), { recursive: true, force: true });
+      await fs.symlink(sourcePath, targetPath);
     }
+    const stagedExtensionsDir = path.join(stagedTreeRoot, "extensions");
     return {
       bundledPluginsDir: stagedExtensionsDir,
       stagedRoot,
@@ -386,8 +415,12 @@ export async function startQaGatewayChild(params: {
     controlUiEnabled: params.controlUiEnabled,
   });
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
-  const allowedPluginIds = (cfg.plugins?.allow ?? []).filter(
-    (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+  const allowedPluginIds = [...(cfg.plugins?.allow ?? []), "openai"].filter(
+    (pluginId, index, array): pluginId is string => {
+      return (
+        typeof pluginId === "string" && pluginId.length > 0 && array.indexOf(pluginId) === index
+      );
+    },
   );
   const bundledPluginsSourceRoot = resolveQaBundledPluginsSourceRoot(params.repoRoot);
   const { bundledPluginsDir, stagedRoot: stagedBundledPluginsRoot } =

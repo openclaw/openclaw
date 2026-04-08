@@ -16,9 +16,32 @@ codeRefs:
   - extensions/qa-channel/src/gateway.ts
   - extensions/qa-lab/src/lab-server.ts
 execution:
-  kind: custom
-  handler: dm-chat-baseline
+  kind: flow
   summary: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
   config:
     prompt: "Hello there, who are you?"
+```
+
+```yaml qa-flow
+steps:
+  - name: replies coherently in DM
+    actions:
+      - call: resetBus
+      - call: state.addInboundMessage
+        args:
+          - conversation:
+              id: alice
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+      - call: waitForOutboundMessage
+        saveAs: outbound
+        args:
+          - ref: state
+          - lambda:
+              params: [candidate]
+              expr: "candidate.conversation.id === 'alice'"
+    detailsExpr: outbound.text
 ```
