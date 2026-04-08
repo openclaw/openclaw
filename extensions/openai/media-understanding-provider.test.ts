@@ -53,19 +53,23 @@ describe("transcribeOpenAiAudio", () => {
     expect(headers.get("authorization")).toBe("Bearer test-key");
     expect(headers.get("x-custom")).toBe("1");
 
-    const form = seenInit?.body as FormData;
-    expect(form).toBeInstanceOf(FormData);
-    expect(form.get("model")).toBe("gpt-4o-transcribe");
-    expect(form.get("language")).toBe("en");
-    expect(form.get("prompt")).toBe("hello");
-    const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    expect(file).not.toBeNull();
-    if (file) {
-      expect(file.type).toBe("audio/wav");
-      if ("name" in file && typeof file.name === "string") {
-        expect(file.name).toBe("voice.wav");
-      }
-    }
+    // Body is a raw Buffer with an explicit multipart/form-data Content-Type (not a FormData instance).
+    // This sidesteps the undici npm fetch / globalThis.FormData incompatibility where the
+    // Content-Type boundary header is never set when using a custom dispatcher.
+    expect(Buffer.isBuffer(seenInit?.body)).toBe(true);
+    const ct = headers.get("content-type") ?? "";
+    expect(ct).toMatch(/^multipart\/form-data; boundary=/);
+
+    const bodyStr = Buffer.from(seenInit?.body as Buffer).toString("utf8");
+    expect(bodyStr).toContain('name="model"');
+    expect(bodyStr).toContain("gpt-4o-transcribe");
+    expect(bodyStr).toContain('name="language"');
+    expect(bodyStr).toContain("en");
+    expect(bodyStr).toContain('name="prompt"');
+    expect(bodyStr).toContain("hello");
+    expect(bodyStr).toContain('name="file"');
+    expect(bodyStr).toContain('filename="voice.wav"');
+    expect(bodyStr).toContain("Content-Type: audio/wav");
   });
 
   it("throws when the provider response omits text", async () => {
