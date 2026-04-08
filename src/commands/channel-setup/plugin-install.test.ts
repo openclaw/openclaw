@@ -435,7 +435,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes channel reloads when setup starts from an empty registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@openclaw/telegram-plugin" });
+    getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, args?: { excludeWorkspace?: boolean }) =>
+        args?.excludeWorkspace ? { pluginId: "@openclaw/telegram-plugin" } : undefined,
+    );
 
     reloadChannelSetupPluginRegistryForChannel({
       cfg,
@@ -455,6 +458,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
         includeSetupOnlyChannelPlugins: true,
       }),
     );
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(1, "telegram", {
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "telegram", {
+      workspaceDir: "/tmp/openclaw-workspace",
+      excludeWorkspace: true,
+    });
   });
 
   it("keeps full reloads when the active plugin registry is already populated", () => {
@@ -489,7 +499,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("scopes channel reloads when the global registry is populated but the pinned channel registry is empty", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@openclaw/telegram-plugin" });
+    getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, args?: { excludeWorkspace?: boolean }) =>
+        args?.excludeWorkspace ? { pluginId: "@openclaw/telegram-plugin" } : undefined,
+    );
     const activeRegistry = createEmptyPluginRegistry();
     activeRegistry.plugins.push(
       createPluginRecord({
@@ -526,7 +539,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
   it("can load a channel-scoped snapshot without activating the global registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
-    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@openclaw/telegram-plugin" });
+    getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, args?: { excludeWorkspace?: boolean }) =>
+        args?.excludeWorkspace ? { pluginId: "@openclaw/telegram-plugin" } : undefined,
+    );
 
     loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg,
@@ -547,6 +563,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
         activate: false,
       }),
     );
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(1, "telegram", {
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "telegram", {
+      workspaceDir: "/tmp/openclaw-workspace",
+      excludeWorkspace: true,
+    });
   });
 
   it("does not scope by raw channel id when no trusted plugin mapping exists", () => {
@@ -565,6 +588,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
         onlyPluginIds: expect.anything(),
       }),
     );
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(1, "telegram", {
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "telegram", {
+      workspaceDir: "/tmp/openclaw-workspace",
+      excludeWorkspace: true,
+    });
   });
 
   it("scopes snapshots by a unique discovered manifest match when catalog mapping is missing", () => {
@@ -620,5 +650,47 @@ describe("ensureChannelSetupPluginInstalled", () => {
         activate: false,
       }),
     );
+  });
+
+  it("preserves trusted workspace mappings when no explicit plugin id is passed", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {
+      plugins: {
+        enabled: true,
+        allow: ["matrix-plugin"],
+      },
+    };
+    getChannelPluginCatalogEntry.mockReturnValue({
+      id: "matrix",
+      pluginId: "matrix-plugin",
+      origin: "workspace",
+      meta: {
+        id: "matrix",
+        label: "Matrix",
+        selectionLabel: "Matrix",
+        docsPath: "/channels/matrix",
+        blurb: "homeserver",
+      },
+      install: {
+        npmSpec: "@openclaw/matrix-plugin",
+      },
+    });
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "matrix",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["matrix-plugin"],
+      }),
+    );
+    expect(getChannelPluginCatalogEntry).toHaveBeenCalledTimes(1);
+    expect(getChannelPluginCatalogEntry).toHaveBeenCalledWith("matrix", {
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
   });
 });

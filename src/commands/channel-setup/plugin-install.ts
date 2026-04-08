@@ -22,6 +22,7 @@ import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { isTrustedWorkspaceChannelCatalogEntry } from "./workspace-trust.js";
 
 type InstallChoice = "npm" | "local" | "skip";
 
@@ -273,9 +274,16 @@ function resolveScopedChannelPluginId(params: {
   if (explicitPluginId) {
     return explicitPluginId;
   }
+  const catalogEntry = getChannelPluginCatalogEntry(params.channel, {
+    workspaceDir: params.workspaceDir,
+  });
+  if (catalogEntry && isTrustedWorkspaceChannelCatalogEntry(catalogEntry, params.cfg)) {
+    return catalogEntry?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params);
+  }
   return (
     getChannelPluginCatalogEntry(params.channel, {
       workspaceDir: params.workspaceDir,
+      excludeWorkspace: true,
     })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params)
   );
 }

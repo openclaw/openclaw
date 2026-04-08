@@ -7,7 +7,6 @@ import {
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { normalizePluginsConfig, resolveEnableState } from "../../plugins/config-state.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -16,6 +15,7 @@ import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./plugin-install.js";
+import { isTrustedWorkspaceChannelCatalogEntry } from "./workspace-trust.js";
 
 type ChannelPluginSnapshot = {
   channels: Array<{ plugin: ChannelPlugin }>;
@@ -72,20 +72,6 @@ function findScopedChannelPlugin(
     snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
     snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
   );
-}
-
-function isTrustedWorkspaceChannelCatalogEntry(
-  entry: ChannelPluginCatalogEntry | undefined,
-  cfg: OpenClawConfig,
-): boolean {
-  if (entry?.origin !== "workspace") {
-    return true;
-  }
-  if (!entry.pluginId) {
-    return false;
-  }
-  return resolveEnableState(entry.pluginId, "workspace", normalizePluginsConfig(cfg.plugins))
-    .enabled;
 }
 
 function resolveTrustedCatalogEntry(params: {

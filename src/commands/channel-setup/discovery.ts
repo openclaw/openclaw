@@ -10,6 +10,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
+import {
+  isTrustedWorkspaceChannelCatalogEntry,
+  isTrustedWorkspacePlugin,
+} from "./workspace-trust.js";
 
 type ChannelCatalogEntry = {
   id: ChannelChoice;
@@ -49,7 +53,15 @@ export function listManifestInstalledChannelIds(params: {
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
-    }).plugins.flatMap((plugin) => plugin.channels as ChannelChoice[]),
+    }).plugins.flatMap((plugin) =>
+      isTrustedWorkspacePlugin({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        cfg: resolvedConfig,
+      })
+        ? (plugin.channels as ChannelChoice[])
+        : [],
+    ),
   );
 }
 
@@ -68,24 +80,55 @@ export function resolveChannelSetupEntries(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ResolvedChannelSetupEntries {
-  const workspaceDir = resolveWorkspaceDir(params.cfg, params.workspaceDir);
+  const resolvedConfig = applyPluginAutoEnable({
+    config: params.cfg,
+    env: params.env ?? process.env,
+  }).config;
+  const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   const manifestInstalledIds = listManifestInstalledChannelIds({
-    cfg: params.cfg,
+    cfg: resolvedConfig,
     workspaceDir,
     env: params.env,
   });
   const installedPluginIds = new Set(params.installedPlugins.map((plugin) => plugin.id));
   const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir });
-  const installedCatalogEntries = catalogEntries.filter(
-    (entry) =>
-      !installedPluginIds.has(entry.id) &&
-      manifestInstalledIds.has(entry.id as ChannelChoice) &&
-      shouldShowChannelInSetup(entry.meta),
+  const nonWorkspaceCatalogEntries = listChannelPluginCatalogEntries({
+    workspaceDir,
+    excludeWorkspace: true,
+  });
+  const nonWorkspaceCatalogById = new Map(
+    nonWorkspaceCatalogEntries.map((entry) => [entry.id, entry]),
   );
-  const installableCatalogEntries = catalogEntries.filter(
+  // Build installed entries from the full catalog so trusted workspace entries are included.
+  // When a workspace shadow is present but untrusted, fall back to the non-workspace entry
+  // for that channel so an already-installed non-workspace channel is not silently dropped.
+  const installedCatalogEntries: ChannelPluginCatalogEntry[] = [];
+  for (const entry of catalogEntries) {
+    if (
+      installedPluginIds.has(entry.id) ||
+      !manifestInstalledIds.has(entry.id as ChannelChoice) ||
+      !shouldShowChannelInSetup(entry.meta)
+    ) {
+      continue;
+    }
+    if (isTrustedWorkspaceChannelCatalogEntry(entry, resolvedConfig)) {
+      installedCatalogEntries.push(entry);
+    } else {
+      // Untrusted workspace shadow: use the non-workspace entry so the installed channel
+      // remains visible in setup instead of disappearing behind the shadow.
+      const fallback = nonWorkspaceCatalogById.get(entry.id);
+      if (fallback && shouldShowChannelInSetup(fallback.meta)) {
+        installedCatalogEntries.push(fallback);
+      }
+    }
+  }
+  const setupInstalledCatalogIds = new Set(
+    installedCatalogEntries.map((entry) => entry.id as ChannelChoice),
+  );
+  const installableCatalogEntries = nonWorkspaceCatalogEntries.filter(
     (entry) =>
       !installedPluginIds.has(entry.id) &&
-      !manifestInstalledIds.has(entry.id as ChannelChoice) &&
+      !setupInstalledCatalogIds.has(entry.id as ChannelChoice) &&
       shouldShowChannelInSetup(entry.meta),
   );
 

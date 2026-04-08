@@ -1,5 +1,8 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
+import {
+  getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries,
+} from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
@@ -23,6 +26,7 @@ import type {
   ChannelOnboardingPostWriteHook,
   SetupChannelsOptions,
 } from "../commands/channel-setup/types.js";
+import { isTrustedWorkspaceChannelCatalogEntry } from "../commands/channel-setup/workspace-trust.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -146,18 +150,33 @@ export async function setupChannels(
   };
   const preloadConfiguredExternalPlugins = () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
+    // Use the full catalog (including trusted workspace entries) so that a configured
+    // trusted workspace channel plugin is still preloaded here. Untrusted workspace
+    // entries are skipped via the trust check below, preserving the security guard
+    // added for GHSA-82qx-6vj7-p8m2 without dropping legitimate workspace channels.
     const workspaceDir = resolveWorkspaceDir();
     for (const entry of listChannelPluginCatalogEntries({ workspaceDir })) {
-      const channel = entry.id as ChannelChoice;
+      let resolvedEntry = entry;
+      if (!isTrustedWorkspaceChannelCatalogEntry(entry, next)) {
+        const fallbackEntry = getChannelPluginCatalogEntry(entry.id, {
+          workspaceDir,
+          excludeWorkspace: true,
+        });
+        if (!fallbackEntry) {
+          continue;
+        }
+        resolvedEntry = fallbackEntry;
+      }
+      const channel = resolvedEntry.id as ChannelChoice;
       if (getVisibleChannelPlugin(channel)) {
         continue;
       }
       const explicitlyEnabled =
-        next.plugins?.entries?.[entry.pluginId ?? channel]?.enabled === true;
+        next.plugins?.entries?.[resolvedEntry.pluginId ?? channel]?.enabled === true;
       if (!explicitlyEnabled && !isChannelConfigured(next, channel)) {
         continue;
       }
-      void loadScopedChannelPlugin(channel, entry.pluginId);
+      void loadScopedChannelPlugin(channel, resolvedEntry.pluginId);
     }
   };
   preloadConfiguredExternalPlugins();
