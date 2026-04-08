@@ -43,7 +43,7 @@ export type CronFailureDestination = {
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
 
-export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronRunStatus = "ok" | "error" | "skipped" | "aborted";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
 export type CronUsageSummary = {
@@ -138,7 +138,7 @@ export type CronJobState = {
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
   /** Back-compat alias for lastRunStatus. */
-  lastStatus?: "ok" | "error" | "skipped";
+  lastStatus?: "ok" | "error" | "skipped" | "aborted";
   lastError?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;

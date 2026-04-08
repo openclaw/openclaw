@@ -152,10 +152,12 @@ async function runCronCommandJob(params: {
   timeoutSeconds?: number;
   abortSignal?: AbortSignal;
 }): Promise<{
-  status: "ok" | "error";
+  status: "ok" | "error" | "aborted";
   summary?: string;
   outputText?: string;
   error?: string;
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
 }> {
   const command = params.command.trim();
   const args = Array.isArray(params.args) ? params.args.filter((entry) => entry.length > 0) : [];
@@ -164,10 +166,12 @@ async function runCronCommandJob(params: {
   }
 
   return await new Promise<{
-    status: "ok" | "error";
+    status: "ok" | "error" | "aborted";
     summary?: string;
     outputText?: string;
     error?: string;
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
   }>((resolve) => {
     const child = spawn(command, args, {
       shell: false,
@@ -192,10 +196,12 @@ async function runCronCommandJob(params: {
     };
 
     const finish = (result: {
-      status: "ok" | "error";
+      status: "ok" | "error" | "aborted";
       summary?: string;
       outputText?: string;
       error?: string;
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
     }) => {
       if (settled) {
         return;
@@ -206,9 +212,10 @@ async function runCronCommandJob(params: {
       resolve(result);
     };
 
+    let aborted = false;
     const onAbort = () => {
+      aborted = true;
       child.kill("SIGTERM");
-      finish({ status: "error", error: "aborted" });
     };
 
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -235,6 +242,15 @@ async function runCronCommandJob(params: {
         finish({
           status: "error",
           error: `command timed out after ${params.timeoutSeconds ?? 0}s`,
+          summary: errorText ?? outputText,
+          outputText,
+        });
+        return;
+      }
+      if (aborted) {
+        finish({
+          status: "aborted",
+          error: "aborted",
           summary: errorText ?? outputText,
           outputText,
         });

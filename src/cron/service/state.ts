@@ -113,6 +113,8 @@ export type CronServiceDeps = {
     {
       summary?: string;
       outputText?: string;
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
     } & CronRunOutcome &
       CronRunTelemetry
   >;
