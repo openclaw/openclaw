@@ -300,15 +300,20 @@ export default definePluginEntry({
             const parsed = new URL(baseUrl);
             if (parsed.protocol === "https:") {
               const host = parsed.hostname.toLowerCase();
+              const isIpv4Literal = /^\d+\.\d+\.\d+\.\d+$/.test(host);
+              const isPrivateIpv4 =
+                isIpv4Literal && /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
+              const isIpv6Loopback = host === "[::1]" || host === "::1";
+              const isBareHostname = !host.includes(".") && !host.includes(":") && !isIpv4Literal;
               const isPrivateHost =
                 host === "localhost" ||
                 host === "127.0.0.1" ||
                 host === "0.0.0.0" ||
-                host === "[::1]" ||
+                isIpv6Loopback ||
                 host.endsWith(".local") ||
                 host.endsWith(".internal") ||
-                !host.includes(".") ||
-                /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
+                isBareHostname ||
+                isPrivateIpv4;
               if (!isPrivateHost) {
                 return undefined;
               }

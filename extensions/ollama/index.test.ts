@@ -612,6 +612,8 @@ describe("ollama plugin", () => {
         "https://ollama.com",
         "https://my-ollama.example.com:11434",
         "https://cloud.ollama.ai",
+        "https://10.example.com:11434",
+        "https://[2001:db8::1]:11434",
       ]) {
         const result = provider.resolveSyntheticAuth?.({
           providerConfig: { baseUrl, api: "ollama", models: [] },
