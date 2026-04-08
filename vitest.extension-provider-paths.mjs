@@ -18,6 +18,8 @@ export const providerExtensionIds = [
   "microsoft-foundry",
   "minimax",
   "mistral",
+  "opencode",
+  "opencode-go",
   "qwen",
   "moonshot",
   "nvidia",
