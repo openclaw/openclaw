@@ -275,6 +275,38 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it.each([
+    ["ANNOUNCE_SKIP", ["ANN", "ANNOUNCE_", "ANNOUNCE_SKIP"]],
+    ["REPLY_SKIP", ["REP", "REPLY_", "REPLY_SKIP"]],
+  ] as const)(
+    "suppresses %s lead fragments and does not leak the streamed prefix in the final chat message",
+    (_replyText, fragments) => {
+      const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+        now: 2_150,
+      });
+      chatRunState.registry.add("run-control", {
+        sessionKey: "session-control",
+        clientRunId: "client-control",
+      });
+
+      for (const text of fragments) {
+        handler({
+          runId: "run-control",
+          seq: 1,
+          stream: "assistant",
+          ts: Date.now(),
+          data: { text },
+        });
+      }
+      emitLifecycleEnd(handler, "run-control");
+
+      const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+      expect(payload.message).toBeUndefined();
+      expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+      nowSpy?.mockRestore();
+    },
+  );
+
   it("keeps final short replies like 'No' even when lead-fragment deltas are suppressed", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_200,

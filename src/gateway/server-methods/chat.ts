@@ -12,8 +12,8 @@ import {
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -54,6 +54,7 @@ import {
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -732,7 +733,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return true;
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+  if (text === undefined || !isSuppressedControlReplyText(text)) {
     return false;
   }
   return !hasAssistantNonTextContent(message);
@@ -745,14 +746,14 @@ export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: numbe
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    // Drop assistant commentary-only entries and NO_REPLY-only entries, but
+    const res = sanitizeChatHistoryMessage(message, maxChars);
+    changed ||= res.changed;
+    // Drop assistant commentary-only entries and exact control replies, but
     // keep mixed assistant entries that still carry non-text content.
-    if (shouldDropAssistantHistoryMessage(message)) {
+    if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
-    changed ||= res.changed;
     next.push(res.message);
   }
   return changed ? next : messages;
