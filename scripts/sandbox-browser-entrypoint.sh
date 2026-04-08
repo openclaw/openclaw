@@ -2,8 +2,6 @@
 set -euo pipefail
 export DBUS_SESSION_BUS_ADDRESS=/dev/null
 
-export DBUS_SESSION_BUS_ADDRESS=/dev/null
-
 dedupe_chrome_args() {
   local -A seen_args=()
   local -a unique_args=()
