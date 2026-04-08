@@ -33,7 +33,8 @@ export function runExtensionOxlint(params) {
 
     writeTempOxlintConfig(repoRoot, tempConfigPath);
 
-    const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
+    const lintTargets = resolveLintTargets(repoRoot, params.roots);
+    const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...lintTargets];
     const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
     const result = spawnSync(oxlintPath, finalArgs, {
       stdio: "inherit",
@@ -50,6 +51,14 @@ export function runExtensionOxlint(params) {
     fs.rmSync(tempDir, { recursive: true, force: true });
     releaseLock();
   }
+}
+
+export function resolveLintTargets(repoRoot, roots) {
+  return [
+    ...new Set(
+      roots.map((root) => normalizeRepoPath(path.relative(repoRoot, path.resolve(repoRoot, root)))),
+    ),
+  ];
 }
 
 function prepareExtensionPackageBoundaryArtifacts(repoRoot) {
@@ -137,4 +146,8 @@ function collectTypeScriptFiles(directoryPath) {
   }
 
   return files;
+}
+
+function normalizeRepoPath(value) {
+  return value.split(path.sep).join("/");
 }
