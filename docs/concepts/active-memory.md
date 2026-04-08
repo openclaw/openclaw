@@ -20,6 +20,50 @@ have made the reply feel natural has already passed.
 Active memory gives the system one bounded chance to surface relevant memory
 before the main reply is generated.
 
+## Paste This Into Your Agent
+
+Paste this into your agent if you want it to enable Active Memory with a
+self-contained, safe-default setup:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          allowedChatTypes: ["direct"],
+          modelFallbackPolicy: "default-remote",
+          queryMode: "recent",
+          timeoutMs: 15000,
+          maxMemories: 2,
+          persistTranscripts: false,
+          logging: true
+        }
+      }
+    }
+  }
+}
+```
+
+This turns the plugin on for the `main` agent, keeps it limited to direct-message
+style sessions by default, lets it inherit the current session model first, and
+still allows the built-in remote fallback if no explicit or inherited model is
+available.
+
+After that, restart the gateway:
+
+```bash
+node scripts/run-node.mjs gateway --profile dev
+```
+
+To inspect it live in a conversation:
+
+```text
+/verbose on
+```
+
 ## Turn active memory on
 
 The safest setup is:
@@ -41,7 +85,7 @@ Start with this in `openclaw.json`:
           allowedChatTypes: ["direct"],
           modelFallbackPolicy: "default-remote",
           queryMode: "recent",
-          timeoutMs: 8000,
+          timeoutMs: 15000,
           maxMemories: 2,
           persistTranscripts: false,
           logging: true,
@@ -289,7 +333,7 @@ Use this when:
 
 Recommended timeout:
 
-- start around `8000` ms
+- start around `15000` ms
 
 ### `full`
 
@@ -416,7 +460,7 @@ Start with `recent`.
         config: {
           agents: ["main"],
           queryMode: "recent",
-          timeoutMs: 8000,
+          timeoutMs: 15000,
           maxMemories: 2,
           logging: true,
         },

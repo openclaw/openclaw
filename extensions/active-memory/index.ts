@@ -12,7 +12,7 @@ import {
 import { resolveSessionStoreEntry, updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-const DEFAULT_TIMEOUT_MS = 8000;
+const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_MEMORIES = 2;
 const DEFAULT_MAX_MEMORY_CHARS = 180;
 const DEFAULT_RECENT_USER_TURNS = 2;
