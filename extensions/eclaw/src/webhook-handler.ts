@@ -262,6 +262,15 @@ export async function handleEclawWebhookRequest(params: {
     return { status: 401, body: { error: "Unauthorized" } };
   }
 
+  // Reject payloads that are missing required routing fields before
+  // acknowledging success. Returning 200 for a structurally invalid push
+  // would tell the E-Claw backend the event was delivered when nothing
+  // was actually processed (see PR #62934 round 13, codex P2).
+  const { body } = params;
+  if (!body.deviceId || body.entityId === undefined || body.entityId === null) {
+    return { status: 400, body: { error: "missing_required_fields" } };
+  }
+
   try {
     await dispatchEclawWebhookMessage({
       accountId: entry.accountId,

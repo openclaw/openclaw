@@ -1332,3 +1332,78 @@ describe("eclaw env fallback restricted to default account (round 12)", () => {
     expect(account.apiKey).toBe("work-explicit-key");
   });
 });
+
+describe("eclaw malformed webhook payload rejection (round 13)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns 400 when deviceId is missing", async () => {
+    registerEclawWebhookToken("good-token", "default");
+    const result = await handleEclawWebhookRequest({
+      cfg: {} as never,
+      authHeader: "Bearer good-token",
+      body: { entityId: 1, from: "u1" } as EclawInboundMessage,
+    });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: "missing_required_fields" });
+    unregisterEclawWebhookToken("good-token");
+  });
+
+  it("returns 400 when entityId is undefined", async () => {
+    registerEclawWebhookToken("good-token-2", "default");
+    const result = await handleEclawWebhookRequest({
+      cfg: {} as never,
+      authHeader: "Bearer good-token-2",
+      body: { deviceId: "dev-1", from: "u1" } as EclawInboundMessage,
+    });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: "missing_required_fields" });
+    unregisterEclawWebhookToken("good-token-2");
+  });
+
+  it("returns 400 when entityId is null", async () => {
+    registerEclawWebhookToken("good-token-3", "default");
+    const result = await handleEclawWebhookRequest({
+      cfg: {} as never,
+      authHeader: "Bearer good-token-3",
+      body: { deviceId: "dev-1", entityId: null, from: "u1" } as unknown as EclawInboundMessage,
+    });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: "missing_required_fields" });
+    unregisterEclawWebhookToken("good-token-3");
+  });
+
+  it("does not return 400 for a valid payload (both deviceId and entityId present)", async () => {
+    setEclawRuntime({
+      channel: {
+        reply: {
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async () => { /* no-op */ },
+        },
+      },
+      logging: {
+        getChildLogger: () => ({ error: () => {} }),
+      },
+    } as never);
+    setEclawClient("default", {} as unknown as EclawClient);
+
+    registerEclawWebhookToken("good-token-4", "default");
+    const result = await handleEclawWebhookRequest({
+      cfg: {} as never,
+      authHeader: "Bearer good-token-4",
+      body: {
+        deviceId: "dev-1",
+        entityId: 2,
+        event: "message",
+        from: "u1",
+        text: "hello",
+      } as EclawInboundMessage,
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true });
+
+    unregisterEclawWebhookToken("good-token-4");
+    clearEclawClient("default");
+  });
+});
