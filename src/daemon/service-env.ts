@@ -106,33 +106,20 @@ function addCommonEnvConfiguredBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
 }
 
-/**
- * Add Nix Home Manager bin directories.
- * Supports darwin and linux platforms (matches the platforms handled
- * by resolveDarwinUserBinDirs / resolveLinuxUserBinDirs).
- *
- * Nix profiles can be in multiple locations:
- * - ~/.nix-profile/bin (default single-user profile)
- * - NIX_PROFILES env var (space-separated list of profile paths for multi-profile setups)
- */
+// Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
+// When NIX_PROFILES is absent, fall back to the default single-user profile.
 function addNixProfileBinDirs(
   dirs: string[],
   home: string,
   env: Record<string, string | undefined> | undefined,
 ): void {
-  // Default single-user Nix profile
-  dirs.push(`${home}/.nix-profile/bin`);
-
-  // Multi-profile support: NIX_PROFILES is a space-separated list of profile paths
-  // Example: "/nix/var/nix/profiles/default /home/user/.nix-profile"
   const nixProfiles = env?.NIX_PROFILES?.trim();
   if (nixProfiles) {
-    const profiles = nixProfiles.split(/\s+/);
-    for (const profile of profiles) {
-      if (profile) {
-        addNonEmptyDir(dirs, appendSubdir(profile, "bin"));
-      }
+    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
+      addNonEmptyDir(dirs, appendSubdir(profile, "bin"));
     }
+  } else {
+    dirs.push(`${home}/.nix-profile/bin`);
   }
 }
 
