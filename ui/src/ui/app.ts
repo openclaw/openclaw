@@ -139,13 +139,23 @@ export function resolveNewSessionAgentId(params: {
   sessionKey: string;
   sessionsResult: OpenClawApp["sessionsResult"];
   assistantAgentId: string | null;
-}): string {
+}): string | null {
   const activeSessionExists =
     params.sessionsResult?.sessions?.some((row) => row.key === params.sessionKey) ?? false;
   const sessionAgentId = activeSessionExists
     ? parseAgentSessionKey(params.sessionKey)?.agentId
     : null;
-  return sessionAgentId ?? params.assistantAgentId ?? "main";
+  if (sessionAgentId) {
+    return sessionAgentId;
+  }
+  if (params.assistantAgentId) {
+    return params.assistantAgentId;
+  }
+  const scopedSessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  if (scopedSessionAgentId && scopedSessionAgentId !== "main") {
+    return null;
+  }
+  return "main";
 }
 
 function resolveOnboardingMode(): boolean {
@@ -817,13 +827,17 @@ export class OpenClawApp extends LitElement {
     if (!name) {
       return;
     }
-    this.newSessionModalOpen = false;
-    this.newSessionName = "";
     const agentId = resolveNewSessionAgentId({
       sessionKey: this.sessionKey,
       sessionsResult: this.sessionsResult,
       assistantAgentId: this.assistantAgentId,
     });
+    if (!agentId) {
+      this.lastError = "Still loading agent context. Try again in a moment.";
+      return;
+    }
+    this.newSessionModalOpen = false;
+    this.newSessionName = "";
     const newKey = buildAgentMainSessionKey({
       agentId,
       mainKey: buildDashboardSessionMainKey({

@@ -81,4 +81,14 @@ describe("resolveNewSessionAgentId", () => {
 
     expect(agentId).toBe("main");
   });
+
+  it("waits for trusted context when active key is scoped to a non-main agent", () => {
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: "agent:ops:dashboard:pending",
+      sessionsResult: null,
+      assistantAgentId: null,
+    });
+
+    expect(agentId).toBeNull();
+  });
 });
