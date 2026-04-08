@@ -207,7 +207,7 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
-  it("still blocks private-network image requests when ssrfPolicy opt-in is absent", async () => {
+  it("passes allowPrivateNetwork=false for private-network baseUrl when ssrfPolicy opt-in is absent", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
@@ -237,6 +237,11 @@ describe("openai image generation provider", () => {
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({
         baseUrl: "http://192.168.1.15:8082/v1",
+        allowPrivateNetwork: false,
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         allowPrivateNetwork: false,
       }),
     );
