@@ -1977,6 +1977,86 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps inbound thread fallback when ACP dispatch uses a bound session key", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "thread chunk" },
+      { type: "done" },
+    ]);
+    const boundAcpSessionKey = "agent:codex-acp:session-bound-1";
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-acp-thread-1",
+      targetSessionKey: boundAcpSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:CHAN1",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {},
+    } satisfies SessionBindingRecord);
+    acpMocks.readAcpSessionEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { sessionKey?: string } | undefined;
+      if (params?.sessionKey !== boundAcpSessionKey) {
+        return null;
+      }
+      return {
+        sessionKey: boundAcpSessionKey,
+        storeSessionKey: boundAcpSessionKey,
+        cfg: {},
+        storePath: "/tmp/mock-sessions.json",
+        entry: {},
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "runtime:bound-thread",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:CHAN1",
+      SessionKey: "agent:main:discord:channel:CHAN1:thread:post-root",
+      AccountId: "default",
+      BodyForAgent: "write a test",
+      ExplicitDeliverRoute: true,
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(mocks.routeReply).toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:CHAN1",
+        threadId: "post-root",
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("closes oneshot ACP sessions after the turn completes", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "done" }]);

@@ -1,5 +1,6 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -185,6 +186,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const routedThreadId =
+    params.ctx.MessageThreadId ?? parseSessionThreadInfo(params.ctx.SessionKey).threadId;
   const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
   const resolvedAccountId =
     explicitAccountId ??
@@ -316,7 +319,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
         accountId: resolvedAccountId,
-        threadId: params.ctx.MessageThreadId,
+        threadId: routedThreadId,
         cfg: params.cfg,
       });
       if (!result.ok) {
@@ -333,7 +336,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           channel: params.originatingChannel,
           accountId: resolvedAccountId,
           to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          ...(routedThreadId != null ? { threadId: routedThreadId } : {}),
           messageId: result.messageId,
         });
       }

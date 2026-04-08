@@ -296,6 +296,10 @@ export async function dispatchReplyFromConfig(params: {
     boundSessionRecord && !isPluginOwnedSessionBindingRecord(boundSessionRecord)
       ? normalizeOptionalString(boundSessionRecord.targetSessionKey)
       : undefined;
+  const routeThreadSessionKey =
+    ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : normalizeOptionalString(ctx.SessionKey);
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg, effectiveBoundSessionKey);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -319,7 +323,7 @@ export async function dispatchReplyFromConfig(params: {
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
   const routeThreadId =
-    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
+    ctx.MessageThreadId ?? parseSessionThreadInfo(routeThreadSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
