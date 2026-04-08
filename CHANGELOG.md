@@ -7,6 +7,9 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - iOS: pin release versioning to an explicit CalVer in `apps/ios/version.json`, keep TestFlight iteration on the same short version until maintainers intentionally promote the next gateway version, and add the documented `pnpm ios:version:pin -- --from-gateway` workflow for release trains. (#63001) Thanks @ngutman.
+- Plugins/provider-auth: let provider manifests declare `providerAuthAliases` so provider variants can share env vars, auth profiles, config-backed auth, and API-key onboarding choices without core-specific wiring.
+- Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit, and reset flows so old daily notes can be replayed safely into `DREAMS.md`. Thanks @mbelinky.
+- Memory/dreaming: harden grounded diary extraction so `What Happened`, `Reflections`, and durable candidates suppress operational noise and preserve more atomic lasting facts. Thanks @mbelinky.
 
 ### Fixes
 
@@ -81,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - Gateway tool/exec config: block model-facing `gateway config.apply` and `config.patch` writes from changing exec approval paths such as `safeBins`, `safeBinProfiles`, `safeBinTrustedDirs`, and `strictInlineEval`, while still allowing unchanged structured values through. (#62001) Thanks @eleqtrizit.
 - Host exec/env sanitization: block dangerous Java, Rust, Cargo, Git, Kubernetes, cloud credential, config-path, and Helm env overrides so host-run tools cannot be redirected to attacker-chosen code, config, credentials, or repository state. (#59119, #62002, #62291) Thanks @eleqtrizit and contributors.
 - Commands/allowlist: require owner authorization for `/allowlist add` and `/allowlist remove` before channel resolution, so non-owner but command-authorized senders can no longer persistently rewrite allowlist policy state. (#62383) Thanks @pgondhi987.
+- Plugins/onboarding auth choices: prevent untrusted workspace plugins from colliding with bundled provider auth-choice ids during non-interactive onboarding, so bundled provider setup keeps operator secrets out of untrusted workspace plugin handlers unless those plugins are explicitly trusted. (#62368) Thanks @pgondhi987.
 - Feishu/docx uploads: honor `tools.fs.workspaceOnly` for local `upload_file` and `upload_image` paths by forwarding workspace-constrained `localRoots` into the media loader, so docx uploads can no longer read host-local files outside the workspace when workspace-only mode is active. (#62369) Thanks @pgondhi987.
 - Network/fetch guard: drop request bodies and body-describing headers on cross-origin `307` and `308` redirects by default, so attacker-controlled redirect hops cannot receive secret-bearing POST payloads from SSRF-guarded fetch flows unless a caller explicitly opts in. (#62357) Thanks @pgondhi987.
 - Browser/SSRF: treat main-frame `document` redirect hops as navigations even when Playwright does not flag them as `isNavigationRequest()`, so strict private-network blocking still stops forbidden redirect pivots before the browser reaches the internal target. (#62355) Thanks @pgondhi987.

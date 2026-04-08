@@ -18,18 +18,9 @@ import {
   type MemoryLightDreamingConfig,
   type MemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import {
-  lowercasePreservingWhitespace,
-  normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/text-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
-import {
-  asRecord,
-  formatErrorMessage,
-  includesSystemEventToken,
-  normalizeTrimmedString,
-} from "./dreaming-shared.js";
+import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -131,7 +122,7 @@ function isGenericDailyHeading(heading: string): boolean {
   if (!normalized) {
     return true;
   }
-  const lower = normalizeLowercaseStringOrEmpty(normalized);
+  const lower = normalized.toLowerCase();
   if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
     return true;
   }
@@ -428,7 +419,7 @@ type SessionIngestionCollectionResult = {
 
 function normalizeWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? lowercasePreservingWhitespace(resolved) : resolved;
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function resolveSessionIngestionStatePath(workspaceDir: string): string {
@@ -1100,13 +1091,117 @@ async function ingestDailyMemorySignals(params: {
   }
 }
 
+export async function seedHistoricalDailyMemorySignals(params: {
+  workspaceDir: string;
+  filePaths: string[];
+  limit: number;
+  nowMs: number;
+  timezone?: string;
+}): Promise<{
+  importedFileCount: number;
+  importedSignalCount: number;
+  skippedPaths: string[];
+}> {
+  const normalizedPaths = [...new Set(params.filePaths.map((entry) => entry.trim()).filter(Boolean))];
+  if (normalizedPaths.length === 0) {
+    return {
+      importedFileCount: 0,
+      importedSignalCount: 0,
+      skippedPaths: [],
+    };
+  }
+
+  const resolved = normalizedPaths
+    .map((filePath) => {
+      const fileName = path.basename(filePath);
+      const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
+      if (!match) {
+        return { filePath, day: null as string | null };
+      }
+      return { filePath, day: match[1] ?? null };
+    })
+    .toSorted((a, b) => {
+      if (a.day && b.day) {
+        return b.day.localeCompare(a.day);
+      }
+      if (a.day) {
+        return -1;
+      }
+      if (b.day) {
+        return 1;
+      }
+      return a.filePath.localeCompare(b.filePath);
+    });
+
+  const valid = resolved.filter((entry): entry is { filePath: string; day: string } => Boolean(entry.day));
+  const skippedPaths = resolved.filter((entry) => !entry.day).map((entry) => entry.filePath);
+  const totalCap = Math.max(20, params.limit * 4);
+  const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, valid.length)));
+  let importedSignalCount = 0;
+  let importedFileCount = 0;
+
+  for (const entry of valid) {
+    if (importedSignalCount >= totalCap) {
+      break;
+    }
+    const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        skippedPaths.push(entry.filePath);
+        return "";
+      }
+      throw err;
+    });
+    if (!raw) {
+      continue;
+    }
+    const lines = stripManagedDailyDreamingLines(raw.split(/\r?\n/));
+    const chunks = buildDailySnippetChunks(lines, perFileCap);
+    const results: MemorySearchResult[] = [];
+    for (const chunk of chunks) {
+      results.push({
+        path: `memory/${entry.day}.md`,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+        score: DAILY_INGESTION_SCORE,
+        snippet: chunk.snippet,
+        source: "memory",
+      });
+      if (results.length >= perFileCap || importedSignalCount + results.length >= totalCap) {
+        break;
+      }
+    }
+    if (results.length === 0) {
+      continue;
+    }
+    await recordShortTermRecalls({
+      workspaceDir: params.workspaceDir,
+      query: `__dreaming_daily__:${entry.day}`,
+      results,
+      signalType: "daily",
+      dedupeByQueryPerDay: true,
+      dayBucket: entry.day,
+      nowMs: params.nowMs,
+      timezone: params.timezone,
+    });
+    importedSignalCount += results.length;
+    importedFileCount += 1;
+  }
+
+  return {
+    importedFileCount,
+    importedSignalCount,
+    skippedPaths,
+  };
+}
+
 function entryAverageScore(entry: ShortTermRecallEntry): number {
   return entry.recallCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / entry.recallCount)) : 0;
 }
 
 function tokenizeSnippet(snippet: string): Set<string> {
   return new Set(
-    normalizeLowercaseStringOrEmpty(snippet)
+    snippet
+      .toLowerCase()
       .split(/[^a-z0-9]+/i)
       .map((token) => token.trim())
       .filter(Boolean),
@@ -1117,7 +1212,7 @@ function jaccardSimilarity(left: string, right: string): number {
   const leftTokens = tokenizeSnippet(left);
   const rightTokens = tokenizeSnippet(right);
   if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return normalizeLowercaseStringOrEmpty(left) === normalizeLowercaseStringOrEmpty(right) ? 1 : 0;
+    return left.trim().toLowerCase() === right.trim().toLowerCase() ? 1 : 0;
   }
   let intersection = 0;
   for (const token of leftTokens) {
@@ -1529,10 +1624,7 @@ async function runPhaseIfTriggered(params: {
         storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
       });
 }): Promise<{ handled: true; reason: string } | undefined> {
-  if (
-    params.trigger !== "heartbeat" ||
-    !includesSystemEventToken(params.cleanedBody, params.eventText)
-  ) {
+  if (params.trigger !== "heartbeat" || params.cleanedBody.trim() !== params.eventText) {
     return undefined;
   }
   if (!params.config.enabled) {
@@ -1558,10 +1650,7 @@ async function runPhaseIfTriggered(params: {
         await runLightDreaming({
           workspaceDir,
           cfg: params.cfg,
-          config: params.config as MemoryLightDreamingConfig & {
-            timezone?: string;
-            storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-          },
+          config: params.config,
           logger: params.logger,
           subagent: params.subagent,
         });
@@ -1569,10 +1658,7 @@ async function runPhaseIfTriggered(params: {
         await runRemDreaming({
           workspaceDir,
           cfg: params.cfg,
-          config: params.config as MemoryRemDreamingConfig & {
-            timezone?: string;
-            storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-          },
+          config: params.config,
           logger: params.logger,
           subagent: params.subagent,
         });

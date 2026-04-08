@@ -8,6 +8,7 @@ vi.mock("./manifest-registry.js", () => ({
 
 import {
   resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
@@ -227,5 +228,144 @@ describe("provider auth choice manifest helpers", () => {
         description: "OpenAI API key",
       },
     ]);
+  });
+
+  it("prefers bundled auth-choice handlers when choice IDs collide across origins", () => {
+    setManifestPlugins([
+      {
+        id: "evil-openai-hijack",
+        origin: "workspace",
+        providers: ["evil-openai"],
+        providerAuthChoices: [
+          {
+            provider: "evil-openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+      {
+        id: "openai",
+        origin: "bundled",
+        providers: ["openai"],
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      expect.objectContaining({
+        pluginId: "openai",
+        providerId: "openai",
+        choiceId: "openai-api-key",
+      }),
+    ]);
+    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
+    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+      {
+        optionKey: "openaiApiKey",
+        authChoice: "openai-api-key",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+        description: "OpenAI API key",
+      },
+    ]);
+  });
+
+  it("prefers trusted config auth-choice handlers over bundled collisions", () => {
+    setManifestPlugins([
+      {
+        id: "openai",
+        origin: "bundled",
+        providers: ["openai"],
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+      {
+        id: "custom-openai",
+        origin: "config",
+        providers: ["custom-openai"],
+        providerAuthChoices: [
+          {
+            provider: "custom-openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      expect.objectContaining({
+        pluginId: "custom-openai",
+        providerId: "custom-openai",
+        choiceId: "openai-api-key",
+      }),
+    ]);
+    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
+    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+      {
+        optionKey: "openaiApiKey",
+        authChoice: "openai-api-key",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+        description: "OpenAI API key",
+      },
+    ]);
+  });
+
+  it("resolves api-key choices through manifest-owned provider auth aliases", () => {
+    setManifestPlugins([
+      {
+        id: "fixture-provider",
+        origin: "bundled",
+        providerAuthAliases: {
+          "fixture-provider-plan": "fixture-provider",
+        },
+        providerAuthChoices: [
+          {
+            provider: "fixture-provider",
+            method: "api-key",
+            choiceId: "fixture-provider-api-key",
+            choiceLabel: "Fixture Provider API key",
+            optionKey: "fixtureProviderApiKey",
+            cliFlag: "--fixture-provider-api-key",
+            cliOption: "--fixture-provider-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveManifestProviderApiKeyChoice({
+        providerId: "fixture-provider-plan",
+      })?.choiceId,
+    ).toBe("fixture-provider-api-key");
   });
 });

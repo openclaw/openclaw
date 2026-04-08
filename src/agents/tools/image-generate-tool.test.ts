@@ -824,6 +824,8 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects unsupported aspect ratios", async () => {
+    stubImageGenerationProviders();
+
     const tool = createImageGenerateTool({
       config: {
         agents: {

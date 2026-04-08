@@ -1,5 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+vi.unmock("../plugins/manifest-registry.js");
+vi.unmock("../plugins/provider-runtime.js");
+vi.unmock("../plugins/provider-runtime.runtime.js");
+vi.unmock("../secrets/provider-env-vars.js");
+
 async function resetProviderRuntimeState() {
   const [
     { clearPluginManifestRegistryCache },
