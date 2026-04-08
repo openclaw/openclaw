@@ -136,9 +136,19 @@ export const fullSuiteVitestShards = [
     projects: ["vitest.extension-media-tools.config.ts"],
   },
   {
-    config: "vitest.full-extension-qa-tools.config.ts",
-    name: "extension-qa-tools",
-    projects: ["vitest.extension-qa-tools.config.ts"],
+    config: "vitest.full-extension-qa-channel.config.ts",
+    name: "extension-qa-channel",
+    projects: ["vitest.extension-qa-channel.config.ts"],
+  },
+  {
+    config: "vitest.full-extension-qa-lab-core.config.ts",
+    name: "extension-qa-lab-core",
+    projects: ["vitest.extension-qa-lab-core.config.ts"],
+  },
+  {
+    config: "vitest.full-extension-qa-lab-runtime.config.ts",
+    name: "extension-qa-lab-runtime",
+    projects: ["vitest.extension-qa-lab-runtime.config.ts"],
   },
   {
     config: "vitest.full-extension-dev-tools.config.ts",
