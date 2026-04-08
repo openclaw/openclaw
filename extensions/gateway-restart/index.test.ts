@@ -21,7 +21,9 @@ vi.mock("node:child_process", () => ({
 }));
 
 // Suppress process.exit in tool execute
-vi.spyOn(global, "setTimeout").mockImplementation(() => 0 as unknown as ReturnType<typeof setTimeout>);
+vi.spyOn(global, "setTimeout").mockImplementation(
+  () => 0 as unknown as ReturnType<typeof setTimeout>,
+);
 
 import gatewayRestartPlugin from "./index.js";
 
@@ -46,7 +48,7 @@ function createApi() {
       state: {
         resolveStateDir: vi.fn().mockReturnValue(STATE_DIR),
       },
-    } as unknown as Parameters<typeof createTestPluginApi>[0]["runtime"],
+    } as unknown as NonNullable<Parameters<typeof createTestPluginApi>[0]>["runtime"],
     registerTool,
     registerService,
   });
@@ -56,13 +58,17 @@ function createApi() {
 
 function getRegisteredTool(registerTool: ReturnType<typeof vi.fn>) {
   const call = registerTool.mock.calls[0]?.[0];
-  if (!call) throw new Error("No tool registered");
+  if (!call) {
+    throw new Error("No tool registered");
+  }
   return call as { execute: (toolCallId: string, params: unknown) => Promise<unknown> };
 }
 
 function getRegisteredService(registerService: ReturnType<typeof vi.fn>) {
   const call = registerService.mock.calls[0]?.[0];
-  if (!call) throw new Error("No service registered");
+  if (!call) {
+    throw new Error("No service registered");
+  }
   return call as { start: (ctx: unknown) => Promise<void> };
 }
 
