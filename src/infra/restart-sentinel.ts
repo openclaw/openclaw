@@ -27,6 +27,16 @@ export type RestartSentinelStats = {
   durationMs?: number | null;
 };
 
+export type RestartSentinelContinuation =
+  | {
+      kind: "systemEvent";
+      text: string;
+    }
+  | {
+      kind: "agentTurn";
+      message: string;
+    };
+
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
@@ -41,6 +51,7 @@ export type RestartSentinelPayload = {
   /** Thread ID for reply threading (e.g., Slack thread_ts). */
   threadId?: string;
   message?: string | null;
+  continuation?: RestartSentinelContinuation | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };

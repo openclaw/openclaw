@@ -22,7 +22,12 @@ const mocks = vi.hoisted(() => ({
       threadId: undefined,
     }),
   ),
-  loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
+  loadSessionEntry: vi.fn(() => ({
+    cfg: {},
+    entry: {},
+    storePath: "/tmp/sessions.json",
+    canonicalKey: "agent:main:main",
+  })),
   deliveryContextFromSession: vi.fn(
     ():
       | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
@@ -34,16 +39,19 @@ const mocks = vi.hoisted(() => ({
   })),
   getChannelPlugin: vi.fn(() => undefined),
   normalizeChannelId: vi.fn<(channel?: string | null) => string | null>(),
-  resolveOutboundTarget: vi.fn((_params?: { to?: string }) => ({
+  resolveOutboundTarget: vi.fn(((_params?: { to?: string }) => ({
     ok: true as const,
     to: "+15550002",
-  })),
+  })) as (params?: { to?: string }) => { ok: true; to: string } | { ok: false; error: Error }),
   deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
   enqueueDelivery: vi.fn(async () => "queue-1"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   requestHeartbeatNow: vi.fn(),
+  injectTimestamp: vi.fn((message: string) => `stamped:${message}`),
+  timestampOptsFromConfig: vi.fn(() => ({})),
+  recordInboundSessionAndDispatchReply: vi.fn(async () => {}),
   logWarn: vi.fn(),
 }));
 
@@ -110,6 +118,10 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
+vi.mock("../plugin-sdk/inbound-reply-dispatch.js", () => ({
+  recordInboundSessionAndDispatchReply: mocks.recordInboundSessionAndDispatchReply,
+}));
+
 vi.mock("../infra/heartbeat-wake.js", async () => {
   return await mergeMockedModule(
     await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
@@ -125,6 +137,11 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
     warn: mocks.logWarn,
   })),
+}));
+
+vi.mock("./server-methods/agent-timestamp.js", () => ({
+  injectTimestamp: mocks.injectTimestamp,
+  timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
@@ -149,7 +166,12 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.parseSessionThreadInfo.mockReset();
     mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
     mocks.loadSessionEntry.mockReset();
-    mocks.loadSessionEntry.mockReturnValue({ cfg: {}, entry: {} });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+    });
     mocks.deliveryContextFromSession.mockReset();
     mocks.deliveryContextFromSession.mockReturnValue(undefined);
     mocks.normalizeChannelId.mockClear();
@@ -163,6 +185,10 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.failDelivery.mockClear();
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeatNow.mockClear();
+    mocks.injectTimestamp.mockClear();
+    mocks.timestampOptsFromConfig.mockClear();
+    mocks.recordInboundSessionAndDispatchReply.mockReset();
+    mocks.recordInboundSessionAndDispatchReply.mockResolvedValue(undefined);
     mocks.logWarn.mockClear();
   });
 
@@ -201,6 +227,7 @@ describe("scheduleRestartSentinelWake", () => {
       reason: "wake",
       sessionKey: "agent:main:main",
     });
+    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalled();
   });
 
@@ -292,6 +319,189 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("dispatches agentTurn continuation after the restart notice in the same routed thread", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        threadId: "thread-42",
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "Reply with exactly: Yay! I did it!",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "restart message" }],
+        threadId: "thread-42",
+      }),
+    );
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "acct-2",
+        routeSessionKey: "agent:main:main",
+        ctxPayload: expect.objectContaining({
+          Body: "Reply with exactly: Yay! I did it!",
+          BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+          SessionKey: "agent:main:main",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550002",
+          ExplicitDeliverRoute: true,
+          MessageThreadId: "thread-42",
+        }),
+      }),
+    );
+  });
+
+  it("requests another wake after enqueueing a systemEvent continuation", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        threadId: "thread-42",
+        ts: 123,
+        continuation: {
+          kind: "systemEvent",
+          text: "continue after restart",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(
+      2,
+      "continue after restart",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext: expect.objectContaining({
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+          threadId: "thread-42",
+        }),
+      }),
+    );
+    expect(mocks.requestHeartbeatNow).toHaveBeenNthCalledWith(1, {
+      reason: "wake",
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.requestHeartbeatNow).toHaveBeenNthCalledWith(2, {
+      reason: "wake",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("logs and continues when continuation delivery fails", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.recordInboundSessionAndDispatchReply.mockRejectedValueOnce(new Error("dispatch failed"));
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("continuation delivery failed"),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        continuationKind: "agentTurn",
+      }),
+    );
+  });
+
+  it("warns and skips agentTurn continuation when restart routing cannot resolve a destination", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: new Error("missing route"),
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("restart continuation route unavailable"),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        continuationKind: "agentTurn",
+      }),
+    );
+  });
+
+  it("consumes continuation once and does not replay it on later startup cycles", async () => {
+    mocks.consumeRestartSentinel
+      .mockResolvedValueOnce({
+        payload: {
+          sessionKey: "agent:main:main",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "+15550002",
+            accountId: "acct-2",
+          },
+          ts: 123,
+          continuation: {
+            kind: "agentTurn",
+            message: "continue",
+          },
+        },
+      } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>)
+      .mockResolvedValueOnce(
+        null as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>,
+      );
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+  });
+
   it("does not wake the main session when the sentinel has no sessionKey", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {
@@ -306,6 +516,32 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("warns when continuation cannot run because the restart sentinel has no sessionKey", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        message: "restart message",
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("continuation skipped"),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        continuationKind: "agentTurn",
+      }),
+    );
   });
 
   it("skips outbound restart notice when no canonical delivery context survives restart", async () => {

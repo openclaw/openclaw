@@ -289,6 +289,10 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  continuationKind: Type.Optional(
+    Type.Union([Type.Literal("systemEvent"), Type.Literal("agentTurn")]),
+  ),
+  continuationMessage: Type.Optional(Type.String()),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -317,7 +321,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. For restart follow-up work, pass `continuationMessage` and optionally `continuationKind`.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -335,6 +339,8 @@ export function createGatewayTool(opts?: {
             : undefined;
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
+        const continuationKind = normalizeOptionalString(params.continuationKind);
         // Extract channel + threadId for routing after restart.
         // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -346,6 +352,17 @@ export function createGatewayTool(opts?: {
           deliveryContext,
           threadId,
           message: note ?? reason ?? null,
+          continuation: continuationMessage
+            ? continuationKind === "systemEvent"
+              ? {
+                  kind: "systemEvent",
+                  text: continuationMessage,
+                }
+              : {
+                  kind: "agentTurn",
+                  message: continuationMessage,
+                }
+            : null,
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
