@@ -1,0 +1,146 @@
+{
+  "packageId": "6632",
+  "name": "LINE Characters: Making Amends",
+  "lang": "zh-tw",
+  "register": "casual",
+  "character": "mixed",
+  "expression_style": "expressive",
+  "animated": false,
+  "occasions": ["apology", "request", "thanks"],
+  "stickers": [
+    {
+      "id": "6632:11825374",
+      "desc": "brown bear, 膝をつき頭を低くして、目を閉じながら深く落ち込んでいる。足元に赤い衝撃波のような演出がある。, scene:謝罪や大きなショックの際",
+      "occasions": ["apology", "reaction"]
+    },
+    {
+      "id": "6632:11825375",
+      "desc": "white rabbit/brown bear/yellow chick, 絶叫するコニー、顔を伏せて落ち込むブラウン、そして横で力尽きて倒れているサリーの様子。, scene:絶望的な状況やパニック時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "6632:11825376",
+      "desc": "white rabbit, 目を閉じて口を大きく開け、両手を顎の下で組んで大喜びしている。隣に大きなハートとキラキラが舞っている。, scene:愛や喜び、感謝を伝える時",
+      "occasions": ["thanks", "reaction"]
+    },
+    {
+      "id": "6632:11825377",
+      "desc": "brown bear, 地面に叩きつけられ、激しい衝撃で周囲に岩が飛び散り、うつ伏せで力尽きているポーズ。, scene:激しいショックや失敗、力尽きた時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "6632:11825378",
+      "desc": "brown bear/yellow chick, ブラウンが90度の角度で深くお辞儀をしている。後ろにはサリーが控えている。, scene:深い謝罪や感謝、敬意を表す時, text:\"90°\"",
+      "occasions": ["apology", "thanks", "greeting"],
+      "text": "90°"
+    },
+    {
+      "id": "6632:11825379",
+      "desc": "white rabbit, 目を細めて口を開け、湯呑みを手に満足げに笑っている。背景にはキラキラとした輝きがある。, scene:相手を許す時や和解の場面, text:\"原諒你了\"",
+      "occasions": ["reaction", "humor"],
+      "text": "原諒你了"
+    },
+    {
+      "id": "6632:11825380",
+      "desc": "white rabbit, 不敵な笑みを浮かべ、赤い物体を粉砕しながら怒りをあらわにする様子。こめかみに青筋を立てている。, scene:強い怒りや不服を伝える時, text:\"絶不饒恕\"",
+      "occasions": ["reaction", "humor"],
+      "text": "絶不饒恕"
+    },
+    {
+      "id": "6632:11825381",
+      "desc": "brown bear, 目を閉じて膝をつき、地面に手をついて深く落ち込んでいる様子。, scene:謝罪や深い反省、落胆を伝える時, text:\"跪\"",
+      "occasions": ["apology", "reaction", "humor"],
+      "text": "跪"
+    },
+    {
+      "id": "6632:11825382",
+      "desc": "round white face, 大粒の涙を流し、口を大きく開けて両手を合わせ、必死に許しを請うような表情とポーズ。周囲にはキラキラとした装飾がある。, scene:謝罪や許しを請いたい時, text:\"會原諒我吧？\"",
+      "occasions": ["apology", "request", "humor"],
+      "text": "會原諒我吧？"
+    },
+    {
+      "id": "6632:11825383",
+      "desc": "round white face, 地面に突っ伏して絶望している様子。背景にはおどろおどろしい影があり、叫び声を表す赤い文字が浮いている。, scene:絶望やショックを感じた時, text:\"啊啊啊呃啊啊啊啊\"",
+      "occasions": ["reaction", "humor"],
+      "text": "啊啊啊呃啊啊啊啊"
+    },
+    {
+      "id": "6632:11825384",
+      "desc": "round white face, 荒波を背景に、涙を流し歯を食いしばりながら正座して、深い恩義に感極まっている表情。, scene:多大な感謝を伝える時, text:\"恩大徳沒齒難忘!!\"",
+      "occasions": ["thanks", "humor"],
+      "text": "恩大徳沒齒難忘!!"
+    },
+    {
+      "id": "6632:11825385",
+      "desc": "brown bear, 無表情で、札束がぎっしり詰まってキラキラと輝くアタッシュケースを目の前に広げている。, scene:金銭的な成功や、大金を手にした報告",
+      "occasions": ["humor", "reaction"]
+    },
+    {
+      "id": "6632:11825386",
+      "desc": "brown bear、white rabbit, 不機嫌そうに腕を組んでそっぽを向くコニーと、その後ろで冷や汗を流しながら困惑するブラウン。, scene:喧嘩した時や機嫌を損ねた時",
+      "occasions": ["reaction", "apology", "humor"]
+    },
+    {
+      "id": "6632:11825387",
+      "desc": "white rabbit, 目を強く閉じ、涙を流しながら口を開けて両手を合わせ、必死にお願いや謝罪をしている様子。, scene:必死のお願いや謝罪、号泣する時",
+      "occasions": ["apology", "request", "reaction"]
+    },
+    {
+      "id": "6632:11825388",
+      "desc": "brown bear, スーツ姿でマイクの前に座り、書類が飛び散る中で無表情に会見をしている様子。, scene:自分がやったと認める時, text:\"就是我做的!\"",
+      "occasions": ["humor", "apology", "reaction"],
+      "text": "就是我做的!"
+    },
+    {
+      "id": "6632:11825389",
+      "desc": "brown bear, 満月の下で後ろ向きに丸まり、膝をついてひどく落ち込んでいるポーズ。, scene:絶望した時や深く反省している時",
+      "occasions": ["apology", "reaction", "humor"]
+    },
+    {
+      "id": "6632:11825390",
+      "desc": "white rabbit, 申し訳なさそうに照れ笑いを浮かべ、片手を口元に当てて少し前かがみになっているポーズ。, scene:軽い謝罪や照れ隠しの場面, text:\"拍寫\"",
+      "occasions": ["apology", "reaction"],
+      "text": "拍寫"
+    },
+    {
+      "id": "6632:11825391",
+      "desc": "brown bear, 黒いスーツを着たブラウンが、深く頭を下げて真剣に謝罪の姿勢をとっている様子。, scene:深く謝罪したいとき, text:\"實在非常抱歉！\"",
+      "occasions": ["apology"],
+      "text": "實在非常抱歉！"
+    },
+    {
+      "id": "6632:11825392",
+      "desc": "yellow chick, 座布団に座り、湯呑みのお茶を飲みながら落ち着いた表情で一息ついている様子。, scene:相手をなだめる時、休憩中, text:\"息怒息怒～\"",
+      "occasions": ["reaction", "request", "humor"],
+      "text": "息怒息怒～"
+    },
+    {
+      "id": "6632:11825393",
+      "desc": "white rabbit, 横になりながらポテトチップスを食べて、気だるそうに背中をかきながら謝る表情。, scene:渋々謝る時や適当に謝る時, text:\"好啦～ 對不起嘛\"",
+      "occasions": ["apology", "humor"],
+      "text": "好啦～ 對不起嘛"
+    },
+    {
+      "id": "6632:11825394",
+      "desc": "brown bear, 無表情で落ち込んだ様子。背後に影があり、テーブルに座りながら三点リーダーの吹き出しを出している。, scene:落ち込んでいる時や沈黙, text:\"...\"",
+      "occasions": ["reaction"],
+      "text": "..."
+    },
+    {
+      "id": "6632:11825395",
+      "desc": "white rabbit/yellow chick, 冷や汗をかきながら、物陰からおずおずと様子を伺っている表情とポーズ, scene:相手の機嫌を伺う時, text:\"生氣了嗎？\"",
+      "occasions": ["apology", "reaction", "humor"],
+      "text": "生氣了嗎？"
+    },
+    {
+      "id": "6632:11825396",
+      "desc": "round white face, ヘルメットを被り作業服姿で深くお辞儀をしている。目は閉じられ、頬を赤らめて丁寧な姿勢をとっている。, scene:謝罪や感謝、挨拶を伝える場面",
+      "occasions": ["apology", "thanks", "greeting"]
+    },
+    {
+      "id": "6632:11825397",
+      "desc": "round white face, 目を細めて舌を出し、両手を広げて嫌悪感や気分の悪さを表現しているポーズ。, scene:嫌悪感や体調不良を伝える時",
+      "occasions": ["reaction", "humor"]
+    }
+  ]
+}

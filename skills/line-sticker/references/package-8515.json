@@ -1,0 +1,154 @@
+{
+  "packageId": "8515",
+  "name": "ゆる敬語★LINEキャラクターズ",
+  "lang": "ja",
+  "register": "business",
+  "character": "mixed",
+  "expression_style": "subtle",
+  "animated": false,
+  "occasions": ["apology", "thanks", "greeting", "request"],
+  "stickers": [
+    {
+      "id": "8515:16581242",
+      "desc": "brown bear/white rabbit, ブラウンは真顔、コニーは笑顔で、二人並んで両手の親指を立てるグッドポーズをしている。, scene:承諾や賛成を伝える時, text:\"OKでーす！\"",
+      "occasions": ["reaction", "praise", "thanks"],
+      "text": "OKでーす！"
+    },
+    {
+      "id": "8515:16581243",
+      "desc": "white rabbit, 満面の笑みで目を閉じ、大きな黄色いハートを抱えて楽しそうに走っている。周囲には色とりどりの花が舞っている。, scene:感謝や喜びを伝える時, text:\"ありがとうございます！\"",
+      "occasions": ["thanks", "reaction"],
+      "text": "ありがとうございます！"
+    },
+    {
+      "id": "8515:16581244",
+      "desc": "brown bear, 両手を合わせ、潤んだ瞳で上を見上げる感謝やお願いの表情。周囲にはキラキラが散りばめられている。, scene:感謝やお願いを伝える時, text:\"助かります！\"",
+      "occasions": ["thanks", "request"],
+      "text": "助かります！"
+    },
+    {
+      "id": "8515:16581245",
+      "desc": "green frog/yellow chick, レナードが口を大きく開けて喜び、サリーが羽を広げて元気に飛び跳ねている様子。, scene:返事や快諾をする時, text:\"はーい！\"",
+      "occasions": ["reaction", "greeting"],
+      "text": "はーい！"
+    },
+    {
+      "id": "8515:16581246",
+      "desc": "yellow chick, 青い格子のカーテンの陰から顔を半分覗かせ、こちらをじっと伺っているポーズ。, scene:提案や進捗を確認する時, text:\"いかがですか...？\"",
+      "occasions": ["request", "humor"],
+      "text": "いかがですか...？"
+    },
+    {
+      "id": "8515:16581247",
+      "desc": "white rabbit, 両腕を上げてバンザイし、目を細めて口を大きく開けて笑っている明るい表情。, scene:相手を安心させる時, text:\"大丈夫です!!\"",
+      "occasions": ["reaction", "humor"],
+      "text": "大丈夫です!!"
+    },
+    {
+      "id": "8515:16581248",
+      "desc": "brown bear girl/yellow chick, チョコとサリーが並んで、丁寧にぺこりとお辞儀をしているポーズ。, scene:挨拶や依頼の場面, text:\"よろしくお願いします\"",
+      "occasions": ["greeting", "request"],
+      "text": "よろしくお願いします"
+    },
+    {
+      "id": "8515:16581249",
+      "desc": "round white face, 手帳を手に持ちながら、目を細めて口を大きく開け、元気いっぱいに返事をする様子。, scene:内容の確認を承諾する時, text:\"確認します！\"",
+      "occasions": ["reaction"],
+      "text": "確認します！"
+    },
+    {
+      "id": "8515:16581250",
+      "desc": "brown bear/yellow chick, ブラウンとサリーが涙を流しながら深く頭を下げて、申し訳なさそうに謝罪しているポーズ。, scene:誠実に謝罪を伝える時, text:\"申し訳ございません…\"",
+      "occasions": ["apology"],
+      "text": "申し訳ございません…"
+    },
+    {
+      "id": "8515:16581251",
+      "desc": "brown bear girl, 頬を赤らめてスマートフォンを見つめ、期待に胸を膨らませてわくわくしている様子。周りに音符が舞っている。, scene:予定を心待ちにする時, text:\"楽しみです♥\"",
+      "occasions": ["reaction"],
+      "text": "楽しみです♥"
+    },
+    {
+      "id": "8515:16581252",
+      "desc": "brown bear, コーヒーのラテアートとして描かれた穏やかな表情のブラウン。上部にはメッセージが入った大きな吹き出しがある。, scene:仕事終わりや休憩時のねぎらい, text:\"お疲れ様です\"",
+      "occasions": ["greeting", "farewell", "praise"],
+      "text": "お疲れ様です"
+    },
+    {
+      "id": "8515:16581253",
+      "desc": "brown bear, 大きなピンクのハートの中に顔を入れ、左右にも小さなハートが舞っている。無表情ながらも可愛らしく愛情を表現している。, scene:愛情や好意を伝える時",
+      "occasions": ["reaction", "thanks", "humor"]
+    },
+    {
+      "id": "8515:16581254",
+      "desc": "お買いものパンダ, 満面の笑みで口を大きく開け、紙吹雪の中で大喜びしている。両手を広げて祝福しているポーズ。, scene:相手を称賛・祝福する時, text:\"さすがです!!\"",
+      "occasions": ["praise", "reaction"],
+      "text": "さすがです!!"
+    },
+    {
+      "id": "8515:16581255",
+      "desc": "brown bear girl, 頬を赤らめて両手を口元に添え、嬉しそうに飛び跳ねている。周囲にはカラフルなハートが舞っている。, scene:喜びや感謝を伝える時, text:\"うれしいです！\"",
+      "occasions": ["thanks", "reaction"],
+      "text": "うれしいです！"
+    },
+    {
+      "id": "8515:16581256",
+      "desc": "round white face, 口を大きく開けて驚き、納得したような表情。頭の横に電球が浮かび、集中線が描かれている。, scene:納得した時や理解した時, text:\"なるほどです！\"",
+      "occasions": ["reaction"],
+      "text": "なるほどです！"
+    },
+    {
+      "id": "8515:16581257",
+      "desc": "brown bear, 黄色い座布団の上で、目を閉じて深く頭を下げてお願いをしているポーズ。, scene:丁寧なお願いや依頼, text:\"何卒…\"",
+      "occasions": ["request", "humor"],
+      "text": "何卒…"
+    },
+    {
+      "id": "8515:16581258",
+      "desc": "round white face、yellow chick, 眉間にしわを寄せ顎に手を当てて悩むムーンと、大きなはてなマークを抱えて困り顔で浮遊するサリーの姿。, scene:悩み事や疑問がある時、考え込む時, text:\"う〜ん\"",
+      "occasions": ["reaction"],
+      "text": "う〜ん"
+    },
+    {
+      "id": "8515:16581259",
+      "desc": "white rabbit/yellow chick, 申し訳なさそうに汗をかきながらお辞儀をするコニーと、横で見つめるサリーの姿。, scene:相手に依頼や手間をかける時, text:\"お手数おかけします\"",
+      "occasions": ["apology", "request", "thanks"],
+      "text": "お手数おかけします"
+    },
+    {
+      "id": "8515:16581260",
+      "desc": "brown bear/yellow chick, 帽子を被りカバンを持ったブラウンとサリーが、キラキラした背景の中で元気に歩いている。, scene:朝の挨拶や登校・出勤時, text:\"おはようございます！\"",
+      "occasions": ["greeting"],
+      "text": "おはようございます！"
+    },
+    {
+      "id": "8515:16581261",
+      "desc": "white rabbit、yellow chick, パジャマ姿のコニーが眠そうに歩き、枕の上で眠るサリーを運んでいる。まぶたを閉じかけ、今にも寝てしまいそうな様子。, scene:寝る前の挨拶, text:\"おやすみなさい\"",
+      "occasions": ["greeting", "farewell"],
+      "text": "おやすみなさい"
+    },
+    {
+      "id": "8515:16581262",
+      "desc": "green frog, 目に涙を浮かべ、口をへの字にして悲しんでいる表情。背景にはショックや落ち込みを表す青い線が描かれている。, scene:悲しい時やショックな時",
+      "occasions": ["reaction"]
+    },
+    {
+      "id": "8515:16581263",
+      "desc": "yellow chick, 顔を赤らめ、冷や汗をかきながら手を合わせて慌てている表情とポーズ, scene:焦りやパニックを感じる時, text:\"あわわわわ\"",
+      "occasions": ["reaction", "apology", "humor"],
+      "text": "あわわわわ"
+    },
+    {
+      "id": "8515:16581264",
+      "desc": "ジェシカ, 目を閉じてにっこりと笑い、手を合わせて喜んでいる様子。周囲にはカラフルなハートが舞っている。, scene:食事を終えた後の挨拶, text:\"ごちそうさまでした\"",
+      "occasions": ["greeting", "thanks"],
+      "text": "ごちそうさまでした"
+    },
+    {
+      "id": "8515:16581265",
+      "desc": "brown bear、round white face、brown bear girl, 笑顔のムーンを中心に、ブラウンとチョコがポンポンを持って紙吹雪の中で賑やかに応援しているポーズ。, scene:相手を応援・激励する時, text:\"がんばって下さい！\"",
+      "occasions": ["praise", "reaction"],
+      "text": "がんばって下さい！"
+    }
+  ]
+}

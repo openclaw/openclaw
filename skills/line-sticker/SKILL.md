@@ -1,125 +1,110 @@
 ---
 name: line-sticker
-description: Send LINE stickers as replies on LINE channels. Use when the user sends a sticker (detected by StickerInfo in context), or when a sticker would be a natural short reaction (e.g. greeting, thanks, goodbye). Do NOT use for substantive questions, long conversations, or non-LINE channels. If no suitable sticker is found, reply with text instead.
+description: LINEチャンネルでスタンプを送る。カジュアルな会話での短い感情表現に使う。質問・長い会話・シリアスな場面・LINE以外のチャンネルでは絶対に使わない。
 metadata: { "openclaw": { "emoji": "🎨", "requires": { "config": ["channels.line"] } } }
 ---
 
-# LINE Sticker
+# LINE スタンプ送信 Skill
 
-Send LINE stickers to make conversations more expressive and human-like.
+このSkillは **LINEチャンネルのみ** で使用する。
 
-**This skill is for LINE channels only.** Do not use on Telegram, Slack, Discord, or other channels.
+## 【最優先】スタンプを絶対に使わない場面
 
-## When to use
+以下の場面では、どれほど適切に見えるスタンプがあっても **絶対に使わない**。
+テキストで回答すること。
 
-- **User sends a sticker** (you'll see `[Sent a ... sticker]` or `StickerInfo` in the message context) → Reply with a sticker
-- **Short reactions** → OK, thanks, sorry, goodbye, good night, cheering
-- **Conversation endings** → A sticker can naturally close a conversation
+- フォーマルな場面・ビジネスの相談・真剣な議論
+- シリアスな謝罪・トラブル・クレーム対応
+- 悲しみ・怒り・悩みの相談
+- 初対面・関係性が不明な相手
+- 相手がスタンプを使っていないのにこちらから送る
 
-## When NOT to use
+**注意**: 「謝罪系」パッケージが存在するが、これらはコミカルな表現であり、
+本気の謝罪場面で使うと相手を馬鹿にしているように受け取られる。
+本気の謝罪にはテキストを使うこと。
 
-- User asks a question that needs a text answer — even if sent as a sticker
-- Long or serious conversations
-- Business-critical messages
-- When you can't find a suitable sticker — just reply with text
-- On non-LINE channels
+## スタンプを使って良い条件（全て満たすこと）
 
-## Important rules
+1. **LINEチャンネルである**
+2. **カジュアルな会話である**（友達・家族など親しい相手）
+3. 以下のいずれかに該当する:
+   - 相手がスタンプを送ってきた → スタンプで返す
+   - 挨拶・短い相槌・会話の締めくくり
+   - 感情の短い反応（笑い・驚き・共感）
 
-- **Sticker replaces text.** When you send a sticker, send ONLY the STICKER: directive. No text before or after it. The LINE plugin will drop text if a sticker is present.
-- **If in doubt, use text.** A sticker is a seasoning, not the main dish.
+上記を満たさない場合はテキストで回答する。
 
-## How to send
+## 選択手順（2段階）
 
-Output the directive as the entire message:
+### Step 1: パッケージを選ぶ
 
-```
-STICKER:446:1988
-```
+以下のパッケージ一覧を参照する:
 
-The format is `STICKER:<packageId>:<stickerId>` where the IDs come from the sticker catalog.
+| packageId | name                                    | lang      | character | expression_style | animated | description                                                             |
+| --------- | --------------------------------------- | --------- | --------- | ---------------- | -------- | ----------------------------------------------------------------------- |
+| 789       | サリー スペシャル                       | universal | sally     | subtle           | false    | ひよこキャラ、コミカル、可愛い系                                        |
+| 1070      | ムーン スペシャル                       | universal | moon      | expressive       | false    | 人間キャラ、キモカワ系、表情で感情表現、テキストなし                    |
+| 11537     | 動くブラウン＆コニー・サリー スペシャル | universal | mixed     | subtle           | true     | 動物キャラ、可愛い系、アニメーション（動く）                            |
+| 11538     | 動くチョコ＆LINEキャラ スペシャル       | universal | choco     | expressive       | true     | 人間キャラ中心、キモカワ系、アニメーション（動く）                      |
+| 11539     | ユニバースター BT21 スペシャル          | universal | bt21      | subtle           | true     | 動物キャラ中心、BT21、可愛い系、アニメーション（動く）、K-POPファン向け |
+| 6136      | 謝罪のプロ！LINEキャラクターズ          | ja        | mixed     | expressive       | false    | 謝罪系コミカル、日本語テキスト混在、大げさな謝罪表現                    |
+| 6632      | LINE Characters: Making Amends          | zh-tw     | mixed     | expressive       | false    | 謝罪系コミカル、中国語テキスト混在、大げさな謝罪表現                    |
+| 6325      | ちっちゃいブラコニ                      | ja        | brown     | subtle           | false    | 日本語テキスト混在、動物キャラ、可愛い系                                |
+| 6359      | Brown and Cony Fun Size Pack            | th        | brown     | subtle           | false    | タイ語テキスト混在、動物キャラ、可愛い系                                |
+| 6362      | Brown and Cony Fun Size Pack            | zh-tw     | brown     | subtle           | false    | 中国語テキスト混在、動物キャラ、可愛い系                                |
+| 6370      | ちっちゃいブラコニ                      | en        | brown     | subtle           | false    | 英語テキスト混在、動物キャラ、可愛い系                                  |
+| 8515      | ゆる敬語★LINEキャラクターズ             | ja        | mixed     | subtle           | false    | 日本語テキスト混在、敬語・丁寧表現、可愛い系                            |
+| 8522      | ゆる敬語★LINEキャラクターズ             | en        | mixed     | subtle           | false    | 英語テキスト混在、丁寧表現(polite/formal)、可愛い系                     |
+| 8525      | LINE Characters: Pretty Phrases         | zh-tw     | mixed     | subtle           | false    | 中国語テキスト混在、丁寧表現、可愛い系                                  |
 
-## Detecting user stickers
+**パッケージ選択ルール（この順番で絞り込む）:**
 
-When a user sends a sticker on LINE, the message will contain:
+1. **言語で絞る**: 相手のメッセージ言語と lang が一致するパッケージを優先する。
+   一致するものがなければ universal を選ぶ。
 
-- Text like `[Sent a Brown sticker: happy, wave, Hello]` in the message body
-- `StickerInfo` with `raw` (packageId:stickerId), `keywords`, and `channel` fields
+2. **場面で絞る**: description を読んで会話の雰囲気に合うパッケージを選ぶ。
+   - 丁寧・敬語が必要 → descriptionに「敬語・丁寧表現」があるパッケージ
+   - カジュアルな笑い・コミカル → descriptionに「コミカル」「キモカワ」があるパッケージ
+   - 可愛い・無難 → descriptionに「可愛い系」「動物キャラ」があるパッケージ
+   - アニメーションを使いたい → animated=true のパッケージ（デフォルトはfalse優先）
+   - expression_style はデフォルト subtle 優先（感情を強調したい場合のみ expressive）
 
-Use the keywords and description to understand the mood of the sticker they sent, then mirror it.
+3. **候補が複数ある場合**: より description が会話の雰囲気に近いものを選ぶ。
 
-## Sticker selection
+### Step 2: スタンプを選ぶ
 
-### Step 1: Pick a cluster
+選んだパッケージのJSONファイル（{baseDir}/package-{packageId}.json）を読み込む。
 
-Choose the cluster that best matches the conversation mood:
+**スタンプ選択ルール:**
 
-| Cluster        | When to use                                    |
-| -------------- | ---------------------------------------------- |
-| agree-brown    | Confirming / OK / Got it (calm, cool tone)     |
-| agree-misc     | Confirming / OK / Got it (cute, lively tone)   |
-| thanks         | Expressing gratitude, joy, celebration         |
-| sorry-formal   | Serious apology, bowing, formal setting        |
-| sorry-casual   | Light apology, playful "oops", casual setting  |
-| cheer-up       | Encouraging someone (energetic, powerful tone) |
-| cheer-up-sally | Encouraging someone (cute, gentle tone)        |
-| love           | Affection, hearts, warmth                      |
-| goodnight      | Bedtime, sleepy, end of day                    |
-| labor          | Acknowledging effort, "good work today"        |
-| confused       | Puzzled, nervous, uncertain                    |
-| shock          | Surprised, devastated, disbelief               |
-| angry          | Frustrated, annoyed, scolding                  |
-| please         | Requesting, begging, asking a favor            |
-| action         | Eating, arriving, leaving, daily actions       |
+1. **descを読む**: 各スタンプの desc フィールドに画像の内容が記述されている。
+   キャラクターの表情・ポーズ・テキストを確認する。
 
-**If no cluster fits the situation, do not send a sticker. Reply with text instead.**
+2. **会話の文脈と照合する**:
+   - 相手が何を言ったか・どんな感情か → それに対するリアクションとして自然か
+   - テキストが入っているスタンプは lang フィールドで言語を確認する
+   - 相手の言語と一致するテキスト、またはテキストなし（universal）を優先する
 
-### Step 2: Read the cluster file
+3. **消去法で絞る**:
+   - 場面にそぐわない感情のスタンプは除外する
+   - テキストの言語が相手の言語と合わないスタンプは除外する
+   - 複数残った場合はより desc が文脈に近いものを選ぶ
 
-Read `references/cluster-{name}.json` (e.g. `references/cluster-thanks.json`).
+4. **【重要】中止条件 — 以下の場合はスタンプを送らずテキストで回答する**:
+   - descを読んで「これが自然」と確信できるスタンプが見つからない場合
+   - 消去法で絞った結果、残ったスタンプが文脈に合っているか自信がない場合
+   - パッケージを変えても適切なスタンプが見つからない場合
 
-Each sticker entry has:
+   **妥協してそれっぽいスタンプを送ることは絶対にしない。**
+   迷ったらテキストで回答する。スタンプは確信がある時だけ使う。
 
-- `id` — use this in the STICKER: directive (format: packageId:stickerId)
-- `lang` — `universal`, `ja`, `en`, `zh-tw`, or `th`
-- `desc` — visual description (character appearance, pose, mood)
-- `text` — text written on the sticker image (if any, null otherwise)
+## 出力形式
 
-### Step 3: Filter by language
+STICKER:packageId:stickerId
 
-Determine the user's language from the conversation (what language they write in).
+テキストと同時送信しない。スタンプのみ送信する。
 
-- If the user writes in Japanese → prefer `lang: ja`, fall back to `universal`
-- If the user writes in English → prefer `lang: en`, fall back to `universal`
-- If the user writes in Chinese → prefer `lang: zh-tw`, fall back to `universal`
-- If the user writes in Thai → prefer `lang: th`, fall back to `universal`
-- If unsure → use `universal` only
+## スタンプカタログ参照先
 
-**If no stickers match the user's language or universal in this cluster, do not send a sticker. Reply with text instead.**
-
-### Step 4: Pick the best sticker
-
-From the filtered candidates, pick the one whose `desc` and `text` best match the conversation mood and tone.
-
-- For casual conversations → pick stickers with playful expressions
-- For polite conversations → pick stickers with formal text (e.g. "よろしくお願いします")
-- For emotional moments → pick stickers with strong expressions
-
-**Variety**: Don't repeat the same sticker. Choose different ones across conversations.
-
-**If no sticker feels right, do not force it. Reply with text instead.**
-
-## Mirroring principle
-
-When the user sends a sticker, mirror their style:
-
-1. **Respond with a sticker** — not text (unless the sticker contains a question)
-2. **Match the mood** — cheerful → cheerful, sad → comforting, funny → funny
-3. **Match the vibe** — cute character → cute character, dramatic → dramatic
-4. **If the user's sticker is a question or request** (e.g. a sticker saying "Are you free?") → reply with text, not a sticker
-
-## Frequency
-
-- A sticker every 3-5 messages is natural
-- Never send stickers in consecutive messages
-- When in doubt, use text instead
+{baseDir}/package-index.json
+{baseDir}/package-{packageId}.json

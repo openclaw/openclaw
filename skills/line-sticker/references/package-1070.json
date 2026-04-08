@@ -1,0 +1,216 @@
+{
+  "packageId": "1070",
+  "name": "ムーン スペシャル",
+  "lang": "universal",
+  "register": "casual",
+  "character": "moon",
+  "expression_style": "expressive",
+  "animated": false,
+  "occasions": ["reaction", "humor", "emphasis"],
+  "stickers": [
+    {
+      "id": "1070:17839",
+      "desc": "round white face、yellow chick, 青い帽子と赤いリュックを身につけ、笑顔で指を差しながら楽しそうに走っている。音符の吹き出しがある。, scene:旅行やお出かけに出かける時",
+      "occasions": ["greeting", "farewell"]
+    },
+    {
+      "id": "1070:17840",
+      "desc": "round white face, 目を閉じて満面の笑みでジャンプし、青いポンポンを持って全力で応援しているポーズ。, scene:相手を応援する時や喜びを表現する時",
+      "occasions": ["reaction", "praise"]
+    },
+    {
+      "id": "1070:17841",
+      "desc": "round white face, サングラスと赤キャップ姿でマイクを持ち、熱唱しながら指を差すラッパー風のポーズ。, scene:テンションが高い時, text:\"LINE\"",
+      "occasions": ["greeting", "reaction", "humor"],
+      "text": "LINE"
+    },
+    {
+      "id": "1070:17842",
+      "desc": "round white face, 木の枝に座りマンドリンを奏でながら、葉をくわえて物思いに耽るような得意げな表情。, scene:余裕がある時や、自分に酔っている時",
+      "occasions": ["humor", "reaction"]
+    },
+    {
+      "id": "1070:17843",
+      "desc": "round white face、yellow chick, ビールと焼き鳥を手に持ち、歓喜の表情で飛び跳ねるムーンと、小さなビールを持って並走するサリーの姿。, scene:飲み会、お祝い、乾杯の合図",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17844",
+      "desc": "round white face, 涙を流しながら口を大きく開けて笑い、両手で親指を立ててサムズアップしている。感動と喜びが混ざった表情。, scene:凄く感動した時や感謝、賞賛を伝える時",
+      "occasions": ["thanks", "reaction", "praise"]
+    },
+    {
+      "id": "1070:17845",
+      "desc": "round white face、yellow chick, 青い傘を差し赤い長靴を履いて、雨の中で笑顔でジャンプしている姿。, scene:雨の日の外出や喜びの表現",
+      "occasions": ["greeting", "reaction"]
+    },
+    {
+      "id": "1070:17846",
+      "desc": "round white face, 頭に花をつけ、黄色い目で口から青いよだれを垂らしながら、狂ったように走り回る様子。, scene:理性を失うほど興奮した時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17847",
+      "desc": "round white face、yellow chick, ナイフとフォークを手に気合十分な表情でステーキを前に口を大きく開けている。横には料理を運ぶサリーがいる。, scene:食事の合図やお腹が空いた時",
+      "occasions": ["request", "reaction", "humor"]
+    },
+    {
+      "id": "1070:17848",
+      "desc": "round white face/yellow chick, 目を細めて嬉しそうに微笑み、鼻歌を歌いながらブラウンのキャラ弁が入ったお弁当箱を手に持っている姿。, scene:昼食時や手作り弁当の報告",
+      "occasions": ["greeting", "reaction"]
+    },
+    {
+      "id": "1070:17849",
+      "desc": "round white face, 太い眉毛と長いまつ毛のキメ顔で、ワイングラスを手に持ち、周囲にキラキラを背負って澄ましているポーズ。, scene:乾杯や気取った返信をする時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17850",
+      "desc": "round white face, 眉を吊り上げ口から煙を出しながら、食べ物を手に無言で怒りをあらわにする表情。, scene:激怒している時や無言の抗議, text:\"....\"",
+      "occasions": ["reaction", "humor"],
+      "text": "...."
+    },
+    {
+      "id": "1070:17851",
+      "desc": "round white face, グレーのジャージを着て、汗をかきながら必死な表情で走るポーズ。後ろにはサリーもいる。, scene:ランニングや急いでいる時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17852",
+      "desc": "round white face/yellow chick, パスポートを手にスーツケースを引き、鼻歌を歌いながら楽しそうに旅行へ出発するポーズ。, scene:旅行への出発や、お出かけの報告をする時",
+      "occasions": ["greeting", "farewell"]
+    },
+    {
+      "id": "1070:17853",
+      "desc": "round white face, 頭にネクタイを巻き、ぐるぐる目でよだれを垂らしながら、千鳥足でふらふらと歩いている酔っ払った姿。, scene:泥酔した時や飲み会帰り",
+      "occasions": ["humor", "reaction"]
+    },
+    {
+      "id": "1070:17854",
+      "desc": "round white face, 派手なサングラスとヒゲをつけ、両手に札束を広げてドヤ顔をする。周囲に金塊や光が散っている成金風のポーズ。, scene:儲かった時や金運を自慢する時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17855",
+      "desc": "round white face, 歯を食いしばり、拳を握りしめて決意を固める表情。背景に稲妻が走り、目が黄色く光っている。, scene:強い決意や怒り、衝撃を伝える時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17856",
+      "desc": "round white face, 怒りで顔を黒く染めて咆哮し、四つん這いで耐えている。周囲に激しい雨のような線と黄色いオーラが描かれている。, scene:猛烈な怒りや絶望を伝える際",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17857",
+      "desc": "round white face, 地面に横たわり、空腹で力尽きたような絶望的な表情。目の前には空の器とフォークが置かれている。, scene:極度の空腹や金欠を伝える時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17858",
+      "desc": "round white face, 部屋の隅で膝をつき、涙を流しながら落ち込んでいる悲しげな表情。, scene:悲しい時や落ち込んだ時",
+      "occasions": ["reaction", "apology", "humor"]
+    },
+    {
+      "id": "1070:17859",
+      "desc": "round white face, 夕日を背景に涙を流し、しゃがみ込んで地面に小枝で落書きをする悲しげな姿。, scene:ひどく落ち込んだ時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17860",
+      "desc": "round white face, 眼鏡と髭をつけ、椅子に座って新聞を読みながら、眉間に皺を寄せて真剣な表情をしている。, scene:ニュースの確認や休日",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17861",
+      "desc": "round white face, サングラスをかけタバコをくわえ、トレンチコートを着て佇むハードボイルドでクールな表情。, scene:渋い雰囲気を出す時や、かっこつけたい時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17862",
+      "desc": "round white face, 目を黄色く光らせ、口を大きく開けて激昂している。衝撃や怒りを感じさせる、勢いのあるポーズ。, scene:驚いた時や怒りを伝える時, text:\"!!!\"",
+      "occasions": ["reaction", "humor"],
+      "text": "!!!"
+    },
+    {
+      "id": "1070:17863",
+      "desc": "round white face, 二人のムーンがお腹を抱えて大爆笑している。目をつぶり、口を大きく開けて体を揺らしている。, scene:爆笑した時や面白い時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17864",
+      "desc": "round white face, 片手を額に当て、腰に手を添えてニヤリと笑うポーズ。照れ隠しやドヤ顔、自己陶酔しているような表情。, scene:自慢や照れ隠しの場面",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17865",
+      "desc": "round white face, 頬を赤らめて目を細め、体をくねらせながら照れくさそうに微笑んでいるポーズ。, scene:照れている時や褒められた時",
+      "occasions": ["reaction", "thanks"]
+    },
+    {
+      "id": "1070:17866",
+      "desc": "round white face, 顎に手を当て、眉間にしわを寄せて真剣な表情で考え込んでいる。頬を赤らめ、頭の横にキラリと光るマークがある。, scene:何かを真剣に検討・思案する場面",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17867",
+      "desc": "round white face, 顔を赤らめ、冷や汗を流しながら口を大きく開けて叫び、多数の腕を激しく振り回してパニックになっている姿。, scene:パニックや大慌ての時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17868",
+      "desc": "round white face, 顔を赤くし口を大きく開けて叫び、両手を震わせて激怒している。頭には怒りマークがあり、冷や汗もかいている。, scene:激しい怒りを感じた時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17869",
+      "desc": "round white face, 大粒の涙を流して号泣しながら、膝をついて両手を合わせ、必死に懇願したり謝ったりしている。目は黄色く、口を大きく開けている, scene:必死なお願いや深い謝罪の場面",
+      "occasions": ["apology", "request"]
+    },
+    {
+      "id": "1070:17870",
+      "desc": "round white face, 顔を真っ赤にして歯を食いしばり、耳から湯気を出して激しく地団駄を踏んでいる怒りの表情。, scene:激しい怒りや不満を伝える時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17871",
+      "desc": "round white face, 涙を流し鼻を赤くしながら、赤いチェックのハンカチを大きく振って悲しそうに見送る姿。, scene:別れの挨拶や見送り",
+      "occasions": ["farewell", "greeting"]
+    },
+    {
+      "id": "1070:17872",
+      "desc": "round white face, パソコンの前で鼻提灯を出し、涎を垂らしながら激しく居眠りをしているポーズ。, scene:仕事や作業中に寝落ちした時, text:\"Z Z Z\"",
+      "occasions": ["humor", "reaction", "greeting"],
+      "text": "Z Z Z"
+    },
+    {
+      "id": "1070:17873",
+      "desc": "brown bear/round white face, 怒りながら泣いているムーンの肩にブラウンが手を回し、静かに寄り添って慰めている様子。, scene:落ち込んだ人を慰める時",
+      "occasions": ["reaction"]
+    },
+    {
+      "id": "1070:17874",
+      "desc": "round white face, 無精髭を生やし、目の下にクマを作り、力なくトボトボと歩く姿。非常に憔悴しており、絶望感や疲労が漂う表情。, scene:疲れ切った時や体調が悪い時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17875",
+      "desc": "round white face, 眉をひそめて激昂し、口を大きく開けて叫びながら両手で机を叩きつけているポーズ。, scene:激しい怒りや不満を伝える時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17876",
+      "desc": "round white face/yellow chick, 魂が抜けたように体から幽霊が飛び出し、怒ったような表情をしている。横でサリーが静かにそれを見守っている。, scene:疲れ切って魂が抜けた時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17877",
+      "desc": "round white face, 顔を真っ赤にして歯を食いしばり、震えながらトイレットペーパーを手に持ってトイレを極限まで我慢している表情。, scene:トイレを我慢している時",
+      "occasions": ["reaction", "humor"]
+    },
+    {
+      "id": "1070:17878",
+      "desc": "round white face, 頬を赤らめ、鼻の下に指を当てて斜め上を見上げている、とぼけたような表情とポーズ。, scene:とぼける時や照れ隠し",
+      "occasions": ["reaction", "humor"]
+    }
+  ]
+}
