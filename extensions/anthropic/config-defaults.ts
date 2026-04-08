@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
@@ -84,7 +85,7 @@ function resolveAnthropicPrimaryModelRef(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const aliasKey = trimmed.toLowerCase();
+  const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
   if (aliasKey === "opus") {
     return "anthropic/claude-opus-4-6";
   }
@@ -124,7 +125,7 @@ function isAnthropicCacheRetentionTarget(
     parsed &&
     (parsed.provider === "anthropic" ||
       (parsed.provider === "amazon-bedrock" &&
-        parsed.model.toLowerCase().includes("anthropic.claude"))),
+        normalizeLowercaseStringOrEmpty(parsed.model).includes("anthropic.claude"))),
   );
 }
 

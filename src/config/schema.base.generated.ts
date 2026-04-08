@@ -2807,6 +2807,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           supportsStrictMode: {
                             type: "boolean",
                           },
+                          requiresStringContent: {
+                            type: "boolean",
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -4236,6 +4239,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Mode",
                     description:
                       'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+                  },
+                  provider: {
+                    type: "string",
+                    title: "Compaction Provider",
+                    description:
+                      "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
                   },
                   reserveTokens: {
                     type: "integer",
@@ -25091,6 +25100,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
       tags: ["advanced"],
     },
+    "agents.defaults.compaction.provider": {
+      label: "Compaction Provider",
+      help: "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
+      tags: ["advanced"],
+    },
     "agents.defaults.compaction.reserveTokens": {
       label: "Compaction Reserve Tokens",
       help: "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
@@ -26890,6 +26904,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.6",
+  version: "2026.4.8",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

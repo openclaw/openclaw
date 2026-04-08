@@ -105,10 +105,7 @@ const DISCORD_THREAD_NAME_LIMIT = 100;
 /** Derive a thread title from the first non-empty line of the message text. */
 function deriveForumThreadName(text: string): string {
   const firstLine =
-    text
-      .split("\n")
-      .find((l) => l.trim())
-      ?.trim() ?? "";
+    normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
   return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
 }
 
@@ -361,13 +358,13 @@ export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookSendOpts,
 ): Promise<DiscordSendResult> {
-  const webhookId = opts.webhookId.trim();
-  const webhookToken = opts.webhookToken.trim();
+  const webhookId = normalizeOptionalString(opts.webhookId) ?? "";
+  const webhookToken = normalizeOptionalString(opts.webhookToken) ?? "";
   if (!webhookId || !webhookToken) {
     throw new Error("Discord webhook id/token are required");
   }
 
-  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
+  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,

@@ -171,7 +171,7 @@ export function resolveChannelModelOverride(
     keys,
     parentKeys,
     wildcardKey: "*",
-    normalizeKey: (value) => value.trim().toLowerCase(),
+    normalizeKey: (value) => normalizeOptionalLowercaseString(value) ?? "",
   });
   const raw = match.entry ?? match.wildcardEntry;
   if (typeof raw !== "string") {

@@ -1,6 +1,9 @@
 import { URL } from "node:url";
 import type { GatewayConfig } from "../config/types.gateway.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
@@ -70,7 +73,9 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
 }
 
 function readAllowHttp(value: string | undefined): boolean {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeOptionalString(value)
+    ? normalizeLowercaseStringOrEmpty(value)
+    : undefined;
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 

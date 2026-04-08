@@ -53,7 +53,7 @@ export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string
   );
 }
 
-const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();
+const HEARTBEAT_OK_PREFIX = normalizeLowercaseStringOrEmpty(HEARTBEAT_TOKEN);
 
 // Detect heartbeat-specific noise so cron reminders don't trigger on non-reminder events.
 function isHeartbeatAckEvent(evt: string): boolean {
@@ -61,7 +61,7 @@ function isHeartbeatAckEvent(evt: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (!lower.startsWith(HEARTBEAT_OK_PREFIX)) {
     return false;
   }
@@ -85,7 +85,7 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
-  return evt.toLowerCase().includes("exec finished");
+  return normalizeLowercaseStringOrEmpty(evt).includes("exec finished");
 }
 
 // Returns true when a system event should be treated as real cron reminder content.

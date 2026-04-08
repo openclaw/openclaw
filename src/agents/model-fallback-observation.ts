@@ -56,6 +56,8 @@ export function logModelFallbackDecision(params: {
     : "none";
   const reasonText = params.reason ?? "unknown";
   const observedError = buildErrorObservationFields(params.error);
+  const detailText = observedError.providerErrorMessagePreview ?? observedError.errorPreview;
+  const detailSuffix = detailText ? ` detail=${sanitizeForLog(detailText)}` : "";
   decisionLog.warn("model fallback decision", {
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
@@ -88,6 +90,6 @@ export function logModelFallbackDecision(params: {
     })),
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText} next=${nextText}`,
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText} next=${nextText}${detailSuffix}`,
   });
 }

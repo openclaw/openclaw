@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { nostrPlugin } from "./channel.js";
+import { nostrOutboundAdapter, startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
 import { TEST_RESOLVED_PRIVATE_KEY, buildResolvedNostrAccount } from "./test-fixtures.js";
 
@@ -57,14 +57,14 @@ describe("nostr outbound cfg threading", () => {
     };
     mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
 
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+    const cleanup = (await startNostrGatewayAccount(
       createStartAccountContext({
         account: buildResolvedNostrAccount(),
       }),
     )) as { stop: () => void };
 
     const cfg = createCfg();
-    await nostrPlugin.outbound!.sendText!({
+    await nostrOutboundAdapter.sendText({
       cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "|a|b|",
@@ -106,7 +106,7 @@ describe("nostr outbound cfg threading", () => {
     };
     mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
 
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+    const cleanup = (await startNostrGatewayAccount(
       createStartAccountContext({
         account: buildResolvedNostrAccount({ accountId: "work" }),
       }),
@@ -121,7 +121,7 @@ describe("nostr outbound cfg threading", () => {
       },
     };
 
-    await nostrPlugin.outbound!.sendText!({
+    await nostrOutboundAdapter.sendText({
       cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "hello",

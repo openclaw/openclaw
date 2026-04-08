@@ -14,6 +14,10 @@ import {
 } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
@@ -170,17 +174,17 @@ function resolveSlackOutboundSessionRouteForTest(params: ChannelOutboundSessionR
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "slack"));
   if (!rawId) {
     return null;
   }
-  const normalizedId = rawId.toLowerCase();
+  const normalizedId = normalizeLowercaseStringOrEmpty(rawId);
   const isDm = lower.startsWith("user:") || lower.startsWith("slack:") || /^u/i.test(rawId);
   const isGroupChannel =
     /^g/i.test(rawId) &&
     params.cfg.channels?.slack?.dm?.groupChannels?.some(
-      (candidate) => String(candidate).trim().toLowerCase() === normalizedId,
+      (candidate) => normalizeLowercaseStringOrEmpty(String(candidate)) === normalizedId,
     ) === true;
   const peerKind: RoutePeer["kind"] = isDm ? "direct" : isGroupChannel ? "group" : "channel";
   return buildThreadedChannelRoute({
@@ -266,7 +270,9 @@ function resolveMattermostOutboundSessionRouteForTest(params: ChannelOutboundSes
 }
 
 function resolveWhatsAppOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const normalized = stripChannelTargetPrefix(params.target, "whatsapp").trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(
+    stripChannelTargetPrefix(params.target, "whatsapp"),
+  );
   if (!normalized) {
     return null;
   }
@@ -308,7 +314,7 @@ function resolveMSTeamsOutboundSessionRouteForTest(params: ChannelOutboundSessio
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const rawId = stripTargetKindPrefix(trimmed);
   if (!rawId) {
     return null;
@@ -338,14 +344,17 @@ function resolveFeishuOutboundSessionRouteForTest(params: ChannelOutboundSession
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   let isGroup = false;
   if (lower.startsWith("group:") || lower.startsWith("chat:") || lower.startsWith("channel:")) {
     trimmed = trimmed.replace(/^(group|chat|channel):/i, "").trim();
     isGroup = true;
   } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
     trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
-  } else if (!trimmed.toLowerCase().startsWith("ou_") && !trimmed.toLowerCase().startsWith("on_")) {
+  } else if (
+    !normalizeLowercaseStringOrEmpty(trimmed).startsWith("ou_") &&
+    !normalizeLowercaseStringOrEmpty(trimmed).startsWith("on_")
+  ) {
     isGroup = false;
   }
   return buildChannelOutboundSessionRoute({
@@ -391,7 +400,7 @@ function resolveBlueBubblesOutboundSessionRouteForTest(params: ChannelOutboundSe
   if (!rawId) {
     return null;
   }
-  const normalizedId = rawId.toLowerCase();
+  const normalizedId = normalizeLowercaseStringOrEmpty(rawId);
   const isGroup = match !== null;
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
@@ -410,7 +419,7 @@ function resolveZaloOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   if (!trimmed) {
     return null;
   }
-  const isGroup = trimmed.toLowerCase().startsWith("group:");
+  const isGroup = normalizeLowercaseStringOrEmpty(trimmed).startsWith("group:");
   const peerId = stripTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -432,7 +441,7 @@ function resolveZalouserOutboundSessionRouteForTest(params: ChannelOutboundSessi
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const isGroup = lower.startsWith("group:") || lower.startsWith("g:");
   const peerId = trimmed.replace(/^(group|user|g|u|dm):/i, "").trim();
   if (!peerId) {
@@ -472,7 +481,7 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("group:")) {
     const nest = `chat/${trimmed.slice("group:".length).trim()}`;
     return buildChannelOutboundSessionRoute({

@@ -355,6 +355,66 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("surfaces nested Claude stream-json API errors instead of raw event output", async () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    const apiError = `API Error: 400 ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message,
+      },
+      request_id: "req_011CZqHuXhFetYCnr8325DQc",
+    })}`;
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: apiError }],
+            },
+            session_id: "session-api-error",
+            error: "unknown",
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            result: apiError,
+            session_id: "session-api-error",
+          }),
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const run = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-api-error",
+      }),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      name: "FailoverError",
+      message,
+      reason: "billing",
+      status: 402,
+    });
+  });
+
   it("sanitizes dangerous backend env overrides before spawn", async () => {
     mockSuccessfulCliRun();
     await executePreparedCliRun(

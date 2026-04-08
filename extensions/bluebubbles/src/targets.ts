@@ -6,6 +6,10 @@ import {
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
 } from "openclaw/plugin-sdk/channel-targets";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
@@ -27,18 +31,6 @@ const SERVICE_PREFIXES: Array<{ prefix: string; service: BlueBubblesService }> =
 ];
 const CHAT_IDENTIFIER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHAT_IDENTIFIER_HEX_RE = /^[0-9a-f]{24,64}$/i;
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return normalizeOptionalString(value)?.toLowerCase() ?? "";
-}
 
 function parseRawChatGuid(value: string): string | null {
   const trimmed = normalizeOptionalString(value);

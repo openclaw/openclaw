@@ -3,6 +3,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeText } from "./normalize-text.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 
@@ -38,7 +39,7 @@ export type AcpBindingConfigShape = {
 };
 
 export function normalizeMode(value: unknown): AcpRuntimeSessionMode {
-  const raw = normalizeText(value)?.toLowerCase();
+  const raw = normalizeOptionalLowercaseString(value);
   return raw === "oneshot" ? "oneshot" : "persistent";
 }
 
@@ -117,7 +118,7 @@ export function parseConfiguredAcpSessionKey(
   if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
     return null;
   }
-  const channel = normalizeText(tokens[2])?.toLowerCase();
+  const channel = normalizeOptionalLowercaseString(tokens[2]);
   if (!channel) {
     return null;
   }

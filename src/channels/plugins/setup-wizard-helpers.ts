@@ -4,6 +4,7 @@ import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -50,10 +51,10 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
 
   const entered = await params.prompter.text({
     message: `New ${params.label} account id`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
   const normalized = normalizeAccountId(String(entered));
-  if (String(entered).trim() !== normalized) {
+  if ((normalizeOptionalString(entered) ?? "") !== normalized) {
     await params.prompter.note(
       `Normalized account id to "${normalized}".`,
       `${params.label} account`,
@@ -63,7 +64,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
 };
 
 export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
-  const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
+  const next = normalizeStringEntries(allowFrom ?? []);
   if (!next.includes("*")) {
     next.push("*");
   }
@@ -74,7 +75,7 @@ export function mergeAllowFromEntries(
   current: Array<string | number> | null | undefined,
   additions: Array<string | number>,
 ): string[] {
-  const merged = [...(current ?? []), ...additions].map((v) => String(v).trim()).filter(Boolean);
+  const merged = normalizeStringEntries([...(current ?? []), ...additions]);
   return [...new Set(merged)];
 }
 
@@ -144,9 +145,7 @@ export function normalizeAllowFromEntries(
   entries: Array<string | number>,
   normalizeEntry?: (value: string) => string | null | undefined,
 ): string[] {
-  const normalized = entries
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  const normalized = normalizeStringEntries(entries)
     .map((entry) => {
       if (entry === "*") {
         return "*";
@@ -154,8 +153,7 @@ export function normalizeAllowFromEntries(
       if (!normalizeEntry) {
         return entry;
       }
-      const value = normalizeEntry(entry);
-      return typeof value === "string" ? value.trim() : "";
+      return normalizeOptionalString(normalizeEntry(entry)) ?? "";
     })
     .filter(Boolean);
   return [...new Set(normalized)];
@@ -1215,7 +1213,7 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
     placeholder: params.placeholder,
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
-      const raw = String(value ?? "").trim();
+      const raw = normalizeOptionalString(value) ?? "";
       if (!raw) {
         return "Required";
       }
@@ -1517,7 +1515,7 @@ export async function promptResolvedAllowFrom(params: {
       message: params.message,
       placeholder: params.placeholder,
       initialValue: params.existing[0] ? String(params.existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
     const parts = params.parseInputs(String(entry));
     if (!params.token) {

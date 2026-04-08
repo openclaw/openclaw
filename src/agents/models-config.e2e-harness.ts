@@ -3,12 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { resetModelsJsonReadyCacheForTest } from "./models-config.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -38,6 +39,8 @@ export function installModelsConfigTestHooks(opts?: {
     previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
     delete process.env.OPENCLAW_AGENT_DIR;
     delete process.env.PI_CODING_AGENT_DIR;
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     if (shouldResetPluginLoaderState) {
       resetPluginLoaderTestStateForTest();
     }
@@ -59,6 +62,8 @@ export function installModelsConfigTestHooks(opts?: {
     } else {
       process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
     }
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     if (shouldResetPluginLoaderState) {
       resetPluginLoaderTestStateForTest();
     }

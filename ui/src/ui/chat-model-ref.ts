@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 export type ChatModelOverride =
@@ -68,8 +69,9 @@ export function resolveChatModelOverride(
   }
 
   let matchedValue = "";
+  const normalizedTrimmed = normalizeLowercaseStringOrEmpty(trimmed);
   for (const entry of catalog) {
-    if (entry.id.trim().toLowerCase() !== trimmed.toLowerCase()) {
+    if (normalizeLowercaseStringOrEmpty(entry.id) !== normalizedTrimmed) {
       continue;
     }
     const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
@@ -77,7 +79,9 @@ export function resolveChatModelOverride(
       matchedValue = candidate;
       continue;
     }
-    if (matchedValue.toLowerCase() !== candidate.toLowerCase()) {
+    if (
+      normalizeLowercaseStringOrEmpty(matchedValue) !== normalizeLowercaseStringOrEmpty(candidate)
+    ) {
       return { value: trimmed, source: "raw", reason: "ambiguous" };
     }
   }

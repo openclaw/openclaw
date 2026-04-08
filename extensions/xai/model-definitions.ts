@@ -204,7 +204,9 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
 export function resolveXaiCatalogEntry(modelId: string) {
   const trimmed = modelId.trim();
   const lower = normalizeOptionalLowercaseString(modelId) ?? "";
-  const exact = XAI_MODEL_CATALOG.find((entry) => entry.id.toLowerCase() === lower);
+  const exact = XAI_MODEL_CATALOG.find(
+    (entry) => normalizeOptionalLowercaseString(entry.id) === lower,
+  );
   if (exact) {
     return toModelDefinition(exact);
   }

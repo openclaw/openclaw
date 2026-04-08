@@ -1,6 +1,6 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import { normalizeProviderSpecificConfig } from "../agents/models-config.providers.policy.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { applyProviderConfigDefaultsWithPlugin } from "../plugins/provider-runtime.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { normalizeTalkConfig } from "./talk.js";

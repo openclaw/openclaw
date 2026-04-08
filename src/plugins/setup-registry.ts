@@ -74,6 +74,7 @@ const setupRegistryCache = new Map<string, PluginSetupRegistry>();
 const setupProviderCache = new Map<string, ProviderPlugin | null>();
 
 export function clearPluginSetupRegistryCache(): void {
+  jitiLoaders.clear();
   setupRegistryCache.clear();
   setupProviderCache.clear();
 }

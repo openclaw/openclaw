@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,7 +20,14 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-const PROTECTED_GATEWAY_CONFIG_PATHS = ["tools.exec.ask", "tools.exec.security"] as const;
+const PROTECTED_GATEWAY_CONFIG_PATHS = [
+  "tools.exec.ask",
+  "tools.exec.security",
+  "tools.exec.safeBins",
+  "tools.exec.safeBinProfiles",
+  "tools.exec.safeBinTrustedDirs",
+  "tools.exec.strictInlineEval",
+] as const;
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -98,7 +106,11 @@ function assertGatewayConfigMutationAllowed(params: {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) => getValueAtPath(params.currentConfig, path) !== getValueAtPath(nextConfig, path),
+    (path) =>
+      !isDeepStrictEqual(
+        getValueAtPath(params.currentConfig, path),
+        getValueAtPath(nextConfig, path),
+      ),
   );
   if (changedProtectedPaths.length === 0) {
     return;
