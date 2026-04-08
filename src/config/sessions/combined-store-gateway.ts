@@ -1,6 +1,8 @@
 // Builds the gateway-visible combined session store across agent-specific stores.
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
+import fsSync from "node:fs";
+import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -20,6 +22,14 @@ import type { SessionEntry } from "./types.js";
 // Template-backed stores need per-agent scans before they can be merged for Gateway views.
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
+}
+
+function resolveComparablePath(filePath: string): string {
+  try {
+    return fsSync.realpathSync.native(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
 }
 
 function loadGatewayStoreEntries(storePath: string): Record<string, SessionEntry> {
@@ -117,8 +127,20 @@ export function loadCombinedSessionStoreForGateway(
     : opts.configuredAgentsOnly === true
       ? resolveSessionStoreTargets(cfg, { allAgents: true })
       : resolveAllAgentSessionStoreTargetsSync(cfg);
+  const scopedTargets = literalAgentsDir
+    ? (() => {
+        const scopedAgentsDir = resolveComparablePath(literalAgentsDir);
+        return targets.filter((target) => {
+          const targetAgentsDir = resolveAgentsDirFromSessionStorePath(target.storePath);
+          return (
+            targetAgentsDir !== undefined &&
+            resolveComparablePath(targetAgentsDir) === scopedAgentsDir
+          );
+        });
+      })()
+    : targets;
   const combined: Record<string, SessionEntry> = {};
-  for (const target of targets) {
+  for (const target of scopedTargets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
     const store = loadGatewayStoreEntries(storePath);
@@ -139,8 +161,8 @@ export function loadCombinedSessionStoreForGateway(
   }
 
   let storePath = "(multiple)";
-  if (targets.length === 1) {
-    storePath = targets[0].storePath;
+  if (scopedTargets.length === 1) {
+    storePath = scopedTargets[0].storePath;
   } else if (literalStorePath) {
     storePath = literalStorePath;
   } else if (typeof storeConfig === "string" && storeConfig.trim()) {

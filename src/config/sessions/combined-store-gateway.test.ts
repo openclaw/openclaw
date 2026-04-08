@@ -30,6 +30,12 @@ describe("loadCombinedSessionStoreForGateway", () => {
       await writeStore(codexStorePath, {
         "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
       });
+      await writeStore(
+        path.join(home, ".openclaw", "agents", "other", "sessions", "sessions.json"),
+        {
+          "agent:other:leaked": { sessionId: "s-leaked", updatedAt: 300 },
+        },
+      );
 
       const cfg: OpenClawConfig = {
         session: {
@@ -45,6 +51,7 @@ describe("loadCombinedSessionStoreForGateway", () => {
 
       expect(storePath).toBe(mainStorePath);
       expect(Object.keys(store).toSorted()).toEqual(["agent:codex:acp-task", "agent:main:main"]);
+      expect(store["agent:other:leaked"]).toBeUndefined();
     });
   });
 
