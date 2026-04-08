@@ -80,9 +80,20 @@ async function workspaceList(
 > {
   const targetPath = path.join(workspaceDir, relativePath);
 
+  // Ensure workspace directory exists (tolerate uncreated workspaces)
+  try {
+    await fs.access(workspaceDir);
+  } catch {
+    await fs.mkdir(workspaceDir, { recursive: true });
+  }
+
   // Resolve symlinks and verify the target stays within the workspace root
   const realRoot = await fs.realpath(workspaceDir);
-  const realTarget = await fs.realpath(targetPath);
+  const realTarget = await fs.realpath(targetPath).catch(() => null);
+  if (!realTarget) {
+    // Target directory doesn't exist yet, return empty listing
+    return [];
+  }
   if (!realTarget.startsWith(realRoot + path.sep) && realTarget !== realRoot) {
     throw new Error("Path resolves outside workspace root");
   }

@@ -2477,8 +2477,8 @@ export function renderApp(state: AppViewState) {
                   const uploadListPath = state.workspacePath;
                   for (const file of files) {
                     try {
-                      const filePath = state.workspacePath
-                        ? `${state.workspacePath}/${file.name}`
+                      const filePath = uploadListPath
+                        ? `${uploadListPath}/${file.name}`
                         : file.name;
                       // Use base64 encoding to preserve binary data for all file types
                       const buffer = await file.arrayBuffer();
