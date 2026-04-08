@@ -142,6 +142,7 @@ describe("status.command-sections", () => {
     expect(
       buildStatusMemoryValue({
         memory: null,
+        memoryCollection: "skipped",
         memoryPlugin: { enabled: true, slot: "memory-lancedb" },
         ok: (value) => `ok(${value})`,
         warn: (value) => `warn(${value})`,
@@ -151,6 +152,22 @@ describe("status.command-sections", () => {
         resolveMemoryCacheSummary: () => ({ text: "cache ok", tone: "ok" }),
       }),
     ).toBe("muted(enabled (plugin memory-lancedb) · not checked)");
+  });
+
+  it("keeps enabled memory as unavailable when collection was attempted", () => {
+    expect(
+      buildStatusMemoryValue({
+        memory: null,
+        memoryCollection: "checked",
+        memoryPlugin: { enabled: true, slot: "memory-lancedb" },
+        ok: (value) => `ok(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+        resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryCacheSummary: () => ({ text: "cache ok", tone: "ok" }),
+      }),
+    ).toBe("muted(enabled (plugin memory-lancedb) · unavailable)");
   });
 
   it("builds footer lines from update and reachability state", () => {

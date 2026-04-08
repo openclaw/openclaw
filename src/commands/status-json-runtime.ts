@@ -11,6 +11,7 @@ type StatusJsonScanLike = {
   update: UpdateCheckResult;
   osSummary: unknown;
   memory: unknown;
+  memoryCollection?: "checked" | "skipped";
   memoryPlugin: unknown;
   gatewayMode: "local" | "remote";
   gatewayConnection: {
@@ -81,6 +82,7 @@ export async function resolveStatusJsonOutput(params: {
     }),
     osSummary: scan.osSummary,
     memory: scan.memory,
+    memoryCollection: scan.memoryCollection,
     memoryPlugin: scan.memoryPlugin,
     agents: scan.agentStatus,
     secretDiagnostics: scan.secretDiagnostics,

@@ -78,6 +78,7 @@ describe("status-overview-rows", () => {
           agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
         },
         memory: { files: 1, chunks: 2, vector: {}, fts: {}, cache: {} },
+        memoryCollection: "checked",
         memoryPlugin: { enabled: true, slot: "memory" },
         pluginCompatibility: [{ pluginId: "a", severity: "warn", message: "legacy" }],
         ok: (value: string) => `ok(${value})`,

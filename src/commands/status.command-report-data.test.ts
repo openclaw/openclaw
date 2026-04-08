@@ -84,6 +84,7 @@ describe("buildStatusCommandReportData", () => {
       },
       channelIssues: [{ channel: "discord", message: "warn msg" }],
       memory: { files: 1, chunks: 2, vector: {}, fts: {}, cache: {} },
+      memoryCollection: "checked",
       memoryPlugin: { enabled: true, slot: "memory" },
       pluginCompatibility: [{ pluginId: "a", severity: "warn", message: "legacy" }],
       pairingRecovery: { requestId: "req-1" },

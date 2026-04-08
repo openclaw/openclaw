@@ -32,6 +32,7 @@ describe("runStatusJsonCommand", () => {
       update: { root: null, installKind: "package" as const, packageManager: "npm" as const },
       osSummary: { platform: "linux" },
       memory: null,
+      memoryCollection: "skipped" as const,
       memoryPlugin: null,
       tailscaleMode: "off",
       tailscaleDns: null,

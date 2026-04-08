@@ -11,6 +11,7 @@ export function buildStatusJsonPayload(params: {
   surface: StatusOverviewSurface;
   osSummary: unknown;
   memory: unknown;
+  memoryCollection?: "checked" | "skipped";
   memoryPlugin: unknown;
   agents: unknown;
   secretDiagnostics: string[];
@@ -31,6 +32,7 @@ export function buildStatusJsonPayload(params: {
     updateChannel: channelInfo.channel,
     updateChannelSource: channelInfo.source,
     memory: params.memory,
+    memoryCollection: params.memoryCollection ?? "checked",
     memoryPlugin: params.memoryPlugin,
     gateway: buildStatusGatewayJsonPayloadFromSurface({ surface: params.surface }),
     gatewayService: params.surface.gatewayService,
