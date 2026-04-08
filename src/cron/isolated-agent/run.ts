@@ -514,6 +514,10 @@ export async function runCronIsolatedAgentTurn(params: {
           timeoutMs,
           bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
+          extraSystemPrompt:
+            agentPayload?.lightContext && cfgWithAgentDefaults.agents?.defaults?.cron?.systemPrompt
+              ? cfgWithAgentDefaults.agents.defaults.cron.systemPrompt
+              : undefined,
           runId: cronSession.sessionEntry.sessionId,
           // Only enforce an explicit message target when the cron delivery target
           // was successfully resolved. When resolution fails the agent should not
