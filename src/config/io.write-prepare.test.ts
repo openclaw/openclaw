@@ -381,6 +381,47 @@ describe("config io write prepare", () => {
     expect(persisted.plugins?.entries?.["disabled-memory-plugin"]).toEqual({ enabled: false });
   });
 
+  it("preserves explicit disabled-plugin config authored in the source file", () => {
+    const sourceConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "disabled-memory-plugin": {
+            enabled: false,
+            config: {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const runtimeConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "disabled-memory-plugin": {
+            enabled: false,
+            config: {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig,
+    }) as {
+      plugins?: {
+        entries?: Record<string, Record<string, unknown>>;
+      };
+    };
+
+    expect(persisted.plugins?.entries?.["disabled-memory-plugin"]).toEqual({
+      enabled: false,
+      config: {},
+    });
+  });
+
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
     const sourceConfig: OpenClawConfig = {
       channels: {
