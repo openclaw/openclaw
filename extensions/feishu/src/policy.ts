@@ -71,7 +71,9 @@ export function resolveFeishuGroupConfig(params: {
   }
 
   const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
+  const matchKey = Object.keys(groups).find(
+    (key) => normalizeOptionalLowercaseString(key) === lowered,
+  );
   if (matchKey) {
     return groups[matchKey];
   }

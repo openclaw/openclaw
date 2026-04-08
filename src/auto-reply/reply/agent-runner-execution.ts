@@ -36,6 +36,7 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { defaultRuntime } from "../../runtime.js";
 import {
   hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
@@ -293,7 +294,7 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
 }
 
 function isToolResultTurnMismatchError(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return (
     lower.includes("toolresult") &&
     lower.includes("tooluse") &&

@@ -1,5 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
@@ -153,7 +156,7 @@ export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDelive
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadId =
     event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
-      ? String(event.requesterOrigin.threadId).trim()
+      ? (normalizeOptionalStringifiedId(event.requesterOrigin.threadId) ?? "")
       : "";
   const bindings = listThreadBindingsBySessionKey({
     targetSessionKey: event.childSessionKey,

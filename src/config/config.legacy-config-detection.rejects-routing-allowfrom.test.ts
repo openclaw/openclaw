@@ -225,9 +225,8 @@ describe("legacy config detection", () => {
       provider: "whatsapp",
       config: { historyLimit: 9, accounts: { work: { historyLimit: 4 } } },
       readValue: (config) =>
-        (
-          config as { channels?: { whatsapp?: { historyLimit?: number } } }
-        ).channels?.whatsapp?.historyLimit,
+        (config as { channels?: { whatsapp?: { historyLimit?: number } } }).channels?.whatsapp
+          ?.historyLimit,
       expectedValue: 9,
     });
     expectProviderConfigValue({
@@ -245,9 +244,8 @@ describe("legacy config detection", () => {
       provider: "telegram",
       config: { historyLimit: 8, accounts: { ops: { historyLimit: 3 } } },
       readValue: (config) =>
-        (
-          config as { channels?: { telegram?: { historyLimit?: number } } }
-        ).channels?.telegram?.historyLimit,
+        (config as { channels?: { telegram?: { historyLimit?: number } } }).channels?.telegram
+          ?.historyLimit,
       expectedValue: 8,
     });
     expectProviderConfigValue({
@@ -278,18 +276,16 @@ describe("legacy config detection", () => {
       provider: "signal",
       config: { historyLimit: 6 },
       readValue: (config) =>
-        (
-          config as { channels?: { signal?: { historyLimit?: number } } }
-        ).channels?.signal?.historyLimit,
+        (config as { channels?: { signal?: { historyLimit?: number } } }).channels?.signal
+          ?.historyLimit,
       expectedValue: 6,
     });
     expectProviderConfigValue({
       provider: "imessage",
       config: { historyLimit: 5 },
       readValue: (config) =>
-        (
-          config as { channels?: { imessage?: { historyLimit?: number } } }
-        ).channels?.imessage?.historyLimit,
+        (config as { channels?: { imessage?: { historyLimit?: number } } }).channels?.imessage
+          ?.historyLimit,
       expectedValue: 5,
     });
     expectSchemaConfigValue({

@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeOptionalLowercaseString } from "../string-coerce.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
 export type DreamingPhaseId = "light" | "deep" | "rem";
@@ -118,7 +119,7 @@ function normalizeFiniteScore(value: unknown, fallback = 0): number {
 }
 
 function normalizeStorageMode(value: unknown): DreamingStatus["storageMode"] {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(normalizeTrimmedString(value));
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
     return normalized;
   }
@@ -144,7 +145,7 @@ function resolveDreamingPluginId(configValue: Record<string, unknown> | null): s
   const plugins = asRecord(configValue?.plugins);
   const slots = asRecord(plugins?.slots);
   const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
+  if (configuredSlot && normalizeOptionalLowercaseString(configuredSlot) !== "none") {
     return configuredSlot;
   }
   return DEFAULT_DREAMING_PLUGIN_ID;

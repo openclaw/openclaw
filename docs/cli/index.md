@@ -35,7 +35,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`logs`](/cli/logs)
 - [`system`](/cli/system)
 - [`models`](/cli/models)
-- [`infer`](/cli/capability)
+- [`infer`](/cli/infer)
 - [`memory`](/cli/memory)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   stripMarkdown,
@@ -364,7 +365,7 @@ export async function createChatForHandle(params: {
     if (
       res.status === 400 ||
       res.status === 403 ||
-      errorText.toLowerCase().includes("private api")
+      normalizeLowercaseStringOrEmpty(errorText).includes("private api")
     ) {
       throw new Error(
         `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,

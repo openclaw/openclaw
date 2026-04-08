@@ -154,7 +154,7 @@ describe("subscribeEmbeddedPiSession", () => {
     },
   );
 
-  it("does not let tool_execution_end delivery stall later assistant streaming", async () => {
+  it("suppresses assistant streaming while deterministic exec approval delivery is pending", async () => {
     let resolveToolResult: (() => void) | undefined;
     const onToolResult = vi.fn(
       () =>
@@ -200,13 +200,13 @@ describe("subscribeEmbeddedPiSession", () => {
 
     await vi.waitFor(() => {
       expect(onToolResult).toHaveBeenCalledTimes(1);
-      expect(onPartialReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "After tool", delta: "After tool" }),
-      );
     });
+    expect(onPartialReply).not.toHaveBeenCalled();
 
     expect(resolveToolResult).toBeTypeOf("function");
     resolveToolResult?.();
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
   });
 
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {

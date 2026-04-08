@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/elevenlabs-speech",
-  "version": "2026.4.6",
+  "version": "2026.4.7",
   "private": true,
   "description": "OpenClaw ElevenLabs speech plugin",
   "type": "module",

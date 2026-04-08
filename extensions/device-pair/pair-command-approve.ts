@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { approveDevicePairing, listDevicePairing } from "./api.js";
 import { formatPendingRequests } from "./notify.js";
 
@@ -31,7 +34,7 @@ export function selectPendingApprovalRequest(params: {
       : { reply: buildMultiplePendingApprovalReply(params.pending) };
   }
 
-  if (params.requested.toLowerCase() === "latest") {
+  if (normalizeLowercaseStringOrEmpty(params.requested) === "latest") {
     return {
       pending: [...params.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0],
     };

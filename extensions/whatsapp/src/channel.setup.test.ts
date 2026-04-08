@@ -2,6 +2,8 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueuedWizardPrompter } from "../../../test/helpers/plugins/setup-wizard.js";
+import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
+import { whatsappApprovalAuth } from "./approval-auth.js";
 import { whatsappPlugin } from "./channel.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
@@ -117,6 +119,13 @@ describe("whatsapp setup wizard", () => {
     hoisted.pathExists.mockResolvedValue(false);
     hoisted.resolveWhatsAppAuthDir.mockReset();
     hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
+  });
+
+  it("exposes approval auth through approvalCapability only", () => {
+    expect(whatsappPlugin.approvalCapability).toBe(whatsappApprovalAuth);
+    expect(typeof whatsappPlugin.auth?.login).toBe("function");
+    expect("authorizeActorAction" in (whatsappPlugin.auth ?? {})).toBe(false);
+    expect("getActionAvailabilityState" in (whatsappPlugin.auth ?? {})).toBe(false);
   });
 
   it("applies owner allowlist when forceAllowFrom is enabled", async () => {
@@ -255,7 +264,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
-    const result = await whatsappPlugin.heartbeat?.checkReady?.({
+    const result = await checkWhatsAppHeartbeatReady({
       cfg: {
         channels: {
           whatsapp: {

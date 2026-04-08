@@ -59,6 +59,61 @@ Related:
 - [/reference/token-use](/reference/token-use)
 - [/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic](/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
 
+## Local OpenAI-compatible backend passes direct probes but agent runs fail
+
+Use this when:
+
+- `curl ... /v1/models` works
+- tiny direct `/v1/chat/completions` calls work
+- OpenClaw model runs fail only on normal agent turns
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+curl http://127.0.0.1:1234/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"<id>","messages":[{"role":"user","content":"hi"}],"stream":false}'
+openclaw infer model run --model <provider/model> --prompt "hi" --json
+openclaw logs --follow
+```
+
+Look for:
+
+- direct tiny calls succeed, but OpenClaw runs fail only on larger prompts
+- backend errors about `messages[].content` expecting a string
+- backend crashes that appear only with larger prompt-token counts or full agent
+  runtime prompts
+
+Common signatures:
+
+- `messages[...].content: invalid type: sequence, expected a string` → backend
+  rejects structured Chat Completions content parts. Fix: set
+  `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+- direct tiny requests succeed, but OpenClaw agent runs fail with backend/model
+  crashes (for example Gemma on some `inferrs` builds) → OpenClaw transport is
+  likely already correct; the backend is failing on the larger agent-runtime
+  prompt shape.
+- failures shrink after disabling tools but do not disappear → tool schemas were
+  part of the pressure, but the remaining issue is still upstream model/server
+  capacity or a backend bug.
+
+Fix options:
+
+1. Set `compat.requiresStringContent: true` for string-only Chat Completions backends.
+2. Set `compat.supportsTools: false` for models/backends that cannot handle
+   OpenClaw's tool schema surface reliably.
+3. Lower prompt pressure where possible: smaller workspace bootstrap, shorter
+   session history, lighter local model, or a backend with stronger long-context
+   support.
+4. If tiny direct requests keep passing while OpenClaw agent turns still crash
+   inside the backend, treat it as an upstream server/model limitation and file
+   a repro there with the accepted payload shape.
+
+Related:
+
+- [/gateway/local-models](/gateway/local-models)
+- [/gateway/configuration#models](/gateway/configuration#models)
+- [/gateway/configuration-reference#openai-compatible-endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.

@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -91,6 +92,10 @@ function buildFallbackNick(nick: string): string {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;
+}
+
+function normalizeIrcNick(value: string): string {
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
@@ -187,7 +192,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!fallbackNickAttempted) {
       fallbackNickAttempted = true;
       const fallbackNick = buildFallbackNick(desiredNick);
-      if (fallbackNick.toLowerCase() !== currentNick.toLowerCase()) {
+      if (normalizeIrcNick(fallbackNick) !== normalizeIrcNick(currentNick)) {
         try {
           sendRaw(`NICK ${fallbackNick}`);
           currentNick = fallbackNick;
@@ -288,7 +293,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (line.command === "NICK") {
         const prefix = parseIrcPrefix(line.prefix);
-        if (prefix.nick && prefix.nick.toLowerCase() === currentNick.toLowerCase()) {
+        if (prefix.nick && normalizeIrcNick(prefix.nick) === normalizeIrcNick(currentNick)) {
           const next =
             line.trailing != null
               ? line.trailing

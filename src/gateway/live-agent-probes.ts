@@ -51,8 +51,9 @@ export function assertLiveImageProbeReply(text: string): void {
 
 export function createLiveCronProbeSpec(): LiveCronProbeSpec {
   const nonce = randomBytes(3).toString("hex").toUpperCase();
-  const name = `live-mcp-${nonce.toLowerCase()}`;
-  const message = `probe-${nonce.toLowerCase()}`;
+  const normalizedNonce = normalizeOptionalLowercaseString(nonce) ?? "";
+  const name = `live-mcp-${normalizedNonce}`;
+  const message = `probe-${normalizedNonce}`;
   const at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const argsJson = JSON.stringify({
     action: "add",

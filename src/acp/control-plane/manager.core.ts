@@ -4,6 +4,7 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
@@ -1581,13 +1582,12 @@ export class AcpSessionManager {
     if (!status) {
       return false;
     }
-    const detailsStatus =
-      typeof status.details?.status === "string" ? status.details.status.trim().toLowerCase() : "";
+    const detailsStatus = normalizeLowercaseStringOrEmpty(status.details?.status);
     if (detailsStatus === "dead" || detailsStatus === "no-session") {
       return true;
     }
     const summaryMatch = status.summary?.match(/\bstatus=([^\s]+)/i);
-    const summaryStatus = normalizeText(summaryMatch?.[1])?.toLowerCase() ?? "";
+    const summaryStatus = normalizeLowercaseStringOrEmpty(summaryMatch?.[1]);
     return summaryStatus === "dead" || summaryStatus === "no-session";
   }
 

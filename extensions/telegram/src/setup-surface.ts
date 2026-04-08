@@ -1,7 +1,9 @@
 import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
+  DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
+  patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";

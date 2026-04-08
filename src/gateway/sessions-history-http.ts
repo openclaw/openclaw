@@ -4,7 +4,10 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -44,7 +47,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = getHeader(req, "accept")?.toLowerCase() ?? "";
+  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
   return accept.includes("text/event-stream");
 }
 

@@ -279,6 +279,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   if (unauthorized) {
     return unauthorized;
   }
+  if (parsed.action !== "list") {
+    const nonOwner = rejectNonOwnerCommand(params, "/allowlist");
+    if (nonOwner) {
+      return nonOwner;
+    }
+  }
 
   const channelId =
     normalizeChannelId(parsed.channel) ??
@@ -413,11 +419,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
-  }
-
-  const nonOwner = rejectNonOwnerCommand(params, "/allowlist");
-  if (nonOwner) {
-    return nonOwner;
   }
 
   const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {

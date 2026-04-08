@@ -9,12 +9,20 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
-import googlePlugin from "./index.js";
+import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { registerGoogleProvider } from "./provider-registration.js";
+
+const googleProviderPlugin = {
+  register(api: Parameters<typeof registerGoogleProvider>[0]) {
+    registerGoogleProvider(api);
+    registerGoogleGeminiCliProvider(api);
+  },
+};
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: googlePlugin,
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
@@ -85,7 +93,7 @@ describe("google provider plugin hooks", () => {
 
   it("owns Gemini CLI tool schema normalization", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: googlePlugin,
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
@@ -132,7 +140,7 @@ describe("google provider plugin hooks", () => {
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: googlePlugin,
+      plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });

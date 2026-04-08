@@ -1,5 +1,6 @@
 import { format } from "node:util";
-import { MatrixExecApprovalHandler } from "../../exec-approvals-handler.js";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -35,6 +36,7 @@ import { runMatrixStartupMaintenance } from "./startup.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
+  channelRuntime?: import("openclaw/plugin-sdk/channel-core").PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   initialSyncLimit?: number;
@@ -147,7 +149,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  let execApprovalsHandler: MatrixExecApprovalHandler | null = null;
   const inboundDeduper = await createMatrixInboundEventDeduper({
     auth,
     env: process.env,
@@ -167,7 +168,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       client.stopSyncWithoutPersist();
       await client.drainPendingDecryptions("matrix monitor shutdown");
       await waitForInFlightRoomMessages();
-      await execApprovalsHandler?.stop();
       threadBindingManager?.stop();
       await inboundDeduper.stop();
       await releaseSharedClientInstance(client, "persist");
@@ -360,12 +360,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
     });
 
-    execApprovalsHandler = new MatrixExecApprovalHandler({
-      client,
+    registerChannelRuntimeContext({
+      channelRuntime: opts.channelRuntime,
+      channelId: "matrix",
       accountId: effectiveAccountId,
-      cfg,
+      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+      context: {
+        client,
+      },
+      abortSignal: opts.abortSignal,
     });
-    await execApprovalsHandler.start();
 
     await runMatrixStartupMaintenance({
       client,

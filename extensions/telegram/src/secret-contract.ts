@@ -7,6 +7,7 @@ import {
   type SecretDefaults,
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export const secretTargetRegistryEntries = [
   {
@@ -65,9 +66,9 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: telegram, surface } = resolved;
-  const baseTokenFile = typeof telegram.tokenFile === "string" ? telegram.tokenFile.trim() : "";
+  const baseTokenFile = normalizeOptionalString(telegram.tokenFile) ?? "";
   const accountTokenFile = (account: Record<string, unknown>) =>
-    typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
+    normalizeOptionalString(account.tokenFile) ?? "";
   collectConditionalChannelFieldAssignments({
     channelKey: "telegram",
     field: "botToken",
@@ -91,12 +92,10 @@ export function collectRuntimeConfigAssignments(params: {
       "no enabled Telegram surface inherits this top-level botToken (tokenFile is configured).",
     accountInactiveReason: "Telegram account is disabled or tokenFile is configured.",
   });
-  const baseWebhookUrl = typeof telegram.webhookUrl === "string" ? telegram.webhookUrl.trim() : "";
+  const baseWebhookUrl = normalizeOptionalString(telegram.webhookUrl) ?? "";
   const accountWebhookUrl = (account: Record<string, unknown>) =>
     hasOwnProperty(account, "webhookUrl")
-      ? typeof account.webhookUrl === "string"
-        ? account.webhookUrl.trim()
-        : ""
+      ? (normalizeOptionalString(account.webhookUrl) ?? "")
       : baseWebhookUrl;
   collectConditionalChannelFieldAssignments({
     channelKey: "telegram",

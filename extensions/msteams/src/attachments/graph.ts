@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -10,6 +11,7 @@ import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
+  estimateBase64DecodedBytes,
   inferPlaceholder,
   readNestedString,
   isUrlAllowed,
@@ -53,7 +55,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
   const conversationType = normalizeLowercaseStringOrEmpty(params.conversationType ?? "");
   const messageIdCandidates = new Set<string>();
   const pushCandidate = (value: string | null | undefined) => {
-    const trimmed = typeof value === "string" ? value.trim() : "";
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (trimmed) {
       messageIdCandidates.add(trimmed);
     }
@@ -64,7 +66,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
   pushCandidate(readNestedString(params.channelData, ["messageId"]));
   pushCandidate(readNestedString(params.channelData, ["teamsMessageId"]));
 
-  const replyToId = typeof params.replyToId === "string" ? params.replyToId.trim() : "";
+  const replyToId = normalizeOptionalString(params.replyToId) ?? "";
 
   if (conversationType === "channel") {
     const teamId =
@@ -190,6 +192,9 @@ async function downloadGraphHostedContent(params: {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
     let buffer: Buffer;
     if (contentBytes) {
+      if (estimateBase64DecodedBytes(contentBytes) > params.maxBytes) {
+        continue;
+      }
       try {
         buffer = Buffer.from(contentBytes, "base64");
       } catch {

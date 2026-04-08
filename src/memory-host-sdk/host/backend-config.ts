@@ -13,6 +13,10 @@ import type {
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 
@@ -107,7 +111,7 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
 };
 
 function sanitizeName(input: string): string {
-  const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
 }
@@ -264,7 +268,7 @@ function resolveCustomPaths(
   const collections: ResolvedQmdCollection[] = [];
   const seenRoots = new Set<string>();
   rawPaths.forEach((entry, index) => {
-    const trimmedPath = entry?.path?.trim();
+    const trimmedPath = normalizeOptionalString(entry?.path);
     if (!trimmedPath) {
       return;
     }
@@ -274,7 +278,7 @@ function resolveCustomPaths(
     } catch {
       return;
     }
-    const pattern = entry.pattern?.trim() || "**/*.md";
+    const pattern = normalizeOptionalString(entry.pattern) || "**/*.md";
     const dedupeKey = `${resolved}\u0000${pattern}`;
     if (seenRoots.has(dedupeKey)) {
       return;
@@ -387,7 +391,7 @@ export function resolveMemoryBackendConfig(params: {
     ...resolveCustomPaths(allQmdPaths, workspaceDir, nameSet, normalizedAgentId),
   ];
 
-  const rawCommand = qmdCfg?.command?.trim() || "qmd";
+  const rawCommand = normalizeOptionalString(qmdCfg?.command) || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {

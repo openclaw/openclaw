@@ -57,7 +57,6 @@ type SessionsListResult = Awaited<
 >;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
   ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));

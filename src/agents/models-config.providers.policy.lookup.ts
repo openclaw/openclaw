@@ -1,4 +1,5 @@
 import { MODEL_APIS } from "../config/types.models.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 const GENERIC_PROVIDER_APIS = new Set<string>([
@@ -12,7 +13,7 @@ export function resolveProviderPluginLookupKey(
   providerKey: string,
   provider?: ProviderConfig,
 ): string {
-  const api = typeof provider?.api === "string" ? provider.api.trim() : "";
+  const api = normalizeOptionalString(provider?.api) ?? "";
   if (
     api &&
     MODEL_APIS.includes(api as (typeof MODEL_APIS)[number]) &&

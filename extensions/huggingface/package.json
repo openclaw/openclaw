@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/huggingface-provider",
-  "version": "2026.4.6",
+  "version": "2026.4.7",
   "private": true,
   "description": "OpenClaw Hugging Face provider plugin",
   "type": "module",

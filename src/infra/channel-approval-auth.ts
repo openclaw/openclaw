@@ -34,6 +34,7 @@ export function resolveApprovalCommandAuthorization(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     action: "approve",
+    approvalKind: params.kind,
   });
   return {
     authorized: resolved.authorized,

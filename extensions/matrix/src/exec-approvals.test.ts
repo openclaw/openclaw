@@ -202,7 +202,7 @@ describe("matrix exec approvals", () => {
     ).toBe(true);
   });
 
-  it("does not suppress local prompts for plugin approval payloads", () => {
+  it("suppresses local prompts for plugin approval payloads when DM approvers are configured", () => {
     const payload = {
       channelData: {
         execApproval: {
@@ -215,10 +215,13 @@ describe("matrix exec approvals", () => {
 
     expect(
       shouldSuppressLocalMatrixExecApprovalPrompt({
-        cfg: buildConfig({ enabled: true, approvers: ["@owner:example.org"] }),
+        cfg: buildConfig(
+          { enabled: true, approvers: ["@owner:example.org"] },
+          { dm: { allowFrom: ["@owner:example.org"] } },
+        ),
         payload,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("normalizes prefixed approver ids", () => {

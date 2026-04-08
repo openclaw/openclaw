@@ -9,7 +9,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: verificationMocks.bootstrapMatrixVerification,
 }));
 
-import { matrixPlugin } from "./channel.js";
+import { matrixConfigAdapter } from "./config-adapter.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
@@ -238,7 +238,7 @@ describe("matrix setup post-write bootstrap", () => {
   });
 
   it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
-    const updated = matrixPlugin.config.deleteAccount?.({
+    const updated = matrixConfigAdapter.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {

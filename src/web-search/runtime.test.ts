@@ -576,10 +576,10 @@ describe("web search runtime", () => {
           },
         },
         runtimeWebSearch: {
-          enabled: true,
           providerConfigured: "runtime-search",
           selectedProvider: "runtime-search",
-          providerSource: "runtime",
+          providerSource: "configured",
+          diagnostics: [],
         },
         preferRuntimeProviders: false,
         args: { query: "prefer-config" },

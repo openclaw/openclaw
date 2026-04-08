@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { transcribeAudio, resolveSTTConfig } from "./stt.js";
 import { convertSilkToWav, isVoiceAttachment, formatDuration } from "./utils/audio-convert.js";
 import { downloadFile } from "./utils/file-utils.js";
@@ -110,7 +111,7 @@ export async function processAttachments(
   // Phase 2: convert/transcribe voice attachments and classify everything else.
   const processTasks = downloadResults.map(
     async ({ att, attUrl, isVoice, localPath, audioPath }) => {
-      const asrReferText = typeof att.asr_refer_text === "string" ? att.asr_refer_text.trim() : "";
+      const asrReferText = normalizeOptionalString(att.asr_refer_text) ?? "";
       const wavUrl =
         isVoice && att.voice_wav_url
           ? att.voice_wav_url.startsWith("//")

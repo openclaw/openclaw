@@ -1,6 +1,7 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   convertMarkdownTables,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -34,7 +35,7 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
   }
-  const msg = response.msg?.toLowerCase() ?? "";
+  const msg = normalizeLowercaseStringOrEmpty(response.msg);
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
