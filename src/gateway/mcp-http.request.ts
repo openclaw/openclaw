@@ -1,7 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 
@@ -11,6 +14,7 @@ export type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
   accountId: string | undefined;
+  senderIsOwner: boolean | undefined;
 };
 
 function resolveScopedSessionKey(
@@ -92,10 +96,15 @@ export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: ReturnType<typeof loadConfig>,
 ): McpRequestContext {
+  const senderIsOwnerRaw = normalizeOptionalLowercaseString(
+    getHeader(req, "x-openclaw-sender-is-owner"),
+  );
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
+    senderIsOwner:
+      senderIsOwnerRaw === "true" ? true : senderIsOwnerRaw === "false" ? false : undefined,
   };
 }

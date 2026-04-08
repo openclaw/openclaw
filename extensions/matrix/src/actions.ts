@@ -7,6 +7,7 @@ import {
   createActionGate,
   readNumberParam,
   readStringParam,
+  ToolAuthorizationError,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionContext,
   type ChannelMessageActionName,
@@ -261,7 +262,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "set-profile") {
       if (ctx.senderIsOwner !== true) {
-        throw new Error("Matrix profile updates require owner access.");
+        throw new ToolAuthorizationError("Matrix profile updates require owner access.");
       }
       const avatarPath =
         readStringParam(params, "avatarPath") ??

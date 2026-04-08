@@ -33,6 +33,7 @@ export type RunCliAgentParams = {
   imageOrder?: PromptImageOrderEntry[];
   messageProvider?: string;
   agentAccountId?: string;
+  senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
 };

@@ -118,6 +118,7 @@ export function createCronPromptExecutor(params: {
             cliSessionId,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

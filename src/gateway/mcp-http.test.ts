@@ -103,6 +103,48 @@ describe("mcp loopback server", () => {
         sessionKey: "agent:main:telegram:group:chat123",
         accountId: "work",
         messageProvider: "telegram",
+        senderIsOwner: undefined,
+        surface: "loopback",
+      }),
+    );
+  });
+
+  it("threads senderIsOwner through loopback request context and cache separation", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const sendToolsList = async (senderIsOwner: "true" | "false") =>
+      await sendRaw({
+        port: server.port,
+        token: runtime?.token,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:matrix:dm:test",
+          "x-openclaw-message-channel": "matrix",
+          "x-openclaw-sender-is-owner": senderIsOwner,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await sendToolsList("true")).status).toBe(200);
+    expect((await sendToolsList("false")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionKey: "agent:main:matrix:dm:test",
+        messageProvider: "matrix",
+        senderIsOwner: true,
+        surface: "loopback",
+      }),
+    );
+    expect(resolveGatewayScopedToolsMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionKey: "agent:main:matrix:dm:test",
+        messageProvider: "matrix",
+        senderIsOwner: false,
         surface: "loopback",
       }),
     );
@@ -153,6 +195,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-sender-is-owner"]).toBe(
+      "${OPENCLAW_MCP_SENDER_IS_OWNER}",
     );
   });
 });

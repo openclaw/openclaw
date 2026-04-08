@@ -813,6 +813,7 @@ export async function runAgentTurnWithFallback(params: {
                   imageOrder: params.opts?.imageOrder,
                   messageProvider: params.followupRun.run.messageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
+                  senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
