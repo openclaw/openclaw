@@ -189,6 +189,14 @@ function findBalancedJsonObject(text: string): string | null {
     return null;
   }
 
+  return findBalancedJsonObjectAt(text, startIndex);
+}
+
+function findBalancedJsonObjectAt(text: string, startIndex: number): string | null {
+  if (text[startIndex] !== "{") {
+    return null;
+  }
+
   let depth = 0;
   let quoteChar: '"' | "'" | null = null;
   let isEscaped = false;
@@ -226,6 +234,25 @@ function findBalancedJsonObject(text: string): string | null {
   }
 
   return null;
+}
+
+function skipKimiDecorativeMarkup(text: string, startIndex: number): number {
+  let index = startIndex;
+  while (index < text.length) {
+    while (index < text.length && /\s/.test(text[index] ?? "")) {
+      index += 1;
+    }
+    const tagMatch = /^<\/?i\b[^>]*>/i.exec(text.slice(index));
+    if (!tagMatch) {
+      break;
+    }
+    index += tagMatch[0].length;
+  }
+  return index;
+}
+
+function isKimiDecorativeMarkupOnly(text: string): boolean {
+  return text.replaceAll(/<\/?i\b[^>]*>/gi, "").trim().length === 0;
 }
 
 function parseKimiJsonToolCalls(payload: string): KimiToolCallBlock[] | null {
@@ -332,6 +359,64 @@ function parseKimiJsonToolCallsInText(text: string): KimiParsedTextBlock | null 
 
   const after = text.slice(lastIndex);
   if (after) {
+    content.push({ type: "text", text: after });
+  }
+
+  return { content, changed };
+}
+
+function parseKimiDecoratedJsonIdToolCallsInText(text: string): KimiParsedTextBlock | null {
+  const callStartRe = /(?:<\/?i\b[^>]*>\s*)*([A-Za-z_][A-Za-z0-9_.-]*:\d+)/g;
+  const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
+  let lastIndex = 0;
+  let changed = false;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = callStartRe.exec(text)) !== null) {
+    const rawId = match[1]?.trim() ?? "";
+    const name = stripTaggedToolCallCounter(rawId);
+    if (!rawId || !name) {
+      continue;
+    }
+
+    const argsStart = skipKimiDecorativeMarkup(text, match.index + match[0].length);
+    const rawArgs = findBalancedJsonObjectAt(text, argsStart);
+    if (!rawArgs) {
+      continue;
+    }
+
+    let parsedArgs: unknown;
+    try {
+      parsedArgs = JSON.parse(rawArgs);
+    } catch {
+      continue;
+    }
+    if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+      continue;
+    }
+
+    const before = text.slice(lastIndex, match.index);
+    if (before && !isKimiDecorativeMarkupOnly(before)) {
+      content.push({ type: "text", text: before });
+    }
+
+    content.push({
+      type: "toolCall",
+      id: rawId,
+      name,
+      arguments: parsedArgs as Record<string, unknown>,
+    });
+    changed = true;
+    lastIndex = argsStart + rawArgs.length;
+    callStartRe.lastIndex = lastIndex;
+  }
+
+  if (!changed) {
+    return null;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after && !isKimiDecorativeMarkupOnly(after)) {
     content.push({ type: "text", text: after });
   }
 
@@ -640,6 +725,10 @@ function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   const json = parseKimiJsonToolCallsInText(text);
   if (json) {
     return json;
+  }
+  const decoratedJsonIds = parseKimiDecoratedJsonIdToolCallsInText(text);
+  if (decoratedJsonIds) {
+    return decoratedJsonIds;
   }
   const simpleTagged = parseKimiSimpleTaggedToolCallsInText(text);
   if (simpleTagged) {

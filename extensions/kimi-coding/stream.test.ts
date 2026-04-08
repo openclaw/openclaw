@@ -56,6 +56,9 @@ const KIMI_PREFIX_FUNCTION_STYLE_TOOL_TEXT = `(read "/Users/guoshuyi/.openclaw/w
 const KIMI_JSON_TOOL_CALLS_TEXT = `I'll run my startup sequence now. Let me read the required files first.\`\`\`json
 {"tool_calls": [{"id": "read_SOUL", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/SOUL.md\\"}"}}, {"id": "read_USER", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/USER.md\\"}"}}, {"id": "read_MEMORY", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/MEMORY.md\\"}"}}, {"id": "read_memory_today", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md\\"}"}}, {"id": "read_memory_yesterday", "type": "read", "function": {"name": "read", "arguments": "{\\"file_path\\": \\"/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md\\"}"}}]}]}
 \`\`\``;
+const KIMI_DECORATED_FUNCTION_ID_TOOL_TEXT = `让我用 shell 读取这些文件。
+
+<i class="ml-2">functions.exec:4 <i class="ml-2">{"command":"cat /Users/guoshuyi/.openclaw/workspace/SOUL.md"}<i class="ml-2">functions.exec:5 <i class="ml-2">{"command":"cat /Users/guoshuyi/.openclaw/workspace/USER.md"}<i class="ml-2">functions.exec:6 <i class="ml-2">{"command":"cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md 2>/dev/null || echo \\"FILE_NOT_FOUND\\""}<i class="ml-2">functions.exec:7 <i class="ml-2">{"command":"cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null || echo \\"FILE_NOT_FOUND\\""}`;
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
@@ -589,6 +592,67 @@ cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null && echo
           id: "read_memory_yesterday",
           name: "read",
           arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("extracts decorated function ids with inline json arguments", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: KIMI_DECORATED_FUNCTION_ID_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn: StreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }) as ReturnType<StreamFn>;
+
+    const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
+    const stream = wrapped(
+      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    ) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "让我用 shell 读取这些文件。\n\n",
+        },
+        {
+          type: "toolCall",
+          id: "functions.exec:4",
+          name: "functions.exec",
+          arguments: { command: "cat /Users/guoshuyi/.openclaw/workspace/SOUL.md" },
+        },
+        {
+          type: "toolCall",
+          id: "functions.exec:5",
+          name: "functions.exec",
+          arguments: { command: "cat /Users/guoshuyi/.openclaw/workspace/USER.md" },
+        },
+        {
+          type: "toolCall",
+          id: "functions.exec:6",
+          name: "functions.exec",
+          arguments: {
+            command:
+              'cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md 2>/dev/null || echo "FILE_NOT_FOUND"',
+          },
+        },
+        {
+          type: "toolCall",
+          id: "functions.exec:7",
+          name: "functions.exec",
+          arguments: {
+            command:
+              'cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null || echo "FILE_NOT_FOUND"',
+          },
         },
       ],
       stopReason: "toolUse",
