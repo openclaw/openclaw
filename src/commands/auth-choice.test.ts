@@ -36,6 +36,7 @@ vi.mock("../plugins/provider-openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
+const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-auth-choice.runtime.js")>(
     "../plugins/provider-auth-choice.runtime.js",
@@ -43,6 +44,7 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
   return {
     ...actual,
     resolvePluginProviders,
+    runProviderModelSelectedHook,
   };
 });
 
@@ -644,6 +646,7 @@ describe("applyAuthChoice", () => {
     vi.unstubAllGlobals();
     resolvePluginProviders.mockReset();
     resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+    runProviderModelSelectedHook.mockClear();
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();

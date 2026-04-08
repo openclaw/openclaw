@@ -127,9 +127,9 @@ describe("model-selection", () => {
   });
 
   describe("normalizeProviderIdForAuth", () => {
-    it("maps coding-plan variants to base provider for auth lookup", () => {
-      expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
-      expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
+    it("only applies generic provider-id normalization before auth alias lookup", () => {
+      expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwen");
+      expect(normalizeProviderIdForAuth("openai-codex")).toBe("openai-codex");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
     });
   });

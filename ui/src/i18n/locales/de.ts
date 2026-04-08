@@ -299,10 +299,24 @@ export const de: TranslationMap = {
       promotedSuffix: "hochgestuft",
       nextSweepPrefix: "nächster Durchlauf",
     },
+    scene: {
+      backfill: "Nachtragen",
+      reset: "Zurücksetzen",
+      working: "Wird bearbeitet…",
+    },
     stats: {
       shortTerm: "Kurzfristig",
       signals: "Signale",
+      promoted: "Hochgestuft",
       phaseHits: "Phasentreffer",
+    },
+    trace: {
+      shortTerm: "Kurzfristig",
+      signals: "Signale",
+      promoted: "Hochgestuft",
+      emptyShortTerm: "Keine aktiven kurzfristigen Einträge.",
+      emptySignals: "Keine aktiven Signale.",
+      emptyPromoted: "Heute wurde noch nichts hochgestuft.",
     },
     diary: {
       title: "Traumtagebuch",

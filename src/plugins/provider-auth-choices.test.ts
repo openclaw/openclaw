@@ -8,6 +8,7 @@ vi.mock("./manifest-registry.js", () => ({
 
 import {
   resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
@@ -337,5 +338,34 @@ describe("provider auth choice manifest helpers", () => {
         description: "OpenAI API key",
       },
     ]);
+  });
+
+  it("resolves api-key choices through manifest-owned provider auth aliases", () => {
+    setManifestPlugins([
+      {
+        id: "fixture-provider",
+        origin: "bundled",
+        providerAuthAliases: {
+          "fixture-provider-plan": "fixture-provider",
+        },
+        providerAuthChoices: [
+          {
+            provider: "fixture-provider",
+            method: "api-key",
+            choiceId: "fixture-provider-api-key",
+            choiceLabel: "Fixture Provider API key",
+            optionKey: "fixtureProviderApiKey",
+            cliFlag: "--fixture-provider-api-key",
+            cliOption: "--fixture-provider-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveManifestProviderApiKeyChoice({
+        providerId: "fixture-provider-plan",
+      })?.choiceId,
+    ).toBe("fixture-provider-api-key");
   });
 });

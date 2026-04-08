@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
@@ -63,6 +64,9 @@ const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
   /^PLIVO_/i,
   /^NGROK_/i,
 ]);
+
+const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
+const QA_OPENAI_PLUGIN_ID = "openai";
 
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
@@ -178,6 +182,7 @@ function isRetryableGatewayCallError(details: string): boolean {
 export const __testing = {
   buildQaRuntimeEnv,
   isRetryableGatewayCallError,
+  readQaLiveProviderConfigOverrides,
   resolveQaLiveCliAuthEnv,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginsSourceRoot,
@@ -202,6 +207,7 @@ function resolveQaBundledPluginsSourceRoot(repoRoot: string) {
 async function resolveQaOwnerPluginIdsForProviderIds(params: {
   repoRoot: string;
   providerIds: readonly string[];
+  providerConfigs?: Record<string, ModelProviderConfig>;
 }) {
   const providerIds = [
     ...new Set(params.providerIds.map((providerId) => providerId.trim())),
@@ -245,9 +251,90 @@ async function resolveQaOwnerPluginIdsForProviderIds(params: {
     }
   }
   for (const providerId of remainingProviderIds) {
+    const providerConfig = params.providerConfigs?.[providerId];
+    if (providerConfig && isQaOpenAiResponsesProviderConfig(providerConfig)) {
+      ownerPluginIds.add(QA_OPENAI_PLUGIN_ID);
+      continue;
+    }
     ownerPluginIds.add(providerId);
   }
   return [...ownerPluginIds];
+}
+
+function resolveQaUserPath(value: string, env: NodeJS.ProcessEnv = process.env) {
+  if (value === "~") {
+    return env.HOME ?? os.homedir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(env.HOME ?? os.homedir(), value.slice(2));
+  }
+  return path.resolve(value);
+}
+
+function resolveQaLiveProviderConfigPath(env: NodeJS.ProcessEnv = process.env) {
+  const explicit =
+    env[QA_LIVE_PROVIDER_CONFIG_PATH_ENV]?.trim() || env.OPENCLAW_CONFIG_PATH?.trim();
+  return explicit
+    ? { path: resolveQaUserPath(explicit, env), explicit: true }
+    : { path: path.join(os.homedir(), ".openclaw", "openclaw.json"), explicit: false };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
+  return isRecord(value) && typeof value.baseUrl === "string" && Array.isArray(value.models);
+}
+
+function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
+  return (
+    config.api === "openai-responses" ||
+    config.models.some((model) => model.api === "openai-responses")
+  );
+}
+
+async function readQaLiveProviderConfigOverrides(params: {
+  providerIds: readonly string[];
+  env?: NodeJS.ProcessEnv;
+}) {
+  const providerIds = [
+    ...new Set(params.providerIds.map((providerId) => providerId.trim())),
+  ].filter((providerId) => providerId.length > 0);
+  if (providerIds.length === 0) {
+    return {};
+  }
+  const configPath = resolveQaLiveProviderConfigPath(params.env);
+  if (!existsSync(configPath.path)) {
+    return {};
+  }
+  try {
+    const raw = await fs.readFile(configPath.path, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    const providers = isRecord(parsed)
+      ? isRecord(parsed.models)
+        ? isRecord(parsed.models.providers)
+          ? parsed.models.providers
+          : {}
+        : {}
+      : {};
+    const selected: Record<string, ModelProviderConfig> = {};
+    for (const providerId of providerIds) {
+      const providerConfig = providers[providerId];
+      if (isQaModelProviderConfig(providerConfig)) {
+        selected[providerId] = providerConfig;
+      }
+    }
+    return selected;
+  } catch (error) {
+    if (configPath.explicit) {
+      throw new Error(
+        `failed to read ${QA_LIVE_PROVIDER_CONFIG_PATH_ENV} provider config: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    return {};
+  }
 }
 
 function parseStableSemverFloor(value: string | undefined) {
@@ -475,11 +562,15 @@ export async function startQaGatewayChild(params: {
           )
           .filter((providerId): providerId is string => Boolean(providerId))
       : [];
+  const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
+    providerIds: liveProviderIds,
+  });
   const enabledPluginIds =
     liveProviderIds.length > 0
       ? await resolveQaOwnerPluginIdsForProviderIds({
           repoRoot: params.repoRoot,
           providerIds: liveProviderIds,
+          providerConfigs: liveProviderConfigs,
         })
       : undefined;
   const cfg = buildQaGatewayConfig({
@@ -498,6 +589,7 @@ export async function startQaGatewayChild(params: {
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     enabledPluginIds,
+    liveProviderConfigs,
     fastMode: params.fastMode,
     thinkingDefault: params.thinkingDefault,
     controlUiEnabled: params.controlUiEnabled,

@@ -35,7 +35,7 @@ const routeMocks = vi.hoisted(() => ({
 
 const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "discord" && channelId !== "telegram") {
+    if (channelId !== "discord" && channelId !== "slack" && channelId !== "telegram") {
       return undefined;
     }
     return {
@@ -1019,6 +1019,36 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("does not deliver final fallback text when routed Slack block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Shared update." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockRoutedTextTurn("Shared update.");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      originatingChannel: "slack",
+      originatingTo: "channel:C123",
+    });
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C123",
+        payload: expect.objectContaining({ text: "Shared update." }),
+      }),
+    );
+  });
+
   it("does not deliver final fallback text when direct block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -1070,6 +1100,35 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Received." }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver final fallback text when direct Slack block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Slack says hi." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockVisibleTextTurn("Slack says hi.");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "slack",
+        Surface: "slack",
+      },
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Slack says hi." }),
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });

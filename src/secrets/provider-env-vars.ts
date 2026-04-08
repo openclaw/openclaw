@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
@@ -12,7 +13,7 @@ const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
   "minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 
-type ProviderEnvVarLookupParams = {
+export type ProviderEnvVarLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -56,6 +57,26 @@ function resolveManifestProviderAuthEnvVarCandidates(
       ([left], [right]) => left.localeCompare(right),
     )) {
       appendUniqueEnvVarCandidates(candidates, providerId, keys);
+    }
+  }
+  const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const plugin of registry.plugins) {
+    for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {}).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      const normalizedAlias = normalizeProviderId(alias);
+      const normalizedTarget = normalizeProviderId(target);
+      if (normalizedAlias && normalizedTarget) {
+        aliases[normalizedAlias] = normalizedTarget;
+      }
+    }
+  }
+  for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const keys = candidates[target];
+    if (keys) {
+      appendUniqueEnvVarCandidates(candidates, alias, keys);
     }
   }
   return candidates;

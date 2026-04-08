@@ -290,10 +290,24 @@ export const en: TranslationMap = {
       promotedSuffix: "promoted",
       nextSweepPrefix: "next sweep",
     },
+    scene: {
+      backfill: "Backfill",
+      reset: "Reset",
+      working: "Working…",
+    },
     stats: {
       shortTerm: "Short-term",
       signals: "Signals",
+      promoted: "Promoted",
       phaseHits: "Phase Hits",
+    },
+    trace: {
+      shortTerm: "Short-term",
+      signals: "Signals",
+      promoted: "Promoted",
+      emptyShortTerm: "No active short-term items.",
+      emptySignals: "No active signals.",
+      emptyPromoted: "Nothing promoted yet today.",
     },
     diary: {
       title: "Dream Diary",

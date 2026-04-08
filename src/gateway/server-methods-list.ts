@@ -5,6 +5,8 @@ const BASE_METHODS = [
   "health",
   "doctor.memory.status",
   "doctor.memory.dreamDiary",
+  "doctor.memory.backfillDreamDiary",
+  "doctor.memory.resetDreamDiary",
   "logs.tail",
   "channels.status",
   "channels.logout",

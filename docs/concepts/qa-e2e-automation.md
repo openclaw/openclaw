@@ -98,7 +98,9 @@ pnpm openclaw qa character-eval \
   --model xiaomi/mimo-v2-pro,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
   --judge-model openai/gpt-5.4,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-6,thinking=high
+  --judge-model anthropic/claude-opus-4-6,thinking=high \
+  --concurrency 8 \
+  --judge-concurrency 8
 ```
 
 The command runs local QA gateway child processes, not Docker. Character eval
@@ -118,6 +120,9 @@ single candidate or judge needs an override. Pass `--fast` only when you want to
 force fast mode on for every candidate model. Candidate and judge durations are
 recorded in the report for benchmark analysis, but judge prompts explicitly say
 not to rank by speed.
+Candidate and judge model runs both default to concurrency 8. Lower
+`--concurrency` or `--judge-concurrency` when provider limits or local gateway
+pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
 `openai/gpt-5.4`, `openai/gpt-5.2`, `anthropic/claude-opus-4-6`,
 `anthropic/claude-sonnet-4-6`, `minimax/MiniMax-M2.7`, `zai/glm-5.1`,

@@ -290,10 +290,24 @@ export const zh_CN: TranslationMap = {
       promotedSuffix: "已提升",
       nextSweepPrefix: "下次扫描",
     },
+    scene: {
+      backfill: "回填",
+      reset: "重置",
+      working: "处理中…",
+    },
     stats: {
       shortTerm: "短期",
       signals: "信号",
+      promoted: "已提升",
       phaseHits: "阶段命中",
+    },
+    trace: {
+      shortTerm: "短期",
+      signals: "信号",
+      promoted: "已提升",
+      emptyShortTerm: "当前没有活跃的短期项目。",
+      emptySignals: "当前没有活跃的信号。",
+      emptyPromoted: "今天还没有任何提升内容。",
     },
     diary: {
       title: "梦境日记",

@@ -1,4 +1,4 @@
-import { normalizeProviderIdForAuth } from "../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
@@ -203,7 +203,7 @@ export function resolveManifestProviderApiKeyChoice(params: {
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceMetadata | undefined {
-  const normalizedProviderId = normalizeProviderIdForAuth(params.providerId);
+  const normalizedProviderId = resolveProviderIdForAuth(params.providerId, params);
   if (!normalizedProviderId) {
     return undefined;
   }
@@ -211,7 +211,7 @@ export function resolveManifestProviderApiKeyChoice(params: {
     if (!choice.optionKey) {
       return false;
     }
-    return normalizeProviderIdForAuth(choice.providerId) === normalizedProviderId;
+    return resolveProviderIdForAuth(choice.providerId, params) === normalizedProviderId;
   });
   const preferred = pickPreferredManifestAuthChoice(candidates);
   return preferred ? stripChoiceOrigin(preferred) : undefined;

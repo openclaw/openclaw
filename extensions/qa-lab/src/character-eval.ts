@@ -20,6 +20,7 @@ const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
   "google/gemini-3.1-pro-preview",
 ]);
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
+const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 8;
 const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
   Object.freeze({
     "openai/gpt-5.4": "xhigh",
@@ -119,6 +120,8 @@ export type QaCharacterEvalParams = {
   judgeThinkingDefault?: QaThinkingLevel;
   judgeModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeTimeoutMs?: number;
+  candidateConcurrency?: number;
+  judgeConcurrency?: number;
   runSuite?: RunSuiteFn;
   runJudge?: RunJudgeFn;
 };
@@ -176,6 +179,35 @@ function sanitizePathPart(value: string) {
   return sanitized || "model";
 }
 
+function normalizeConcurrency(value: number | undefined, fallback = 1) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+async function mapWithConcurrency<T, U>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<U>,
+) {
+  const results = Array.from<U>({ length: items.length });
+  let nextIndex = 0;
+  const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function extractTranscript(result: QaSuiteResult) {
   const details = result.scenarios.flatMap((scenario) =>
     scenario.steps
@@ -192,6 +224,23 @@ function collectTranscriptStats(transcript: string) {
     userTurns: transcript.match(/^USER\b/gm)?.length ?? 0,
     assistantTurns: transcript.match(/^ASSISTANT\b/gm)?.length ?? 0,
   };
+}
+
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "unknown";
+  }
+  if (ms < 1_000) {
+    return `${Math.round(ms)}ms`;
+  }
+  if (ms < 60_000) {
+    const seconds = ms / 1_000;
+    return `${seconds >= 10 ? Math.round(seconds) : Number(seconds.toFixed(1))}s`;
+  }
+  const totalSeconds = Math.round(ms / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
 }
 
 function buildJudgePrompt(params: { scenarioId: string; runs: readonly QaCharacterEvalRun[] }) {
@@ -327,7 +376,7 @@ function renderCharacterEvalReport(params: {
     "",
     `- Started: ${params.startedAt.toISOString()}`,
     `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
+    `- Duration: ${formatDuration(params.finishedAt.getTime() - params.startedAt.getTime())}`,
     `- Scenario: ${params.scenarioId}`,
     "- Execution: local QA gateway child processes, not Docker",
     `- Judges: ${params.judgments.map((judgment) => judgment.model).join(", ")}`,
@@ -340,7 +389,7 @@ function renderCharacterEvalReport(params: {
 
   for (const judgment of params.judgments) {
     lines.push(`### ${judgment.model}`, "");
-    lines.push(`- Duration ms: ${judgment.durationMs}`, "");
+    lines.push(`- Duration: ${formatDuration(judgment.durationMs)}`, "");
     if (judgment.rankings.length > 0) {
       for (const ranking of judgment.rankings) {
         lines.push(
@@ -364,12 +413,12 @@ function renderCharacterEvalReport(params: {
 
   lines.push("## Run Stats", "");
   lines.push(
-    "| Model | Thinking | Fast mode | Status | Duration ms | User turns | Assistant turns | Transcript chars |",
+    "| Model | Thinking | Fast mode | Status | Duration | User turns | Assistant turns | Transcript chars |",
   );
   lines.push("| --- | --- | --- | --- | ---: | ---: | ---: | ---: |");
   for (const run of params.runs) {
     lines.push(
-      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${run.durationMs} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
+      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${formatDuration(run.durationMs)} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
     );
   }
 
@@ -379,7 +428,7 @@ function renderCharacterEvalReport(params: {
     lines.push(`- Status: ${run.status}`);
     lines.push(`- Thinking: ${run.thinkingDefault}`);
     lines.push(`- Fast mode: ${run.fastMode ? "on" : "off"}`);
-    lines.push(`- Duration ms: ${run.durationMs}`);
+    lines.push(`- Duration: ${formatDuration(run.durationMs)}`);
     lines.push(`- Report: ${run.reportPath ?? "unavailable"}`);
     if (run.error) {
       lines.push(`- Error: ${run.error}`);
@@ -408,8 +457,11 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   await fs.mkdir(runsDir, { recursive: true });
 
   const runSuite = params.runSuite ?? runQaSuite;
-  const runs: QaCharacterEvalRun[] = [];
-  for (const model of models) {
+  const candidateConcurrency = normalizeConcurrency(
+    params.candidateConcurrency,
+    DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+  );
+  const runs = await mapWithConcurrency(models, candidateConcurrency, async (model) => {
     const thinkingDefault = resolveCandidateThinkingDefault({
       model,
       candidateThinkingDefault: params.candidateThinkingDefault,
@@ -438,7 +490,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       const status = result.scenarios.some((scenario) => scenario.status === "fail")
         ? "fail"
         : "pass";
-      runs.push({
+      return {
         model,
         status,
         durationMs: Date.now() - runStartedAt,
@@ -449,10 +501,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         summaryPath: result.summaryPath,
         transcript,
         stats: collectTranscriptStats(transcript),
-      });
+      } satisfies QaCharacterEvalRun;
     } catch (error) {
       const transcript = "";
-      runs.push({
+      return {
         model,
         status: "fail",
         durationMs: Date.now() - runStartedAt,
@@ -462,9 +514,9 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         transcript,
         stats: collectTranscriptStats(transcript),
         error: formatErrorMessage(error),
-      });
+      } satisfies QaCharacterEvalRun;
     }
-  }
+  });
 
   const judgeModels = normalizeModelRefs(
     params.judgeModels && params.judgeModels.length > 0
@@ -474,8 +526,11 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         : DEFAULT_JUDGE_MODELS,
   );
   const runJudge = params.runJudge ?? defaultRunJudge;
-  const judgments: QaCharacterEvalJudgeResult[] = [];
-  for (const judgeModel of judgeModels) {
+  const judgeConcurrency = normalizeConcurrency(
+    params.judgeConcurrency,
+    DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+  );
+  const judgments = await mapWithConcurrency(judgeModels, judgeConcurrency, async (judgeModel) => {
     const judgeOptions = resolveJudgeOptions({
       model: judgeModel,
       judgeThinkingDefault: params.judgeThinkingDefault,
@@ -498,15 +553,15 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       judgeError = formatErrorMessage(error);
     }
 
-    judgments.push({
+    return {
       model: judgeModel,
       thinkingDefault: judgeOptions.thinkingDefault,
       fastMode: judgeOptions.fastMode,
       durationMs: Date.now() - judgeStartedAt,
       rankings,
       ...(judgeError ? { error: judgeError } : {}),
-    });
-  }
+    } satisfies QaCharacterEvalJudgeResult;
+  });
 
   const finishedAt = new Date();
   const report = renderCharacterEvalReport({

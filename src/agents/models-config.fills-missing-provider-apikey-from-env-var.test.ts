@@ -8,6 +8,7 @@ vi.unmock("../secrets/provider-env-vars.js");
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   const [{ resetProviderRuntimeHookCacheForTest }, { resetPluginLoaderTestStateForTest }] =
@@ -23,6 +24,7 @@ async function loadSecretsModule() {
 beforeEach(async () => {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   const [{ resetProviderRuntimeHookCacheForTest }, { resetPluginLoaderTestStateForTest }] =

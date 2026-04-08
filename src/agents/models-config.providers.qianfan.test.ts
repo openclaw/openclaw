@@ -25,6 +25,7 @@ let createProviderAuthResolver: typeof import("./models-config.providers.secrets
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   await resetProviderRuntimeState();

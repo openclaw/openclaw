@@ -320,11 +320,45 @@ function isToolResultTurnMismatchError(message: string): boolean {
   );
 }
 
+function collapseRepeatedFailureDetail(message: string): string {
+  const parts = message
+    .split(/\s+\|\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
+    return parts[0];
+  }
+  return message.trim();
+}
+
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+
+function buildMissingApiKeyFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
+  const provider = providerMatch?.[1]?.trim().toLowerCase();
+  if (!provider) {
+    return null;
+  }
+  if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.";
+  }
+  if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
+    return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+  }
+  return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
 function buildExternalRunFailureText(message: string): string {
-  if (isToolResultTurnMismatchError(message)) {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (isToolResultTurnMismatchError(normalizedMessage)) {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
   }
-  const oauthRefreshFailure = classifyOAuthRefreshFailure(message);
+  const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
+  if (missingApiKeyFailure) {
+    return missingApiKeyFailure;
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
     if (oauthRefreshFailure.reason) {
