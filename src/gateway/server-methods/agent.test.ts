@@ -933,6 +933,66 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("does not add group chat context for channel completion wakes", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      chatType: "channel",
+      channel: "telegram",
+      subject: "Release Updates",
+      lastChannel: "discord",
+      lastTo: "channel:c3",
+      lastAccountId: "acct-1",
+      origin: {
+        provider: "telegram",
+        surface: "discord",
+        chatType: "channel",
+        to: "channel:c3",
+        accountId: "acct-1",
+      },
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "child finished",
+      sessionKey: "agent:main:main",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fix the cache bug",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Patched and tested.",
+          replyInstruction: "Reply in your normal assistant voice now.",
+        },
+      ],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      idempotencyKey: "inter-session-context-channel",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(callArgs.extraSystemPrompt).toContain("## Inbound Context (trusted metadata)");
+    expect(callArgs.extraSystemPrompt).toContain('"chat_type": "channel"');
+    expect(callArgs.extraSystemPrompt).toContain('"provider": "discord"');
+    expect(callArgs.extraSystemPrompt).not.toContain(
+      'You are in the Discord group chat "Release Updates".',
+    );
+    expect(callArgs.extraSystemPrompt).not.toContain(
+      "Your replies are automatically sent to this group chat.",
+    );
+  });
+
   it("keeps explicit extraSystemPrompt on inter-session completion wakes", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({

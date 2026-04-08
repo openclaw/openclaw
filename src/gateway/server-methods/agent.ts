@@ -229,9 +229,7 @@ function buildPersistedCompletionWakeExtraSystemPrompt(
   };
 
   const groupChatContext =
-    sessionCtx.ChatType === "group" || sessionCtx.ChatType === "channel"
-      ? buildGroupChatContext({ sessionCtx })
-      : "";
+    sessionCtx.ChatType === "group" ? buildGroupChatContext({ sessionCtx }) : "";
 
   const parts = [buildInboundMetaSystemPrompt(sessionCtx), groupChatContext]
     .map((part) => normalizeOptionalString(part))
