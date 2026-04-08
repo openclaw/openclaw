@@ -254,7 +254,9 @@ ${decisionsSection}---
     }
 
     for (const searchDir of searchDirs) {
-      if (!fs.existsSync(searchDir)) continue;
+      if (!fs.existsSync(searchDir)) {
+        continue;
+      }
 
       const files = fs.readdirSync(searchDir).filter((f) => f.endsWith(".md"));
 
