@@ -2,10 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "../server.js";
 import { getFreePort } from "./test-port.js";
 
+type EnsureBrowserControlAuthResult = {
+  auth: {
+    token?: string;
+    password?: string;
+  };
+  generatedToken?: string;
+};
+
 const mocks = vi.hoisted(() => ({
   controlPort: 0,
   gatewayAuthMode: undefined as "password" | undefined,
-  ensureBrowserControlAuth: vi.fn(async () => {
+  ensureBrowserControlAuth: vi.fn<() => Promise<EnsureBrowserControlAuthResult>>(async () => {
     throw new Error("read-only config");
   }),
   resolveBrowserControlAuth: vi.fn(() => ({})),

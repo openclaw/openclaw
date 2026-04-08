@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => OpenClawConfig>(),
-  writeConfigFile: vi.fn(async () => {}),
+  writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
   resolveGatewayAuth: vi.fn(
     ({
       authConfig,
