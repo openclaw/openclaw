@@ -28,11 +28,18 @@ export type SlackDmConfig = {
   replyToMode?: ReplyToMode;
 };
 
+export type SlackChannelThreadConfig = {
+  /** Require explicit @mention inside bot-participated threads for this channel. */
+  requireExplicitMention?: boolean;
+};
+
 export type SlackChannelConfig = {
   /** If false, disable the bot in this channel. */
   enabled?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Per-channel thread mention behavior. */
+  thread?: SlackChannelThreadConfig;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

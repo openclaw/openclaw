@@ -12,6 +12,7 @@ import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from ".
 export type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
+  threadRequireExplicitMention?: boolean;
   allowBots?: boolean;
   users?: Array<string | number>;
   skills?: string[];
@@ -23,6 +24,7 @@ export type SlackChannelConfigResolved = {
 export type SlackChannelConfigEntry = {
   enabled?: boolean;
   requireMention?: boolean;
+  thread?: { requireExplicitMention?: boolean };
   allowBots?: boolean;
   users?: Array<string | number>;
   skills?: string[];
@@ -91,6 +93,7 @@ export function resolveSlackChannelConfig(params: {
   channels?: SlackChannelConfigEntries;
   channelKeys?: string[];
   defaultRequireMention?: boolean;
+  defaultThreadRequireExplicitMention?: boolean;
   allowNameMatching?: boolean;
 }): SlackChannelConfigResolved | null {
   const {
@@ -99,6 +102,7 @@ export function resolveSlackChannelConfig(params: {
     channels,
     channelKeys,
     defaultRequireMention,
+    defaultThreadRequireExplicitMention,
     allowNameMatching,
   } = params;
   const entries = channels ?? {};
@@ -128,10 +132,24 @@ export function resolveSlackChannelConfig(params: {
 
   const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {
-    return { allowed: true, requireMention: requireMentionDefault };
+    const result: SlackChannelConfigResolved = {
+      allowed: true,
+      requireMention: requireMentionDefault,
+    };
+    if (defaultThreadRequireExplicitMention !== undefined) {
+      result.threadRequireExplicitMention = defaultThreadRequireExplicitMention;
+    }
+    return result;
   }
   if (!matched && !fallback) {
-    return { allowed: false, requireMention: requireMentionDefault };
+    const result: SlackChannelConfigResolved = {
+      allowed: false,
+      requireMention: requireMentionDefault,
+    };
+    if (defaultThreadRequireExplicitMention !== undefined) {
+      result.threadRequireExplicitMention = defaultThreadRequireExplicitMention;
+    }
+    return result;
   }
 
   const resolved = matched ?? fallback ?? {};
@@ -143,6 +161,11 @@ export function resolveSlackChannelConfig(params: {
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const threadRequireExplicitMention = firstDefined(
+    resolved.thread?.requireExplicitMention,
+    fallback?.thread?.requireExplicitMention,
+    defaultThreadRequireExplicitMention,
+  );
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
@@ -151,6 +174,9 @@ export function resolveSlackChannelConfig(params: {
     skills,
     systemPrompt,
   };
+  if (threadRequireExplicitMention !== undefined) {
+    result.threadRequireExplicitMention = threadRequireExplicitMention;
+  }
   return applyChannelMatchMeta(result, match);
 }
 

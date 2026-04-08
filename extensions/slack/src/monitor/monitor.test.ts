@@ -32,6 +32,45 @@ describe("resolveSlackChannelConfig", () => {
     expect(res).toMatchObject({ requireMention: true });
   });
 
+  it("prefers direct channel thread.requireExplicitMention over a false account default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { thread: { requireExplicitMention: true } } },
+      defaultThreadRequireExplicitMention: false,
+    });
+    expect(res).toMatchObject({
+      threadRequireExplicitMention: true,
+      matchKey: "C1",
+      matchSource: "direct",
+    });
+  });
+
+  it("prefers direct channel thread.requireExplicitMention false over a true account default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { thread: { requireExplicitMention: false } } },
+      defaultThreadRequireExplicitMention: true,
+    });
+    expect(res).toMatchObject({
+      threadRequireExplicitMention: false,
+      matchKey: "C1",
+      matchSource: "direct",
+    });
+  });
+
+  it("uses wildcard thread.requireExplicitMention before the account default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { "*": { thread: { requireExplicitMention: true } } },
+      defaultThreadRequireExplicitMention: false,
+    });
+    expect(res).toMatchObject({
+      threadRequireExplicitMention: true,
+      matchKey: "*",
+      matchSource: "wildcard",
+    });
+  });
+
   it("uses wildcard entries when no direct channel config exists", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",

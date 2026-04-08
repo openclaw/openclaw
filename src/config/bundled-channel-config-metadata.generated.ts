@@ -11850,6 +11850,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               requireMention: {
                 type: "boolean",
               },
+              thread: {
+                type: "object",
+                properties: {
+                  requireExplicitMention: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               tools: {
                 type: "object",
                 properties: {
@@ -12780,6 +12789,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     requireMention: {
                       type: "boolean",
+                    },
+                    thread: {
+                      type: "object",
+                      properties: {
+                        requireExplicitMention: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
                     },
                     tools: {
                       type: "object",

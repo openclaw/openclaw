@@ -489,6 +489,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           channels: ctx.channelsConfig,
           channelKeys: ctx.channelsConfigKeys,
           defaultRequireMention: ctx.defaultRequireMention,
+          defaultThreadRequireExplicitMention: ctx.threadRequireExplicitMention,
           allowNameMatching: ctx.allowNameMatching,
         });
         if (ctx.useAccessGroups) {
