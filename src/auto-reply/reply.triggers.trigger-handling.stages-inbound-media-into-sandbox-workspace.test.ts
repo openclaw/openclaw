@@ -236,6 +236,30 @@ describe("stageSandboxMedia", () => {
     });
   });
 
+  it("truncates long staged filenames to filesystem-safe length", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      await loadStageSandboxMediaInTempHome();
+      const { cfg, workspaceDir } = await setupSandboxWorkspace(home);
+
+      const longName = `${"a".repeat(240)}.png`;
+      const mediaPath = await writeInboundMedia(home, longName, "LONG");
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedName = path.basename(ctx.MediaPath ?? "");
+      expect(Buffer.byteLength(stagedName, "utf8")).toBeLessThanOrEqual(255);
+      expect(stagedName).toMatch(/\.png$/);
+      expect(stagedName).toMatch(/-[a-f0-9]{8}\.png$/);
+    });
+  });
+
   it("blocks destination symlink escapes when staging into sandbox workspace", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       await loadStageSandboxMediaInTempHome();

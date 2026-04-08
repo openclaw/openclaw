@@ -222,6 +222,23 @@ async function isAllowedSourcePath(params: {
   }
 }
 
+const MAX_FILENAME_BYTES = 255;
+
+function trimUtf8ToMaxBytes(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  let out = "";
+  for (const char of value) {
+    const next = `${out}${char}`;
+    if (Buffer.byteLength(next, "utf8") > maxBytes) {
+      break;
+    }
+    out = next;
+  }
+  return out;
+}
+
 function allocateStagedFileName(
   source: string,
   usedNames: Set<string>,
@@ -232,11 +249,22 @@ function allocateStagedFileName(
     return null;
   }
   const parsed = path.parse(baseName);
+  const ext = parsed.ext;
+  const suffixBase = `-${stageNonce}`;
   const baseStem = parsed.name || "media";
-  let fileName = `${baseStem}-${stageNonce}${parsed.ext}`;
+  const maxStemBytes = Math.max(1, MAX_FILENAME_BYTES - Buffer.byteLength(`${suffixBase}${ext}`));
+  const safeStem = trimUtf8ToMaxBytes(baseStem, maxStemBytes) || "media";
+
+  let fileName = `${safeStem}${suffixBase}${ext}`;
   let suffix = 1;
   while (usedNames.has(fileName)) {
-    fileName = `${baseStem}-${stageNonce}-${suffix}${parsed.ext}`;
+    const numberedSuffix = `${suffixBase}-${suffix}`;
+    const maxNumberedStemBytes = Math.max(
+      1,
+      MAX_FILENAME_BYTES - Buffer.byteLength(`${numberedSuffix}${ext}`),
+    );
+    const numberedStem = trimUtf8ToMaxBytes(safeStem, maxNumberedStemBytes) || "media";
+    fileName = `${numberedStem}${numberedSuffix}${ext}`;
     suffix += 1;
   }
   usedNames.add(fileName);
