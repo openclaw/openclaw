@@ -352,6 +352,127 @@ function parseKimiFunctionStyleToolCallsInText(text: string): KimiParsedTextBloc
   return { content, changed };
 }
 
+function parseKimiPrefixFunctionStyleArguments(
+  name: string,
+  rawArgs: string,
+): Record<string, unknown> | null {
+  const trimmedArgs = rawArgs.trim();
+  if (!trimmedArgs) {
+    return null;
+  }
+
+  const quotedMatch = /^(["'])([\s\S]*)\1$/u.exec(trimmedArgs);
+  if (quotedMatch) {
+    const value = quotedMatch[2] ?? "";
+    if (name === "read") {
+      return { file_path: value };
+    }
+    if (name === "exec") {
+      return { command: value };
+    }
+  }
+
+  return parseKimiFunctionStyleArguments(name, trimmedArgs);
+}
+
+function findMatchingPrefixFunctionStyleClose(text: string, openParenIndex: number): number {
+  let depth = 1;
+  let quoteChar: '"' | "'" | null = null;
+  let isEscaped = false;
+
+  for (let index = openParenIndex + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoteChar !== null) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        isEscaped = true;
+        continue;
+      }
+      if (char === quoteChar) {
+        quoteChar = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quoteChar = char;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function parseKimiPrefixFunctionStyleToolCallsInText(text: string): KimiParsedTextBlock | null {
+  const callStartRe = /\(([A-Za-z_][A-Za-z0-9_.-]*)\s+/g;
+  const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
+  let lastIndex = 0;
+  let changed = false;
+  let toolCallCount = 0;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = callStartRe.exec(text)) !== null) {
+    const name = match[1]?.trim() ?? "";
+    if (!name) {
+      continue;
+    }
+    const openParenIndex = match.index ?? 0;
+    const closeParenIndex = findMatchingPrefixFunctionStyleClose(text, openParenIndex);
+    if (closeParenIndex < 0) {
+      continue;
+    }
+
+    const parsedArgs = parseKimiPrefixFunctionStyleArguments(
+      name,
+      text.slice(match.index + match[0].length, closeParenIndex),
+    );
+    if (!parsedArgs) {
+      callStartRe.lastIndex = openParenIndex + 1;
+      continue;
+    }
+
+    const before = text.slice(lastIndex, openParenIndex);
+    if (before) {
+      content.push({ type: "text", text: before });
+    }
+
+    content.push({
+      type: "toolCall",
+      id: `${name}:${toolCallCount}`,
+      name,
+      arguments: parsedArgs,
+    });
+    toolCallCount += 1;
+    changed = true;
+    lastIndex = closeParenIndex + 1;
+    callStartRe.lastIndex = closeParenIndex + 1;
+  }
+
+  if (!changed) {
+    return null;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after) {
+    content.push({ type: "text", text: after });
+  }
+
+  return { content, changed };
+}
+
 function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   const tagged = parseKimiTaggedToolCalls(text);
   if (tagged) {
@@ -365,7 +486,11 @@ function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   if (simpleTagged) {
     return simpleTagged;
   }
-  return parseKimiFunctionStyleToolCallsInText(text);
+  const functionStyle = parseKimiFunctionStyleToolCallsInText(text);
+  if (functionStyle) {
+    return functionStyle;
+  }
+  return parseKimiPrefixFunctionStyleToolCallsInText(text);
 }
 
 function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
