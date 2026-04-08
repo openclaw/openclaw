@@ -234,7 +234,9 @@ function createQaMultipassOutputDir(repoRoot: string) {
 function resolveGuestMountedPath(repoRoot: string, hostPath: string) {
   const relativePath = path.relative(repoRoot, hostPath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath) || relativePath.length === 0) {
-    throw new Error(`unable to resolve Multipass mounted path for ${hostPath}`);
+    throw new Error(
+      `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,
+    );
   }
   return path.posix.join(MULTIPASS_MOUNTED_REPO_PATH, ...relativePath.split(path.sep));
 }

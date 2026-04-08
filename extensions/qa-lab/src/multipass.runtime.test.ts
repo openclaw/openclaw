@@ -7,6 +7,15 @@ describe("qa multipass runtime", () => {
     vi.unstubAllEnvs();
   });
 
+  it("rejects output directories outside the mounted repo root", () => {
+    expect(() =>
+      createQaMultipassPlan({
+        repoRoot: process.cwd(),
+        outputDir: "/tmp/qa-out",
+      }),
+    ).toThrow("qa suite --runner multipass requires --output-dir to stay under the repo root");
+  });
+
   it("reuses suite scenario semantics and resolves mounted artifact paths", () => {
     const repoRoot = process.cwd();
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "multipass-test");
