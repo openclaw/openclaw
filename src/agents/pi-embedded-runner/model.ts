@@ -538,17 +538,18 @@ function shouldCompareProviderRuntimeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks: ProviderRuntimeHooks;
 }): boolean {
+  const workspaceDir = params.cfg?.agents?.defaults?.workspace;
   return (
     params.runtimeHooks.shouldPreferProviderRuntimeResolvedModel?.({
       provider: params.provider,
       config: params.cfg,
-      workspaceDir: params.agentDir,
+      workspaceDir,
       context: {
         provider: params.provider,
         modelId: params.modelId,
         config: params.cfg,
         agentDir: params.agentDir,
-        workspaceDir: params.agentDir,
+        workspaceDir,
       },
     }) ?? false
   );
