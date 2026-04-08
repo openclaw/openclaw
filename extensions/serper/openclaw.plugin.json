@@ -1,0 +1,47 @@
+{
+  "id": "serper",
+  "providerAuthEnvVars": {
+    "serper": ["SERPER_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Serper API Key",
+      "help": "Serper.dev API key for Google Search results (fallback: SERPER_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "your-serper-api-key"
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["serper"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "gl": {
+            "type": "string",
+            "description": "Country code for results (e.g. 'us', 'ec'). Default: 'us'."
+          },
+          "hl": {
+            "type": "string",
+            "description": "Language code for results (e.g. 'en', 'es'). Default: 'en'."
+          },
+          "num": {
+            "type": "number",
+            "description": "Number of results to return (1-100). Default: 10."
+          }
+        }
+      }
+    }
+  }
+}
