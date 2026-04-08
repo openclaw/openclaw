@@ -533,4 +533,62 @@ describe("provider request config", () => {
       "X-Custom": "1",
     });
   });
+
+  it("sets allowPrivateNetwork to true for custom (operator-configured) baseUrl endpoints", () => {
+    // Reproduces: STT/audio transcription blocked when provider is on a LAN IP.
+    // usesExplicitProxyLikeEndpoint is true for any non-default, non-native-OpenAI
+    // baseUrl (including private-network addresses like 192.168.x.x). Operator-
+    // configured endpoints are trusted infrastructure, so private network access
+    // should be permitted by default — matching the trust model used for LLM inference.
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "openai",
+      api: "openai-audio-transcriptions",
+      baseUrl: "http://192.168.30.208:5092/v1",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+
+    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.policy.usesExplicitProxyLikeEndpoint).toBe(true);
+    expect(resolved.policy.endpointClass).toBe("custom");
+  });
+
+  it("keeps allowPrivateNetwork false for the default public OpenAI audio endpoint", () => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "openai",
+      api: "openai-audio-transcriptions",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+
+    expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.policy.usesExplicitProxyLikeEndpoint).toBe(false);
+  });
+
+  it("explicit allowPrivateNetwork param always wins over the policy-derived default", () => {
+    // Caller can still force allowPrivateNetwork: false even on a custom endpoint.
+    const resolvedFalse = resolveProviderRequestPolicyConfig({
+      provider: "openai",
+      api: "openai-audio-transcriptions",
+      baseUrl: "http://192.168.30.208:5092/v1",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      capability: "audio",
+      transport: "media-understanding",
+      allowPrivateNetwork: false,
+    });
+    expect(resolvedFalse.allowPrivateNetwork).toBe(false);
+
+    // And caller can force allowPrivateNetwork: true even on a public endpoint.
+    const resolvedTrue = resolveProviderRequestPolicyConfig({
+      provider: "openai",
+      api: "openai-audio-transcriptions",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      capability: "audio",
+      transport: "media-understanding",
+      allowPrivateNetwork: true,
+    });
+    expect(resolvedTrue.allowPrivateNetwork).toBe(true);
+  });
 });
