@@ -240,15 +240,51 @@ function stripBackfillDiaryBlocks(existing: string): { updated: string; removed:
   };
 }
 
-export function formatBackfillDiaryDate(isoDay: string, timezone?: string): string {
+export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay);
+  if (!match) {
+    return isoDay;
+  }
+  const [, year, month, day] = match;
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone ?? "UTC",
+    // Preserve the source iso day exactly; backfill labels should not drift by timezone.
+    timeZone: "UTC",
     year: "numeric",
     month: "long",
     day: "numeric",
   };
-  const epochMs = Date.parse(`${isoDay}T12:00:00Z`);
+  const epochMs = Date.UTC(Number(year), Number(month) - 1, Number(day), 12);
   return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
+}
+
+async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
+  const stat = await fs.lstat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  if (!stat) {
+    return;
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error("Refusing to write symlinked DREAMS.md");
+  }
+  if (!stat.isFile()) {
+    throw new Error("Refusing to write non-file DREAMS.md");
+  }
+}
+
+async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
+  await assertSafeDreamsPath(dreamsPath);
+  const tempPath = `${dreamsPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
+  try {
+    await fs.rename(tempPath, dreamsPath);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 export function buildBackfillDiaryEntry(params: {
@@ -295,7 +331,7 @@ export async function writeBackfillDiaryEntries(params: {
     ),
   ];
   const updated = replaceDiaryContent(stripped.updated, joinDiaryBlocks(nextBlocks));
-  await fs.writeFile(dreamsPath, updated, "utf-8");
+  await writeDreamsFileAtomic(dreamsPath, updated);
   return {
     dreamsPath,
     written: params.entries.length,
@@ -311,7 +347,7 @@ export async function removeBackfillDiaryEntries(params: {
   const stripped = stripBackfillDiaryBlocks(existing);
   if (stripped.removed > 0 || existing.length > 0) {
     await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-    await fs.writeFile(dreamsPath, stripped.updated, "utf-8");
+    await writeDreamsFileAtomic(dreamsPath, stripped.updated);
   }
   return {
     dreamsPath,
