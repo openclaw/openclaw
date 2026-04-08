@@ -38,6 +38,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
     get: async () => null,
     list: async () => [],
     remove: async () => false,
+    findPreferredDmByUserId: async () => null,
     findByUserId: async () => null,
   };
   const pollStore: MSTeamsPollStore = {
@@ -47,7 +48,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   };
 
   return {
-    cfg: (params?.cfg ?? {}) as OpenClawConfig,
+    cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
     appId: "test-app-id",
     adapter,

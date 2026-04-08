@@ -1,92 +1,101 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
 import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
 
-describe("media-understanding runtime helpers", () => {
+const mocks = vi.hoisted(() => {
+  const cleanup = vi.fn(async () => {});
+  return {
+    buildProviderRegistry: vi.fn(() => new Map()),
+    createMediaAttachmentCache: vi.fn(() => ({ cleanup })),
+    normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
+    normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
+    runCapability: vi.fn(),
+    cleanup,
+  };
+});
+
+vi.mock("../plugin-sdk/media-runtime.js", () => ({
+  buildProviderRegistry: mocks.buildProviderRegistry,
+  createMediaAttachmentCache: mocks.createMediaAttachmentCache,
+  normalizeMediaAttachments: mocks.normalizeMediaAttachments,
+  normalizeMediaProviderId: mocks.normalizeMediaProviderId,
+  runCapability: mocks.runCapability,
+}));
+
+describe("media-understanding runtime", () => {
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    mocks.buildProviderRegistry.mockReset();
+    mocks.createMediaAttachmentCache.mockReset();
+    mocks.normalizeMediaAttachments.mockReset();
+    mocks.normalizeMediaProviderId.mockReset();
+    mocks.runCapability.mockReset();
+    mocks.cleanup.mockReset();
+    mocks.cleanup.mockResolvedValue(undefined);
   });
 
-  it("describes images through the active media-understanding registry", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-runtime-"));
-    const imagePath = path.join(tempDir, "sample.jpg");
-    await fs.writeFile(imagePath, Buffer.from("image-bytes"));
+  it("returns disabled state without loading providers", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
 
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.mediaUnderstandingProviders.push({
-      pluginId: "vision-plugin",
-      pluginName: "Vision Plugin",
-      source: "test",
-      provider: {
-        id: "vision-plugin",
-        capabilities: ["image"],
-        describeImage: async () => ({ text: "image ok", model: "vision-v1" }),
-      },
-    });
-    setActivePluginRegistry(pluginRegistry);
-
-    const cfg = {
-      tools: {
-        media: {
-          image: {
-            models: [{ provider: "vision-plugin", model: "vision-v1" }],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = await describeImageFile({
-      filePath: imagePath,
-      mime: "image/jpeg",
-      cfg,
-      agentDir: "/tmp/agent",
-    });
-
-    expect(result).toEqual({
-      text: "image ok",
-      provider: "vision-plugin",
-      model: "vision-v1",
-      output: {
-        kind: "image.description",
-        attachmentIndex: 0,
-        text: "image ok",
-        provider: "vision-plugin",
-        model: "vision-v1",
-      },
-    });
-  });
-
-  it("returns undefined when no media output is produced", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-runtime-"));
-    const imagePath = path.join(tempDir, "sample.jpg");
-    await fs.writeFile(imagePath, Buffer.from("image-bytes"));
-
-    const result = await runMediaUnderstandingFile({
-      capability: "image",
-      filePath: imagePath,
-      mime: "image/jpeg",
-      cfg: {
-        tools: {
-          media: {
-            image: {
-              enabled: false,
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "image",
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        cfg: {
+          tools: {
+            media: {
+              image: {
+                enabled: false,
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    });
-
-    expect(result).toEqual({
+        } as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
       text: undefined,
       provider: undefined,
       model: undefined,
       output: undefined,
     });
+
+    expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();
+    expect(mocks.runCapability).not.toHaveBeenCalled();
+  });
+
+  it("returns the matching capability output", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await expect(
+      describeImageFile({
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: "image ok",
+      provider: "vision-plugin",
+      model: "vision-v1",
+      output,
+    });
+
+    expect(mocks.runCapability).toHaveBeenCalledTimes(1);
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 });

@@ -108,15 +108,16 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("CRITICAL: OAuth dir missing");
   });
 
-  it("prompts for oauth dir when whatsapp is configured", async () => {
+  it("does not prompt for oauth dir when whatsapp is configured without persisted auth state", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         whatsapp: {},
       },
     };
     const confirmRuntimeRepair = await runStateIntegrity(cfg);
-    expect(confirmRuntimeRepair).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
-    expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+    expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    expect(stateIntegrityText()).toContain("OAuth dir not present");
+    expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
   });
 
   it("prompts for oauth dir when a channel dmPolicy is pairing", async () => {
@@ -159,6 +160,50 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
+    const cfg: OpenClawConfig = {
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: { enabled: true },
+        },
+      },
+    };
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+
+    expect(stateIntegrityText()).not.toContain(
+      "These .jsonl files are no longer referenced by sessions.json",
+    );
+    expect(confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
+  it("still detects orphan transcripts when QMD sessions are disabled", async () => {
+    const cfg: OpenClawConfig = {
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: { enabled: false },
+        },
+      },
+    };
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+
+    expect(stateIntegrityText()).toContain(
+      "These .jsonl files are no longer referenced by sessions.json",
+    );
+    expect(confirmRuntimeRepair).toHaveBeenCalled();
   });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {

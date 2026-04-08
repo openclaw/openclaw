@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { runExec } from "openclaw/plugin-sdk/browser-node-runtime";

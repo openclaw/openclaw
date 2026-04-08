@@ -1,6 +1,7 @@
 // Public media/payload helpers for plugins that fetch, transform, or send attachments.
 
 export * from "../media/audio.js";
+export * from "../media/base64.js";
 export * from "../media/constants.js";
 export * from "../media/fetch.js";
 export * from "../media/ffmpeg-exec.js";
@@ -23,6 +24,7 @@ export * from "../media-understanding/audio-preflight.ts";
 export * from "../media-understanding/defaults.js";
 export * from "../media-understanding/image-runtime.ts";
 export * from "../media-understanding/runner.js";
+export { normalizeMediaProviderId } from "../media-understanding/provider-registry.js";
 export * from "../polls.js";
 export {
   createDirectTextMediaOutbound,

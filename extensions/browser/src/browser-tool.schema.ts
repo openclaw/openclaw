@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { optionalStringEnum, stringEnum } from "./core-api.js";
+import { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 
 const BROWSER_ACT_KINDS = [
   "click",

@@ -1,8 +1,9 @@
 {
   "id": "fal",
+  "enabledByDefault": true,
   "providers": ["fal"],
   "providerAuthEnvVars": {
-    "fal": ["FAL_KEY"]
+    "fal": ["FAL_KEY", "FAL_API_KEY"]
   },
   "providerAuthChoices": [
     {
@@ -21,7 +22,8 @@
     }
   ],
   "contracts": {
-    "imageGenerationProviders": ["fal"]
+    "imageGenerationProviders": ["fal"],
+    "videoGenerationProviders": ["fal"]
   },
   "configSchema": {
     "type": "object",

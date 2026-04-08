@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
 
 const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
@@ -13,10 +13,14 @@ vi.mock("./app-settings.ts", () => ({
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
+let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
-async function loadChatHelpers(): Promise<void> {
-  vi.resetModules();
-  ({ handleSendChat, refreshChatAvatar } = await import("./app-chat.ts"));
+async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
+  if (params?.reload) {
+    vi.resetModules();
+  }
+  ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
+    await import("./app-chat.ts"));
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
@@ -45,7 +49,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
 }
 
 describe("refreshChatAvatar", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadChatHelpers();
   });
 
@@ -89,13 +93,17 @@ describe("refreshChatAvatar", () => {
 });
 
 describe("handleSendChat", () => {
-  beforeEach(async () => {
-    setLastActiveSessionKeyMock.mockReset();
+  beforeAll(async () => {
     await loadChatHelpers();
+  });
+
+  beforeEach(() => {
+    setLastActiveSessionKeyMock.mockReset();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.doUnmock("./chat/slash-command-executor.ts");
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
@@ -155,6 +163,64 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+  });
+
+  it("shows a visible pending item for /steer on the active run", async () => {
+    vi.doMock("./chat/slash-command-executor.ts", async () => {
+      const actual = await vi.importActual<typeof import("./chat/slash-command-executor.ts")>(
+        "./chat/slash-command-executor.ts",
+      );
+      return {
+        ...actual,
+        executeSlashCommand: vi.fn(async () => ({
+          content: "Steered.",
+          pendingCurrentRun: true,
+        })),
+      };
+    });
+    await loadChatHelpers({ reload: true });
+
+    const host = makeHost({
+      client: { request: vi.fn() } as unknown as ChatHost["client"],
+      chatRunId: "run-1",
+      chatMessage: "/steer tighten the plan",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        text: "/steer tighten the plan",
+        pendingRunId: "run-1",
+      }),
+    ]);
+  });
+
+  it("removes pending steer indicators when the run finishes", async () => {
+    const host = makeHost({
+      chatQueue: [
+        {
+          id: "pending",
+          text: "/steer tighten the plan",
+          createdAt: 1,
+          pendingRunId: "run-1",
+        },
+        {
+          id: "queued",
+          text: "follow up",
+          createdAt: 2,
+        },
+      ],
+    });
+
+    clearPendingQueueItemsForRun(host, "run-1");
+
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        id: "queued",
+        text: "follow up",
+      }),
+    ]);
   });
 });
 

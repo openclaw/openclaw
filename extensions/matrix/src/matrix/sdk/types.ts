@@ -52,6 +52,7 @@ export type FileWithThumbnailInfo = {
   size?: number;
   mimetype?: string;
   thumbnail_url?: string;
+  thumbnail_file?: EncryptedFile;
   thumbnail_info?: {
     w?: number;
     h?: number;
@@ -199,7 +200,7 @@ export type MatrixCryptoBootstrapApi = {
   }) => Promise<void>;
   createRecoveryKeyFromPassphrase?: (password?: string) => Promise<MatrixGeneratedSecretStorageKey>;
   getSecretStorageStatus?: () => Promise<MatrixSecretStorageStatus>;
-  requestOwnUserVerification: () => Promise<unknown | null>;
+  requestOwnUserVerification: () => Promise<MatrixVerificationRequestLike | null>;
   findVerificationRequestDMInProgress?: (
     roomId: string,
     userId: string,

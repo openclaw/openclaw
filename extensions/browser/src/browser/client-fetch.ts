@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -119,7 +121,7 @@ function isBrowserbaseUrl(url: string): boolean {
     return false;
   }
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
     return host === "browserbase.com" || host.endsWith(".browserbase.com");
   } catch {
     return false;
@@ -140,8 +142,9 @@ function resolveBrowserFetchOperatorHint(url: string): string {
 }
 
 function normalizeErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message.trim();
+  const message = err instanceof Error ? normalizeOptionalString(err.message) : undefined;
+  if (message) {
+    return message;
   }
   return String(err);
 }
@@ -171,7 +174,7 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = String(err);
-  const msgLower = msg.toLowerCase();
+  const msgLower = normalizeLowercaseStringOrEmpty(msg);
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||

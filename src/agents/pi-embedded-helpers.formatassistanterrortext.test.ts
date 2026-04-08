@@ -82,6 +82,12 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("sanitizes Codex error-prefixed JSON payloads", () => {
+    const msg = makeAssistantError(
+      'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"},"sequence_number":2}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
     const result = formatAssistantErrorText(msg);
@@ -185,6 +191,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it.each(["disk full", "ENOSPC: no space left on device, write"])(
+    "returns a friendly disk-space message for %s",
+    (errorMessage) => {
+      const msg = makeAssistantError(errorMessage);
+      expect(formatAssistantErrorText(msg)).toBe(
+        "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+      );
+    },
+  );
+
   it("returns a DNS-specific message for provider lookup failures", () => {
     const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -198,6 +214,15 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: network connection was interrupted.",
     );
   });
+
+  it("sanitizes invalid streaming event order errors", () => {
+    const msg = makeAssistantError(
+      'Unexpected event order, got message_start before receiving "message_stop"',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -209,7 +234,7 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
     expect(text).toContain("Rate limited.");
-    expect(text).toContain("req_123");
+    expect(text).not.toContain("req_123");
   });
 
   it("renders a generic unknown error message when raw is empty", () => {
@@ -220,6 +245,10 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
       "HTTP 500: Internal Server Error",
     );
+  });
+
+  it("formats colon-delimited HTTP status lines", () => {
+    expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {

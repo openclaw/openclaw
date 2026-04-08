@@ -8,7 +8,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuDocxBlock } from "./docx-types.js";
+import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
 // ============ Table Utilities ============
 
@@ -39,6 +39,26 @@ function normalizeChildBlockIds(children: string[] | string | undefined): string
     return children;
   }
   return typeof children === "string" ? [children] : [];
+}
+
+function omitParentId(block: FeishuDocxBlock): FeishuDocxBlock {
+  const cleanBlock = { ...block };
+  delete cleanBlock.parent_id;
+  return cleanBlock;
+}
+
+function createDescendantTable(
+  table: FeishuBlockTable,
+  adaptiveWidths: number[] | undefined,
+): FeishuBlockTable {
+  const { row_size, column_size } = table.property || {};
+  return {
+    property: {
+      row_size,
+      column_size,
+      ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
+    },
+  };
 }
 
 export function calculateAdaptiveColumnWidths(
@@ -94,13 +114,13 @@ export function calculateAdaptiveColumnWidths(
   // Calculate weighted length (CJK chars count as 2)
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
   function getWeightedLength(text: string): number {
-    return [...text].reduce((sum, char) => {
+    return Array.from(text).reduce((sum, char) => {
       return sum + (char.charCodeAt(0) > 255 ? 2 : 1);
     }, 0);
   }
 
   // Find max content length per column
-  const maxLengths: number[] = new Array(column_size).fill(0);
+  const maxLengths = Array.from({ length: column_size }, () => 0);
 
   for (let row = 0; row < row_size; row++) {
     for (let col = 0; col < column_size; col++) {
@@ -123,7 +143,7 @@ export function calculateAdaptiveColumnWidths(
       MIN_COLUMN_WIDTH,
       Math.min(MAX_COLUMN_WIDTH, Math.floor(totalWidth / column_size)),
     );
-    return new Array(column_size).fill(equalWidth);
+    return Array.from({ length: column_size }, () => equalWidth);
   }
 
   // Calculate proportional widths
@@ -140,11 +160,15 @@ export function calculateAdaptiveColumnWidths(
   while (remaining > 0) {
     // Find columns that can still grow (not at max)
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
-    if (growable.length === 0) break;
+    if (growable.length === 0) {
+      break;
+    }
 
     // Distribute evenly among growable columns
     const perColumn = Math.floor(remaining / growable.length);
-    if (perColumn === 0) break;
+    if (perColumn === 0) {
+      break;
+    }
 
     for (const i of growable) {
       const add = Math.min(perColumn, MAX_COLUMN_WIDTH - widths[i]);
@@ -178,8 +202,7 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
   }
 
   return blocks.map((block) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { parent_id: _parentId, ...cleanBlock } = block;
+    const cleanBlock = omitParentId(block);
 
     // Fix: Convert API sometimes returns children as string for TableCell
     if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
@@ -188,18 +211,8 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
 
     // Clean table blocks
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { cells: _cells, ...tableWithoutCells } = cleanBlock.table;
-      const { row_size, column_size } = tableWithoutCells.property || {};
       const adaptiveWidths = block.block_id ? tableWidths.get(block.block_id) : undefined;
-
-      cleanBlock.table = {
-        property: {
-          row_size,
-          column_size,
-          ...(adaptiveWidths?.length && { column_width: adaptiveWidths }),
-        },
-      };
+      cleanBlock.table = createDescendantTable(cleanBlock.table, adaptiveWidths);
     }
 
     return cleanBlock;

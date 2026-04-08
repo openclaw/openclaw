@@ -1,7 +1,7 @@
 import {
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
-} from "../../../agents/subagent-control.js";
+} from "../commands-subagents-control.runtime.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,

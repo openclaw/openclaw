@@ -1,64 +1,74 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
+  resolveRuntimePluginRegistry: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
+  getChannelPlugin: mocks.getChannelPlugin,
+  listChannelPlugins: () => [],
+}));
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveDefaultAgentId: () => "main",
+  resolveSessionAgentId: ({
+    sessionKey,
+  }: {
+    sessionKey?: string;
+    config?: unknown;
+    agentId?: string;
+  }) => {
+    const match = sessionKey?.match(/^agent:([^:]+)/i);
+    return match?.[1] ?? "main";
+  },
+  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+}));
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+}));
+
+vi.mock("../../plugins/loader.js", () => ({
+  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
+}));
+
+vi.mock("./targets.js", () => ({
+  resolveOutboundTarget: mocks.resolveOutboundTarget,
+}));
+
+vi.mock("./deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 let sendMessage: typeof import("./message.js").sendMessage;
+let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
 
 describe("sendMessage", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../channels/plugins/index.js", () => ({
-      normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
-      getChannelPlugin: mocks.getChannelPlugin,
-      listChannelPlugins: () => [],
-    }));
-    vi.doMock("../../agents/agent-scope.js", () => ({
-      resolveDefaultAgentId: () => "main",
-      resolveSessionAgentId: ({
-        sessionKey,
-      }: {
-        sessionKey?: string;
-        config?: unknown;
-        agentId?: string;
-      }) => {
-        const match = sessionKey?.match(/^agent:([^:]+)/i);
-        return match?.[1] ?? "main";
-      },
-      resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
-    }));
-    vi.doMock("../../config/plugin-auto-enable.js", () => ({
-      applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
-    }));
-    vi.doMock("../../plugins/loader.js", () => ({
-      loadOpenClawPlugins: mocks.loadOpenClawPlugins,
-    }));
-    vi.doMock("./targets.js", () => ({
-      resolveOutboundTarget: mocks.resolveOutboundTarget,
-    }));
-    vi.doMock("./deliver.js", () => ({
-      deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-    }));
+  beforeAll(async () => {
+    ({ sendMessage } = await import("./message.js"));
+    ({ resetOutboundChannelResolutionStateForTest } = await import("./channel-resolution.js"));
+  });
+
+  beforeEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
+    resetOutboundChannelResolutionStateForTest();
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
-    mocks.loadOpenClawPlugins.mockClear();
+    mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "mattermost", messageId: "m1" }]);
-
-    ({ sendMessage } = await import("./message.js"));
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
@@ -124,6 +134,6 @@ describe("sendMessage", () => {
       via: "direct",
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 });

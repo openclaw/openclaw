@@ -9,7 +9,9 @@ vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: verificationMocks.bootstrapMatrixVerification,
 }));
 
-import { matrixPlugin } from "./channel.js";
+import { matrixConfigAdapter } from "./config-adapter.js";
+import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
+import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -46,7 +48,7 @@ describe("matrix setup post-write bootstrap", () => {
       previousCfg: params.previousCfg,
       accountId: params.accountId,
       input: params.input,
-      nextCfg: matrixPlugin.setup!.applyAccountConfig({
+      nextCfg: matrixSetupAdapter.applyAccountConfig({
         cfg: params.previousCfg,
         accountId: params.accountId,
         input: params.input,
@@ -85,11 +87,10 @@ describe("matrix setup post-write bootstrap", () => {
     accountId: string;
     input: Record<string, unknown>;
   }) {
-    await matrixPlugin.setup!.afterAccountConfigWritten?.({
+    await runMatrixSetupBootstrapAfterConfigWrite({
       previousCfg: params.previousCfg,
       cfg: params.nextCfg,
       accountId: params.accountId,
-      input: params.input,
       runtime,
     });
   }
@@ -226,7 +227,7 @@ describe("matrix setup post-write bootstrap", () => {
       },
       () => {
         expect(
-          matrixPlugin.setup!.validateInput?.({
+          matrixSetupAdapter.validateInput?.({
             cfg: {} as CoreConfig,
             accountId: "default",
             input: { useEnv: true },
@@ -236,13 +237,16 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
-    const updated = matrixPlugin.config.deleteAccount?.({
+  it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
+    const updated = matrixConfigAdapter.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+            proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {
                 enabled: true,

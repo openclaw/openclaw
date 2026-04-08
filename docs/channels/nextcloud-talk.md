@@ -5,13 +5,17 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-# Nextcloud Talk (plugin)
+# Nextcloud Talk
 
-Status: supported via plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
+Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
-## Plugin required
+## Bundled plugin
 
-Nextcloud Talk ships as a plugin and is not bundled with the core install.
+Nextcloud Talk ships as a bundled plugin in current OpenClaw releases, so
+normal packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Nextcloud Talk,
+install it manually:
 
 Install via CLI (npm registry):
 
@@ -22,17 +26,16 @@ openclaw plugins install @openclaw/nextcloud-talk
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/nextcloud-talk
+openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
-
-If you choose Nextcloud Talk during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Install the Nextcloud Talk plugin.
+1. Ensure the Nextcloud Talk plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. On your Nextcloud server, create a bot:
 
    ```bash
@@ -136,3 +139,11 @@ Provider options:
 - `channels.nextcloud-talk.blockStreaming`: disable block streaming for this channel.
 - `channels.nextcloud-talk.blockStreamingCoalesce`: block streaming coalesce tuning.
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

@@ -1,6 +1,6 @@
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { describe, expect, it } from "vitest";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 import { buildFinalizedDiscordDirectInboundContext } from "./inbound-context.test-helpers.js";
 

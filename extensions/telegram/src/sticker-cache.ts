@@ -9,11 +9,15 @@ import {
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
-import { AUTO_IMAGE_KEY_PROVIDERS, DEFAULT_IMAGE_MODELS } from "openclaw/plugin-sdk/media-runtime";
 import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
-import { describeImageFileWithModel } from "openclaw/plugin-sdk/media-understanding-runtime";
+import {
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
+} from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { getTelegramRuntime } from "./runtime.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -72,12 +76,12 @@ export function cacheSticker(sticker: CachedSticker): void {
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
   const cache = loadCache();
-  const queryLower = query.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
   for (const sticker of Object.values(cache.stickers)) {
     let score = 0;
-    const descLower = sticker.description.toLowerCase();
+    const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 
     // Exact substring match in description
     if (descLower.includes(queryLower)) {
@@ -99,7 +103,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
     }
 
     // Set name match
-    if (sticker.setName?.toLowerCase().includes(queryLower)) {
+    if (normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower)) {
       score += 3;
     }
 
@@ -182,15 +186,25 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     }
   };
 
+  const autoProviders = resolveAutoMediaKeyProviders({
+    cfg,
+    capability: "image",
+  });
+
   const selectCatalogModel = (provider: string) => {
     const entries = catalog.filter(
       (entry) =>
-        entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
+        normalizeLowercaseStringOrEmpty(entry.provider) ===
+          normalizeLowercaseStringOrEmpty(provider) && modelSupportsVision(entry),
     );
     if (entries.length === 0) {
       return undefined;
     }
-    const defaultId = DEFAULT_IMAGE_MODELS[provider];
+    const defaultId = resolveDefaultMediaModel({
+      cfg,
+      providerId: provider,
+      capability: "image",
+    });
     const preferred = entries.find((entry) => entry.id === defaultId);
     return preferred ?? entries[0];
   };
@@ -198,16 +212,14 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let resolved = null as { provider: string; model?: string } | null;
   if (
     activeModel &&
-    AUTO_IMAGE_KEY_PROVIDERS.includes(
-      activeModel.provider as (typeof AUTO_IMAGE_KEY_PROVIDERS)[number],
-    ) &&
+    autoProviders.includes(activeModel.provider) &&
     (await hasProviderKey(activeModel.provider))
   ) {
     resolved = activeModel;
   }
 
   if (!resolved) {
-    for (const provider of AUTO_IMAGE_KEY_PROVIDERS) {
+    for (const provider of autoProviders) {
       if (!(await hasProviderKey(provider))) {
         continue;
       }
@@ -236,7 +248,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
-    const result = await describeImageFileWithModel({
+    const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({
       filePath: imagePath,
       mime: "image/webp",
       cfg,

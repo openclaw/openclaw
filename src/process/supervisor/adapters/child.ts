@@ -5,6 +5,8 @@ import { resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
+const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
+
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
@@ -112,13 +114,97 @@ export async function createChildAdapter(params: {
     });
   };
 
-  const wait = async () =>
-    await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
-        resolve({ code, signal });
-      });
-    });
+  let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let waitError: unknown;
+  let resolveWait:
+    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
+    | null = null;
+  let rejectWait: ((reason?: unknown) => void) | null = null;
+  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
+  let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+
+  const clearForceKillWaitFallback = () => {
+    if (!forceKillWaitFallbackTimer) {
+      return;
+    }
+    clearTimeout(forceKillWaitFallbackTimer);
+    forceKillWaitFallbackTimer = null;
+  };
+
+  const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
+    if (waitResult || waitError !== undefined) {
+      return;
+    }
+    clearForceKillWaitFallback();
+    waitResult = value;
+    if (resolveWait) {
+      const resolve = resolveWait;
+      resolveWait = null;
+      rejectWait = null;
+      resolve(value);
+    }
+  };
+
+  const rejectPendingWait = (error: unknown) => {
+    if (waitResult || waitError !== undefined) {
+      return;
+    }
+    clearForceKillWaitFallback();
+    waitError = error;
+    if (rejectWait) {
+      const reject = rejectWait;
+      resolveWait = null;
+      rejectWait = null;
+      reject(error);
+    }
+  };
+
+  const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
+    clearForceKillWaitFallback();
+    // Some Windows child processes never emit `close` after a hard kill.
+    forceKillWaitFallbackTimer = setTimeout(() => {
+      settleWait({ code: null, signal });
+    }, FORCE_KILL_WAIT_FALLBACK_MS);
+    forceKillWaitFallbackTimer.unref?.();
+  };
+
+  child.once("error", (error) => {
+    rejectPendingWait(error);
+  });
+  child.once("close", (code, signal) => {
+    settleWait({ code, signal });
+  });
+
+  const wait = async () => {
+    if (waitResult) {
+      return waitResult;
+    }
+    if (waitError !== undefined) {
+      throw waitError;
+    }
+    if (!waitPromise) {
+      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          resolveWait = resolve;
+          rejectWait = reject;
+          if (waitResult) {
+            const settled = waitResult;
+            resolveWait = null;
+            rejectWait = null;
+            resolve(settled);
+            return;
+          }
+          if (waitError !== undefined) {
+            const error = waitError;
+            resolveWait = null;
+            rejectWait = null;
+            reject(error);
+          }
+        },
+      );
+    }
+    return waitPromise;
+  };
 
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
@@ -131,6 +217,7 @@ export async function createChildAdapter(params: {
       } catch {
         // ignore kill errors
       }
+      scheduleForceKillWaitFallback("SIGKILL");
       return;
     }
     try {
@@ -141,6 +228,7 @@ export async function createChildAdapter(params: {
   };
 
   const dispose = () => {
+    clearForceKillWaitFallback();
     child.removeAllListeners();
   };
 

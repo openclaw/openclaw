@@ -1,5 +1,6 @@
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
+import type { MattermostFetch } from "./client.js";
 
 export function createMattermostTestConfig(): OpenClawConfig {
   return {
@@ -69,12 +70,12 @@ export function createMattermostReactionFetchMock(params: {
       );
     }
 
-    throw new Error(`unexpected url: ${url}`);
+    throw new Error(`unexpected url: ${String(url)}`);
   });
 }
 
 export async function withMockedGlobalFetch<T>(
-  fetchImpl: typeof fetch,
+  fetchImpl: MattermostFetch,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;

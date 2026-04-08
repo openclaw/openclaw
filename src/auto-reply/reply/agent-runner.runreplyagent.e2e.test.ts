@@ -24,6 +24,7 @@ type AgentRunParams = {
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+  silentExpected?: boolean;
 };
 
 type EmbeddedRunParams = {
@@ -32,6 +33,7 @@ type EmbeddedRunParams = {
   memoryFlushWritePath?: string;
   sessionId?: string;
   sessionFile?: string;
+  silentExpected?: boolean;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
@@ -40,7 +42,6 @@ type EmbeddedRunParams = {
 const state = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
   runEmbeddedPiAgentMock: vi.fn(),
-  runCliAgentMock: vi.fn(),
 }));
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
@@ -84,10 +85,6 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
-}));
-
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
@@ -104,7 +101,6 @@ beforeAll(async () => {
 beforeEach(() => {
   state.compactEmbeddedPiSessionMock.mockClear();
   state.runEmbeddedPiAgentMock.mockClear();
-  state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -160,6 +156,7 @@ function createMinimalRun(params?: {
       },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
+      skipProviderRuntimeHints: process.env.OPENCLAW_TEST_FAST === "1",
       ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
@@ -186,7 +183,7 @@ function createMinimalRun(params?: {
         sessionKey,
         storePath: params?.storePath,
         sessionCtx,
-        defaultModel: "anthropic/claude-opus-4-5",
+        defaultModel: "anthropic/claude-opus-4-6",
         resolvedVerboseLevel: params?.resolvedVerboseLevel ?? "off",
         isNewSession: false,
         blockStreamingEnabled: params?.blockStreamingEnabled ?? false,
@@ -292,7 +289,7 @@ async function runReplyAgentWithBase(params: {
     sessionStore: { [params.sessionKey]: params.sessionEntry } as Record<string, SessionEntry>,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
-    defaultModel: "anthropic/claude-opus-4-5",
+    defaultModel: "anthropic/claude-opus-4-6",
     agentCfgContextTokens: 100_000,
     resolvedVerboseLevel: "off",
     isNewSession: false,
@@ -491,6 +488,56 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
       expect(typing.startTypingLoop).not.toHaveBeenCalled();
     }
+  });
+
+  it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      expect(params.silentExpected).toBe(true);
+      await params.onReasoningStream?.({ text: "Reasoning:\nI am trying to send NO_REPLY now." });
+      await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
+      await params.onBlockReply?.({ text: "I am trying to send NO_REPLY now." });
+      return { payloads: [{ text: "I am trying to send NO_REPLY now." }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      blockStreamingEnabled: true,
+      runOverrides: { silentExpected: true },
+    });
+    const res = await run();
+
+    expect(onReasoningStream).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(res).toBeUndefined();
+  });
+
+  it("suppresses bare NO_REPLY silent-turn payloads", async () => {
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      expect(params.silentExpected).toBe(true);
+      await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
+      await params.onPartialReply?.({ text: "NO_REPLY" });
+      await params.onBlockReply?.({ text: "NO_REPLY" });
+      return { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantText: "NO_REPLY" } };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      blockStreamingEnabled: true,
+      runOverrides: { silentExpected: true },
+    });
+    const res = await run();
+
+    expect(onReasoningStream).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(res).toBeUndefined();
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
@@ -847,7 +894,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "fireworks",
-              model: "fireworks/minimax-m2p5",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
               error: "Provider fireworks is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -908,7 +955,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "fireworks",
-              model: "fireworks/minimax-m2p5",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
               error: "Provider fireworks is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -982,7 +1029,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             attempts: [
               {
                 provider: "fireworks",
-                model: "fireworks/minimax-m2p5",
+                model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
                 error: "Provider fireworks is in cooldown (all profiles unavailable)",
                 reason: "rate_limit",
               },
@@ -1045,7 +1092,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
               attempts: [
                 {
                   provider: "fireworks",
-                  model: "fireworks/minimax-m2p5",
+                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
                   error: "Provider fireworks is in cooldown (all profiles unavailable)",
                   reason: "rate_limit",
                 },
@@ -1125,7 +1172,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
               attempts: [
                 {
                   provider: "fireworks",
-                  model: "fireworks/minimax-m2p5",
+                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
                   error: "Provider fireworks is in cooldown (all profiles unavailable)",
                   reason: "rate_limit",
                 },
@@ -1247,7 +1294,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionId,
         updatedAt: Date.now(),
         sessionFile: transcriptPath,
-        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
+        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
         fallbackNoticeReason: "rate limit",
       };
@@ -1704,11 +1751,6 @@ describe("runReplyAgent memory flush", () => {
         payloads: [{ text: "ok" }],
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       }));
-      state.runCliAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      });
-
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
@@ -1723,10 +1765,11 @@ describe("runReplyAgent memory flush", () => {
         commandBody: "hello",
       });
 
-      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
-      const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const call = state.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+        | { prompt?: string }
+        | undefined;
       expect(call?.prompt).toBe("hello");
-      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1894,6 +1937,7 @@ describe("runReplyAgent memory flush", () => {
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
       expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
       expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
+      expect(flushCall?.silentExpected).toBe(true);
       expect(calls[1]?.prompt).toBe("hello");
     });
   });

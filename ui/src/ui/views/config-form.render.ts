@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -8,6 +9,7 @@ export type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
+  rawAvailable?: boolean;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;
@@ -341,9 +343,9 @@ function matchesSearch(params: {
   const meta = SECTION_META[params.key];
   const sectionMetaMatches =
     q &&
-    (params.key.toLowerCase().includes(q) ||
-      (meta?.label ? meta.label.toLowerCase().includes(q) : false) ||
-      (meta?.description ? meta.description.toLowerCase().includes(q) : false));
+    (normalizeLowercaseStringOrEmpty(params.key).includes(q) ||
+      (meta?.label ? normalizeLowercaseStringOrEmpty(meta.label).includes(q) : false) ||
+      (meta?.description ? normalizeLowercaseStringOrEmpty(meta.description).includes(q) : false));
 
   if (sectionMetaMatches && criteria.tags.length === 0) {
     return true;
@@ -456,6 +458,7 @@ export function renderConfigForm(props: ConfigFormProps) {
           value: params.nodeValue,
           path: params.path,
           hints: props.uiHints,
+          rawAvailable: props.rawAvailable ?? true,
           unsupported,
           disabled: props.disabled ?? false,
           showLabel: false,

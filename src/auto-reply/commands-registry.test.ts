@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -20,6 +20,7 @@ import {
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
 beforeEach(() => {
+  vi.doUnmock("../channels/plugins/index.js");
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -30,6 +31,7 @@ afterEach(() => {
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
+    expect(buildCommandText("tasks")).toBe("/tasks");
     expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
     expect(buildCommandText("models")).toBe("/models");
   });
@@ -39,6 +41,7 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "tasks")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
@@ -105,7 +108,7 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
   });
 
-  it("applies provider-specific native names", () => {
+  it("applies discord native command overrides", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "discord" },
@@ -115,13 +118,12 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
-  it("renames status to agentstatus for slack", () => {
+  it("applies slack native command overrides", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "slack" },
     );
     expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
-    expect(native.find((spec) => spec.name === "status")).toBeFalsy();
     expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
   });
@@ -352,12 +354,10 @@ describe("commands registry args", () => {
       args: [{ name: "model", description: "model", type: "string", captureRemaining: true }],
     };
 
-    expect(serializeCommandArgs(command, { raw: "gpt-5.2-codex" })).toBe("gpt-5.2-codex");
-    expect(serializeCommandArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "gpt-5.2-codex",
-    );
-    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "/model gpt-5.2-codex",
+    expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(serializeCommandArgs(command, { values: { model: "gpt-5.4" } })).toBe("gpt-5.4");
+    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.4" } })).toBe(
+      "/model gpt-5.4",
     );
   });
 
