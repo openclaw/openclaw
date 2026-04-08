@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { buildSubagentsSendContext } from "./commands-subagents.test-helpers.js";
 import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 
 const sendControlledSubagentMessageMock = vi.hoisted(() => vi.fn());
@@ -11,45 +10,11 @@ vi.mock("./commands-subagents-control.runtime.js", () => ({
   steerControlledSubagentRun: steerControlledSubagentRunMock,
 }));
 
-function buildRun(): SubagentRunRecord {
-  return {
-    runId: "run-1",
-    childSessionKey: "agent:main:subagent:abc",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "do thing",
-    cleanup: "keep",
-    createdAt: 1000,
-    startedAt: 1000,
-  };
-}
-
-function buildContext(params?: {
-  cfg?: OpenClawConfig;
-  requesterKey?: string;
-  runs?: SubagentRunRecord[];
-  restTokens?: string[];
-}) {
-  return {
-    params: {
-      cfg:
-        params?.cfg ??
-        ({
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-      ctx: {},
-      command: {
-        channel: "whatsapp",
-        to: "test-bot",
-      },
-    },
+const buildContext = () =>
+  buildSubagentsSendContext({
     handledPrefix: "/subagents",
-    requesterKey: params?.requesterKey ?? "agent:main:main",
-    runs: params?.runs ?? [buildRun()],
-    restTokens: params?.restTokens ?? ["1", "continue", "with", "follow-up", "details"],
-  } as Parameters<typeof handleSubagentsSendAction>[0];
-}
+    restTokens: ["1", "continue", "with", "follow-up", "details"],
+  });
 
 describe("subagents send action", () => {
   beforeEach(() => {

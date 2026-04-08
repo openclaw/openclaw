@@ -9,6 +9,7 @@ const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
+const originalExecArgv = [...process.execArgv];
 
 function makeRepoRoot(prefix: string): string {
   return makeTrackedTempDir(prefix, tempDirs);
@@ -68,9 +69,12 @@ function expectResolvedBundledDir(params: {
   bundledDirOverride?: string;
   disableBundledPlugins?: string;
   vitest?: string;
+  execArgv?: string[];
 }) {
   vi.spyOn(process, "cwd").mockReturnValue(params.cwd);
   process.argv[1] = params.argv1 ?? "/usr/bin/env";
+  process.execArgv.length = 0;
+  process.execArgv.push(...(params.execArgv ?? []));
   if (params.vitest === undefined) {
     delete process.env.VITEST;
   } else {
@@ -99,6 +103,7 @@ function expectResolvedBundledDirFromRoot(params: {
   bundledDirOverride?: string;
   vitest?: string;
   cwd?: string;
+  execArgv?: string[];
 }) {
   expectResolvedBundledDir({
     cwd: params.cwd ?? params.repoRoot,
@@ -106,6 +111,7 @@ function expectResolvedBundledDirFromRoot(params: {
     ...(params.argv1 ? { argv1: params.argv1 } : {}),
     ...(params.bundledDirOverride ? { bundledDirOverride: params.bundledDirOverride } : {}),
     ...(params.vitest !== undefined ? { vitest: params.vitest } : {}),
+    ...(params.execArgv ? { execArgv: params.execArgv } : {}),
   });
 }
 
@@ -153,6 +159,8 @@ afterEach(() => {
     process.env.VITEST = originalVitest;
   }
   process.argv[1] = originalArgv1;
+  process.execArgv.length = 0;
+  process.execArgv.push(...originalExecArgv);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -207,6 +215,21 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
+      "prefers source extensions during tsx-driven source execution",
+      {
+        prefix: "openclaw-bundled-dir-tsx-",
+        hasExtensions: true,
+        hasSrc: true,
+        hasDistRuntimeExtensions: true,
+        hasDistExtensions: true,
+        hasGitCheckout: true,
+      },
+      {
+        expectedRelativeDir: "extensions",
+        execArgv: ["--import", "tsx"],
+      },
+    ],
+    [
       "falls back to source extensions in a git checkout when built trees are missing",
       {
         prefix: "openclaw-bundled-dir-git-",
@@ -230,6 +253,7 @@ describe("resolveBundledPluginsDir", () => {
       repoRoot,
       expectedRelativeDir: expectation.expectedRelativeDir,
       ...("vitest" in expectation ? { vitest: expectation.vitest } : {}),
+      ...("execArgv" in expectation ? { execArgv: [...expectation.execArgv] } : {}),
     });
   });
 

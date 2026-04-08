@@ -487,6 +487,12 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
             },
           )
         : undefined,
+    shouldPreferProviderRuntimeResolvedModel: (params: {
+      provider: string;
+      context: { modelId: string };
+    }) =>
+      params.provider === "openai-codex" &&
+      params.context.modelId.trim().toLowerCase() === "gpt-5.4",
     prepareProviderDynamicModel: async (params: {
       provider: string;
       context: { modelId: string };

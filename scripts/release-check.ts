@@ -1,7 +1,16 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync, execSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -165,6 +174,77 @@ function runPackDry(): PackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return JSON.parse(raw) as PackResult[];
+}
+
+function runPack(packDestination: string): PackResult[] {
+  const raw = execFileSync(
+    "npm",
+    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024 * 100,
+    },
+  );
+  return JSON.parse(raw) as PackResult[];
+}
+
+function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
+  const filenames = results
+    .map((entry) => entry.filename)
+    .filter((filename): filename is string => typeof filename === "string" && filename.length > 0);
+  if (filenames.length !== 1) {
+    throw new Error(
+      `release-check: npm pack produced ${filenames.length} tarballs; expected exactly one.`,
+    );
+  }
+  return resolve(packDestination, filenames[0]);
+}
+
+function linkRootNodeModules(packageRoot: string): void {
+  const rootNodeModules = resolve("node_modules");
+  if (!existsSync(rootNodeModules)) {
+    return;
+  }
+  symlinkSync(
+    rootNodeModules,
+    join(packageRoot, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
+function runPackedBundledChannelEntrySmoke(): void {
+  const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
+  try {
+    const packDir = join(tmpRoot, "pack");
+    const extractDir = join(tmpRoot, "extract");
+    mkdirSync(packDir);
+    mkdirSync(extractDir);
+
+    const packResults = runPack(packDir);
+    const tarballPath = resolvePackedTarballPath(packDir, packResults);
+    execFileSync("tar", ["-xzf", tarballPath, "-C", extractDir], { stdio: "inherit" });
+
+    const packageRoot = join(extractDir, "package");
+    linkRootNodeModules(packageRoot);
+    execFileSync(
+      process.execPath,
+      [
+        resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
+        "--package-root",
+        packageRoot,
+      ],
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+        },
+      },
+    );
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
 }
 
 export function collectMissingPackPaths(paths: Iterable<string>): string[] {
@@ -444,7 +524,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("release-check: npm pack contents look OK.");
+  runPackedBundledChannelEntrySmoke();
+
+  console.log("release-check: npm pack contents and bundled channel entrypoints look OK.");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
