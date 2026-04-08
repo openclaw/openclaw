@@ -1,6 +1,5 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -9,93 +8,129 @@ import {
   GCP_VERTEX_CREDENTIALS_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
-  hasUsableCustomProviderApiKey,
-  requireApiKey,
-  resolveApiKeyForProvider,
-  resolveAwsSdkEnvVarName,
-  resolveModelAuthMode,
-  resolveUsableCustomProviderApiKey,
-} from "./model-auth.js";
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
-    provider: string;
-    context: { resolvedApiKey?: string };
-  }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
-  resolveProviderSyntheticAuthWithPlugin: (params: {
-    provider: string;
-    config?: {
-      plugins?: {
-        enabled?: boolean;
-        entries?: {
-          xai?: {
-            enabled?: boolean;
-            config?: {
-              webSearch?: {
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    buildProviderMissingAuthMessageWithPlugin: () => undefined,
+    resolveExternalAuthProfilesWithPlugins: () => [],
+    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+      provider: string;
+      context: { resolvedApiKey?: string };
+    }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
+    resolveProviderSyntheticAuthWithPlugin: (params: {
+      provider: string;
+      config?: {
+        plugins?: {
+          enabled?: boolean;
+          entries?: {
+            xai?: {
+              enabled?: boolean;
+              config?: {
+                webSearch?: {
+                  apiKey?: unknown;
+                };
+              };
+            };
+          };
+        };
+        tools?: {
+          web?: {
+            search?: {
+              grok?: {
                 apiKey?: unknown;
               };
             };
           };
         };
       };
-      tools?: {
-        web?: {
-          search?: {
-            grok?: {
-              apiKey?: unknown;
-            };
+      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+    }) => {
+      if (params.provider === "xai") {
+        if (
+          params.config?.plugins?.enabled === false ||
+          params.config?.plugins?.entries?.xai?.enabled === false
+        ) {
+          return undefined;
+        }
+        const pluginApiKey = params.config?.plugins?.entries?.xai?.config?.webSearch?.apiKey;
+        if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
+          return {
+            apiKey: pluginApiKey.trim(),
+            source: "plugins.entries.xai.config.webSearch.apiKey",
+            mode: "api-key" as const,
           };
-        };
-      };
-    };
-    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
-  }) => {
-    if (params.provider === "xai") {
-      if (
-        params.config?.plugins?.enabled === false ||
-        params.config?.plugins?.entries?.xai?.enabled === false
-      ) {
+        }
+        if (pluginApiKey && typeof pluginApiKey === "object") {
+          return {
+            apiKey: NON_ENV_SECRETREF_MARKER,
+            source: "plugins.entries.xai.config.webSearch.apiKey",
+            mode: "api-key" as const,
+          };
+        }
         return undefined;
       }
-      const pluginApiKey = params.config?.plugins?.entries?.xai?.config?.webSearch?.apiKey;
-      if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
+      if (params.provider === "claude-cli") {
         return {
-          apiKey: pluginApiKey.trim(),
-          source: "plugins.entries.xai.config.webSearch.apiKey",
-          mode: "api-key" as const,
+          apiKey: "claude-cli-access-token",
+          source: "Claude CLI native auth",
+          mode: "oauth" as const,
         };
       }
-      if (pluginApiKey && typeof pluginApiKey === "object") {
-        return {
-          apiKey: NON_ENV_SECRETREF_MARKER,
-          source: "plugins.entries.xai.config.webSearch.apiKey",
-          mode: "api-key" as const,
-        };
+      if (params.provider !== "ollama") {
+        return undefined;
       }
-      return undefined;
-    }
-    if (params.provider !== "ollama") {
-      return undefined;
-    }
-    const providerConfig = params.context.providerConfig;
-    const hasApiConfig =
-      Boolean(providerConfig?.api?.trim()) ||
-      Boolean(providerConfig?.baseUrl?.trim()) ||
-      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-    if (!hasApiConfig) {
-      return undefined;
-    }
-    return {
-      apiKey: "ollama-local",
-      source: "models.providers.ollama (synthetic local key)",
-      mode: "api-key" as const,
-    };
-  },
-}));
+      const providerConfig = params.context.providerConfig;
+      const hasMeaningfulOllamaConfig =
+        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
+        Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
+        Boolean(
+          providerConfig?.baseUrl?.trim() &&
+          providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
+        );
+      if (!hasMeaningfulOllamaConfig) {
+        return undefined;
+      }
+      return {
+        apiKey: "ollama-local",
+        source: "models.providers.ollama (synthetic local key)",
+        mode: "api-key" as const,
+      };
+    },
+  };
+});
+
+let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
+let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
+let requireApiKey: typeof import("./model-auth.js").requireApiKey;
+let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
+let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
+let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
+let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveUsableCustomProviderApiKey;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
+
+beforeAll(async () => {
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
+  ({
+    applyAuthHeaderOverride,
+    applyLocalNoAuthHeaderOverride,
+    hasUsableCustomProviderApiKey,
+    requireApiKey,
+    resolveApiKeyForProvider,
+    resolveAwsSdkEnvVarName,
+    resolveModelAuthMode,
+    resolveUsableCustomProviderApiKey,
+  } = await import("./model-auth.js"));
+});
+
+beforeEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -484,6 +519,28 @@ describe("resolveApiKeyForProvider", () => {
         }),
       ),
     ).rejects.toThrow('No API key found for provider "xai"');
+  });
+
+  it("reuses native Claude CLI auth for the claude-cli provider", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "claude-cli",
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "claude-cli/claude-sonnet-4-6",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "claude-cli-access-token",
+      source: "Claude CLI native auth",
+      mode: "oauth",
+    });
   });
 
   it("prefers explicit api-key provider config over ambient auth profiles", async () => {

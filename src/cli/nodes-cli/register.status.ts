@@ -1,6 +1,12 @@
 import type { Command } from "commander";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -15,7 +21,7 @@ function formatVersionLabel(raw: string) {
   if (!trimmed) {
     return raw;
   }
-  if (trimmed.toLowerCase().startsWith("v")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("v")) {
     return trimmed;
   }
   return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
@@ -27,8 +33,8 @@ function resolveNodeVersions(node: {
   coreVersion?: string;
   uiVersion?: string;
 }) {
-  const core = node.coreVersion?.trim() || undefined;
-  const ui = node.uiVersion?.trim() || undefined;
+  const core = normalizeOptionalString(node.coreVersion);
+  const ui = normalizeOptionalString(node.uiVersion);
   if (core || ui) {
     return { core, ui };
   }
@@ -36,7 +42,7 @@ function resolveNodeVersions(node: {
   if (!legacy) {
     return { core: undefined, ui: undefined };
   }
-  const platform = node.platform?.trim().toLowerCase() ?? "";
+  const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
@@ -86,8 +92,7 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  const value =
-    typeof raw === "string" ? raw.trim() : typeof raw === "number" ? String(raw).trim() : null;
+  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
   if (value === null) {
     defaultRuntime.error(`${label}: invalid duration value`);
     defaultRuntime.exit(1);
@@ -99,7 +104,7 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   try {
     return parseDurationMs(value);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     defaultRuntime.error(`${label}: ${message}`);
     defaultRuntime.exit(1);
     return undefined;

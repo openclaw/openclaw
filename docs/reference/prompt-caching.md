@@ -112,6 +112,13 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - OpenAI returns useful tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`, but cache-hit accounting should come from the usage payload, not from headers.
 - In practice, OpenAI often behaves like an initial-prefix cache rather than Anthropic-style moving full-history reuse. Stable long-prefix text turns can land near a `4864` cached-token plateau in current live probes, while tool-heavy or MCP-style transcripts often plateau near `4608` cached tokens even on exact repeats.
 
+### Anthropic Vertex
+
+- Anthropic models on Vertex AI (`anthropic-vertex/*`) support `cacheRetention` the same way as direct Anthropic.
+- `cacheRetention: "long"` maps to the real 1-hour prompt-cache TTL on Vertex AI endpoints.
+- Default cache retention for `anthropic-vertex` matches direct Anthropic defaults.
+- Vertex requests are routed through boundary-aware cache shaping so cache reuse stays aligned with what providers actually receive.
+
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
@@ -136,12 +143,16 @@ If the provider does not support this cache mode, `cacheRetention` has no effect
 
 - Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits
   through upstream `cachedContentTokenCount`; OpenClaw maps that to `cacheRead`.
-- If you already have a Gemini cached-content handle, you can pass it through as
+- When `cacheRetention` is set on a direct Gemini model, OpenClaw automatically
+  creates, reuses, and refreshes `cachedContents` resources for system prompts
+  on Google AI Studio runs. This means you no longer need to pre-create a
+  cached-content handle manually.
+- You can still pass a pre-existing Gemini cached-content handle through as
   `params.cachedContent` (or legacy `params.cached_content`) on the configured
   model.
-- This is separate from Anthropic/OpenAI prompt-prefix caching. OpenClaw is
-  forwarding a provider-native cached-content reference, not synthesizing cache
-  markers.
+- This is separate from Anthropic/OpenAI prompt-prefix caching. For Gemini,
+  OpenClaw manages a provider-native `cachedContents` resource rather than
+  injecting cache markers into the request.
 
 ### Gemini CLI JSON usage
 
@@ -151,6 +162,35 @@ If the provider does not support this cache mode, `cacheRetention` has no effect
   from `stats.input_tokens - stats.cached`.
 - This is usage normalization only. It does not mean OpenClaw is creating
   Anthropic/OpenAI-style prompt-cache markers for Gemini CLI.
+
+## System-prompt cache boundary
+
+OpenClaw splits the system prompt into a **stable prefix** and a **volatile
+suffix** separated by an internal cache-prefix boundary. Content above the
+boundary (tool definitions, skills metadata, workspace files, and other
+relatively static context) is ordered so it stays byte-identical across turns.
+Content below the boundary (for example `HEARTBEAT.md`, runtime timestamps, and
+other per-turn metadata) is allowed to change without invalidating the cached
+prefix.
+
+Key design choices:
+
+- Stable workspace project-context files are ordered before `HEARTBEAT.md` so
+  heartbeat churn does not bust the stable prefix.
+- The boundary is applied across Anthropic-family, OpenAI-family, Google, and
+  CLI transport shaping so all supported providers benefit from the same prefix
+  stability.
+- Codex Responses and Anthropic Vertex requests are routed through
+  boundary-aware cache shaping so cache reuse stays aligned with what providers
+  actually receive.
+- System-prompt fingerprints are normalized (whitespace, line endings,
+  hook-added context, runtime capability ordering) so semantically unchanged
+  prompts share KV/cache across turns.
+
+If you see unexpected `cacheWrite` spikes after a config or workspace change,
+check whether the change lands above or below the cache boundary. Moving
+volatile content below the boundary (or stabilizing it) often resolves the
+issue.
 
 ## OpenClaw cache-stability guards
 

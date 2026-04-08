@@ -35,14 +35,15 @@ node-llama-cpp).
 
 ## Supported providers
 
-| Provider | ID        | Needs API key | Notes                         |
-| -------- | --------- | ------------- | ----------------------------- |
-| OpenAI   | `openai`  | Yes           | Auto-detected, fast           |
-| Gemini   | `gemini`  | Yes           | Supports image/audio indexing |
-| Voyage   | `voyage`  | Yes           | Auto-detected                 |
-| Mistral  | `mistral` | Yes           | Auto-detected                 |
-| Ollama   | `ollama`  | No            | Local, must set explicitly    |
-| Local    | `local`   | No            | GGUF model, ~0.6 GB download  |
+| Provider | ID        | Needs API key | Notes                                                |
+| -------- | --------- | ------------- | ---------------------------------------------------- |
+| OpenAI   | `openai`  | Yes           | Auto-detected, fast                                  |
+| Gemini   | `gemini`  | Yes           | Supports image/audio indexing                        |
+| Voyage   | `voyage`  | Yes           | Auto-detected                                        |
+| Mistral  | `mistral` | Yes           | Auto-detected                                        |
+| Bedrock  | `bedrock` | No            | Auto-detected when the AWS credential chain resolves |
+| Ollama   | `ollama`  | No            | Local, must set explicitly                           |
+| Local    | `local`   | No            | GGUF model, ~0.6 GB download                         |
 
 ## How search works
 

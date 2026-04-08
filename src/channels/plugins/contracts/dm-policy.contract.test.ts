@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isSignalSenderAllowed,
   type SignalSender,
-} from "../../../../test/helpers/channels/policy-contract.js";
+} from "../../../../test/helpers/channels/dm-policy-contract.js";
 import { isAllowedBlueBubblesSender } from "../../../plugin-sdk/bluebubbles-policy.js";
 import { isMattermostSenderAllowed } from "../../../plugin-sdk/mattermost-policy.js";
 import {

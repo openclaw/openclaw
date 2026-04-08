@@ -136,29 +136,34 @@ describe("CronToolSchema", () => {
     );
   });
 
-  it("job.failureAlert also allows boolean false", () => {
+  it("job.failureAlert uses plain object type for OpenAPI 3.0 compat", () => {
     const root = (CronToolSchema as Record<string, unknown>).properties as
       | Record<string, { properties?: Record<string, unknown>; type?: unknown }>
       | undefined;
     const jobProps = root?.job?.properties as
-      | Record<string, { type?: unknown; not?: { const?: unknown } }>
+      | Record<string, { type?: unknown; description?: string }>
       | undefined;
     const schema = jobProps?.failureAlert;
-    expect(schema?.type).toEqual(["object", "boolean"]);
-    expect(schema?.not?.const).toBe(true);
+    // Must be a plain "object" type — not a type array — so providers that
+    // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot) accept it.
+    expect(schema?.type).toBe("object");
+    // The description must mention "false" so LLMs know they can disable alerts.
+    expect(schema?.description).toMatch(/false/i);
   });
 
-  it("job.agentId and job.sessionKey accept null for clear/keep-unset flows", () => {
+  it("job.agentId and job.sessionKey use plain string type for OpenAPI 3.0 compat", () => {
     const root = (CronToolSchema as Record<string, unknown>).properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
 
-    expect(jobProps?.agentId?.type).toEqual(["string", "null"]);
-    expect(jobProps?.sessionKey?.type).toEqual(["string", "null"]);
+    // Must be plain "string" — not ["string", "null"] — for provider compat.
+    // Null semantics are conveyed via the field description and handled at runtime.
+    expect(jobProps?.agentId?.type).toBe("string");
+    expect(jobProps?.sessionKey?.type).toBe("string");
   });
 
-  it("patch.payload.toolsAllow accepts null for clear flows", () => {
+  it("patch.payload.toolsAllow uses plain array type for OpenAPI 3.0 compat", () => {
     const root = (CronToolSchema as Record<string, unknown>).properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
@@ -166,6 +171,17 @@ describe("CronToolSchema", () => {
       | Record<string, { properties?: Record<string, { type?: unknown }> }>
       | undefined;
 
-    expect(patchProps?.payload?.properties?.toolsAllow?.type).toEqual(["array", "null"]);
+    // Must be plain "array" — not ["array", "null"] — for provider compat.
+    expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
+  });
+
+  // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
+  // serialized cron tool schema.  This catches future regressions at the source.
+  it("serialized schema contains no type-array or not/const keywords", () => {
+    const json = JSON.stringify(CronToolSchema);
+    // type arrays like ["string","null"] are not valid in OpenAPI 3.0
+    expect(json).not.toMatch(/"type"\s*:\s*\[/);
+    // "not" composition keyword is not supported by OpenAPI 3.0
+    expect(json).not.toMatch(/"not"\s*:\s*\{/);
   });
 });

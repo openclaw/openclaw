@@ -1,5 +1,5 @@
-import { isClaudeCliProvider } from "../../extensions/anthropic/api.js";
 import type { CliBackendConfig } from "../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -22,6 +22,10 @@ export type CliStreamingDelta = {
   sessionId?: string;
   usage?: CliUsage;
 };
+
+function isClaudeCliProvider(providerId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
+}
 
 function extractJsonObjectCandidates(raw: string): string[] {
   const candidates: string[] = [];
@@ -99,6 +103,42 @@ function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
   return parsedRecords;
 }
 
+function readNestedErrorMessage(parsed: Record<string, unknown>): string | undefined {
+  if (isRecord(parsed.error)) {
+    const errorMessage = readNestedErrorMessage(parsed.error);
+    if (errorMessage) {
+      return errorMessage;
+    }
+  }
+  if (typeof parsed.message === "string") {
+    const trimmed = parsed.message.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof parsed.error === "string") {
+    const trimmed = parsed.error.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function unwrapCliErrorText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  for (const parsed of parseJsonRecordCandidates(trimmed)) {
+    const nested = readNestedErrorMessage(parsed);
+    if (nested) {
+      return nested;
+    }
+  }
+  return trimmed;
+}
+
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
@@ -114,7 +154,8 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
     (Object.hasOwn(raw, "cached") && typeof totalInput === "number"
       ? Math.max(0, totalInput - (cacheRead ?? 0))
       : totalInput);
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
+  const cacheWrite =
+    pick("cache_creation_input_tokens") ?? pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
@@ -166,6 +207,35 @@ function collectCliText(value: unknown): string {
   if (isRecord(value.message)) {
     return collectCliText(value.message);
   }
+  return "";
+}
+
+function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
+  const nested = readNestedErrorMessage(parsed);
+  if (nested) {
+    return unwrapCliErrorText(nested);
+  }
+
+  if (parsed.is_error === true && typeof parsed.result === "string") {
+    return unwrapCliErrorText(parsed.result);
+  }
+
+  if (parsed.type === "assistant") {
+    const text = collectCliText(parsed.message);
+    if (/^\s*API Error:/i.test(text)) {
+      return unwrapCliErrorText(text);
+    }
+  }
+
+  if (parsed.type === "error") {
+    const text =
+      collectCliText(parsed.message) ||
+      collectCliText(parsed.content) ||
+      collectCliText(parsed.result) ||
+      collectCliText(parsed);
+    return unwrapCliErrorText(text);
+  }
+
   return "";
 }
 
@@ -393,7 +463,7 @@ export function parseCliJsonl(
 
       const item = isRecord(parsed.item) ? parsed.item : null;
       if (item && typeof item.text === "string") {
-        const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+        const type = normalizeLowercaseStringOrEmpty(item.type);
         if (!type || type.includes("message")) {
           texts.push(item.text);
         }
@@ -432,4 +502,21 @@ export function parseCliOutput(params: {
       sessionId: params.fallbackSessionId,
     }
   );
+}
+
+export function extractCliErrorMessage(raw: string): string | null {
+  const parsedRecords = parseJsonRecordCandidates(raw);
+  if (parsedRecords.length === 0) {
+    return null;
+  }
+
+  let errorText = "";
+  for (const parsed of parsedRecords) {
+    const next = collectExplicitCliErrorText(parsed);
+    if (next) {
+      errorText = next;
+    }
+  }
+
+  return errorText || null;
 }

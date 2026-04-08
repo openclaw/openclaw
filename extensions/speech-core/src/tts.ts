@@ -18,12 +18,20 @@ import type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
-import { CONFIG_DIR, resolveUserPath, stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  resolveConfigDir,
+  resolveUserPath,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -35,6 +43,7 @@ import {
   summarizeText,
   type SpeechModelOverridePolicy,
   type SpeechProviderConfig,
+  type SpeechProviderOverrides,
   type SpeechVoiceOption,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
@@ -167,7 +176,7 @@ function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
   if (envPath) {
     return resolveUserPath(envPath);
   }
-  return path.join(CONFIG_DIR, "settings", "tts.json");
+  return path.join(resolveConfigDir(process.env), "settings", "tts.json");
 }
 
 function resolveModelOverridePolicy(
@@ -210,7 +219,7 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
   });
 }
 
-function resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
+function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
   return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
@@ -244,7 +253,7 @@ function resolveLazyProviderConfig(
   cfg?: OpenClawConfig,
 ): SpeechProviderConfig {
   const canonical =
-    normalizeConfiguredSpeechProviderId(providerId) ?? providerId.trim().toLowerCase();
+    normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
   const existing = config.providerConfigs[canonical];
   const effectiveCfg = cfg ?? config.sourceConfig;
   if (existing && !effectiveCfg) {
@@ -307,7 +316,7 @@ export function getResolvedSpeechProviderConfig(
   const canonical =
     canonicalizeSpeechProviderId(providerId, cfg) ??
     normalizeConfiguredSpeechProviderId(providerId) ??
-    providerId.trim().toLowerCase();
+    normalizeLowercaseStringOrEmpty(providerId);
   return resolveLazyProviderConfig(config, canonical, cfg);
 }
 
@@ -321,9 +330,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     mode: raw.mode ?? "final",
     provider:
       normalizeConfiguredSpeechProviderId(raw.provider) ??
-      (providerSource === "config" ? raw.provider?.trim().toLowerCase() || "" : ""),
+      (providerSource === "config" ? (normalizeOptionalLowercaseString(raw.provider) ?? "") : ""),
     providerSource,
-    summaryModel: raw.summaryModel?.trim() || undefined,
+    summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     providerConfigs: collectDirectProviderConfigEntries(raw),
     prefsPath: raw.prefsPath,
@@ -390,7 +399,7 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
   if (autoMode === "off") {
     return undefined;
   }
-  const config = resolveTtsConfig(cfg);
+  const _config = resolveTtsConfig(cfg);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -494,6 +503,66 @@ export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
   });
 }
 
+export function resolveExplicitTtsOverrides(params: {
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  provider?: string;
+  modelId?: string;
+  voiceId?: string;
+}): TtsDirectiveOverrides {
+  const providerInput = params.provider?.trim();
+  const modelId = params.modelId?.trim();
+  const voiceId = params.voiceId?.trim();
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  const selectedProvider =
+    canonicalizeSpeechProviderId(providerInput, params.cfg) ??
+    (modelId || voiceId ? getTtsProvider(config, prefsPath) : undefined);
+
+  if (providerInput && !selectedProvider) {
+    throw new Error(`Unknown TTS provider "${providerInput}".`);
+  }
+
+  if (!modelId && !voiceId) {
+    return selectedProvider ? { provider: selectedProvider } : {};
+  }
+
+  if (!selectedProvider) {
+    throw new Error("TTS model or voice overrides require a resolved provider.");
+  }
+
+  const provider = getSpeechProvider(selectedProvider, params.cfg);
+  if (!provider) {
+    throw new Error(`speech provider ${selectedProvider} is not registered`);
+  }
+  if (!provider.resolveTalkOverrides) {
+    throw new Error(
+      `TTS provider "${selectedProvider}" does not support model or voice overrides.`,
+    );
+  }
+
+  const providerOverrides = provider.resolveTalkOverrides({
+    talkProviderConfig: {},
+    params: {
+      ...(voiceId ? { voiceId } : {}),
+      ...(modelId ? { modelId } : {}),
+    },
+  });
+  if ((voiceId || modelId) && (!providerOverrides || Object.keys(providerOverrides).length === 0)) {
+    throw new Error(
+      `TTS provider "${selectedProvider}" ignored the requested model or voice overrides.`,
+    );
+  }
+
+  const overridesRecord = providerOverrides as SpeechProviderOverrides;
+  return {
+    provider: selectedProvider,
+    providerOverrides: {
+      [provider.id]: overridesRecord,
+    },
+  };
+}
+
 export function getTtsMaxLength(prefsPath: string): number {
   const prefs = readPrefs(prefsPath);
   return prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH;
@@ -569,7 +638,7 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
 }
 
 function sanitizeTtsErrorForLog(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = formatErrorMessage(err);
   return redactSensitiveText(raw).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 

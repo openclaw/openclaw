@@ -1,5 +1,6 @@
 import { format } from "node:util";
-import { MatrixExecApprovalHandler } from "../../exec-approvals-handler.js";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -15,6 +16,7 @@ import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
+  backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
@@ -34,6 +36,7 @@ import { runMatrixStartupMaintenance } from "./startup.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
+  channelRuntime?: import("openclaw/plugin-sdk/channel-core").PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   initialSyncLimit?: number;
@@ -146,7 +149,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  let execApprovalsHandler: MatrixExecApprovalHandler | null = null;
   const inboundDeduper = await createMatrixInboundEventDeduper({
     auth,
     env: process.env,
@@ -166,7 +168,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       client.stopSyncWithoutPersist();
       await client.drainPendingDecryptions("matrix monitor shutdown");
       await waitForInFlightRoomMessages();
-      await execApprovalsHandler?.stop();
       threadBindingManager?.stop();
       await inboundDeduper.stop();
       await releaseSharedClientInstance(client, "persist");
@@ -207,6 +208,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
+  const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
@@ -214,8 +216,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
-  const streaming: "partial" | "off" =
-    accountConfig.streaming === true || accountConfig.streaming === "partial" ? "partial" : "off";
+  const streaming: "partial" | "quiet" | "off" =
+    accountConfig.streaming === true || accountConfig.streaming === "partial"
+      ? "partial"
+      : accountConfig.streaming === "quiet"
+        ? "quiet"
+        : "off";
   const blockStreamingEnabled = accountConfig.blockStreaming === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
@@ -271,6 +277,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     replyToMode,
     threadReplies,
     dmThreadReplies,
+    dmSessionScope,
     streaming,
     blockStreamingEnabled,
     dmEnabled,
@@ -345,13 +352,24 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
     // Shared client is already started via resolveSharedMatrixClient.
     logger.info(`matrix: logged in as ${auth.userId}`);
-
-    execApprovalsHandler = new MatrixExecApprovalHandler({
-      client,
-      accountId: effectiveAccountId,
-      cfg,
+    void backfillMatrixAuthDeviceIdAfterStartup({
+      auth,
+      env: process.env,
+      abortSignal: opts.abortSignal,
+    }).catch((err) => {
+      logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
     });
-    await execApprovalsHandler.start();
+
+    registerChannelRuntimeContext({
+      channelRuntime: opts.channelRuntime,
+      channelId: "matrix",
+      accountId: effectiveAccountId,
+      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+      context: {
+        client,
+      },
+      abortSignal: opts.abortSignal,
+    });
 
     await runMatrixStartupMaintenance({
       client,

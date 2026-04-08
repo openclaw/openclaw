@@ -1,8 +1,7 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -10,21 +9,16 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { tlonChannelConfigSchema } from "./config-schema.js";
+import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
-import {
-  applyTlonSetupConfig,
-  createTlonSetupWizardBase,
-  resolveTlonSetupConfigured,
-  tlonSetupAdapter,
-} from "./setup-core.js";
+import { createTlonSetupWizardBase, tlonSetupAdapter } from "./setup-core.js";
 import {
   formatTargetHint,
   normalizeShip,
   parseTlonTarget,
   resolveTlonOutboundTarget,
 } from "./targets.js";
-import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
-import { validateUrbitBaseUrl } from "./urbit/base-url.js";
+import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
@@ -100,6 +94,7 @@ export const tlonPlugin = createChatChannelPlugin({
           },
         }),
     },
+    doctor: tlonDoctor,
     messaging: {
       normalizeTarget: (target) => {
         const parsed = parseTlonTarget(target);

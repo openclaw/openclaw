@@ -1,5 +1,5 @@
-import { hasHelpOrVersion } from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 
 export function shouldSkipRespawnForArgv(argv: string[]): boolean {
-  return hasHelpOrVersion(argv);
+  return resolveCliArgvInvocation(argv).hasHelpOrVersion;
 }

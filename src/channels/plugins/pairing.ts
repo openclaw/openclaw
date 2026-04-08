@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   type ChannelId,
   getChannelPlugin,
@@ -29,20 +30,18 @@ export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapt
 }
 
 export function resolvePairingChannel(raw: unknown): ChannelId {
-  const value = (
+  const value =
     typeof raw === "string"
       ? raw
       : typeof raw === "number" || typeof raw === "boolean"
         ? String(raw)
-        : ""
-  )
-    .trim()
-    .toLowerCase();
-  const normalized = normalizeChannelId(value);
+        : "";
+  const normalizedValue = normalizeLowercaseStringOrEmpty(value);
+  const normalized = normalizeChannelId(normalizedValue);
   const channels = listPairingChannels();
   if (!normalized || !channels.includes(normalized)) {
     throw new Error(
-      `Invalid channel: ${value || "(empty)"} (expected one of: ${channels.join(", ")})`,
+      `Invalid channel: ${normalizedValue || "(empty)"} (expected one of: ${channels.join(", ")})`,
     );
   }
   return normalized;

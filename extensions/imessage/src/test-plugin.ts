@@ -2,13 +2,14 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contrac
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 function normalizeIMessageTestHandle(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered.startsWith("imessage:")) {
     return normalizeIMessageTestHandle(trimmed.slice("imessage:".length));
   }
@@ -20,11 +21,11 @@ function normalizeIMessageTestHandle(raw: string): string {
   }
   if (/^(chat_id:|chat_guid:|chat_identifier:)/i.test(trimmed)) {
     return trimmed.replace(/^(chat_id:|chat_guid:|chat_identifier:)/i, (match) =>
-      match.toLowerCase(),
+      normalizeLowercaseStringOrEmpty(match),
     );
   }
   if (trimmed.includes("@")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
   const digits = trimmed.replace(/[^\d+]/g, "");
   if (digits) {

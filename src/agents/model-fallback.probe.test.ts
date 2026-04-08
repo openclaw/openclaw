@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -52,7 +52,6 @@ const makeCfg = makeModelFallbackCfg;
 let unregisterLogTransport: (() => void) | undefined;
 
 async function loadModelFallbackProbeModules() {
-  vi.resetModules();
   const authProfilesStoreModule = await import("./auth-profiles/store.js");
   const authProfilesUsageModule = await import("./auth-profiles/usage.js");
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
@@ -71,6 +70,8 @@ async function loadModelFallbackProbeModules() {
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
 }
+
+beforeAll(loadModelFallbackProbeModules);
 
 function expectFallbackUsed(
   result: { result: unknown; attempts: Array<{ reason?: string }> },
@@ -170,8 +171,7 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-  beforeEach(async () => {
-    await loadModelFallbackProbeModules();
+  beforeEach(() => {
     realDateNow = Date.now;
     Date.now = vi.fn(() => NOW);
 

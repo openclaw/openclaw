@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { msteamsSetupAdapter } from "./setup-core.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
 
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
 const resolveMSTeamsChannelAllowlist = vi.hoisted(() => vi.fn());
@@ -25,17 +25,8 @@ vi.mock("./token.js", () => ({
   resolveMSTeamsCredentials,
 }));
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 describe("msteams setup surface", () => {
-  let msteamsSetupWizard: typeof import("./setup-surface.js").msteamsSetupWizard;
-
-  beforeAll(async () => {
-    ({ msteamsSetupWizard } = await import("./setup-surface.js"));
-  });
+  const msteamsSetupWizard = createMSTeamsSetupWizardBase();
 
   beforeEach(() => {
     resolveMSTeamsUserAllowlist.mockReset();
@@ -145,9 +136,15 @@ describe("msteams setup surface", () => {
     const note = vi.fn(async () => {});
     const confirm = vi.fn(async () => false);
     const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") return "app-id";
-      if (message === "Enter MS Teams App Password") return "app-password";
-      if (message === "Enter MS Teams Tenant ID") return "tenant-id";
+      if (message === "Enter MS Teams App ID") {
+        return "app-id";
+      }
+      if (message === "Enter MS Teams App Password") {
+        return "app-password";
+      }
+      if (message === "Enter MS Teams Tenant ID") {
+        return "tenant-id";
+      }
       throw new Error(`Unexpected prompt: ${message}`);
     });
 

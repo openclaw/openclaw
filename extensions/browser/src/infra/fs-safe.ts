@@ -2,4 +2,4 @@ export {
   SafeOpenError,
   openFileWithinRoot,
   writeFileFromPathWithinRoot,
-} from "openclaw/plugin-sdk/browser-support";
+} from "openclaw/plugin-sdk/browser-security-runtime";

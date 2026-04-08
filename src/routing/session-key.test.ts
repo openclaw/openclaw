@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
@@ -70,7 +70,7 @@ describe("isCronSessionKey", () => {
   });
 });
 
-describe("deriveSessionChatType", () => {
+describe("deriveSessionChatTypeFromKey", () => {
   it.each([
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
@@ -83,7 +83,7 @@ describe("deriveSessionChatType", () => {
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
   ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
-    expect(deriveSessionChatType(key)).toBe(expected);
+    expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 });
 

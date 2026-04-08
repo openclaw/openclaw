@@ -87,6 +87,7 @@ export const createOpenClawCodingToolsMock = vi.fn(() => []);
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
+export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
@@ -133,6 +134,8 @@ export function resetCompactSessionStateMocks(): void {
   sessionAbortCompactionMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  registerProviderStreamForModelMock.mockReset();
+  registerProviderStreamForModelMock.mockReturnValue(undefined);
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
@@ -199,6 +202,10 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("../provider-stream.js", () => ({
+    registerProviderStreamForModel: registerProviderStreamForModelMock,
   }));
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {
@@ -498,6 +505,11 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../pi-embedded-helpers.js", () => ({
     ensureSessionHeader: vi.fn(async () => {}),
+    pickFallbackThinkingLevel: vi.fn((params: { message?: string; attempted?: Set<string> }) =>
+      params.message?.includes("Reasoning is mandatory") && !params.attempted?.has("minimal")
+        ? "minimal"
+        : undefined,
+    ),
     validateAnthropicTurns: vi.fn((m: unknown[]) => m),
     validateGeminiTurns: vi.fn((m: unknown[]) => m),
   }));
@@ -534,7 +546,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./utils.js", () => ({
     describeUnknownError: vi.fn((err: unknown) => String(err)),
-    mapThinkingLevel: vi.fn(() => "off"),
+    mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
     resolveExecToolDefaults: vi.fn(() => undefined),
   }));
 

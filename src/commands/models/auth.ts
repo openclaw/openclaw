@@ -31,6 +31,10 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../../shared/string-coerce.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
@@ -38,8 +42,8 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { openUrl } from "../onboard-helpers.js";
 import {
+  applyProviderAuthConfigPatch,
   applyDefaultModel,
-  mergeConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
@@ -101,7 +105,9 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
   return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
 }
 
-async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
+async function resolveModelsAuthContext(params?: {
+  requestedProvider?: string;
+}): Promise<ResolvedModelsAuthContext> {
   const config = await loadValidConfigOrThrow();
   const defaultAgentId = resolveDefaultAgentId(config);
   const agentDir = resolveAgentDir(config, defaultAgentId);
@@ -110,10 +116,19 @@ async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
+    mode: "setup",
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
+    ...(params?.requestedProvider?.trim()
+      ? { providerRefs: [params.requestedProvider], activate: true }
+      : {}),
   });
-  return { config, agentDir, workspaceDir, providers };
+  return {
+    config,
+    agentDir,
+    workspaceDir,
+    providers,
+  };
 }
 
 function resolveRequestedProviderOrThrow(
@@ -230,7 +245,7 @@ async function persistProviderAuthResult(params: {
   await updateConfig((cfg) => {
     let next = cfg;
     if (params.result.configPatch) {
-      next = mergeConfigPatch(next, params.result.configPatch);
+      next = applyProviderAuthConfigPatch(next, params.result.configPatch);
     }
     for (const profile of params.result.profiles) {
       next = applyAuthProfileConfig(next, {
@@ -309,7 +324,9 @@ export async function modelsAuthSetupTokenCommand(
     throw new Error("setup-token requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+  });
   const tokenProviders = listProvidersWithTokenMethods(providers);
   if (tokenProviders.length === 0) {
     throw new Error(
@@ -359,12 +376,13 @@ export async function modelsAuthPasteTokenCommand(
   runtime: RuntimeEnv,
 ) {
   const { agentDir } = await resolveModelsAuthContext();
-  const rawProvider = opts.provider?.trim();
+  const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
-  const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
+  const profileId =
+    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -384,12 +402,14 @@ export async function modelsAuthPasteTokenCommand(
       ? String(tokenInput ?? "")
           .replaceAll(/\s+/g, "")
           .trim()
-      : String(tokenInput ?? "").trim();
+      : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires =
-    opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
-      : undefined;
+  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
+    ? Date.now() +
+      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
+        defaultUnit: "d",
+      })
+    : undefined;
 
   upsertAuthProfile({
     profileId,
@@ -407,10 +427,9 @@ export async function modelsAuthPasteTokenCommand(
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
-    runtime.log("Anthropic setup-token auth is a legacy/manual path in OpenClaw.");
-    runtime.log(
-      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
-    );
+    runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
+    runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
+    runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
   }
 }
 
@@ -567,7 +586,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error("models auth login requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+  });
   const prompter = createClackPrompter();
   const authProviders = listProvidersWithAuthMethods(providers);
   if (authProviders.length === 0) {

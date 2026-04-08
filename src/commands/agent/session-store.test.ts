@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { updateSessionStoreAfterAgentRun } from "../../agents/command/session-store.js";
 import { resolveSession } from "../../agents/command/session.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
-import { updateSessionStoreAfterAgentRun } from "./session-store.js";
 
 function acpMeta() {
   return {
@@ -126,7 +126,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     );
   });
 
-  it("stores and reloads CLI bindings for explicit session-id-only runs", async () => {
+  it("stores and reloads the runtime model for explicit session-id-only runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
     const storePath = path.join(dir, "sessions.json");
     const cfg = {
@@ -167,6 +167,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             sessionId: "claude-cli-session-1",
             cliSessionBinding: {
               sessionId: "claude-cli-session-1",
+              authEpoch: "auth-epoch-1",
             },
           },
         },
@@ -181,11 +182,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(second.sessionKey).toBe(first.sessionKey);
     expect(second.sessionEntry?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "claude-cli-session-1",
+      authEpoch: "auth-epoch-1",
     });
 
     const persisted = loadSessionStore(storePath, { skipCache: true })[first.sessionKey!];
     expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "claude-cli-session-1",
+      authEpoch: "auth-epoch-1",
     });
   });
 });
