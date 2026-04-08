@@ -129,6 +129,7 @@ Current source-of-truth:
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
     - `/stop` aborts the current run.
+    - `/powernap` resets all sessions across all agents and restarts the gateway. Used for full session reset without LLM cost.
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
     - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
     - `/export-trajectory [path]` asks for exec approval, then exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Use it when you need the prompt, tool, and transcript timeline for one OpenClaw session. In group chats, the approval prompt and export result go to the owner privately. Alias: `/trajectory`.
