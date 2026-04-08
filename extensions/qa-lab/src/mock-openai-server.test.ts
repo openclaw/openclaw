@@ -169,6 +169,62 @@ describe("qa mock openai server", () => {
     ]);
   });
 
+  it("supports exact reply memory prompts and embeddings requests", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const remember = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Reply exactly `Remembered ALPHA-7.` once stored.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(remember.status).toBe(200);
+    const rememberPayload = (await remember.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(rememberPayload.output?.[0]?.content?.[0]?.text).toBe("Remembered ALPHA-7.");
+
+    const embeddings = await fetch(`${server.baseUrl}/v1/embeddings`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: ["Project Nebula ORBIT-10", "Project Nebula ORBIT-9"],
+      }),
+    });
+    expect(embeddings.status).toBe(200);
+    const embeddingPayload = (await embeddings.json()) as {
+      data?: Array<{ embedding?: number[]; index?: number }>;
+      model?: string;
+    };
+    expect(embeddingPayload.model).toBe("text-embedding-3-small");
+    expect(embeddingPayload.data).toHaveLength(2);
+    expect(embeddingPayload.data?.[0]?.index).toBe(0);
+    expect(embeddingPayload.data?.[0]?.embedding?.length).toBeGreaterThan(0);
+  });
+
   it("requests non-threaded subagent handoff for QA channel runs", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
@@ -19,6 +20,7 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const loadedPublicSurfaceModules = new Map<string, unknown>();
+const sourceArtifactRequire = createRequire(import.meta.url);
 const publicSurfaceLocations = new Map<
   string,
   {
@@ -28,6 +30,28 @@ const publicSurfaceLocations = new Map<
 >();
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const sharedBundledPublicSurfaceJitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+
+function isSourceArtifactPath(modulePath: string): boolean {
+  switch (path.extname(modulePath).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+    case ".mts":
+    case ".cts":
+    case ".mtsx":
+    case ".ctsx":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
+  return (
+    !params.tryNative &&
+    isSourceArtifactPath(params.modulePath) &&
+    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
+  );
+}
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -93,6 +117,19 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
+function loadPublicSurfaceModule(modulePath: string): unknown {
+  const { tryNative } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    preferBuiltDist: true,
+  });
+  if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
+    return sourceArtifactRequire(modulePath);
+  }
+  return getJiti(modulePath)(modulePath);
+}
+
 function getSharedBundledPublicSurfaceJiti(
   modulePath: string,
   tryNative: boolean,
@@ -156,7 +193,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   const sentinel = {} as T;
   loadedPublicSurfaceModules.set(location.modulePath, sentinel);
   try {
-    const loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    const loaded = loadPublicSurfaceModule(location.modulePath) as T;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {

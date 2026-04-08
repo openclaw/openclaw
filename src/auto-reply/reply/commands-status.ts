@@ -110,6 +110,8 @@ export async function buildStatusReply(params: {
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
+  modelAuthOverride?: string;
+  activeModelAuthOverride?: string;
 }): Promise<ReplyPayload | undefined> {
   const { command } = params;
   if (!command.isAuthorizedSender) {

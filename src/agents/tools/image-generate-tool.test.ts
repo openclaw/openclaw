@@ -564,6 +564,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {
+    stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });
     const tool = requireImageGenerateTool(
       createImageGenerateTool({

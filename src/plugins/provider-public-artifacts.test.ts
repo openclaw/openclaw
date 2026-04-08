@@ -19,16 +19,10 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 describe("provider public artifacts", () => {
-  it("loads bundled provider policy surfaces for anthropic", () => {
+  it("uses the bundled anthropic policy hooks from the public artifact", () => {
     const surface = resolveBundledProviderPolicySurface("anthropic");
-
     expect(surface?.normalizeConfig).toBeTypeOf("function");
     expect(surface?.applyConfigDefaults).toBeTypeOf("function");
-  });
-
-  it("uses the bundled anthropic policy hooks without loading the runtime plugin", () => {
-    const surface = resolveBundledProviderPolicySurface("anthropic");
-    expect(surface).toBeTruthy();
 
     const normalized = surface?.normalizeConfig?.({
       provider: "anthropic",
@@ -37,6 +31,7 @@ describe("provider public artifacts", () => {
         models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
       },
     });
+
     expect(normalized).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",

@@ -83,7 +83,7 @@ describe("status-all format", () => {
       },
       channelLabel: "stable (config)",
       gitLabel: "main · tag v1.2.3",
-      updateLine: "git main · ↔ origin/main · behind 2 · npm update 2026.4.9",
+      updateLine: "git main · ↔ origin/main · behind 2 · npm latest 2026.4.9",
       updateAvailable: true,
     });
   });
