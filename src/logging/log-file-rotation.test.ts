@@ -74,6 +74,43 @@ describe("rolling log file size rotation", () => {
     stderrSpy.mockRestore();
   });
 
+  it("enforces the size cap when renameSync throws (failed rotation)", () => {
+    const today = formatLocalDate(new Date());
+    logDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-log-rot-"));
+    rollingPath = path.join(logDir, `openclaw-${today}.log`);
+    rmRollingLogFamily(rollingPath);
+
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+
+    // Block all renames from the start so rotation always fails with EXDEV.
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      const err = Object.assign(new Error("EXDEV: cross-device link not permitted"), {
+        code: "EXDEV",
+      });
+      throw err;
+    });
+
+    const maxFileBytes = 2048;
+    setLoggerOverride({ level: "info", file: rollingPath, maxFileBytes });
+    const logger = getLogger();
+
+    // Send enough entries to exceed maxFileBytes several times over. Under the old bug
+    // pendingBytes was reset to 0 on every failed rotation attempt, so the cap was never
+    // enforced and the file grew without bound.
+    for (let i = 0; i < 40; i++) {
+      logger.error(`fail-rot-${i}-${"x".repeat(100)}`);
+    }
+
+    stderrSpy.mockRestore();
+
+    // The file must not grow past the hard cap (with a small tolerance for the one
+    // entry that may land before the cap-warning gate fires).
+    const finalSize = fs.statSync(rollingPath).size;
+    expect(finalSize).toBeLessThanOrEqual(maxFileBytes * 1.15);
+  });
+
   it("does not rotate when a single serialized line exceeds maxFileBytes", () => {
     const today = formatLocalDate(new Date());
     logDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-log-rot-"));

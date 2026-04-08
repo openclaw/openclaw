@@ -225,16 +225,22 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         pendingBytes + payloadBytes > settings.maxFileBytes &&
         payloadBytes <= settings.maxFileBytes
       ) {
-        rotateLogFile(settings.file);
-        pendingBytes = 0;
-        warnedAboutSizeCap = false;
+        const rotated = rotateLogFile(settings.file);
+        if (rotated !== settings.file) {
+          pendingBytes = 0;
+          currentFileBytes = 0;
+          warnedAboutSizeCap = false;
+        }
       }
 
       // Proactive rotation once the file is near capacity so the next lines land in a fresh file.
       if (isRollingPath(settings.file) && pendingBytes > rotationThreshold) {
-        rotateLogFile(settings.file);
-        pendingBytes = 0;
-        warnedAboutSizeCap = false;
+        const rotated = rotateLogFile(settings.file);
+        if (rotated !== settings.file) {
+          pendingBytes = 0;
+          currentFileBytes = 0;
+          warnedAboutSizeCap = false;
+        }
       }
 
       const nextBytes = pendingBytes + payloadBytes;
