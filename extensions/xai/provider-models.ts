@@ -20,7 +20,6 @@ export function isModernXaiModel(modelId: string): boolean {
 export function resolveXaiForwardCompatModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
-  // eslint-disable-next-line no-redundant-type-constituents -- ProviderRuntimeModel is unresolvable in the extension lint context (treated as `any`), so `| undefined` appears redundant; the union is intentionally correct and required by tsgo for TS2883
 }): ProviderRuntimeModel | undefined {
   const definition = resolveXaiCatalogEntry(params.ctx.modelId);
   if (!definition) {
