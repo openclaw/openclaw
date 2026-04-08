@@ -113,16 +113,10 @@ async function runYepSearch(params: {
     body.safe_search = params.safeSearch;
   }
   if (params.includeDomains) {
-    const normalized = normalizeYepDomains(params.includeDomains);
-    if (normalized) {
-      body.include_domains = normalized;
-    }
+    body.include_domains = params.includeDomains;
   }
   if (params.excludeDomains) {
-    const normalized = normalizeYepDomains(params.excludeDomains);
-    if (normalized) {
-      body.exclude_domains = normalized;
-    }
+    body.exclude_domains = params.excludeDomains;
   }
   if (params.dateAfter) {
     body.start_published_date = params.dateAfter;
@@ -308,8 +302,14 @@ function createYepToolDefinition(
       const contentType = readStringParam(params, "content_type");
       const safeSearch =
         typeof params.safe_search === "boolean" ? params.safe_search : undefined;
-      const includeDomains = readStringParam(params, "include_domains");
-      const excludeDomains = readStringParam(params, "exclude_domains");
+      const rawIncludeDomains = readStringParam(params, "include_domains");
+      const rawExcludeDomains = readStringParam(params, "exclude_domains");
+      const includeDomains = rawIncludeDomains
+        ? normalizeYepDomains(rawIncludeDomains) || undefined
+        : undefined;
+      const excludeDomains = rawExcludeDomains
+        ? normalizeYepDomains(rawExcludeDomains) || undefined
+        : undefined;
 
       const rawDateAfter = readStringParam(params, "date_after");
       const rawDateBefore = readStringParam(params, "date_before");
