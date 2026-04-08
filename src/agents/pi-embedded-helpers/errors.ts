@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import { stripToolCallXmlTags } from "../../shared/text/assistant-visible-text.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -825,7 +826,15 @@ function stripFinalTagsFromText(text: unknown): string {
   if (!normalized) {
     return normalized;
   }
-  return normalized.replace(FINAL_TAG_RE, "");
+  // Strip <final> tags, then strip leaked text-based tool-call XML blocks
+  // (e.g. `<minimax:tool_call><invoke name="exec">…`) which some providers
+  // emit as plain text instead of structured tool_calls[]. Without this,
+  // raw XML leaks to messaging surfaces (WhatsApp, etc.) that sanitize
+  // outbound via normalize-reply → sanitizeUserFacingText. The stripper has
+  // a TOOL_CALL_QUICK_RE fast-path guard so it is a no-op on text that
+  // contains no tool-call markers.
+  const withoutFinal = normalized.replace(FINAL_TAG_RE, "");
+  return stripToolCallXmlTags(withoutFinal);
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {

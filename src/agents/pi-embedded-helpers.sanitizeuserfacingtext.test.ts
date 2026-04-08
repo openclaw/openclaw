@@ -20,6 +20,49 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  describe("tool-call XML stripping (#62820)", () => {
+    // Regression: when providers emit tool calls as plain text (e.g.
+    // MiniMax's `<minimax:tool_call><invoke>…`) instead of structured
+    // tool_calls[], the raw XML used to leak through sanitizeUserFacingText
+    // to messaging surfaces like WhatsApp, because stripFinalTagsFromText
+    // only stripped `<final>` tags. The fix now also chains
+    // stripToolCallXmlTags (already used by stripAssistantInternalScaffolding
+    // on iMessage/UI paths) so every surface that calls sanitizeUserFacingText
+    // gets the same tool-call XML scrubbing.
+    it("strips MiniMax-style text-based tool call blocks", () => {
+      const input =
+        'Let me check what reminders are active:\n<minimax:tool_call>\n<invoke name="exec">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>';
+      const result = sanitizeUserFacingText(input);
+      expect(result).not.toContain("<minimax:tool_call>");
+      expect(result).not.toContain("<invoke");
+      expect(result).toContain("Let me check what reminders are active:");
+    });
+
+    it("strips closed <tool_call> blocks from user-visible text", () => {
+      const input =
+        'Here you go. <tool_call> {"name": "read", "arguments": {"file_path": "test.md"}} </tool_call> Done.';
+      const result = sanitizeUserFacingText(input);
+      expect(result).not.toContain("<tool_call>");
+      expect(result).toContain("Here you go.");
+      expect(result).toContain("Done.");
+    });
+
+    it("strips dangling <tool_call> content to end-of-string", () => {
+      const input = 'Running now.\n<tool_call>\n{"name": "find", "arguments": {}}\n';
+      const result = sanitizeUserFacingText(input);
+      expect(result).not.toContain("<tool_call>");
+      expect(result).toContain("Running now.");
+    });
+
+    it("leaves legitimate prose that merely mentions tool calls untouched", () => {
+      // Fast-path TOOL_CALL_QUICK_RE only fires on actual `<tool_call>` /
+      // `<invoke>` markers, so prose like this should pass through unchanged.
+      const text =
+        "The README explains how to use the tool_call field in the structured tool_calls[] array.";
+      expect(sanitizeUserFacingText(text)).toBe(text);
+    });
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
