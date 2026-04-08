@@ -115,6 +115,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodeUtilsMocks.resolveNodeId.mockClear();
     nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
+    screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
     nodesCameraMocks.cameraTempPath.mockClear();
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
@@ -175,14 +176,14 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
-  it("uses the workspace temp dir for implicit screen_record output when workspaceOnly is enabled", async () => {
+  it("defaults screen_record output into the workspace when workspaceOnly is enabled", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
     const tool = createNodesTool({
       workspaceDir: "/tmp/workspace",
       workspaceOnly: true,
     });
 
-    await tool.execute("call-workspace-screen-record", {
+    await tool.execute("call-workspace-default-out-path", {
       action: "screen_record",
       node: "macbook",
     });
@@ -191,6 +192,10 @@ describe("createNodesTool screen_record duration guardrails", () => {
       ext: "mp4",
       tmpDir: "/tmp/workspace",
     });
+    expect(screenMocks.writeScreenRecordToFile).toHaveBeenCalledWith(
+      "/tmp/screen-record.mp4",
+      "ZmFrZQ==",
+    );
   });
 
   it("uses the workspace temp dir for implicit camera output when workspaceOnly is enabled", async () => {
@@ -281,7 +286,6 @@ describe("createNodesTool screen_record duration guardrails", () => {
       }),
     ).rejects.toThrow("workspaceDir is required when nodes workspaceOnly is enabled");
   });
-
   it("rejects the removed run action", async () => {
     const tool = createNodesTool();
 

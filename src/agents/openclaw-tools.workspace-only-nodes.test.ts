@@ -53,6 +53,12 @@ describe("createOpenClawTools nodes workspaceOnly guard", () => {
       disablePluginTools: true,
     });
 
+    expect(mocks.createNodesTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        workspaceOnly: true,
+      }),
+    );
     expect(mocks.wrapToolWorkspaceRootGuardWithOptions).toHaveBeenCalledWith(
       mocks.nodesTool,
       "/tmp/workspace",
@@ -71,6 +77,12 @@ describe("createOpenClawTools nodes workspaceOnly guard", () => {
       disablePluginTools: true,
     });
 
+    expect(mocks.createNodesTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        workspaceOnly: false,
+      }),
+    );
     expect(mocks.wrapToolWorkspaceRootGuardWithOptions).not.toHaveBeenCalled();
     expect(tools.find((tool) => tool.name === "nodes")).toBe(mocks.nodesTool);
   });
