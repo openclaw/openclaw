@@ -28,6 +28,14 @@ VALID_STATUSES = {"pending", "in_progress", "blocked", "done"}
 VALID_PRIORITIES = {"low", "normal", "high", "critical"}
 
 
+def parse_iso_datetime(value: str) -> datetime:
+    """Parse ISO datetime and normalize Z suffix / naive values."""
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00") if value.endswith("Z") else value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=JST)
+    return dt
+
+
 def get_tasks_path(memory_dir: str | None = None) -> Path:
     """Resolve pending_tasks.json path."""
     import os
@@ -150,7 +158,7 @@ def cmd_prune(args):
         if not (
             t.get("status") == "done"
             and t.get("completedAt")
-            and datetime.fromisoformat(t["completedAt"]) < cutoff
+            and parse_iso_datetime(t["completedAt"]) < cutoff
         )
     ]
     pruned = before - len(data["tasks"])
@@ -170,7 +178,7 @@ def cmd_overdue(args):
     for t in data["tasks"]:
         if t.get("status") in ("pending", "in_progress"):
             try:
-                created = datetime.fromisoformat(t["createdAt"])
+                created = parse_iso_datetime(t["createdAt"])
                 if now - created > threshold:
                     age_hours = (now - created).total_seconds() / 3600
                     overdue.append((t, age_hours))

@@ -128,16 +128,16 @@ def cmd_update(args):
     content = path.read_text(encoding="utf-8")
     section_header = f"## {args.section}"
 
-    if section_header not in content:
+    lines = content.split("\n")
+    available_sections = [line[3:].strip() for line in lines if line.startswith("## ")]
+    if args.section not in available_sections:
         print(f"Section not found: {args.section}", file=sys.stderr)
         print(f"Available sections:", file=sys.stderr)
-        for line in content.split("\n"):
-            if line.startswith("## "):
-                print(f"  {line[3:]}", file=sys.stderr)
+        for section in available_sections:
+            print(f"  {section}", file=sys.stderr)
         sys.exit(1)
 
-    # Insert text after the section header (and any HTML comment)
-    lines = content.split("\n")
+    # Insert text after the exact section header (and any HTML comment)
     new_lines = []
     found = False
     inserted = False

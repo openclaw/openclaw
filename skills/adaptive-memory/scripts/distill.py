@@ -27,6 +27,14 @@ from pathlib import Path
 JST = timezone(timedelta(hours=9))
 
 
+def parse_iso_datetime(value: str) -> datetime:
+    """Parse ISO datetime and normalize naive values to JST."""
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00") if value.endswith("Z") else value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=JST)
+    return dt
+
+
 def get_workspace(args_dir: str | None = None) -> Path:
     """Resolve workspace root."""
     if args_dir:
@@ -62,32 +70,28 @@ def get_daily_notes(workspace: Path) -> list[Path]:
 
 
 def get_unprocessed_notes(workspace: Path, state: dict) -> list[Path]:
-    """Find daily notes created after last consolidation."""
+    """Find daily notes created or modified after last consolidation."""
     all_notes = get_daily_notes(workspace)
     last = state.get("lastConsolidatedAt")
     if not last:
         return all_notes
 
-    # Parse the last consolidated timestamp
     try:
-        if last.endswith("Z"):
-            last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        else:
-            last_dt = datetime.fromisoformat(last)
-        last_date = last_dt.date()
+        last_dt = parse_iso_datetime(last)
     except (ValueError, AttributeError):
         return all_notes
 
-    # Notes with date > last consolidated date
     unprocessed = []
     for note in all_notes:
         try:
-            note_date_str = note.stem  # YYYY-MM-DD
-            note_date = datetime.strptime(note_date_str, "%Y-%m-%d").date()
-            if note_date > last_date:
-                unprocessed.append(note)
+            note_date = datetime.strptime(note.stem, "%Y-%m-%d").date()
         except ValueError:
             continue
+
+        note_mtime = datetime.fromtimestamp(note.stat().st_mtime, tz=JST)
+        note_end = datetime.combine(note_date, datetime.max.time(), tzinfo=JST)
+        if note_end > last_dt or note_mtime > last_dt:
+            unprocessed.append(note)
 
     return unprocessed
 
@@ -106,10 +110,7 @@ def should_distill(workspace: Path, staleness_hours: int = 48, min_notes: int = 
         return False, f"Never consolidated but only {len(unprocessed)} notes (need {min_notes})"
 
     try:
-        if last.endswith("Z"):
-            last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        else:
-            last_dt = datetime.fromisoformat(last)
+        last_dt = parse_iso_datetime(last)
     except (ValueError, AttributeError):
         return True, "Cannot parse lastConsolidatedAt, running distillation"
 
@@ -228,8 +229,9 @@ def main():
     # Phase 3 & 4: Consolidate & Prune
     # NOTE: Actual consolidation requires LLM judgment to extract lasting knowledge
     # from daily notes and merge into MEMORY.md. This script handles the mechanical
-    # parts (finding notes, checking staleness, updating state). The agent reads this
-    # output and performs the actual consolidation.
+    # parts (finding notes, checking staleness, previewing inputs). The agent reads this
+    # output, performs the actual consolidation, and should only rerun without --dry-run
+    # once that handoff succeeds.
     print("\n[Phase 3: Consolidate]")
     print("  Unprocessed notes ready for agent consolidation:")
     for name, content in notes:
@@ -244,7 +246,7 @@ def main():
     print("\n[Phase 4: Prune]")
     print("  Agent should review MEMORY.md for outdated entries")
 
-    # Update state
+    # Update state after the script reaches the end successfully.
     state["lastConsolidatedAt"] = datetime.now(JST).isoformat()
     save_state(workspace, state)
     print(f"\n  Updated lastConsolidatedAt: {state['lastConsolidatedAt']}")

@@ -1,6 +1,6 @@
 ---
 name: adaptive-memory
-description: Hierarchical memory management for AI agents across sessions. Maintains three layers — daily notes (raw logs), active context (working memory), and long-term memory (curated knowledge) — with automatic distillation from raw notes to permanent memory. Use when setting up persistent memory for an agent workspace, when an agent needs to remember context across sessions or compaction boundaries, when organizing what to remember vs. forget, or when consolidating scattered notes into structured long-term memory. Complements session-recall (which searches memory) by managing what gets stored and how it evolves.
+description: Hierarchical memory management for AI agents across sessions. Maintains three layers — daily notes (raw logs), active context (working memory), and long-term memory (curated knowledge) — with automatic distillation from raw notes to permanent memory. Use when setting up persistent memory for an agent workspace, when an agent needs to remember context across sessions or compaction boundaries, when organizing what to remember vs. forget, or when consolidating scattered notes into structured long-term memory. Complements retrieval-oriented skills by managing what gets stored and how it evolves.
 ---
 
 # Adaptive Memory
@@ -10,6 +10,7 @@ Hierarchical memory management for AI agents. Three layers — daily notes, acti
 ## Problem This Solves
 
 AI agents lose context between sessions and after context compaction. Without structured memory:
+
 - Decisions get re-debated
 - Completed work gets redone
 - Lessons learned are forgotten
@@ -37,22 +38,27 @@ Raw log of what happened each day. Append-only, minimal editing.
 # 2026-04-01
 
 ## Tasks
+
 - Implemented login flow for project X
 - Fixed timezone bug in cron scheduler
 
 ## Decisions
+
 - Chose SQLite over JSON for data storage (performance at scale)
 - API rate limit: 100 req/min with exponential backoff
 
 ## Learned
+
 - Library Y requires v3+ for async support
 - Browser cookies are not shared across profiles
 
 ## Blockers
+
 - Waiting on API key approval from service Z
 ```
 
 **Rules:**
+
 - Create `memory/` directory if it doesn't exist
 - One file per day, named `YYYY-MM-DD.md`
 - Append throughout the day, don't restructure
@@ -67,17 +73,21 @@ Working memory — what's in progress right now. Updated as tasks start, complet
 # Active Context
 
 ## In Progress
+
 - **Project X login flow**: OAuth integration, 70% complete
   - Next: token refresh logic
 
 ## Blocked / Waiting
+
 - **API key for service Z**: Requested 2026-03-30, awaiting approval
 
 ## Recently Completed
+
 - **Timezone fix**: Deployed, cron jobs now fire correctly (2026-04-01)
 ```
 
 **Rules:**
+
 - Keep current — stale entries erode trust
 - Move completed items to "Recently Completed" (prune after a few days)
 - Always check this file at session start — it's the fastest way to resume context
@@ -91,20 +101,24 @@ Curated knowledge distilled from daily notes. The agent's permanent memory.
 # Long-Term Memory
 
 ## Systems Built
+
 - **Data pipeline**: SQLite-based, runs daily at 6 AM, stores in project.db
 - **Monitoring**: 3-tier alert system (info → warning → critical)
 
 ## Lessons Learned
+
 1. SQLite > JSON for anything over 100 records
 2. Always set explicit timeouts on HTTP requests
 3. Browser automation: check for virtual scroll before scraping
 
 ## Key Decisions
+
 - Chose framework A over B (reason: better async support, MIT license)
 - API integration uses webhook push, not polling
 ```
 
 **Rules:**
+
 - This is curated, not a dump — every entry should justify its space
 - Review and update periodically (see [Distillation Cycle](#distillation-cycle))
 - Organize by topic, not by date
@@ -118,17 +132,21 @@ For multi-channel setups (Slack, Discord, etc.), maintain per-channel summaries 
 # channel-name
 
 ## Current Topics
+
 - Discussing migration plan for database X
 - Reviewing PR #42
 
 ## Recent Decisions
+
 - Approved new CI pipeline config (2026-04-01)
 
 ## Unresolved
+
 - Performance regression in endpoint /api/users — investigating
 ```
 
 **Rules:**
+
 - Update at natural conversation boundaries (topic complete, day change)
 - Keep concise — this is a summary, not a transcript
 - One file per channel
@@ -171,13 +189,13 @@ Do not respond to messages until context is loaded. "I don't know what you're ta
 
 ### What to Capture
 
-| Write it down | Skip it |
-|---|---|
-| Decisions and their reasoning | Routine operations that went smoothly |
-| Errors and how they were fixed | Intermediate debugging steps |
-| Key facts about the environment | Information already in code comments |
-| User preferences and patterns | Temporary values that change hourly |
-| Lessons that prevent future mistakes | Obvious things any model would know |
+| Write it down                        | Skip it                               |
+| ------------------------------------ | ------------------------------------- |
+| Decisions and their reasoning        | Routine operations that went smoothly |
+| Errors and how they were fixed       | Intermediate debugging steps          |
+| Key facts about the environment      | Information already in code comments  |
+| User preferences and patterns        | Temporary values that change hourly   |
+| Lessons that prevent future mistakes | Obvious things any model would know   |
 
 ### Security Rules
 
@@ -193,13 +211,17 @@ Periodically consolidate daily notes into long-term memory. Recommended: weekly 
 ### Four-Phase Process
 
 #### Phase 1: Orient
+
 Read `MEMORY.md` to understand current state. Note what's already captured.
 
 #### Phase 2: Gather
+
 Read recent daily notes (`memory/YYYY-MM-DD.md`) that haven't been consolidated yet.
 
 #### Phase 3: Consolidate
+
 For each daily note, extract what deserves long-term storage:
+
 - New systems or tools built
 - Lessons learned (especially from mistakes)
 - Decisions with lasting impact
@@ -209,7 +231,9 @@ For each daily note, extract what deserves long-term storage:
 Add these to the appropriate section in `MEMORY.md`.
 
 #### Phase 4: Prune
+
 Remove from `MEMORY.md`:
+
 - Entries that are no longer relevant
 - Information superseded by newer entries
 - Overly detailed entries that can be summarized
@@ -229,6 +253,7 @@ In `memory/distillation-state.json`:
 ### Automation
 
 Distillation can be triggered by:
+
 - **Cron job** — weekly scheduled task (recommended)
 - **Heartbeat** — check if 48h+ since last distillation and 3+ unprocessed daily notes
 - **Manual** — user requests "consolidate memory" or "review notes"
@@ -247,17 +272,22 @@ Using both together provides full coverage: structured storage + intelligent ret
 ## Quick Start
 
 1. Initialize the memory directory structure:
+
    ```bash
-   # Using the bundled script (recommended)
+   # From the repository root
+   skills/adaptive-memory/scripts/init_memory.sh
+
+   # Or from inside skills/adaptive-memory/
    ./scripts/init_memory.sh
 
    # Or manually
    mkdir -p memory/channel_context
    touch memory/active_context.md
-   echo '{"lastUpdated":"","tasks":[]}' > memory/pending_tasks.json
+   echo '{"lastUpdated":null,"tasks":[]}' > memory/pending_tasks.json
    ```
 
 2. Add to your `AGENTS.md` or session start routine:
+
    ```
    Before responding, read:
    1. memory/active_context.md

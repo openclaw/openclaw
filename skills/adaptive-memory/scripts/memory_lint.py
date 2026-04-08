@@ -23,6 +23,15 @@ from pathlib import Path
 
 JST = timezone(timedelta(hours=9))
 
+
+def parse_iso_datetime(value: str) -> datetime:
+    """Parse ISO datetime and normalize Z suffix / naive values."""
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00") if value.endswith("Z") else value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=JST)
+    return dt
+
+
 # Patterns that suggest leaked credentials
 CREDENTIAL_PATTERNS = [
     (r"(?:api[_-]?key|apikey)\s*[:=]\s*['\"]?[\w\-]{20,}", "API key"),
@@ -112,7 +121,7 @@ def check_daily_notes(workspace: Path):
         warn("daily notes", f"{len(empty)} nearly empty notes: {', '.join(n.stem for n in empty[:5])}")
 
     # Check today's note exists
-    today = datetime.now(JST).strftime("%Y-%m-%d")
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
     today_path = memory_dir / f"{today}.md"
     if not today_path.exists():
         warn(f"memory/{today}.md", "Today's daily note doesn't exist yet")
@@ -177,7 +186,7 @@ def check_pending_tasks(workspace: Path):
     for t in tasks:
         if t.get("status") in ("pending", "in_progress"):
             try:
-                created = datetime.fromisoformat(t["createdAt"])
+                created = parse_iso_datetime(t["createdAt"])
                 age = now - created
                 if age > timedelta(days=7):
                     warn("pending_tasks.json", f"Task '{t['title'][:40]}' is {age.days} days old")
@@ -188,7 +197,7 @@ def check_pending_tasks(workspace: Path):
     done_old = [
         t for t in tasks
         if t.get("status") == "done" and t.get("completedAt")
-        and (now - datetime.fromisoformat(t["completedAt"])) > timedelta(days=7)
+        and (now - parse_iso_datetime(t["completedAt"])) > timedelta(days=7)
     ]
     if done_old:
         warn("pending_tasks.json", f"{len(done_old)} completed tasks older than 7 days — run prune", fixable=True)
@@ -216,7 +225,7 @@ def check_distillation_state(workspace: Path):
         return
 
     try:
-        last_dt = datetime.fromisoformat(last.replace("Z", "+00:00") if last.endswith("Z") else last)
+        last_dt = parse_iso_datetime(last)
         age = datetime.now(JST) - last_dt
         if age > timedelta(hours=96):
             warn("distillation-state.json", f"Last distillation was {age.days}d ago — may be overdue")
