@@ -27,9 +27,15 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  isCliProvider: () => false,
-}));
+vi.mock("../../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
+    "../../agents/model-selection.js",
+  );
+  return {
+    ...actual,
+    isCliProvider: () => false,
+  };
+});
 
 vi.mock("../../agents/bootstrap-budget.js", () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
