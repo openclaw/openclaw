@@ -620,30 +620,26 @@ export async function restartLaunchAgent({
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
 
-  const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
-  if (start.code === 0) {
+  // Use unload/load instead of kickstart -k to avoid launchd state issues
+  // that can leave the service unloaded after restart.
+  const unload = await execLaunchctl(["unload", plistPath]);
+  if (unload.code !== 0) {
+    // If unload fails, try to ensure it's loaded first
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
+  }
+  const load = await execLaunchctl(["load", plistPath]);
+  if (load.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
 
-  if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
-  }
-
-  // If the service was previously booted out, re-register the plist and retry.
+  // If load failed, try bootstrap as fallback
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget,
     plistPath,
     actionHint: "openclaw gateway restart",
   });
-
-  const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
-  if (retry.code !== 0) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
-    throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
-  }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }
