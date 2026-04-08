@@ -7,7 +7,6 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
@@ -33,7 +32,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -67,39 +65,14 @@ type ResetPreservedSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
 >;
 
-function parseProviderModelRef(
-  raw: string | undefined,
-): { provider: string; model: string } | undefined {
-  const normalized = normalizeOptionalString(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  const slash = normalized.indexOf("/");
-  if (slash <= 0 || slash === normalized.length - 1) {
-    return undefined;
-  }
-  return {
-    provider: normalized.slice(0, slash),
-    model: normalized.slice(slash + 1),
-  };
-}
-
-function sameProviderModelRef(
-  left: { provider: string; model: string } | undefined,
-  right: { provider: string; model: string } | undefined,
-): boolean {
-  return left?.provider === right?.provider && left?.model === right?.model;
-}
-
 function resolveResetPreservedSelection(params: {
-  cfg: ReturnType<typeof loadConfig>;
   entry?: SessionEntry;
-  agentId: string;
 }): Partial<ResetPreservedSelectionState> {
   const { entry } = params;
   if (!entry) {
@@ -107,31 +80,10 @@ function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
-  const defaultRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  const currentModel = normalizeOptionalString(entry.modelOverride);
-  const currentSelection = currentModel
-    ? {
-        provider: normalizeOptionalString(entry.providerOverride) ?? defaultRef.provider,
-        model: currentModel,
-      }
-    : undefined;
-  const fallbackSelected = parseProviderModelRef(entry.fallbackNoticeSelectedModel);
-  const fallbackActive = parseProviderModelRef(entry.fallbackNoticeActiveModel);
-  const fallbackPinnedSelection =
-    currentSelection &&
-    fallbackSelected &&
-    fallbackActive &&
-    !sameProviderModelRef(fallbackSelected, fallbackActive) &&
-    sameProviderModelRef(currentSelection, fallbackActive)
-      ? fallbackSelected
-      : undefined;
-  const explicitSelection = fallbackPinnedSelection ?? currentSelection;
-  if (explicitSelection && !sameProviderModelRef(explicitSelection, defaultRef)) {
-    preserved.providerOverride = explicitSelection.provider;
-    preserved.modelOverride = explicitSelection.model;
+  if (entry.modelOverrideSource === "user" && entry.modelOverride) {
+    preserved.providerOverride = entry.providerOverride;
+    preserved.modelOverride = entry.modelOverride;
+    preserved.modelOverrideSource = entry.modelOverrideSource;
   }
 
   if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
@@ -594,14 +546,13 @@ export async function performGatewaySessionReset(params: {
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resetPreservedSelection = resolveResetPreservedSelection({
-      cfg,
       entry: currentEntry,
-      agentId: sessionAgentId,
     });
     const resetEntry = {
       ...stripRuntimeModelState(currentEntry),
       providerOverride: undefined,
       modelOverride: undefined,
+      modelOverrideSource: undefined,
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,

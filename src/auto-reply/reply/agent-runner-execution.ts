@@ -113,6 +113,7 @@ type FallbackSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -121,6 +122,7 @@ type FallbackSelectionState = Pick<
 const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -141,6 +143,12 @@ function setFallbackSelectionStateField(
     case "modelOverride":
       if (entry.modelOverride !== value) {
         entry.modelOverride = value as SessionEntry["modelOverride"];
+        return true;
+      }
+      return false;
+    case "modelOverrideSource":
+      if (entry.modelOverrideSource !== value) {
+        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
         return true;
       }
       return false;
@@ -170,6 +178,7 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
   return {
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -185,6 +194,7 @@ function buildFallbackSelectionState(params: {
   return {
     providerOverride: params.provider,
     modelOverride: params.model,
+    modelOverrideSource: "auto",
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,

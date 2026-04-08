@@ -1581,6 +1581,7 @@ describe("gateway server sessions", () => {
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "user",
           modelProvider: "openai",
           model: "gpt-test-a",
         },
@@ -1637,6 +1638,7 @@ describe("gateway server sessions", () => {
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "auto",
           fallbackNoticeSelectedModel: "openai/gpt-test-a",
           fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
           fallbackNoticeReason: "rate limit",
@@ -1679,6 +1681,64 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset follows the updated default after an auto fallback pinned an older default", async () => {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentConfig = {
+      model: {
+        primary: "openai/gpt-test-c",
+      },
+    };
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-fallback-stale-default",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "auto",
+          fallbackNoticeSelectedModel: "openai/gpt-test-a",
+          fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
+          fallbackNoticeReason: "rate limit",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      };
+    }>(ws, "sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.providerOverride).toBeUndefined();
+    expect(reset.payload?.entry.modelOverride).toBeUndefined();
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-c");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      }
+    >;
+    expect(store["agent:main:main"]?.providerOverride).toBeUndefined();
+    expect(store["agent:main:main"]?.modelOverride).toBeUndefined();
+    expect(store["agent:main:main"]?.modelProvider).toBe("openai");
+    expect(store["agent:main:main"]?.model).toBe("gpt-test-c");
+
+    ws.close();
+  });
+
   test("sessions.reset preserves spawned session ownership metadata", async () => {
     const { storePath } = await createSessionStoreDir();
     const customSessionFile = path.join(
@@ -1708,6 +1768,7 @@ describe("gateway server sessions", () => {
           ttsAuto: "always",
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "user",
           authProfileOverride: "work",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 7,
