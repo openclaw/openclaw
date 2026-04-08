@@ -145,6 +145,20 @@ describe(".devcontainer", () => {
       expect(script).toContain('[ -n "$final_name" ] && [ -n "$final_email" ]');
     });
 
+    it("counts copilot install failure as a warning", async () => {
+      const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
+      // The else branch after "gh extension install github/gh-copilot" must
+      // increment warn so the summary footer reflects the actual setup state.
+      const copilotBlock = script.slice(
+        script.indexOf("gh extension install github/gh-copilot"),
+      );
+      const elseBranch = copilotBlock.slice(
+        copilotBlock.indexOf("else"),
+        copilotBlock.indexOf("fi"),
+      );
+      expect(elseBranch).toContain("warn=$((warn + 1))");
+    });
+
     it("checks SSH agent forwarding", async () => {
       const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
       expect(script).toContain("SSH_AUTH_SOCK");

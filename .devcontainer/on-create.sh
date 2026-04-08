@@ -26,6 +26,7 @@ if gh auth status >/dev/null 2>&1; then
       echo "  ✓ GitHub Copilot: installed"
     else
       echo "  ✗ GitHub Copilot: install failed (can retry with 'gh extension install github/gh-copilot')"
+      warn=$((warn + 1))
     fi
   fi
 else
