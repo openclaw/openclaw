@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - Slack/ACP: treat Slack ACP block replies as visible delivered output so OpenClaw stops re-sending the final fallback text after Slack already rendered the reply. (#62858) Thanks @gumadeiras.
 - Android/manual connect: allow blank port input only for TLS manual gateway endpoints so standard HTTPS Tailscale hosts default to `443` without silently changing cleartext manual connects. (#63134) Thanks @Tyler-RNG.
 - Matrix/doctor: migrate legacy `channels.matrix.dm.policy: "trusted"` configs back to compatible DM policies during `openclaw doctor --fix`, preserving explicit `allowFrom` boundaries as `allowlist` and defaulting empty legacy configs to `pairing`. (#62942) Thanks @lukeboyett.
+<<<<<<< HEAD
 - npm packaging: mirror bundled channel runtime deps, stage Nostr runtime deps, derive required root mirrors from manifests and built chunks, and test packed release tarballs without repo `node_modules` so fresh installs fail fast on missing plugin deps instead of crashing at runtime. (#63065) Thanks @scoootscooob.
 - Windows/update: add heap headroom to Windows `pnpm build` steps during dev updates so update preflight builds stop failing on low default Node memory.
 - Auth/profiles: persist explicit auth-profile upserts directly and skip external CLI sync for local writes so profile changes are saved without stale external credential state.
