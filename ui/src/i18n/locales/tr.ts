@@ -298,10 +298,24 @@ export const tr: TranslationMap = {
       promotedSuffix: "yükseltildi",
       nextSweepPrefix: "sonraki tarama",
     },
+    scene: {
+      backfill: "Geri doldur",
+      reset: "Sıfırla",
+      working: "Çalışıyor…",
+    },
     stats: {
       shortTerm: "Kısa vadeli",
       signals: "Sinyaller",
+      promoted: "Yükseltilenler",
       phaseHits: "Aşama İsabetleri",
+    },
+    trace: {
+      shortTerm: "Kısa vadeli",
+      signals: "Sinyaller",
+      promoted: "Yükseltilenler",
+      emptyShortTerm: "Etkin kısa vadeli öğe yok.",
+      emptySignals: "Etkin sinyal yok.",
+      emptyPromoted: "Bugün henüz hiçbir şey yükseltilmedi.",
     },
     diary: {
       title: "Rüya Günlüğü",

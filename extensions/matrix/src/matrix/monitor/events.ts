@@ -49,6 +49,7 @@ export function registerMatrixMonitorEvents(params: {
   logger: RuntimeLogger;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
+  runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
 }): void {
   const {
     cfg,
@@ -65,6 +66,7 @@ export function registerMatrixMonitorEvents(params: {
     logger,
     formatNativeDependencyHint,
     onRoomMessage,
+    runDetachedTask,
   } = params;
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
@@ -75,11 +77,27 @@ export function registerMatrixMonitorEvents(params: {
     logVerboseMessage,
   });
 
+  const runMonitorTask = (label: string, task: () => Promise<void>) => {
+    if (runDetachedTask) {
+      return runDetachedTask(label, task);
+    }
+    return Promise.resolve()
+      .then(task)
+      .catch((error) => {
+        logVerboseMessage(`matrix: ${label} failed (${String(error)})`);
+      });
+  };
+
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    void onRoomMessage(roomId, event);
+    void runMonitorTask(
+      `room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+      async () => {
+        await onRoomMessage(roomId, event);
+      },
+    );
   });
 
   client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
@@ -121,7 +139,9 @@ export function registerMatrixMonitorEvents(params: {
   );
 
   client.on("verification.summary", (summary) => {
-    void routeVerificationSummary(summary);
+    void runMonitorTask("verification summary handler", async () => {
+      await routeVerificationSummary(summary);
+    });
   });
 
   client.on("room.invite", (roomId: string, event: MatrixRawEvent) => {
@@ -179,7 +199,12 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void onRoomMessage(roomId, event);
+      void runMonitorTask(
+        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+        async () => {
+          await onRoomMessage(roomId, event);
+        },
+      );
       return;
     }
 

@@ -296,10 +296,24 @@ export const uk: TranslationMap = {
       promotedSuffix: "підвищено",
       nextSweepPrefix: "наступний цикл",
     },
+    scene: {
+      backfill: "Заповнити пропуски",
+      reset: "Скинути",
+      working: "Обробка…",
+    },
     stats: {
       shortTerm: "Короткостроково",
       signals: "Сигнали",
+      promoted: "Підвищено",
       phaseHits: "Збіги фаз",
+    },
+    trace: {
+      shortTerm: "Короткострокові",
+      signals: "Сигнали",
+      promoted: "Підвищено",
+      emptyShortTerm: "Немає активних короткострокових елементів.",
+      emptySignals: "Немає активних сигналів.",
+      emptyPromoted: "Сьогодні ще нічого не підвищено.",
     },
     diary: {
       title: "Щоденник сновидінь",
