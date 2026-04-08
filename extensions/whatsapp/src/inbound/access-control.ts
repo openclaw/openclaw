@@ -114,6 +114,16 @@ export async function checkInboundAccessControl(params: {
         ? Boolean(normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender))
         : normalizedEntrySet.has(normalizedDmSender);
     },
+    isSenderDenied: (denyEntries) => {
+      const normalizedEntrySet = new Set(
+        denyEntries
+          .map((entry) => normalizeE164(String(entry)))
+          .filter((entry): entry is string => Boolean(entry)),
+      );
+      return params.group
+        ? Boolean(normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender))
+        : normalizedEntrySet.has(normalizedDmSender);
+    },
   });
   // denyFrom silently blocks — no pairing reply, no error message.
   if (access.decision === "block" && access.reasonCode === "dm_policy_denylisted") {

@@ -85,6 +85,7 @@ type DmGroupAccessInputParams = {
   storeAllowFrom?: Array<string | number> | null;
   groupAllowFromFallbackToAllowFrom?: boolean | null;
   isSenderAllowed: (allowFrom: string[]) => boolean;
+  isSenderDenied?: (denyFrom: string[]) => boolean;
 };
 
 export async function readStoreAllowFromForDmPolicy(params: {
@@ -112,6 +113,8 @@ export function resolveDmGroupAccessDecision(params: {
   effectiveGroupAllowFrom: Array<string | number>;
   denyFrom?: Array<string | number> | null;
   isSenderAllowed: (allowFrom: string[]) => boolean;
+  /** Strict deny check — must not include self-chat bypass or wildcard logic. */
+  isSenderDenied?: (denyFrom: string[]) => boolean;
 }): {
   decision: DmGroupAccessDecision;
   reasonCode: DmGroupAccessReasonCode;
@@ -126,8 +129,9 @@ export function resolveDmGroupAccessDecision(params: {
   const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
 
   // denyFrom takes precedence — silently block denied senders regardless of policy.
+  // Uses isSenderDenied (not isSenderAllowed) to avoid self-chat bypass logic.
   const effectiveDenyFrom = normalizeStringEntries(params.denyFrom ?? []);
-  if (effectiveDenyFrom.length > 0 && params.isSenderAllowed(effectiveDenyFrom)) {
+  if (effectiveDenyFrom.length > 0 && params.isSenderDenied?.(effectiveDenyFrom)) {
     return {
       decision: "block",
       reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_DENYLISTED,
@@ -230,6 +234,7 @@ export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams):
     effectiveGroupAllowFrom,
     denyFrom: params.denyFrom,
     isSenderAllowed: params.isSenderAllowed,
+    isSenderDenied: params.isSenderDenied,
   });
   return {
     ...access,
