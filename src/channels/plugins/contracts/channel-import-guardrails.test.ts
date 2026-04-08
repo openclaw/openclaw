@@ -189,6 +189,13 @@ const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
   },
 ];
 
+const CONTRACT_API_GUARDS: GuardedSource[] = [
+  {
+    path: bundledPluginFile("slack", "contract-api.ts"),
+    forbiddenPatterns: [/outbound-payload-harness/, /plugin-sdk\/testing/, /\.\/test-api\.js/],
+  },
+];
+
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "acpx",
   "bluebubbles",
@@ -539,6 +546,15 @@ describe("channel import guardrails", () => {
 
   it("keeps channel config schemas off the broad core sdk barrel", () => {
     for (const source of CHANNEL_CONFIG_SCHEMA_GUARDS) {
+      const text = readSource(source.path);
+      for (const pattern of source.forbiddenPatterns) {
+        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
+      }
+    }
+  });
+
+  it("keeps runtime contract barrels free of test-only helpers", () => {
+    for (const source of CONTRACT_API_GUARDS) {
       const text = readSource(source.path);
       for (const pattern of source.forbiddenPatterns) {
         expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);

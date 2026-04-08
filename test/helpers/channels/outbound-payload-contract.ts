@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, type Mock, vi } from "vitest";
-import { createSlackOutboundPayloadHarness } from "../../../extensions/slack/contract-api.js";
 import { whatsappOutbound } from "../../../extensions/whatsapp/test-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
@@ -25,6 +24,9 @@ const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleI
 
 let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
 let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
+let createSlackOutboundPayloadHarnessCache:
+  | typeof import("../../../extensions/slack/src/outbound-payload-harness.js").createSlackOutboundPayloadHarness
+  | undefined;
 
 async function getDiscordOutbound(): Promise<ChannelOutboundAdapter> {
   discordOutboundCache ??= (async () => {
@@ -34,6 +36,16 @@ async function getDiscordOutbound(): Promise<ChannelOutboundAdapter> {
     return module.discordOutbound;
   })();
   return await discordOutboundCache;
+}
+
+function getCreateSlackOutboundPayloadHarness() {
+  if (!createSlackOutboundPayloadHarnessCache) {
+    ({ createSlackOutboundPayloadHarness: createSlackOutboundPayloadHarnessCache } =
+      loadBundledPluginTestApiSync<{
+        createSlackOutboundPayloadHarness: typeof import("../../../extensions/slack/src/outbound-payload-harness.js").createSlackOutboundPayloadHarness;
+      }>("slack"));
+  }
+  return createSlackOutboundPayloadHarnessCache;
 }
 
 function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
@@ -339,7 +351,7 @@ export function installSlackOutboundPayloadContractSuite() {
   installChannelOutboundPayloadContractSuite({
     channel: "slack",
     chunking: { mode: "passthrough", longTextLength: 5000 },
-    createHarness: createSlackOutboundPayloadHarness,
+    createHarness: getCreateSlackOutboundPayloadHarness(),
   });
 }
 
