@@ -5,6 +5,7 @@ import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -252,9 +253,76 @@ async function resolveSlackFileFromApi(params: {
  * Downloads all files attached to a Slack message and returns them as an array.
  * Returns `null` when no files could be downloaded.
  */
+function shouldRetrySlackMediaWithFallback(
+  error: unknown,
+  primaryToken: string,
+  fallbackToken?: string,
+): fallbackToken is string {
+  const message = error instanceof Error ? error.message : String(error);
+  return Boolean(
+    fallbackToken &&
+    fallbackToken !== primaryToken &&
+    /(?:HTTP\s+)?(?:401|403)\b|forbidden/i.test(message),
+  );
+}
+
+async function resolveSlackFileFromApiWithFallback(params: {
+  token: string;
+  fallbackToken?: string;
+  fileId: string;
+}): Promise<SlackFile | null> {
+  try {
+    return await resolveSlackFileFromApi({
+      token: params.token,
+      fileId: params.fileId,
+    });
+  } catch (error) {
+    if (!shouldRetrySlackMediaWithFallback(error, params.token, params.fallbackToken)) {
+      throw error;
+    }
+    logVerbose("slack files.info auth failed, retrying with fallback token");
+    return resolveSlackFileFromApi({
+      token: params.fallbackToken,
+      fileId: params.fileId,
+    });
+  }
+}
+
+async function fetchSlackMediaWithFallback(params: {
+  sourceUrl: string;
+  token: string;
+  fallbackToken?: string;
+  fetchImpl: ReturnType<typeof createSlackMediaFetch>;
+  filePathHint: string;
+  maxBytes: number;
+}) {
+  const fetchWithToken = async (token: string) => {
+    const { url, requestInit } = createSlackMediaRequest(params.sourceUrl, token);
+    return fetchRemoteMedia({
+      url,
+      fetchImpl: params.fetchImpl,
+      requestInit,
+      filePathHint: params.filePathHint,
+      maxBytes: params.maxBytes,
+      ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+    });
+  };
+
+  try {
+    return await fetchWithToken(params.token);
+  } catch (error) {
+    if (!shouldRetrySlackMediaWithFallback(error, params.token, params.fallbackToken)) {
+      throw error;
+    }
+    logVerbose("slack media fetch auth failed, retrying with fallback token");
+    return fetchWithToken(params.fallbackToken);
+  }
+}
+
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
+  fallbackToken?: string;
   maxBytes: number;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
@@ -268,19 +336,23 @@ export async function resolveSlackMedia(params: {
       let url = file.url_private_download ?? file.url_private;
       let effectiveFile = file;
       if (!url && file.id) {
-        const hydrated = await resolveSlackFileFromApi({
-          token: params.token,
-          fileId: file.id,
-        });
+        const hydrated =
+          (await resolveSlackFileFromApiWithFallback({
+            token: params.token,
+            fallbackToken: params.fallbackToken,
+            fileId: file.id,
+          })) ??
+          (params.fallbackToken && params.fallbackToken !== params.token
+            ? await resolveSlackFileFromApi({
+                token: params.fallbackToken,
+                fileId: file.id,
+              })
+            : null);
         if (hydrated) {
           effectiveFile = {
-            ...hydrated,
             ...file,
-            url_private: file.url_private ?? hydrated.url_private,
-            url_private_download: file.url_private_download ?? hydrated.url_private_download,
+            ...hydrated,
             name: file.name ?? hydrated.name,
-            mimetype: file.mimetype ?? hydrated.mimetype,
-            subtype: file.subtype ?? hydrated.subtype,
           };
           url = effectiveFile.url_private_download ?? effectiveFile.url_private;
         }
@@ -289,20 +361,15 @@ export async function resolveSlackMedia(params: {
         return null;
       }
       try {
-        const { url: slackUrl, requestInit } = createSlackMediaRequest(url, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchRemoteMedia({
-          url: slackUrl,
+        const fetched = await fetchSlackMediaWithFallback({
+          sourceUrl: url,
+          token: params.token,
+          fallbackToken: params.fallbackToken,
           fetchImpl,
-          requestInit,
-          filePathHint: effectiveFile.name,
+          filePathHint: effectiveFile.name ?? effectiveFile.id ?? "slack-file",
           maxBytes: params.maxBytes,
-          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
         });
-        if (fetched.buffer.byteLength > params.maxBytes) {
-          return null;
-        }
-
         // Guard against auth/login HTML pages returned instead of binary media.
         // Allow user-provided HTML files through.
         const fileMime = normalizeOptionalLowercaseString(effectiveFile.mimetype);
@@ -345,9 +412,11 @@ export async function resolveSlackMedia(params: {
 export async function resolveSlackAttachmentContent(params: {
   attachments?: SlackAttachment[];
   token: string;
+  fallbackToken?: string;
   maxBytes: number;
-}): Promise<{ text: string; media: SlackMediaResult[] } | null> {
+}): Promise<{ text: string; media?: SlackMediaResult[] } | null> {
   const attachments = params.attachments;
+
   if (!attachments || attachments.length === 0) {
     return null;
   }
@@ -373,14 +442,14 @@ export async function resolveSlackAttachmentContent(params: {
     const imageUrl = resolveForwardedAttachmentImageUrl(att);
     if (imageUrl) {
       try {
-        const { url: slackUrl, requestInit } = createSlackMediaRequest(imageUrl, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchRemoteMedia({
-          url: slackUrl,
+        const fetched = await fetchSlackMediaWithFallback({
+          sourceUrl: imageUrl,
+          token: params.token,
+          fallbackToken: params.fallbackToken,
           fetchImpl,
-          requestInit,
+          filePathHint: `slack-forwarded-attachment-${allMedia.length}`,
           maxBytes: params.maxBytes,
-          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
         });
         if (fetched.buffer.byteLength <= params.maxBytes) {
           const saved = await saveMediaBuffer(
@@ -405,6 +474,7 @@ export async function resolveSlackAttachmentContent(params: {
       const fileMedia = await resolveSlackMedia({
         files: att.files,
         token: params.token,
+        fallbackToken: params.fallbackToken,
         maxBytes: params.maxBytes,
       });
       if (fileMedia) {

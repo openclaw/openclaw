@@ -286,19 +286,15 @@ function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // Keep true thread replies thread-scoped, but preserve channel-level sessions
-  // for top-level room turns when replyToMode is off.
-  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
+  // When replyToMode="all", align session routing with Slack reply threading so
+  // a top-level room message roots its own session immediately using message ts.
+  // That keeps the later thread attached to the same session from the first turn.
+  // For DMs, preserve the existing auto-thread behavior.
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  // Only fork channel/group messages into thread-specific sessions when they are
-  // actual thread replies (thread_ts present, different from message ts).
-  // Top-level channel messages must stay on the per-channel session for continuity.
-  // Before this fix, every channel message used its own ts as threadId, creating
-  // isolated sessions per message (regression from #10686).
-  const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
+  const roomThreadId = isThreadReply && threadTs ? threadTs : autoThreadId;
   const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
@@ -307,7 +303,7 @@ function resolveSlackRoutingContext(params: {
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
-    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
+    canonicalThreadId && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   return {
     route,
@@ -555,6 +551,8 @@ export async function prepareSlackMessage(params: {
     threadStarter,
     isBotMessage,
     botToken: ctx.mediaReadToken ?? ctx.botToken,
+    fallbackBotToken:
+      ctx.mediaReadToken && ctx.mediaReadToken !== ctx.botToken ? ctx.botToken : undefined,
     mediaMaxBytes: ctx.mediaMaxBytes,
   });
   if (!resolvedMessageContent) {

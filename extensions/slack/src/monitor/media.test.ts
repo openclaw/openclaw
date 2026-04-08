@@ -375,6 +375,80 @@ describe("resolveSlackMedia", () => {
     );
   });
 
+  it("falls back to the bot token when files.info auth fails", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/from-files-info-fallback.jpg", "image/jpeg"),
+    );
+
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false, error: "missing_scope" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            file: {
+              id: "F456",
+              name: "from-files-info-fallback.jpg",
+              mimetype: "image/jpeg",
+              url_private_download: "https://files.slack.com/files-pri/T123-F456/download.jpg",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("image data"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+      );
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F456", name: "from-files-info-fallback.jpg" }],
+      token: "xoxp-user-token",
+      fallbackToken: "xoxb-bot-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        path: "/tmp/from-files-info-fallback.jpg",
+        placeholder: "[Slack file: download.jpg]",
+      }),
+    ]);
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://slack.com/api/files.info?file=F456",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Authorization: "Bearer xoxp-user-token" }),
+      }),
+    );
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://slack.com/api/files.info?file=F456",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Authorization: "Bearer xoxb-bot-token" }),
+      }),
+    );
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      3,
+      "https://files.slack.com/files-pri/T123-F456/download.jpg",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer xoxp-user-token" }),
+      }),
+    );
+  });
+
   it("rejects HTML auth pages for non-HTML files", async () => {
     const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
     mockFetch.mockResolvedValueOnce(

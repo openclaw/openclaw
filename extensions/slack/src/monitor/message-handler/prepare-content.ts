@@ -42,6 +42,7 @@ export async function resolveSlackMessageContent(params: {
   threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
   botToken: string;
+  fallbackBotToken?: string;
   mediaMaxBytes: number;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -53,12 +54,14 @@ export async function resolveSlackMessageContent(params: {
   const media = await resolveSlackMedia({
     files: ownFiles,
     token: params.botToken,
+    fallbackToken: params.fallbackBotToken,
     maxBytes: params.mediaMaxBytes,
   });
 
   const attachmentContent = await resolveSlackAttachmentContent({
     attachments: params.message.attachments,
     token: params.botToken,
+    fallbackToken: params.fallbackBotToken,
     maxBytes: params.mediaMaxBytes,
   });
 

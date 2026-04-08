@@ -116,18 +116,25 @@ export async function resolveSlackThreadContextData(params: {
     includeStarterContext &&
     (starter?.files?.length || starter?.attachments?.length)
   ) {
+    const primaryMediaToken = params.ctx.mediaReadToken ?? params.ctx.botToken;
+    const fallbackMediaToken =
+      params.ctx.mediaReadToken && params.ctx.mediaReadToken !== params.ctx.botToken
+        ? params.ctx.botToken
+        : undefined;
     const [fileMedia, attachmentContent] = await Promise.all([
       starter?.files?.length
         ? resolveSlackMedia({
             files: starter.files,
-            token: params.ctx.mediaReadToken ?? params.ctx.botToken,
+            token: primaryMediaToken,
+            fallbackToken: fallbackMediaToken,
             maxBytes: params.ctx.mediaMaxBytes,
           })
         : Promise.resolve(null),
       starter?.attachments?.length
         ? resolveSlackAttachmentContent({
             attachments: starter.attachments,
-            token: params.ctx.mediaReadToken ?? params.ctx.botToken,
+            token: primaryMediaToken,
+            fallbackToken: fallbackMediaToken,
             maxBytes: params.ctx.mediaMaxBytes,
           })
         : Promise.resolve(null),
