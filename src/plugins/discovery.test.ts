@@ -306,7 +306,6 @@ describe("discoverOpenClawPlugins", () => {
     expect(diagnostics).toEqual([]);
   });
 
-
   it("does not recurse arbitrary workspace directories for plugin auto-discovery", () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
