@@ -39,25 +39,58 @@ export async function transcribeOpenAiCompatibleAudio(
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
-  const form = new FormData();
   const fileName = params.fileName?.trim() || path.basename(params.fileName) || "audio";
-  const bytes = new Uint8Array(params.buffer);
-  const blob = new Blob([bytes], {
-    type: params.mime ?? "application/octet-stream",
-  });
-  form.append("file", blob, fileName);
-  form.append("model", model);
+  // Build the multipart body manually rather than using `new FormData()`.
+  //
+  // When requests go through `fetchWithRuntimeDispatcher` (undici npm package fetch
+  // with a custom dispatcher), Node.js's globalThis.FormData is not recognised by
+  // undici: the Content-Type multipart boundary is never set, so the server receives
+  // a body it cannot parse (e.g. Flask: "No file part in the request").
+  // globalThis.fetch handles globalThis.FormData correctly, but audio transcription
+  // requests go through the SSRF-guarded undici path, not globalThis.fetch.
+  // Constructing the body as a Buffer with an explicit Content-Type sidesteps the
+  // incompatibility entirely and works with any fetch implementation.
+  const mime = params.mime ?? "application/octet-stream";
+  const boundary = `----FormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
+  const enc = new TextEncoder();
+  const parts: Uint8Array[] = [
+    enc.encode(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: ${mime}\r\n\r\n`,
+    ),
+    new Uint8Array(params.buffer),
+    enc.encode(
+      `\r\n--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`,
+    ),
+  ];
   if (params.language?.trim()) {
-    form.append("language", params.language.trim());
+    parts.push(
+      enc.encode(
+        `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${params.language.trim()}\r\n`,
+      ),
+    );
   }
   if (params.prompt?.trim()) {
-    form.append("prompt", params.prompt.trim());
+    parts.push(
+      enc.encode(
+        `--${boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\n${params.prompt.trim()}\r\n`,
+      ),
+    );
   }
+  parts.push(enc.encode(`--${boundary}--\r\n`));
+  const totalLen = parts.reduce((sum, p) => sum + p.length, 0);
+  const body = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.length;
+  }
+  const headersWithCT = new Headers(headers);
+  headersWithCT.set("content-type", `multipart/form-data; boundary=${boundary}`);
 
   const { response: res, release } = await postTranscriptionRequest({
     url,
-    headers,
-    body: form,
+    headers: headersWithCT,
+    body: Buffer.from(body),
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
