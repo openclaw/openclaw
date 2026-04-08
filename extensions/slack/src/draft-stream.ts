@@ -14,6 +14,7 @@ export type SlackDraftStream = {
   forceNewMessage: () => void;
   messageId: () => string | undefined;
   channelId: () => string | undefined;
+  lastText: () => string | undefined;
 };
 
 export function createSlackDraftStream(params: {
@@ -133,5 +134,6 @@ export function createSlackDraftStream(params: {
     forceNewMessage,
     messageId: () => streamMessageId,
     channelId: () => streamChannelId,
+    lastText: () => lastSentText || undefined,
   };
 }

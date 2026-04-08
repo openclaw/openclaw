@@ -123,6 +123,42 @@ export function resolveSlackStreamingThreadHint(params: {
   });
 }
 
+function buildSlackTurnDeliveryKey(params: {
+  payload: ReplyPayload;
+  threadTs?: string;
+  textOverride?: string;
+}): string | null {
+  const reply = resolveSendableOutboundReplyParts(params.payload, {
+    text: params.textOverride,
+  });
+  const slackBlocks = readSlackReplyBlocks(params.payload);
+  if (!reply.hasContent && !slackBlocks?.length) {
+    return null;
+  }
+  return JSON.stringify({
+    threadTs: params.threadTs ?? "",
+    text: reply.trimmedText,
+    mediaUrls: reply.mediaUrls,
+    blocks: slackBlocks ?? null,
+  });
+}
+
+export function createSlackTurnDeliveryTracker() {
+  const deliveredKeys = new Set<string>();
+  return {
+    hasDelivered(params: { payload: ReplyPayload; threadTs?: string; textOverride?: string }) {
+      const key = buildSlackTurnDeliveryKey(params);
+      return key ? deliveredKeys.has(key) : false;
+    },
+    markDelivered(params: { payload: ReplyPayload; threadTs?: string; textOverride?: string }) {
+      const key = buildSlackTurnDeliveryKey(params);
+      if (key) {
+        deliveredKeys.add(key);
+      }
+    },
+  };
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -349,9 +385,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
+  const deliveryTracker = createSlackTurnDeliveryTracker();
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
+    if (deliveryTracker.hasDelivered({ payload, threadTs: replyThreadTs })) {
+      logVerbose("slack: suppressed duplicate normal delivery within the same turn");
+      return;
+    }
     await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
@@ -369,6 +410,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       usedReplyThreadTs ??= replyThreadTs;
     }
     replyPlan.markSent();
+    deliveryTracker.markDelivered({ payload, threadTs: replyThreadTs });
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
@@ -392,6 +434,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await deliverNormally(payload);
           return;
         }
+        if (
+          deliveryTracker.hasDelivered({
+            payload,
+            threadTs: streamThreadTs,
+            textOverride: text,
+          })
+        ) {
+          logVerbose("slack-stream: suppressed duplicate stream start payload");
+          return;
+        }
 
         streamSession = await startSlackStream({
           client: ctx.app.client,
@@ -404,12 +456,32 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         observedReplyDelivery = true;
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
+        deliveryTracker.markDelivered({
+          payload,
+          threadTs: streamThreadTs,
+          textOverride: text,
+        });
+        return;
+      }
+      if (
+        deliveryTracker.hasDelivered({
+          payload,
+          threadTs: streamSession.threadTs,
+          textOverride: text,
+        })
+      ) {
+        logVerbose("slack-stream: suppressed duplicate append payload");
         return;
       }
 
       await appendSlackStream({
         session: streamSession,
         text: "\n" + text,
+      });
+      deliveryTracker.markDelivered({
+        payload,
+        threadTs: streamSession.threadTs,
+        textOverride: text,
       });
     } catch (err) {
       runtime.error?.(
@@ -444,6 +516,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         typeof draftChannelId === "string";
 
       if (canFinalizeViaPreviewEdit) {
+        const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
+        const previewLastText = draftStream?.lastText();
+        if (deliveryTracker.hasDelivered({ payload, threadTs: finalThreadTs })) {
+          observedReplyDelivery = true;
+          return;
+        }
         draftStream?.stop();
         try {
           await finalizeSlackPreviewEdit({
@@ -454,11 +532,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             messageId: draftMessageId,
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-            threadTs: usedReplyThreadTs ?? statusThreadTs,
+            threadTs: finalThreadTs,
           });
           observedReplyDelivery = true;
+          deliveryTracker.markDelivered({ payload, threadTs: finalThreadTs });
           return;
         } catch (err) {
+          const normalizedPreviewText = normalizeSlackOutboundText((previewLastText ?? "").trim());
+          if (
+            !reply.hasMedia &&
+            !slackBlocks?.length &&
+            normalizedPreviewText &&
+            normalizedPreviewText === normalizeSlackOutboundText(trimmedFinalText)
+          ) {
+            logVerbose(
+              "slack: preview already matched final text; suppressing duplicate fallback send",
+            );
+            observedReplyDelivery = true;
+            deliveryTracker.markDelivered({ payload, threadTs: finalThreadTs });
+            return;
+          }
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
           );

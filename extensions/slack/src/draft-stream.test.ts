@@ -67,6 +67,16 @@ describe("createSlackDraftStream", () => {
     expect(edit).toHaveBeenCalledTimes(0);
   });
 
+  it("exposes the last visible preview text", async () => {
+    const { stream } = createDraftStreamHarness();
+
+    expect(stream.lastText()).toBeUndefined();
+    stream.update("hello");
+    await stream.flush();
+
+    expect(stream.lastText()).toBe("hello");
+  });
+
   it("supports forceNewMessage for subsequent assistant messages", async () => {
     const send = vi
       .fn<DraftSendFn>()

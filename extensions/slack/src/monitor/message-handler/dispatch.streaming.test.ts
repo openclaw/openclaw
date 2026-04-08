@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
@@ -16,6 +17,18 @@ describe("slack native streaming defaults", () => {
     expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
+  });
+});
+
+describe("slack turn delivery tracker", () => {
+  it("treats repeated text payloads on the same thread as duplicates", () => {
+    const tracker = createSlackTurnDeliveryTracker();
+    const payload = { text: "same reply" };
+
+    expect(tracker.hasDelivered({ payload, threadTs: "123.456" })).toBe(false);
+    tracker.markDelivered({ payload, threadTs: "123.456" });
+    expect(tracker.hasDelivered({ payload, threadTs: "123.456" })).toBe(true);
+    expect(tracker.hasDelivered({ payload, threadTs: "other-thread" })).toBe(false);
   });
 });
 
