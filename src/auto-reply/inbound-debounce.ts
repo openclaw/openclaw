@@ -233,9 +233,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const flushAll = async () => {
     const keys = Array.from(buffers.keys());
-    for (const key of keys) {
-      await flushKey(key);
-    }
+    await Promise.all(keys.map((key) => flushKey(key)));
   };
 
   return { enqueue, flushKey, flushAll };

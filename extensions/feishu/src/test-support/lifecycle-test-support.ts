@@ -86,6 +86,7 @@ export function createImmediateInboundDebounce() {
         }
       },
       flushKey: async () => {},
+      flushAll: async () => {},
     }),
   };
 }
