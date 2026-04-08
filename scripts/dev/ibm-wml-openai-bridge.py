@@ -391,9 +391,43 @@ def chat_completions():
             requested_tokens = MAX_OUTPUT_TOKENS
         max_tokens = max(1, min(requested_tokens, MAX_OUTPUT_TOKENS))
 
-        stream = data.get("stream", False)
-        if not isinstance(stream, bool):
-            stream = bool(stream)
+        raw_stream = data.get("stream", False)
+        if isinstance(raw_stream, bool):
+            stream = raw_stream
+        elif isinstance(raw_stream, str):
+            value = raw_stream.strip().lower()
+            if value == "true":
+                stream = True
+            elif value == "false":
+                stream = False
+            else:
+                return (
+                    jsonify(
+                        {
+                            "error": "Invalid value for 'stream'; expected boolean true/false"
+                        }
+                    ),
+                    400,
+                )
+        elif isinstance(raw_stream, int):
+            if raw_stream in (0, 1):
+                stream = bool(raw_stream)
+            else:
+                return (
+                    jsonify(
+                        {
+                            "error": "Invalid numeric value for 'stream'; expected 0 or 1"
+                        }
+                    ),
+                    400,
+                )
+        else:
+            return (
+                jsonify(
+                    {"error": "Invalid type for 'stream' parameter; expected boolean"}
+                ),
+                400,
+            )
 
         params = {"temperature": temperature, "max_tokens": max_tokens}
         logger.info(
