@@ -166,6 +166,35 @@ async function waitForCondition<T>(
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
+function findFailureOutboundMessage(state: QaBusState, options?: { sinceIndex?: number }) {
+  return state
+    .getSnapshot()
+    .messages.filter((message) => message.direction === "outbound")
+    .slice(options?.sinceIndex ?? 0)
+    .find((message) => Boolean(extractQaFailureReplyText(message.text)));
+}
+
+function createScenarioWaitForCondition(state: QaBusState) {
+  const sinceIndex = state.getSnapshot().messages.length;
+  return async function waitForScenarioCondition<T>(
+    check: () => T | Promise<T | null | undefined> | null | undefined,
+    timeoutMs = 15_000,
+    intervalMs = 100,
+  ): Promise<T> {
+    return await waitForCondition(
+      async () => {
+        const failureMessage = findFailureOutboundMessage(state, { sinceIndex });
+        if (failureMessage) {
+          throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+        }
+        return await check();
+      },
+      timeoutMs,
+      intervalMs,
+    );
+  };
+}
+
 async function waitForOutboundMessage(
   state: QaBusState,
   predicate: (message: QaBusMessage) => boolean,
@@ -173,6 +202,10 @@ async function waitForOutboundMessage(
   options?: { sinceIndex?: number },
 ) {
   return await waitForCondition(() => {
+    const failureMessage = findFailureOutboundMessage(state, options);
+    if (failureMessage) {
+      throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+    }
     const match = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound")
@@ -1034,7 +1067,7 @@ function createScenarioFlowApi(
     sleep,
     randomUUID,
     runScenario,
-    waitForCondition,
+    waitForCondition: createScenarioWaitForCondition(env.lab.state),
     waitForOutboundMessage,
     waitForNoOutbound,
     recentOutboundSummary,
@@ -1092,6 +1125,12 @@ function createScenarioFlowApi(
     },
   };
 }
+
+export const qaSuiteTesting = {
+  createScenarioWaitForCondition,
+  findFailureOutboundMessage,
+  waitForOutboundMessage,
+};
 
 async function runScenarioDefinition(
   env: QaSuiteEnvironment,
