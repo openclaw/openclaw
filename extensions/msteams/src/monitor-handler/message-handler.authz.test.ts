@@ -65,7 +65,7 @@ vi.mock("../reply-dispatcher.js", () => ({
 describe("msteams monitor handler authz", () => {
   function createDeps(cfg: OpenClawConfig) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
-    const upsertPairingRequest = vi.fn(async () => null);
+    const upsertPairingRequest = vi.fn(async () => ({ code: "MOCKPAIR01", created: true }));
     const recordInboundSession = vi.fn(async () => undefined);
     setMSTeamsRuntime({
       logging: { shouldLogVerbose: () => false },
@@ -244,6 +244,7 @@ describe("msteams monitor handler authz", () => {
       },
     } as OpenClawConfig);
 
+    const sendActivity = vi.fn(async () => undefined);
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
       activity: {
@@ -276,7 +277,7 @@ describe("msteams monitor handler authz", () => {
         ],
         attachments: [],
       },
-      sendActivity: vi.fn(async () => undefined),
+      sendActivity,
     } as unknown as Parameters<typeof handler>[0]);
 
     expect(upsertPairingRequest).toHaveBeenCalledWith({
@@ -285,6 +286,15 @@ describe("msteams monitor handler authz", () => {
       id: "new-user-aad",
       meta: { name: "New User" },
     });
+    expect(sendActivity).toHaveBeenCalledWith(expect.stringMatching(/MOCKPAIR01/s));
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams pairing request",
+      expect.objectContaining({
+        sender: "new-user-aad",
+        code: "MOCKPAIR01",
+        label: "New User",
+      }),
+    );
     expect(conversationStore.upsert).toHaveBeenCalledWith("a:personal-chat", {
       activityId: "msg-pairing",
       user: {

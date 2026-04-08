@@ -97,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions_send: pass `threadId` through announce delivery so cross-session notifications land in the correct Telegram forum topic instead of the group's general thread. (#62758) Thanks @jalehman.
 - Daemon/systemd: keep sudo systemctl calls scoped to the invoking user when machine-scoped systemctl fails, while still avoiding machine fallback for permission-denied user bus errors. (#62337) Thanks @Aftabbs.
 - Docs/i18n: relocalize final localized-page links after translation and remove the zh-CN homepage redirect override so localized Mintlify pages resolve to the correct language roots again. (#61796) Thanks @hxy91819.
+- MS Teams: send the standard pairing instructions on first DM when `dmPolicy=pairing`, and log pairing metadata (including the code) when a request is created. (#62765) Thanks @neeravmakwana.
 
 ## 2026.4.5
 

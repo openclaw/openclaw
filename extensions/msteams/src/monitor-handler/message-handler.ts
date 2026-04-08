@@ -257,16 +257,27 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             error: formatUnknownError(err),
           });
         });
-        const request = await pairing.upsertPairingRequest({
-          id: senderId,
+        await pairing.issueChallenge({
+          senderId,
+          senderIdLine: `Your Microsoft Teams user id: ${senderId}`,
           meta: { name: senderName },
+          sendPairingReply: async (text) => {
+            await context.sendActivity(text);
+          },
+          onCreated: ({ code }) => {
+            log.info("msteams pairing request", {
+              sender: senderId,
+              code,
+              label: senderName,
+            });
+          },
+          onReplyError: (err) => {
+            log.error("msteams pairing reply failed", {
+              sender: senderId,
+              error: formatUnknownError(err),
+            });
+          },
         });
-        if (request) {
-          log.info("msteams pairing request created", {
-            sender: senderId,
-            label: senderName,
-          });
-        }
       }
       log.debug?.("dropping dm (not allowlisted)", {
         sender: senderId,
