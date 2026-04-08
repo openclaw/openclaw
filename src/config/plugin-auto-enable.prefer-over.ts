@@ -119,7 +119,10 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
   isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
-  isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
+  isPluginExplicitlyDisabled: (
+    config: OpenClawConfig,
+    entry: Pick<PluginAutoEnableCandidate, "pluginId"> & { channelId?: string },
+  ) => boolean;
 }): boolean {
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
@@ -127,7 +130,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     }
     if (
       params.isPluginDenied(params.config, other.pluginId) ||
-      params.isPluginExplicitlyDisabled(params.config, other.pluginId)
+      params.isPluginExplicitlyDisabled(params.config, other)
     ) {
       continue;
     }

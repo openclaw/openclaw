@@ -200,6 +200,22 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.channels?.imessage?.enabled).toBe(true);
     });
 
+    it("allows imessage auto-configure when bluebubbles channel is explicitly disabled", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            bluebubbles: { serverUrl: "http://localhost:1234", password: "x", enabled: false },
+            imessage: { cliPath: "/usr/local/bin/imsg" },
+          },
+        },
+        env: makeIsolatedEnv(),
+      });
+
+      expect(result.config.channels?.bluebubbles?.enabled).toBe(false);
+      expect(result.config.channels?.imessage?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+    });
+
     it("auto-enables imessage when only imessage is configured", () => {
       const result = applyPluginAutoEnable({
         config: {

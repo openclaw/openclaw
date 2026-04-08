@@ -467,21 +467,30 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   return changes;
 }
 
-function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  const builtInChannelId = normalizeChatChannelId(pluginId);
-  if (builtInChannelId) {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    const channelConfig = channels?.[builtInChannelId];
-    if (
-      channelConfig &&
-      typeof channelConfig === "object" &&
-      !Array.isArray(channelConfig) &&
-      (channelConfig as { enabled?: unknown }).enabled === false
-    ) {
+function isChannelExplicitlyDisabled(cfg: OpenClawConfig, channelId?: string): boolean {
+  if (!channelId) {
+    return false;
+  }
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channelConfig = channels?.[channelId];
+  return isRecord(channelConfig) && channelConfig.enabled === false;
+}
+
+function isPluginExplicitlyDisabled(
+  cfg: OpenClawConfig,
+  entry: Pick<PluginAutoEnableCandidate, "pluginId"> & { channelId?: string },
+): boolean {
+  const candidateChannelId = "channelId" in entry ? entry.channelId : undefined;
+  if (isChannelExplicitlyDisabled(cfg, candidateChannelId)) {
+    return true;
+  }
+  const builtInChannelId = normalizeChatChannelId(entry.pluginId);
+  if (builtInChannelId && builtInChannelId !== candidateChannelId) {
+    if (isChannelExplicitlyDisabled(cfg, builtInChannelId)) {
       return true;
     }
   }
-  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
+  return cfg.plugins?.entries?.[entry.pluginId]?.enabled === false;
 }
 
 function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -575,7 +584,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 
   for (const entry of params.candidates) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
-    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
+    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry)) {
       continue;
     }
     if (
