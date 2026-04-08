@@ -21,4 +21,11 @@ describe("createIMessageTestPlugin", () => {
 
     expect(listImportedBundledPluginFacadeIds()).toEqual([]);
   });
+
+  it("normalizes repeated transport prefixes without recursive stack growth", () => {
+    const plugin = createIMessageTestPlugin();
+    const prefixedHandle = `${"imessage:".repeat(5000)}+44 20 7946 0958`;
+
+    expect(plugin.messaging?.normalizeTarget?.(prefixedHandle)).toBe("+442079460958");
+  });
 });

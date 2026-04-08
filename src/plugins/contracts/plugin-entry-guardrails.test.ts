@@ -8,26 +8,22 @@ import { loadPluginManifestRegistry } from "../manifest-registry.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const RUNTIME_ENTRY_HELPER_RE = /(^|\/)plugin-entry\.runtime\.[cm]?[jt]s$/;
-const GUARDED_CONTRACT_ARTIFACT_BASENAMES = new Set([
-  "channel-config-api.js",
-  "contract-api.js",
-  "secret-contract-api.js",
-  "security-contract-api.js",
-]);
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
 const FORBIDDEN_CONTRACT_MODULE_SPECIFIER_PATTERNS = [
   /^vitest$/u,
   /^openclaw\/plugin-sdk\/testing$/u,
   /(^|\/)test-api(?:\.[cm]?[jt]s)?$/u,
   /(^|\/)__tests__(\/|$)/u,
+  /(^|\/)test-support(\/|$)/u,
   /(^|\/)[^/]*\.test(?:[-.][^/]*)?(?:\.[cm]?[jt]s)?$/u,
-  /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*(?:\.[cm]?[jt]s)?$/u,
+  /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|test-support|harness)[^/]*(?:\.[cm]?[jt]s)?$/u,
 ] as const;
 const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
   /(^|\/)__tests__(\/|$)/u,
+  /(^|\/)test-support(\/|$)/u,
   /(^|\/)test-api\.[cm]?[jt]s$/u,
   /(^|\/)[^/]*\.test(?:[-.][^/]*)?\.[cm]?[jt]s$/u,
-  /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*\.[cm]?[jt]s$/u,
+  /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|test-support|harness)[^/]*\.[cm]?[jt]s$/u,
 ] as const;
 function listBundledPluginRoots() {
   return loadPluginManifestRegistry({})
@@ -53,6 +49,12 @@ function resolvePublicSurfaceSourcePath(
   return null;
 }
 
+function isGuardedContractArtifactBasename(artifactBasename: string): boolean {
+  return (
+    artifactBasename === "channel-config-api.js" || artifactBasename.endsWith("contract-api.js")
+  );
+}
+
 function collectProductionContractEntryPaths(): Array<{
   pluginId: string;
   entryPath: string;
@@ -62,7 +64,7 @@ function collectProductionContractEntryPaths(): Array<{
     const pluginRoot = resolve(REPO_ROOT, "extensions", plugin.dirName);
     const entryPaths = new Set<string>();
     for (const artifact of plugin.publicSurfaceArtifacts ?? []) {
-      if (!GUARDED_CONTRACT_ARTIFACT_BASENAMES.has(artifact)) {
+      if (!isGuardedContractArtifactBasename(artifact)) {
         continue;
       }
       const sourcePath = resolvePublicSurfaceSourcePath(pluginRoot, artifact);
@@ -98,8 +100,9 @@ function analyzeSourceModule(params: { filePath: string; source: string }): {
 
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement)) {
-      const specifier =
-        ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
+      const specifier = ts.isStringLiteral(statement.moduleSpecifier)
+        ? statement.moduleSpecifier.text
+        : undefined;
       if (specifier) {
         specifiers.add(specifier);
       }
@@ -284,6 +287,25 @@ describe("plugin entry guardrails", () => {
       `,
       }).relativeSpecifiers.toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);
+  });
+
+  it("guards contract-style production artifacts beyond the legacy allowlist", () => {
+    expect(isGuardedContractArtifactBasename("channel-config-api.js")).toBe(true);
+    expect(isGuardedContractArtifactBasename("contract-api.js")).toBe(true);
+    expect(isGuardedContractArtifactBasename("doctor-contract-api.js")).toBe(true);
+    expect(isGuardedContractArtifactBasename("web-search-contract-api.js")).toBe(true);
+    expect(isGuardedContractArtifactBasename("test-api.js")).toBe(false);
+  });
+
+  it("flags test-support directory hops in guarded contract graphs", () => {
+    expect(collectForbiddenContractSpecifiers(["./test-support/index.js"])).toEqual([
+      "./test-support/index.js",
+    ]);
+    expect(
+      FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS.some((pattern) =>
+        pattern.test("extensions/demo/src/test-support/index.ts"),
+      ),
+    ).toBe(true);
   });
 
   it("detects aliased definePluginEntry imports from core", () => {

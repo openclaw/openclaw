@@ -19,7 +19,12 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   }
 
   const segments = normalized.split("/");
-  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+  if (
+    segments.some(
+      (segment) =>
+        segment.length === 0 || segment === "." || segment === ".." || segment.includes(":"),
+    )
+  ) {
     throw new Error(`Bundled plugin artifact path must stay plugin-local: ${artifactBasename}`);
   }
 

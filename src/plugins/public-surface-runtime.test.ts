@@ -22,5 +22,11 @@ describe("bundled plugin public surface runtime", () => {
     expect(() => normalizeBundledPluginArtifactSubpath("..\\outside.js")).toThrow(
       /must stay plugin-local/,
     );
+    expect(() => normalizeBundledPluginArtifactSubpath("C:outside.js")).toThrow(
+      /must stay plugin-local/,
+    );
+    expect(() => normalizeBundledPluginArtifactSubpath("src/C:outside.js")).toThrow(
+      /must stay plugin-local/,
+    );
   });
 });
