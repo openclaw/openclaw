@@ -175,4 +175,26 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
   });
+
+  it("applies a larger safety margin for sessions with >= 50 messages", () => {
+    const shortHistory = "word ".repeat(20);
+    const smallSession = Array.from({ length: 20 }, () => makeAssistantHistory(shortHistory));
+    const largeSession = Array.from({ length: 60 }, () => makeAssistantHistory(shortHistory));
+
+    const smallEstimate = estimatePrePromptTokens({
+      messages: smallSession,
+      systemPrompt: "sys",
+      prompt: "hello",
+    });
+    const largeEstimate = estimatePrePromptTokens({
+      messages: largeSession,
+      systemPrompt: "sys",
+      prompt: "hello",
+    });
+
+    // The large session has 3x more messages, so the base estimate is ~3x.
+    // With the extra margin, the ratio should exceed 3.
+    const ratio = largeEstimate / smallEstimate;
+    expect(ratio).toBeGreaterThan(3);
+  });
 });

@@ -9,6 +9,14 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
+/**
+ * For large sessions (many messages or many tool results), token estimation
+ * can undercount by 15-20% due to tokenizer overhead and tool result metadata.
+ * Scale the safety margin beyond the base SAFETY_MARGIN for these sessions.
+ */
+const LARGE_SESSION_MESSAGE_THRESHOLD = 50;
+const LARGE_SESSION_EXTRA_MARGIN = 1.15; // additional 15% on top of base SAFETY_MARGIN
+
 export type PreemptiveCompactionRoute =
   | "fits"
   | "compact_only"
@@ -34,7 +42,12 @@ export function estimatePrePromptTokens(params: {
   const estimated =
     estimateMessagesTokens(messages) +
     syntheticMessages.reduce((sum, message) => sum + estimateTokens(message), 0);
-  return Math.max(0, Math.ceil(estimated * SAFETY_MARGIN));
+  // Scale safety margin for large sessions where token estimation is less accurate.
+  const margin =
+    messages.length >= LARGE_SESSION_MESSAGE_THRESHOLD
+      ? SAFETY_MARGIN * LARGE_SESSION_EXTRA_MARGIN
+      : SAFETY_MARGIN;
+  return Math.max(0, Math.ceil(estimated * margin));
 }
 
 export function shouldPreemptivelyCompactBeforePrompt(params: {

@@ -503,4 +503,92 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
     expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
   });
+
+  it("progressively truncates tool results with halved context window on each attempt", async () => {
+    // First attempt: overflow, compaction fails, first truncation attempt.
+    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
+    // Second attempt: overflow persists — truncation not aggressive enough.
+    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
+    // Third attempt: success after more aggressive truncation.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    // First truncation succeeds but not enough.
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 1,
+    });
+    // Second truncation (more aggressive) also succeeds.
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    // Two truncation attempts with different effective context windows.
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(2);
+    // First call with full context window (200000 tokens).
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ contextWindowTokens: 200000 }),
+    );
+    // Second call with halved context window (100000 tokens).
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ contextWindowTokens: 100000 }),
+    );
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("attempt 1/3"));
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("attempt 2/3"));
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("runs explicit budget compaction after SDK auto-compaction proves insufficient", async () => {
+    // First attempt: overflow WITH SDK auto-compaction (compactionCount > 0).
+    // The run loop should skip explicit compaction on the first retry.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: makeOverflowError(),
+        compactionCount: 1,
+      }),
+    );
+    // Second attempt: overflow persists — SDK compaction was not enough.
+    // Now the run loop should escalate to explicit budget-targeted compaction.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: makeOverflowError(),
+        compactionCount: 0,
+      }),
+    );
+    // Third attempt: success after budget compaction.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Budget-targeted compaction after SDK was insufficient",
+        firstKeptEntryId: "entry-10",
+        tokensBefore: 180000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    // First retry: skipped explicit compaction (SDK already compacted).
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("context overflow persisted after in-attempt compaction"),
+    );
+    // Second retry: ran explicit budget compaction.
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-compaction succeeded"),
+    );
+    // Three total attempts.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.meta.error).toBeUndefined();
+  });
 });

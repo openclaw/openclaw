@@ -389,7 +389,8 @@ export async function runEmbeddedPiAgent(
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
-      let toolResultTruncationAttempted = false;
+      let toolResultTruncationAttempts = 0;
+      const MAX_TOOL_RESULT_TRUNCATION_ATTEMPTS = 3;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
@@ -899,12 +900,13 @@ export async function runEmbeddedPiAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
-            // If this attempt already compacted (SDK auto-compaction), avoid immediately
-            // running another explicit compaction for the same overflow trigger.
+            // If this attempt already SDK-compacted AND this is the first
+            // overflow retry, give the SDK compaction one chance to settle
+            // before escalating to explicit budget-targeted compaction.
             if (
               !isCompactionFailure &&
               hadAttemptLevelCompaction &&
-              overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+              overflowCompactionAttempts === 0
             ) {
               overflowCompactionAttempts++;
               log.warn(
@@ -912,11 +914,11 @@ export async function runEmbeddedPiAgent(
               );
               continue;
             }
-            // Attempt explicit overflow compaction only when this attempt did not
-            // already auto-compact.
+            // Attempt explicit budget-targeted compaction when:
+            // - SDK did not auto-compact this attempt, OR
+            // - SDK auto-compaction was insufficient (second+ retry)
             if (
               !isCompactionFailure &&
-              !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               if (log.isEnabled("debug")) {
@@ -1028,8 +1030,11 @@ export async function runEmbeddedPiAgent(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
             }
-            if (!toolResultTruncationAttempted) {
-              const contextWindowTokens = ctxInfo.tokens;
+            if (toolResultTruncationAttempts < MAX_TOOL_RESULT_TRUNCATION_ATTEMPTS) {
+              // Progressive truncation: each attempt uses a halved effective
+              // context window, forcing more aggressive per-result truncation.
+              const scale = 1 / 2 ** toolResultTruncationAttempts;
+              const contextWindowTokens = Math.max(1, Math.floor(ctxInfo.tokens * scale));
               const hasOversized = attempt.messagesSnapshot
                 ? sessionLikelyHasOversizedToolResults({
                     messages: attempt.messagesSnapshot,
@@ -1038,10 +1043,11 @@ export async function runEmbeddedPiAgent(
                 : false;
 
               if (hasOversized) {
-                toolResultTruncationAttempted = true;
+                toolResultTruncationAttempts++;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
-                    `(contextWindow=${contextWindowTokens} tokens)`,
+                    `(attempt ${toolResultTruncationAttempts}/${MAX_TOOL_RESULT_TRUNCATION_ATTEMPTS}, ` +
+                    `effectiveContextWindow=${contextWindowTokens} tokens)`,
                 );
                 const truncResult = await truncateOversizedToolResultsInSession({
                   sessionFile: params.sessionFile,
