@@ -70,6 +70,8 @@ Docs: https://docs.openclaw.ai
 - Control UI/models: preserve provider-qualified refs for OpenRouter catalog models whose ids already contain slashes so picker selections submit allowlist-compatible model refs instead of dropping the `openrouter/` prefix. (#63416) Thanks @sallyom.
 - Plugin SDK/command auth: split command status builders onto the lightweight `openclaw/plugin-sdk/command-status` subpath while preserving deprecated `command-auth` compatibility exports, so auth-only plugin imports no longer pull status/context warmup into CLI onboarding paths. (#63174) Thanks @hxy91819.
 
+- Sessions/model selection: preserve catalog-backed session model labels and keep already-qualified session model refs stable when catalog metadata is unavailable, so Control UI model selection survives reloads without bogus provider-prefixed values. (#61382) Thanks @Mule-ME.
+
 ## 2026.4.8
 
 ### Fixes
