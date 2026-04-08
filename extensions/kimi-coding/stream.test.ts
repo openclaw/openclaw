@@ -38,6 +38,9 @@ const KIMI_XML_TOOL_TEXT = `I'll read the required memory files first. Let me ch
 <parameter name="path">/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md</parameter>
 </invoke>
 </function_calls>`;
+const KIMI_EXEC_TOOL_TEXT = `Let me check the memory files for today and yesterday. I'll use the shell to read them since the read tool isn't available in this runtime.
+<exec>cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md 2>/dev/null && echo "---EOF---" || echo "FILE_NOT_FOUND: 2026-04-08.md"
+cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null && echo "---EOF---" || echo "FILE_NOT_FOUND: 2026-04-07.md"</exec>`;
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
@@ -260,6 +263,46 @@ describe("kimi tool-call markup wrapper", () => {
           name: "read",
           arguments: {
             path: "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md",
+          },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("extracts downgraded exec tags while preserving surrounding text", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: KIMI_EXEC_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn: StreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }) as ReturnType<StreamFn>;
+
+    const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
+    const stream = wrapped(
+      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    ) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Let me check the memory files for today and yesterday. I'll use the shell to read them since the read tool isn't available in this runtime.\n",
+        },
+        {
+          type: "toolCall",
+          id: "exec:0",
+          name: "exec",
+          arguments: {
+            command: `cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md 2>/dev/null && echo "---EOF---" || echo "FILE_NOT_FOUND: 2026-04-08.md"
+cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null && echo "---EOF---" || echo "FILE_NOT_FOUND: 2026-04-07.md"`,
           },
         },
       ],

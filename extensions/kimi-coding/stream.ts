@@ -183,12 +183,56 @@ function parseKimiXmlToolCallsInText(text: string): KimiParsedTextBlock | null {
   return { content, changed };
 }
 
+function parseKimiSimpleTaggedToolCallsInText(text: string): KimiParsedTextBlock | null {
+  const simpleToolRe = /<exec>([\s\S]*?)<\/exec>/gi;
+  const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
+  let lastIndex = 0;
+  let changed = false;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = simpleToolRe.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before) {
+      content.push({ type: "text", text: before });
+    }
+
+    const command = decodeXmlText(match[1] ?? "").trim();
+    if (!command) {
+      return null;
+    }
+
+    content.push({
+      type: "toolCall",
+      id: `exec:${content.filter((entry) => entry.type === "toolCall").length}`,
+      name: "exec",
+      arguments: { command },
+    });
+    changed = true;
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (!changed) {
+    return null;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after) {
+    content.push({ type: "text", text: after });
+  }
+
+  return { content, changed };
+}
+
 function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   const tagged = parseKimiTaggedToolCalls(text);
   if (tagged) {
     return { content: tagged, changed: true };
   }
-  return parseKimiXmlToolCallsInText(text);
+  const xml = parseKimiXmlToolCallsInText(text);
+  if (xml) {
+    return xml;
+  }
+  return parseKimiSimpleTaggedToolCallsInText(text);
 }
 
 function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
