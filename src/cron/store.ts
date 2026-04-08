@@ -143,6 +143,9 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       // No state file, no inline state: fresh clone or first run.
       for (const job of store.jobs) {
         job.state = (job.state && typeof job.state === "object" ? job.state : {}) as never;
+        if (typeof job.updatedAtMs !== "number") {
+          job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
+        }
       }
     }
     // else: migration mode — no state file but jobs.json has inline state. Use as-is.
