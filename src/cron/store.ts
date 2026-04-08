@@ -17,7 +17,10 @@ function resolveDefaultCronStorePath(): string {
 }
 
 function resolveStatePath(storePath: string): string {
-  return storePath.replace(/\.json$/, "-state.json");
+  if (storePath.endsWith(".json")) {
+    return storePath.replace(/\.json$/, "-state.json");
+  }
+  return `${storePath}-state.json`;
 }
 
 type CronStateFileEntry = {
@@ -130,6 +133,10 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
           if (!job.state || typeof job.state !== "object") {
             job.state = {} as never;
           }
+          // Backfill updatedAtMs for manually-added jobs that have no state entry yet.
+          if (typeof job.updatedAtMs !== "number") {
+            job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
+          }
         }
       }
     } else if (!hasInlineState(jobs as unknown as Array<Record<string, unknown>>)) {
@@ -178,7 +185,6 @@ async function atomicWrite(filePath: string, content: string, dirMode = 0o700): 
   await fs.promises.chmod(dir, dirMode).catch(() => undefined);
   const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, content, { encoding: "utf-8", mode: 0o600 });
-  await setSecureFileMode(tmp);
   await renameWithRetry(tmp, filePath);
   await setSecureFileMode(filePath);
 }
