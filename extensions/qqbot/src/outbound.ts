@@ -42,7 +42,7 @@ import {
   getQQBotMediaDir,
   isLocalPath as isLocalFilePath,
   normalizePath,
-  resolveQQBotLocalMediaPath,
+  resolveQQBotPayloadLocalFilePath,
   sanitizeFileName,
 } from "./utils/platform.js";
 
@@ -273,6 +273,40 @@ function shouldDirectUploadUrl(account: ResolvedQQBotAccount): boolean {
   return account.config?.urlDirectUpload !== false;
 }
 
+type QQBotMediaKind = "image" | "voice" | "video" | "file" | "media";
+
+const qqBotMediaKindLabel: Record<QQBotMediaKind, string> = {
+  image: "Image",
+  voice: "Voice",
+  video: "Video",
+  file: "File",
+  media: "Media",
+};
+
+type ResolvedOutboundMediaPath = { ok: true; mediaPath: string } | { ok: false; error: string };
+
+function resolveOutboundMediaPath(
+  rawPath: string,
+  prefix: string,
+  mediaKind: QQBotMediaKind,
+): ResolvedOutboundMediaPath {
+  const normalizedPath = normalizePath(rawPath);
+  if (!isLocalFilePath(normalizedPath)) {
+    return { ok: true, mediaPath: normalizedPath };
+  }
+
+  const allowedPath = resolveQQBotPayloadLocalFilePath(normalizedPath);
+  if (allowedPath) {
+    return { ok: true, mediaPath: allowedPath };
+  }
+
+  debugWarn(`${prefix} blocked local ${mediaKind} path outside QQ Bot media storage`);
+  return {
+    ok: false,
+    error: `${qqBotMediaKindLabel[mediaKind]} path must be inside QQ Bot media storage`,
+  };
+}
+
 /**
  * Send a photo from a local file, public URL, or Base64 data URL.
  */
@@ -281,7 +315,11 @@ export async function sendPhoto(
   imagePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
+  const resolvedMediaPath = resolveOutboundMediaPath(imagePath, prefix, "image");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isLocal = isLocalFilePath(mediaPath);
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const isData = mediaPath.startsWith("data:");
@@ -412,7 +450,11 @@ export async function sendVoice(
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
+  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, prefix, "voice");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp) {
@@ -551,7 +593,11 @@ export async function sendVideoMsg(
   videoPath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
+  const resolvedMediaPath = resolveOutboundMediaPath(videoPath, prefix, "video");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
@@ -672,7 +718,11 @@ export async function sendDocument(
   filePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
+  const resolvedMediaPath = resolveOutboundMediaPath(filePath, prefix, "file");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
@@ -1282,14 +1332,18 @@ export async function sendProactiveMessage(
 /** Send rich media, auto-routing by media type and source. */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account, mimeType } = ctx;
-  const mediaUrl = resolveQQBotLocalMediaPath(normalizePath(ctx.mediaUrl));
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
   }
-  if (!mediaUrl) {
+  if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
+  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "[qqbot:sendMedia]", "media");
+  if (!resolvedMediaPath.ok) {
+    return { channel: "qqbot", error: resolvedMediaPath.error };
+  }
+  const mediaUrl = resolvedMediaPath.mediaPath;
 
   const target = buildMediaTarget({ to, account, replyToId }, "[qqbot:sendMedia]");
 
