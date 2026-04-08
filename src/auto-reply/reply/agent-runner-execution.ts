@@ -4,7 +4,10 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+} from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -311,9 +314,7 @@ function buildExternalRunFailureText(message: string): string {
   }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(message);
   if (oauthRefreshFailure) {
-    const loginCommand = oauthRefreshFailure.provider
-      ? `openclaw models auth login --provider ${oauthRefreshFailure.provider}`
-      : "openclaw models auth login --provider <provider>";
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
     if (oauthRefreshFailure.reason) {
       return `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`;
     }

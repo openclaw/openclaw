@@ -12,20 +12,17 @@ import {
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
+  buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import {
-  buildProviderAuthRecoveryHint,
-  resolveProviderAuthLoginCommand,
-} from "./provider-auth-guidance.js";
+import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 const CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
@@ -202,10 +199,7 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
     return null;
   }
   const provider = classified.provider ?? params.provider;
-  const command =
-    resolveProviderAuthLoginCommand({
-      provider,
-    }) ?? formatCliCommand(`openclaw models auth login --provider ${provider}`);
+  const command = buildOAuthRefreshFailureLoginCommand(provider);
   if (classified.reason) {
     return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
   }

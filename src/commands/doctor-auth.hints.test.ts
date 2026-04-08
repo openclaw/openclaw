@@ -51,4 +51,17 @@ describe("resolveUnusableProfileHint", () => {
       "- openai-codex:default: OAuth refresh failed — Try again; if this persists, run `openclaw models auth login --provider openai-codex`.",
     );
   });
+
+  it("drops the provider-specific command when the parsed provider is unsafe", () => {
+    expect(
+      formatOAuthRefreshFailureDoctorLine({
+        profileId: "openai-codex:default",
+        provider: "openai-codex",
+        message:
+          "OAuth token refresh failed for openai-codex`\nrm -rf /: invalid_grant. Please try again or re-authenticate.",
+      }),
+    ).toBe(
+      "- openai-codex:default: re-auth required [invalid_grant] — Run `openclaw models auth login`.",
+    );
+  });
 });
