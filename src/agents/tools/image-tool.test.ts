@@ -611,6 +611,54 @@ describe("image tool implicit imageModel config", () => {
     __testing.setProviderDepsForTest();
   });
 
+  it("uses tools.media.image.timeoutSeconds for image requests", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+
+      const describeImageWithModel = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4-mini" },
+            imageModel: { primary: "openai/gpt-5.4-mini" },
+          },
+        },
+        tools: {
+          media: {
+            image: {
+              timeoutSeconds: 120,
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(describeImageWithModel).toHaveBeenCalledTimes(1);
+      const [call] = describeImageWithModel.mock.calls;
+      const [args] = call ?? [];
+      expect((args as ImageDescriptionRequest | undefined)?.timeoutMs).toBe(120_000);
+    });
+  });
+
   it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
