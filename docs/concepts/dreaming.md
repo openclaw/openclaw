@@ -88,7 +88,12 @@ There is also a grounded historical backfill lane for review and recovery work:
 - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase already uses.
 - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
 
-The Control UI exposes the same diary backfill/reset flow so you can inspect results in the Dreams scene before deciding whether the grounded candidates deserve promotion.
+The Control UI exposes the same diary backfill/reset flow so you can inspect
+results in the Dreams scene before deciding whether the grounded candidates
+deserve promotion. The Scene also shows a distinct grounded lane so you can see
+which staged short-term entries came from historical replay, which promoted
+items were grounded-led, and clear only grounded-only staged entries without
+touching ordinary live short-term state.
 
 ## Deep ranking signals
 
@@ -216,8 +221,9 @@ When enabled, the Gateway **Dreams** tab shows:
 
 - current dreaming enabled state
 - phase-level status and managed-sweep presence
-- short-term, long-term, and promoted-today counts
+- short-term, grounded, signal, and promoted-today counts
 - next scheduled run timing
+- a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
 ## Related

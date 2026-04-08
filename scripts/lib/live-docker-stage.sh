@@ -14,6 +14,9 @@ openclaw_live_stage_source_tree() {
     --exclude=.tmp-precommit-venv \
     --exclude=.worktrees \
     --exclude=__openclaw_vitest__ \
+    --exclude=relay.sock \
+    --exclude='*.sock' \
+    --exclude='*/*.sock' \
     --exclude='apps/*/.build' \
     --exclude='apps/*/*.bun-build' \
     --exclude='apps/*/.gradle' \
@@ -46,6 +49,9 @@ openclaw_live_stage_state_dir() {
     tar -C "$source_dir" \
       --exclude=workspace \
       --exclude=sandboxes \
+      --exclude=relay.sock \
+      --exclude='*.sock' \
+      --exclude='*/*.sock' \
       -cf - . | tar -C "$dest_dir" -xf -
     chmod -R u+rwX "$dest_dir" || true
     if [ -d "$source_dir/workspace" ] && [ ! -e "$dest_dir/workspace" ]; then

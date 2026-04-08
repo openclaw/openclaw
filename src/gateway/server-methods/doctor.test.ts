@@ -18,6 +18,7 @@ const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
 const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
+const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   loadConfig,
@@ -40,6 +41,7 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   previewGroundedRemMarkdown,
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
+  removeGroundedShortTermCandidates,
 }));
 
 import { doctorHandlers } from "./doctor.js";
@@ -100,6 +102,17 @@ const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.f
   });
 };
 
+const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.resetGroundedShortTerm"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -121,6 +134,10 @@ describe("doctor.memory.status", () => {
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
     getMemorySearchManager.mockReset();
+    previewGroundedRemMarkdown.mockReset();
+    writeBackfillDiaryEntries.mockReset();
+    removeBackfillDiaryEntries.mockReset();
+    removeGroundedShortTermCandidates.mockReset();
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -698,6 +715,32 @@ describe("doctor.memory.status", () => {
       readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("doctor.memory dream actions", () => {
+  it("clears grounded-only staged short-term entries without touching the diary", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    removeGroundedShortTermCandidates.mockResolvedValue({
+      removed: 3,
+      storePath: "/tmp/openclaw/memory/.dreams/short-term-recall.json",
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryResetGroundedShortTerm(respond);
+
+    expect(removeGroundedShortTermCandidates).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "resetGroundedShortTerm",
+        removedShortTermEntries: 3,
+      },
+      undefined,
+    );
   });
 });
 
