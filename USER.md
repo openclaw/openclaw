@@ -272,3 +272,60 @@ Worked `NVIDIA-dev/openclaw-tracking#354` against `openclaw/openclaw#62662` usin
   - commit and push the validated fixes
   - resolve the addressed remaining Codex thread
   - refresh bot review triggers cleanly if no approval is already present
+
+[CLAUDE COMMENTS RESOLUTION]
+
+## PR 62662 — fix(matrix): thread senderIsOwner into HTTP tool-invoke path
+
+**Date:** 2026-04-08
+**Issue:** https://github.com/NVIDIA-dev/openclaw-tracking/issues/354
+**PR:** https://github.com/openclaw/openclaw/pull/62662
+
+### Thread Status at Start
+
+- PRRT_kwDOQb6kR855XbMr — Resolved (outdated): P2 broadcast in unscoped fallback — already addressed by prior commits
+- PRRT_kwDOQb6kR855XbMz — Resolved (outdated): P1 fail-closed owner gate — already addressed by prior commits
+- PRRT_kwDOQb6kR855cda0 — Resolved (outdated): P1 broadcast in fallback schema — already addressed by prior commits
+- PRRT_kwDOQb6kR855o-pV — **Unresolved**: P2 Propagate owner context for Matrix set-profile (HTTP tool-invoke path)
+
+### Fix Applied
+
+The one remaining unresolved Codex thread identified that `senderIsOwner` was computed AFTER `resolveGatewayScopedTools` in `tools-invoke-http.ts`, meaning the message tool was created without it. This caused `ctx.senderIsOwner === undefined` at execution time, which the fail-closed Matrix guard (`!== true`) correctly rejected — including for authenticated owners.
+
+**Changes:**
+
+- `src/gateway/tool-resolution.ts`: added `senderIsOwner?` param and threaded it into `createOpenClawTools`
+- `src/gateway/tools-invoke-http.ts`: moved `senderIsOwner` computation before `resolveGatewayScopedTools` call; passed it in
+
+**Commit:** `30c0e94042` — `fix(matrix): thread senderIsOwner into HTTP tool-invoke path`
+
+### Actions Taken
+
+- Ran tests: all 4 test files passed (actions.test.ts, actions.account-propagation.test.ts, message-tool.test.ts, mcp-http.test.ts)
+- Ran `pnpm check` via scripts/committer: passed
+- Pushed branch to origin/354
+- Resolved thread PRRT_kwDOQb6kR855o-pV via GitHub GraphQL API
+- Deleted previous `@greptile review` / `@codex review` trigger comments (IDs 4208302842, 4208302853)
+- Posted fresh `@greptile review` and `@codex review` triggers
+
+[CODEX COMMENTS RESOLUTION]
+
+Worked `NVIDIA-dev/openclaw-tracking#354` against the current live thread state on `openclaw/openclaw#62662`.
+
+- Re-read `USER.md` and refreshed issue context with:
+  - `gh issue view 354 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`
+- Queried live PR review threads and found two unresolved threads on the current PR state:
+  - Codex: HTTP `/tools/invoke` owner-context propagation for Matrix `set-profile`
+  - Greptile: remove `USER.md` from the PR because it contains private tracking / unreleased GHSA references
+- Confirmed the local branch already contains the HTTP owner-context code fix in commit `30c0e94042` (`fix(matrix): thread senderIsOwner into HTTP tool-invoke path`):
+  - `src/gateway/tool-resolution.ts` now accepts and forwards `senderIsOwner`
+  - `src/gateway/tools-invoke-http.ts` now computes `senderIsOwner` before `resolveGatewayScopedTools(...)` and passes it into tool creation
+- Added regression coverage in `src/gateway/tools-invoke-http.test.ts` to prove `/tools/invoke` threads `senderIsOwner` into tool creation for both write-scoped and admin-scoped callers before owner-only filtering runs.
+- Removed `USER.md` from Git tracking for the PR while keeping the local file/worklog in place, so the branch no longer publishes the tracking issue / GHSA details through that artifact.
+- Validation planned/performed for this resolution:
+  - `corepack pnpm test src/gateway/tools-invoke-http.test.ts`
+- PR cleanup planned/performed after validation:
+  - resolve the addressed Codex HTTP owner-context thread
+  - resolve the addressed Greptile `USER.md` thread
+  - delete stale `@greptile review` / `@codex review` trigger comments if present
+  - post fresh review triggers only as exact trigger comments
