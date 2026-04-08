@@ -78,6 +78,7 @@ describe("matrixMessageActions", () => {
 
     const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
+      senderIsOwner: true,
     } as never);
     if (!discovery) {
       throw new Error("describeMessageTool returned null");
@@ -100,6 +101,18 @@ describe("matrixMessageActions", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
       senderIsOwner: false,
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+
+    expect(discovery.actions).not.toContain(profileAction);
+    expect(discovery.schema).toBeNull();
+  });
+
+  it("hides self-profile updates when owner status is unknown", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
     } as never);
     if (!discovery) {
       throw new Error("describeMessageTool returned null");

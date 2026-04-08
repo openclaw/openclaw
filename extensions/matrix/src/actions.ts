@@ -52,7 +52,7 @@ function createMatrixExposedActions(params: {
     actions.add("unpin");
     actions.add("list-pins");
   }
-  if (params.gate("profile") && params.senderIsOwner !== false) {
+  if (params.gate("profile") && params.senderIsOwner === true) {
     actions.add("set-profile");
   }
   if (params.gate("memberInfo")) {
@@ -260,7 +260,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "set-profile") {
-      if (ctx.senderIsOwner === false) {
+      if (ctx.senderIsOwner !== true) {
         throw new Error("Matrix profile updates require owner access.");
       }
       const avatarPath =

@@ -837,6 +837,16 @@ describe("message tool schema scoping", () => {
     expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: true }));
     expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: false }));
   });
+
+  it("keeps core send and broadcast actions in unscoped schemas", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    expect(getActionEnum(getToolProperties(tool))).toEqual(
+      expect.arrayContaining(["send", "broadcast"]),
+    );
+  });
 });
 
 describe("message tool description", () => {
@@ -1039,6 +1049,14 @@ describe("message tool description", () => {
 
     expect(tool.description).toContain("Supports actions:");
     expect(tool.description).toContain('Use action="read" with threadId');
+  });
+
+  it("includes broadcast in the generic fallback description", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    expect(tool.description).toContain("Supports actions: send, broadcast.");
   });
 });
 

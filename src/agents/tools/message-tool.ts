@@ -466,7 +466,33 @@ function resolveMessageToolSchemaActions(params: {
     }
     return Array.from(allActions);
   }
-  const actions = listAllChannelSupportedActions({
+  return listAllMessageToolActions({
+    cfg: params.cfg,
+    currentChannelId: params.currentChannelId,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
+    currentAccountId: params.currentAccountId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
+  });
+}
+
+function listAllMessageToolActions(params: {
+  cfg: OpenClawConfig;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  currentAccountId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  requesterSenderId?: string;
+  senderIsOwner?: boolean;
+}): ChannelMessageActionName[] {
+  const pluginActions = listAllChannelSupportedActions({
     cfg: params.cfg,
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
@@ -478,7 +504,7 @@ function resolveMessageToolSchemaActions(params: {
     requesterSenderId: params.requesterSenderId,
     senderIsOwner: params.senderIsOwner,
   });
-  return actions.length > 0 ? actions : ["send"];
+  return Array.from(new Set<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]));
 }
 
 function resolveIncludeCapability(
@@ -650,12 +676,12 @@ function buildMessageToolDescription(options?: {
 
   // Fallback to generic description with all configured actions
   if (resolvedOptions.config) {
-    const actions = listAllChannelSupportedActions({
+    const actions = listAllMessageToolActions({
       cfg: resolvedOptions.config,
       currentChannelId: resolvedOptions.currentChannelId,
       currentThreadTs: resolvedOptions.currentThreadTs,
       currentMessageId: resolvedOptions.currentMessageId,
-      accountId: resolvedOptions.currentAccountId,
+      currentAccountId: resolvedOptions.currentAccountId,
       sessionKey: resolvedOptions.sessionKey,
       sessionId: resolvedOptions.sessionId,
       agentId: resolvedOptions.agentId,
