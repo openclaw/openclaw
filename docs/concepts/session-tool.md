@@ -65,9 +65,14 @@ disk instead of treating `sessions_history` as a raw dump.
 `sessions_send` delivers a message to another session and optionally waits for
 the response:
 
+- Target the destination with **either** `sessionKey` **or** `label`, not both.
+- Use `sessionKey` when you already have an exact key from `sessions_list`.
+- Use `label` when you want OpenClaw to resolve a visible session by label.
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return
   immediately.
 - **Wait for reply:** set a timeout and get the response inline.
+
+If both `sessionKey` and `label` are provided, the tool returns an input error.
 
 After the target responds, OpenClaw can run a **reply-back loop** where the
 agents alternate messages (up to 5 turns). The target agent can reply
