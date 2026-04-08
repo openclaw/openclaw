@@ -321,6 +321,7 @@ afterEach(async () => {
   FOLLOWUP_TEST_SESSION_STORES.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
+  const { clearSessionStoreCacheForTest } = await import("../../config/sessions/store.js");
   clearSessionStoreCacheForTest();
   if (!FOLLOWUP_DEBUG) {
     return;
