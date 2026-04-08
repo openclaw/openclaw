@@ -141,6 +141,54 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("carries lifecycle refs for collected batches", async () => {
+    const key = `test-collect-lifecycle-refs-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = createRun({
+      prompt: "one",
+      messageId: "one-msg",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    const second = createRun({
+      prompt: "two",
+      messageId: "two-msg",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.lifecycleRefs).toEqual([
+      expect.objectContaining({
+        messageId: "one-msg",
+        enqueuedAt: first.enqueuedAt,
+        run: { sessionId: first.run.sessionId },
+      }),
+      expect.objectContaining({
+        messageId: "two-msg",
+        enqueuedAt: second.enqueuedAt,
+        run: { sessionId: second.run.sessionId },
+      }),
+    ]);
+  });
+
   it("collects Slack messages in same thread and preserves string thread id", async () => {
     const key = `test-collect-slack-thread-same-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -334,5 +382,46 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+  });
+
+  it("carries the current item lifecycle ref on overflow summaries", async () => {
+    const key = `test-overflow-summary-lifecycle-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "first-msg",
+      }),
+      settings,
+    );
+    const second = createRun({
+      prompt: "second",
+      messageId: "second-msg",
+    });
+    enqueueFollowupRun(key, second, settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.lifecycleRefs).toEqual([
+      expect.objectContaining({
+        messageId: "second-msg",
+        enqueuedAt: second.enqueuedAt,
+        run: { sessionId: second.run.sessionId },
+      }),
+    ]);
   });
 });

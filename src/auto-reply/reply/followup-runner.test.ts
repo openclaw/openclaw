@@ -113,6 +113,10 @@ function clearFollowupQueueForFollowupTest(key: string): number {
   return cleared;
 }
 
+function getFollowupQueueDepthForFollowupTest(key: string): number {
+  return FOLLOWUP_TEST_QUEUES.get(key.trim())?.items.length ?? 0;
+}
+
 function enqueueFollowupRunForFollowupTest(key: string, run: FollowupRun): boolean {
   const queue = getFollowupTestQueue(key);
   queue.items.push(run);
@@ -222,7 +226,6 @@ async function persistRunSessionUsageForFollowupTest(
   }
   await saveSessionStore(storePath, store);
 }
-
 vi.mock(
   "../../agents/model-fallback.js",
   async () => await import("../../test-utils/model-fallback.mock.js"),
@@ -246,6 +249,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 vi.mock("./queue.js", () => ({
   clearFollowupQueue: clearFollowupQueueForFollowupTest,
   enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
+  getFollowupQueueDepth: getFollowupQueueDepthForFollowupTest,
   refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
 }));
 vi.mock("./session-run-accounting.js", () => ({
@@ -265,6 +269,11 @@ const { createFollowupRunner } = await import("./followup-runner.js");
 const { loadSessionStore, saveSessionStore, clearSessionStoreCacheForTest } =
   await import("../../config/sessions/store.js");
 const { clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js");
+const {
+  registerQueuedFollowupLifecycle,
+  consumeQueuedFollowupStartNotice,
+  resetQueuedFollowupLifecycleForTests,
+} = await import("./queue-lifecycle.js");
 const sessionRunAccounting = await import("./session-run-accounting.js");
 const { createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js");
 
@@ -294,12 +303,14 @@ beforeEach(async () => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  resetQueuedFollowupLifecycleForTests();
 });
 
 afterEach(async () => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  resetQueuedFollowupLifecycleForTests();
   vi.clearAllTimers();
   vi.useRealTimers();
   clearSessionStoreCacheForTest();
@@ -772,6 +783,198 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
     expect(call?.allowGatewaySubagentBinding).toBe(true);
     expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
+describe("createFollowupRunner queue lifecycle", () => {
+  it("prepends a resumed notice without counting the current item as backlog", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00.000Z"));
+
+    const onBlockReply = createAsyncReplySpy();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionKey: "main",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "main",
+      },
+    });
+    enqueueFollowupRun("main", queued, { mode: "queue" });
+    registerQueuedFollowupLifecycle({
+      queueKey: "main",
+      run: queued,
+    });
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    await runner(queued);
+
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Resumed after backlog cleared after 2s. Thanks for waiting.",
+      }),
+    );
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "hello world!" }),
+    );
+  });
+
+  it("clears queued lifecycle state when messaging-tool suppression drops followup payloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00.000Z"));
+
+    const onBlockReply = createAsyncReplySpy();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionKey: "main",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        messageProvider: "slack",
+        sessionKey: "main",
+      },
+    });
+    registerQueuedFollowupLifecycle({
+      queueKey: "main",
+      run: queued,
+    });
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    await runner(queued);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(
+      consumeQueuedFollowupStartNotice({
+        queueKey: "main",
+        run: queued,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("clears queued lifecycle state when the followup produces no payloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00.000Z"));
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionKey: "main",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "main",
+      },
+    });
+    registerQueuedFollowupLifecycle({
+      queueKey: "main",
+      run: queued,
+    });
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    await runner(queued);
+
+    expect(
+      consumeQueuedFollowupStartNotice({
+        queueKey: "main",
+        run: queued,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("consumes lifecycle refs carried by synthesized followup runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00.000Z"));
+
+    const onBlockReply = createAsyncReplySpy();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "batch reply" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionKey: "main",
+    });
+
+    const first = createQueuedRun({
+      prompt: "first",
+      messageId: "first-msg",
+      run: {
+        sessionKey: "main",
+      },
+    });
+    const second = createQueuedRun({
+      prompt: "second",
+      messageId: "second-msg",
+      run: {
+        sessionKey: "main",
+      },
+    });
+    enqueueFollowupRun("main", first, { mode: "collect" });
+    enqueueFollowupRun("main", second, { mode: "collect" });
+    registerQueuedFollowupLifecycle({
+      queueKey: "main",
+      run: first,
+    });
+    registerQueuedFollowupLifecycle({
+      queueKey: "main",
+      run: second,
+    });
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    await runner({
+      ...second,
+      prompt: "[Queued messages while agent was busy]",
+      enqueuedAt: Date.now(),
+      messageId: "summary-msg",
+      lifecycleRefs: [first, second],
+    });
+
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Resumed after backlog cleared after 2s. Thanks for waiting.",
+      }),
+    );
+    expect(
+      consumeQueuedFollowupStartNotice({
+        queueKey: "main",
+        refs: [first, second],
+      }),
+    ).toBeUndefined();
   });
 });
 

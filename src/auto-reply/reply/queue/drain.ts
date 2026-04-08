@@ -12,7 +12,7 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+import type { FollowupLifecycleRef, FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -46,6 +46,16 @@ type OriginRoutingMetadata = Pick<
   FollowupRun,
   "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
 >;
+
+function toLifecycleRef(run: FollowupRun): FollowupLifecycleRef {
+  return {
+    messageId: run.messageId,
+    enqueuedAt: run.enqueuedAt,
+    run: {
+      sessionId: run.run.sessionId,
+    },
+  };
+}
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
   return {
@@ -133,6 +143,7 @@ export function scheduleFollowupDrain(
             prompt,
             run,
             enqueuedAt: Date.now(),
+            lifecycleRefs: items.map(toLifecycleRef),
             ...routing,
           });
           queue.items.splice(0, items.length);
@@ -154,6 +165,7 @@ export function scheduleFollowupDrain(
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
+                lifecycleRefs: [toLifecycleRef(item)],
                 originatingChannel: item.originatingChannel,
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,

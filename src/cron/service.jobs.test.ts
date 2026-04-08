@@ -683,6 +683,85 @@ describe("createJob delivery defaults", () => {
     });
     expect(job.delivery).toBeUndefined();
   });
+
+  it("requires explicit delivery.mode for migrated automation session jobs", () => {
+    const state = createMockState(now);
+    expect(() =>
+      createJob(state, {
+        name: "migrated-automation-missing-delivery",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        sessionKey: "agent:main:cron:job-1",
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      } as Parameters<typeof createJob>[1]),
+    ).toThrow("cron automation session jobs require explicit delivery.mode");
+  });
+
+  it("requires explicit payload.toolsAllow for migrated automation session jobs", () => {
+    const state = createMockState(now);
+    expect(() =>
+      createJob(state, {
+        name: "migrated-automation-missing-tools",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        sessionKey: "agent:main:cron:job-1",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "none" },
+      } as Parameters<typeof createJob>[1]),
+    ).toThrow("cron automation session jobs require explicit payload.toolsAllow");
+  });
+});
+
+describe("automation session patch validation", () => {
+  it("rejects patches against migrated automation jobs that still lack explicit delivery", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-automation-patch-delivery",
+      name: "job-automation-patch-delivery",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      sessionKey: "agent:main:cron:job-automation-patch-delivery",
+      payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      delivery: undefined,
+      state: {},
+    };
+
+    expect(() => applyJobPatch(job, { enabled: false })).toThrow(
+      "cron automation session jobs require explicit delivery.mode",
+    );
+  });
+
+  it("rejects patches that clear toolsAllow on migrated automation session jobs", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-automation-patch-tools",
+      name: "job-automation-patch-tools",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      sessionKey: "agent:main:cron:job-automation-patch-tools",
+      payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      delivery: { mode: "none" },
+      state: {},
+    };
+
+    expect(() =>
+      applyJobPatch(job, {
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: null },
+      }),
+    ).toThrow("cron automation session jobs require explicit payload.toolsAllow");
+  });
 });
 
 describe("recomputeNextRuns", () => {

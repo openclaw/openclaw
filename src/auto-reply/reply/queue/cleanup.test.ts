@@ -4,6 +4,7 @@ import { __testing, clearSessionQueues } from "./cleanup.js";
 const followupQueueMocks = vi.hoisted(() => ({
   clearFollowupDrainCallback: vi.fn(),
   clearFollowupQueue: vi.fn(() => 2),
+  clearQueuedFollowupLifecycleForQueue: vi.fn(),
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
@@ -16,6 +17,10 @@ vi.mock("./drain.js", () => ({
 
 vi.mock("./state.js", () => ({
   clearFollowupQueue: followupQueueMocks.clearFollowupQueue,
+}));
+
+vi.mock("../queue-lifecycle.js", () => ({
+  clearQueuedFollowupLifecycleForQueue: followupQueueMocks.clearQueuedFollowupLifecycleForQueue,
 }));
 
 vi.mock("../../../process/command-queue.js", () => ({
@@ -31,6 +36,7 @@ describe("clearSessionQueues", () => {
     __testing.resetDepsForTests();
     followupQueueMocks.clearFollowupDrainCallback.mockReset();
     followupQueueMocks.clearFollowupQueue.mockReset().mockReturnValue(2);
+    followupQueueMocks.clearQueuedFollowupLifecycleForQueue.mockReset();
     commandQueueMocks.clearCommandLane.mockReset().mockReturnValue(3);
   });
 
@@ -48,6 +54,7 @@ describe("clearSessionQueues", () => {
       keys: ["alpha"],
     });
     expect(followupQueueMocks.clearFollowupQueue).toHaveBeenCalledWith("alpha");
+    expect(followupQueueMocks.clearQueuedFollowupLifecycleForQueue).toHaveBeenCalledWith("alpha");
     expect(followupQueueMocks.clearFollowupDrainCallback).toHaveBeenCalledWith("alpha");
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith("session:alpha");
   });

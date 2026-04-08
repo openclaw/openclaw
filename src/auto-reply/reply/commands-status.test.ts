@@ -408,32 +408,82 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("all done");
   });
 
-  it("falls back to same-agent task counts without details when the current session has none", async () => {
+  it("shows automation counts without details when the current session has none", async () => {
     createRunningTaskRun({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:other",
-      childSessionKey: "agent:main:subagent:status-agent-fallback-running",
-      runId: "run-status-agent-fallback-running",
+      runtime: "cron",
+      ownerKey: "system:cron:status-automation-running",
+      scopeKind: "system",
+      requesterSessionKey: "system:cron:status-automation-running",
+      childSessionKey: "agent:main:cron:status-automation-running",
+      runId: "run-status-automation-running",
       agentId: "main",
       task: "hidden task title",
       progressSummary: "hidden progress detail",
     });
     createQueuedTaskRun({
       runtime: "cron",
-      requesterSessionKey: "agent:main:another",
-      childSessionKey: "agent:main:subagent:status-agent-fallback-queued",
-      runId: "run-status-agent-fallback-queued",
+      ownerKey: "system:cron:status-automation-queued",
+      scopeKind: "system",
+      requesterSessionKey: "system:cron:status-automation-queued",
+      childSessionKey: "agent:main:cron:status-automation-queued",
+      runId: "run-status-automation-queued",
       agentId: "main",
       task: "another hidden task title",
     });
 
     const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
 
-    expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total · agent-local");
+    expect(reply?.text).toContain("📌 Automation: 2 active · 2 total");
     expect(reply?.text).not.toContain("hidden task title");
     expect(reply?.text).not.toContain("hidden progress detail");
     expect(reply?.text).not.toContain("subagent");
     expect(reply?.text).not.toContain("cron");
+  });
+
+  it("shows automation separately when the current session already has task detail", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-session-live",
+      runId: "run-status-session-live",
+      task: "visible background task",
+    });
+    createQueuedTaskRun({
+      runtime: "cron",
+      ownerKey: "system:cron:status-automation-extra",
+      scopeKind: "system",
+      requesterSessionKey: "system:cron:status-automation-extra",
+      childSessionKey: "agent:main:cron:status-automation-extra",
+      runId: "run-status-automation-extra",
+      agentId: "main",
+      task: "hidden automation task",
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
+    expect(reply?.text).toContain("📌 Automation: 1 active · 1 total");
+    expect(reply?.text).not.toContain("hidden automation task");
+  });
+
+  it("counts cron-owned session tasks as automation without surfacing their detail", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      ownerKey: "agent:main:cron:status-automation-owned",
+      requesterSessionKey: "agent:main:cron:status-automation-owned",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:status-automation-owned-child",
+      runId: "run-status-automation-owned",
+      agentId: "main",
+      task: "hidden cron-owned task",
+      progressSummary: "hidden cron-owned detail",
+    });
+
+    const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
+
+    expect(reply?.text).toContain("📌 Automation: 1 active · 1 total");
+    expect(reply?.text).not.toContain("hidden cron-owned task");
+    expect(reply?.text).not.toContain("hidden cron-owned detail");
   });
 
   it("uses transcript usage fallback in /status output", async () => {

@@ -3,10 +3,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveAgentMainSessionKey,
-  resolveMainSessionKey,
-} from "../../config/sessions/main-session.js";
+import { resolveAutomationStatusSessionKey } from "../../infra/automation-status-session.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
@@ -246,15 +243,6 @@ function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): bo
   return job.sessionTarget === "isolated" && !deliveryBestEffort;
 }
 
-function resolveCronAwarenessMainSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string {
-  return params.cfg.session?.scope === "global"
-    ? resolveMainSessionKey(params.cfg)
-    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
-}
-
 async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
@@ -272,15 +260,12 @@ async function queueCronAwarenessSystemEvent(params: {
   try {
     const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
     enqueueSystemEvent(text, {
-      sessionKey: resolveCronAwarenessMainSessionKey({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      }),
+      sessionKey: resolveAutomationStatusSessionKey(params.agentId),
       contextKey: params.deliveryIdempotencyKey,
     });
   } catch (err) {
     logWarn(
-      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the automation status session: ${formatErrorMessage(err)}`,
     );
   }
 }

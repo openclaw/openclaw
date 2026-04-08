@@ -19,12 +19,25 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export type FollowupLifecycleRef = {
+  messageId?: string;
+  enqueuedAt: number;
+  run: {
+    sessionId: string;
+  };
+};
+
 export type FollowupRun = {
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  /**
+   * Original queued items represented by this run when the drain synthesizes a
+   * summary or collect prompt.
+   */
+  lifecycleRefs?: FollowupLifecycleRef[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

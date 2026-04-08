@@ -24,12 +24,33 @@ import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { consumeQueuedFollowupStartNotice } from "./queue-lifecycle.js";
+import {
+  getFollowupQueueDepth,
+  refreshQueuedFollowupSession,
+  type FollowupLifecycleRef,
+  type FollowupRun,
+} from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+function resolveQueuedLifecycleRefs(queued: FollowupRun): FollowupLifecycleRef[] {
+  if (queued.lifecycleRefs?.length) {
+    return queued.lifecycleRefs;
+  }
+  return [
+    {
+      messageId: queued.messageId,
+      enqueuedAt: queued.enqueuedAt,
+      run: {
+        sessionId: queued.run.sessionId,
+      },
+    },
+  ];
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -304,6 +325,18 @@ export function createFollowupRunner(params: {
         });
       }
 
+      const queueKey = queued.run.sessionKey ?? sessionKey;
+      const lifecycleRefs = resolveQueuedLifecycleRefs(queued);
+      const startNotice = queueKey
+        ? consumeQueuedFollowupStartNotice({
+            queueKey,
+            refs: lifecycleRefs,
+            remainingQueuedCount: Math.max(
+              0,
+              getFollowupQueueDepth(queueKey) - lifecycleRefs.length,
+            ),
+          })
+        : undefined;
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
         return;
@@ -336,6 +369,9 @@ export function createFollowupRunner(params: {
       if (finalPayloads.length === 0) {
         return;
       }
+      if (startNotice) {
+        finalPayloads.unshift(startNotice);
+      }
 
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
@@ -353,7 +389,6 @@ export function createFollowupRunner(params: {
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
         if (refreshedSessionEntry) {
-          const queueKey = queued.run.sessionKey ?? sessionKey;
           if (queueKey) {
             refreshQueuedFollowupSession({
               key: queueKey,

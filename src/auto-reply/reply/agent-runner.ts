@@ -53,6 +53,7 @@ import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import { registerQueuedFollowupLifecycle } from "./queue-lifecycle.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
@@ -68,6 +69,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -198,6 +200,38 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const sendQueueLifecyclePayload = async (payload: ReplyPayload) => {
+    const { originatingChannel, originatingTo } = followupRun;
+    const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+      return;
+    }
+    if (shouldRouteToOriginating) {
+      const result = await routeReply({
+        payload,
+        channel: originatingChannel,
+        to: originatingTo,
+        sessionKey: followupRun.run.sessionKey,
+        accountId: followupRun.originatingAccountId,
+        threadId: followupRun.originatingThreadId,
+        cfg: followupRun.run.config,
+      });
+      if (result.ok) {
+        return;
+      }
+      const provider = resolveOriginMessageProvider({
+        provider: followupRun.run.messageProvider,
+      });
+      const origin = resolveOriginMessageProvider({
+        originatingChannel,
+      });
+      if (opts?.onBlockReply && origin && origin === provider) {
+        await opts.onBlockReply(payload);
+      }
+      return;
+    }
+    await opts?.onBlockReply?.(payload);
+  };
   const touchActiveSessionEntry = async () => {
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
@@ -251,7 +285,7 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -259,6 +293,13 @@ export async function runReplyAgent(params: {
       queuedRunFollowupTurn,
       false,
     );
+    if (enqueued) {
+      registerQueuedFollowupLifecycle({
+        queueKey,
+        run: followupRun,
+        sendNotice: sendQueueLifecyclePayload,
+      });
+    }
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
     if (!isRunActive?.()) {

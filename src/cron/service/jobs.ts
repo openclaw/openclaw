@@ -213,6 +213,62 @@ function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "d
   }
 }
 
+function isDedicatedAutomationCronSession(job: Pick<CronJob, "sessionKey" | "agentId">): boolean {
+  const sessionKey = job.sessionKey?.trim().toLowerCase();
+  if (!sessionKey) {
+    return false;
+  }
+  return sessionKey.startsWith(`agent:${normalizeAgentId(job.agentId)}:cron:`);
+}
+
+function assertMigratedAutomationContract(
+  job: Pick<CronJob, "sessionTarget" | "payload" | "delivery" | "sessionKey" | "agentId">,
+) {
+  const isIsolatedLike =
+    job.sessionTarget === "isolated" ||
+    job.sessionTarget === "current" ||
+    job.sessionTarget.startsWith("session:");
+  if (
+    !isIsolatedLike ||
+    job.payload.kind !== "agentTurn" ||
+    !isDedicatedAutomationCronSession(job)
+  ) {
+    return;
+  }
+  if (!job.delivery?.mode) {
+    throw new Error("cron automation session jobs require explicit delivery.mode");
+  }
+  if (!Array.isArray(job.payload.toolsAllow)) {
+    throw new Error("cron automation session jobs require explicit payload.toolsAllow");
+  }
+}
+
+function assertMigratedAutomationCreateInput(
+  input: Pick<CronJobCreate, "sessionTarget" | "payload" | "delivery"> & {
+    sessionKey?: unknown;
+    agentId?: unknown;
+  },
+) {
+  const sessionKey = normalizeOptionalSessionKey(input.sessionKey);
+  const agentId = normalizeOptionalAgentId(input.agentId);
+  const isIsolatedLike =
+    input.sessionTarget === "isolated" ||
+    input.sessionTarget === "current" ||
+    input.sessionTarget.startsWith("session:");
+  const isDedicatedAutomationSession = Boolean(
+    sessionKey?.toLowerCase().startsWith(`agent:${normalizeAgentId(agentId)}:cron:`),
+  );
+  if (!isIsolatedLike || input.payload.kind !== "agentTurn" || !isDedicatedAutomationSession) {
+    return;
+  }
+  if (!input.delivery?.mode) {
+    throw new Error("cron automation session jobs require explicit delivery.mode");
+  }
+  if (!Array.isArray(input.payload.toolsAllow)) {
+    throw new Error("cron automation session jobs require explicit payload.toolsAllow");
+  }
+}
+
 export function findJobOrThrow(state: CronServiceState, id: string) {
   const job = state.store?.jobs.find((j) => j.id === id);
   if (!job) {
@@ -513,6 +569,7 @@ export function nextWakeAtMs(state: CronServiceState) {
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
+  assertMigratedAutomationCreateInput(input as CronJobCreate & { sessionKey?: unknown });
   const schedule =
     input.schedule.kind === "every"
       ? {
@@ -565,6 +622,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  assertMigratedAutomationContract(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -644,6 +702,7 @@ export function applyJobPatch(
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  assertMigratedAutomationContract(job);
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {

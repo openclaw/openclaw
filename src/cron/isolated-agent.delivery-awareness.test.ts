@@ -74,7 +74,7 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("agent:main:main")).toEqual(["hello from cron"]);
+      expect(peekSystemEvents("agent:main:automation-status")).toEqual(["hello from cron"]);
     });
   });
 
@@ -101,7 +101,7 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
+      expect(peekSystemEvents("agent:main:automation-status")).toEqual(["global cron digest"]);
     });
   });
 });

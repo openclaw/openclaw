@@ -284,6 +284,60 @@ describe("normalizeStoredCronJobs", () => {
     expect(schedule.staggerMs).toBeUndefined();
   });
 
+  it("defaults quiet migrated automation jobs to delivery.mode none and flags missing toolsAllow", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-quiet-migrated",
+        sessionKey: "agent:main:cron:job-quiet-migrated",
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "quiet cron",
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.missingToolsAllow).toBe(1);
+    expect(job.delivery).toEqual({ mode: "none" });
+  });
+
+  it("does not flag migrated automation jobs that already carry explicit toolsAllow", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-explicit-tools",
+        sessionKey: "agent:main:cron:job-explicit-tools",
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "quiet cron",
+          toolsAllow: ["read"],
+        },
+      }),
+    );
+
+    expect(result.issues.missingToolsAllow).toBeUndefined();
+    expect(job.delivery).toEqual({ mode: "none" });
+  });
+
+  it("keeps non-cron isolated sessions announced and does not require toolsAllow", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-custom-session",
+        sessionKey: "agent:main:telegram:dm:12345",
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "reply in the human lane",
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.missingToolsAllow).toBeUndefined();
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
   it("migrates legacy string schedules and command-only payloads (#18445)", () => {
     const { job, result } = normalizeOneJob({
       id: "imessage-refresh",

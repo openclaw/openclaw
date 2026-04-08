@@ -7,6 +7,7 @@ import {
   registerAgentRunContext,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import { resolveAutomationStatusSessionKey } from "../infra/automation-status-session.js";
 import {
   hasPendingHeartbeatWake,
   resetHeartbeatWakeStateForTests,
@@ -685,6 +686,116 @@ describe("task-registry", () => {
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("routes system-owned task fallbacks to the automation status sink", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "system:cron:nightly-digest",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:nightly-digest",
+        agentId: "main",
+        runId: "run-system-fallback",
+        task: "Nightly digest",
+        status: "succeeded",
+        notifyPolicy: "done_only",
+        deliveryStatus: "pending",
+        terminalSummary: "Digest sent to storage.",
+      });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-system-fallback")).toMatchObject({
+          deliveryStatus: "session_queued",
+          status: "succeeded",
+        }),
+      );
+      expect(peekSystemEvents(resolveAutomationStatusSessionKey("main"))).toEqual([
+        expect.stringContaining("Background task done: Nightly digest"),
+      ]);
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hasPendingHeartbeatWake()).toBe(false);
+    });
+  });
+
+  it("routes blocked system-owned followups to the automation status sink without waking the human lane", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "system:cron:nightly-repair",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:nightly-repair",
+        agentId: "main",
+        runId: "run-system-blocked",
+        task: "Nightly repair",
+        status: "succeeded",
+        notifyPolicy: "done_only",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-system-blocked")).toMatchObject({
+          deliveryStatus: "session_queued",
+          terminalOutcome: "blocked",
+        }),
+      );
+      expect(peekSystemEvents(resolveAutomationStatusSessionKey("main"))).toEqual([
+        expect.stringContaining("Background task blocked: Nightly repair"),
+        expect.stringContaining("Task needs follow-up: Nightly repair"),
+      ]);
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hasPendingHeartbeatWake()).toBe(false);
+    });
+  });
+
+  it("routes cron-owned session task fallbacks to the automation status sink", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:cron:nightly-digest",
+        requesterSessionKey: "agent:main:cron:nightly-digest",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:nightly-digest-child",
+        agentId: "main",
+        runId: "run-cron-owned-fallback",
+        label: "Nightly digest child task",
+        task: "Nightly digest child task",
+        status: "succeeded",
+        notifyPolicy: "done_only",
+        deliveryStatus: "pending",
+        terminalSummary: "Saved summary to automation storage.",
+      });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-cron-owned-fallback")).toMatchObject({
+          deliveryStatus: "session_queued",
+          status: "succeeded",
+        }),
+      );
+      expect(peekSystemEvents(resolveAutomationStatusSessionKey("main"))).toEqual([
+        expect.stringContaining("Background task done: Nightly digest child task"),
+      ]);
+      expect(peekSystemEvents("agent:main:cron:nightly-digest")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hasPendingHeartbeatWake()).toBe(false);
     });
   });
 

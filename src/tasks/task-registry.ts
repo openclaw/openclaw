@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { resolveAutomationStatusSessionKey } from "../infra/automation-status-session.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
@@ -950,21 +951,41 @@ function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
 
+export function isAutomationTaskRecord(
+  task: Pick<TaskRecord, "scopeKind" | "ownerKey" | "requesterSessionKey">,
+): boolean {
+  return (
+    task.scopeKind === "system" ||
+    task.ownerKey.trim().toLowerCase().startsWith("system:") ||
+    isCronSessionKey(task.ownerKey) ||
+    isCronSessionKey(task.requesterSessionKey)
+  );
+}
+
+function shouldRouteTaskFallbackToAutomationStatus(task: TaskRecord): boolean {
+  return isAutomationTaskRecord(task);
+}
+
 function queueTaskSystemEvent(task: TaskRecord, text: string) {
   const owner = resolveTaskDeliveryOwner(task);
   const ownerKey = owner.sessionKey?.trim();
-  if (!ownerKey) {
+  const targetSessionKey = shouldRouteTaskFallbackToAutomationStatus(task)
+    ? resolveAutomationStatusSessionKey(task.agentId)
+    : ownerKey;
+  if (!targetSessionKey) {
     return false;
   }
   enqueueSystemEvent(text, {
-    sessionKey: ownerKey,
+    sessionKey: targetSessionKey,
     contextKey: `task:${task.taskId}`,
-    deliveryContext: owner.requesterOrigin,
+    deliveryContext: targetSessionKey === ownerKey ? owner.requesterOrigin : undefined,
   });
-  requestHeartbeatNow({
-    reason: "background-task",
-    sessionKey: ownerKey,
-  });
+  if (targetSessionKey === ownerKey) {
+    requestHeartbeatNow({
+      reason: "background-task",
+      sessionKey: ownerKey,
+    });
+  }
   return true;
 }
 
@@ -975,18 +996,23 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
   }
   const owner = resolveTaskDeliveryOwner(task);
   const ownerKey = owner.sessionKey?.trim();
-  if (!ownerKey) {
+  const targetSessionKey = shouldRouteTaskFallbackToAutomationStatus(task)
+    ? resolveAutomationStatusSessionKey(task.agentId)
+    : ownerKey;
+  if (!targetSessionKey) {
     return false;
   }
   enqueueSystemEvent(followupText, {
-    sessionKey: ownerKey,
+    sessionKey: targetSessionKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
-    deliveryContext: owner.requesterOrigin,
+    deliveryContext: targetSessionKey === ownerKey ? owner.requesterOrigin : undefined,
   });
-  requestHeartbeatNow({
-    reason: "background-task-blocked",
-    sessionKey: ownerKey,
-  });
+  if (targetSessionKey === ownerKey) {
+    requestHeartbeatNow({
+      reason: "background-task-blocked",
+      sessionKey: ownerKey,
+    });
+  }
   return true;
 }
 
@@ -1018,14 +1044,15 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     }
     const owner = resolveTaskDeliveryOwner(latest);
     const ownerSessionKey = owner.sessionKey?.trim();
-    if (!ownerSessionKey) {
+    const shouldRouteToAutomationStatus = shouldRouteTaskFallbackToAutomationStatus(latest);
+    if (!ownerSessionKey && !shouldRouteToAutomationStatus) {
       return updateTask(taskId, {
         deliveryStatus: resolveMissingOwnerDeliveryStatus(latest),
         lastEventAt: Date.now(),
       });
     }
     const eventText = formatTaskTerminalMessage(latest);
-    if (!canDeliverTaskToRequesterOrigin(latest)) {
+    if (!ownerSessionKey || !canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
         if (latest.terminalOutcome === "blocked") {
@@ -1121,13 +1148,14 @@ export async function maybeDeliverTaskStateChangeUpdate(
   try {
     const owner = resolveTaskDeliveryOwner(current);
     const ownerSessionKey = owner.sessionKey?.trim();
-    if (!ownerSessionKey) {
+    const shouldRouteToAutomationStatus = shouldRouteTaskFallbackToAutomationStatus(current);
+    if (!ownerSessionKey && !shouldRouteToAutomationStatus) {
       return updateTask(taskId, {
         deliveryStatus: resolveMissingOwnerDeliveryStatus(current),
         lastEventAt: Date.now(),
       });
     }
-    if (!canDeliverTaskToRequesterOrigin(current)) {
+    if (!ownerSessionKey || !canDeliverTaskToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
       upsertTaskDeliveryState({
         taskId,
