@@ -82,6 +82,9 @@ That one command builds the QA site, starts the Docker-backed gateway + QA Lab
 stack, and prints the QA Lab URL. From that site you can pick scenarios, choose
 the model lane, launch individual runs, and watch results live.
 
+The Docker-backed QA site is meant to stay local to the machine running it. The
+generated QA Lab and gateway port publishes bind to loopback by default.
+
 Full repo-backed QA suite:
 
 ```bash

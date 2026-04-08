@@ -37,6 +37,10 @@ QA Lab page where an operator or automation loop can give the agent a QA
 mission, observe real channel behavior, and record what worked, failed, or
 stayed blocked.
 
+The Docker-backed QA site is for local debugging only. The generated host port
+publishes bind to loopback, so access stays on `127.0.0.1` unless you
+intentionally add your own forwarding or proxy layer.
+
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
 start the stack with a bind-mounted QA Lab bundle:
 
