@@ -103,6 +103,7 @@ Runtime: **Node 24 (recommended) or Node 22.16+**.
 ```bash
 npm install -g openclaw@latest
 # or: pnpm add -g openclaw@latest
+# or: bun add -g openclaw@latest
 
 openclaw onboard --install-daemon
 ```

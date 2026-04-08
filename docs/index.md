@@ -95,11 +95,27 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 
 ## Quick start
 
+Node remains the recommended Gateway runtime. Bun is supported for global CLI install, but use Node to run the Gateway in production.
+
 <Steps>
   <Step title="Install OpenClaw">
-    ```bash
-    npm install -g openclaw@latest
-    ```
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install -g openclaw@latest
+        ```
+      </Tab>
+      <Tab title="pnpm">
+        ```bash
+        pnpm add -g openclaw@latest
+        ```
+      </Tab>
+      <Tab title="Bun">
+        ```bash
+        bun add -g openclaw@latest
+        ```
+      </Tab>
+    </Tabs>
   </Step>
   <Step title="Onboard and install the service">
     ```bash
