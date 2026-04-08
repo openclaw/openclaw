@@ -9,6 +9,8 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  /** Set by unknown-tool loop detection; checked by streamFn guard to inject stop signals. */
+  unknownToolLoopDetected?: { toolNames: string[]; message: string };
 };
 
 export type ToolCallRecord = {
@@ -17,6 +19,8 @@ export type ToolCallRecord = {
   toolCallId?: string;
   resultHash?: string;
   timestamp: number;
+  /** Set when the tool call targeted a non-existent tool (SDK "Tool X not found" error). */
+  unknownTool?: boolean;
 };
 
 export type SessionRef = {

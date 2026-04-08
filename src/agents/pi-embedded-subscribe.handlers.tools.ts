@@ -17,9 +17,11 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -45,6 +47,13 @@ import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+
+const unknownToolLog = createSubsystemLogger("agents/unknown-tool-loop");
+
+const loadUnknownToolLoopRuntime = createLazyRuntimeSurface(
+  () => import("./pi-tools.before-tool-call.runtime.js"),
+  ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
+);
 
 type ToolStartRecord = {
   startTime: number;
@@ -1096,5 +1105,59 @@ export async function handleToolExecutionEnd(
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
+  }
+
+  // Unknown tool loop detection: the SDK bypasses all beforeToolCall/afterToolCall
+  // hooks when a tool is not found, so handleToolExecutionEnd is the only place
+  // we can intercept repeated "Tool X not found" errors.
+  if (isToolError && ctx.params.sessionKey) {
+    const errorText = extractToolResultText(sanitizedResult) ?? "";
+    try {
+      const {
+        getDiagnosticSessionState,
+        isUnknownToolErrorText,
+        recordToolCall: recordCall,
+        recordToolCallOutcome: recordOutcome,
+        detectUnknownToolLoop,
+        logToolLoopAction,
+      } = await loadUnknownToolLoopRuntime();
+      if (isUnknownToolErrorText(errorText)) {
+        const sessionState = getDiagnosticSessionState({
+          sessionKey: ctx.params.sessionKey,
+          sessionId: ctx.params.sessionId,
+        });
+        recordCall(sessionState, toolName, {}, toolCallId, undefined, { unknownTool: true });
+        recordOutcome(sessionState, {
+          toolName,
+          toolParams: {},
+          toolCallId,
+          error: errorText,
+        });
+        const loopResult = detectUnknownToolLoop(sessionState, toolName);
+        if (loopResult.stuck && loopResult.level === "critical") {
+          unknownToolLog.error(
+            `Blocking unknown tool loop: tool=${toolName} count=${loopResult.count}`,
+          );
+          logToolLoopAction({
+            sessionKey: ctx.params.sessionKey,
+            sessionId: ctx.params.sessionId,
+            toolName,
+            level: "critical",
+            action: "block",
+            detector: "unknown_tool",
+            count: loopResult.count,
+            message: loopResult.message,
+          });
+          sessionState.unknownToolLoopDetected = {
+            toolNames: [toolName],
+            message: loopResult.message,
+          };
+        }
+      }
+    } catch (err) {
+      unknownToolLog.warn(
+        `unknown tool loop detection failed: tool=${toolName} error=${String(err)}`,
+      );
+    }
   }
 }

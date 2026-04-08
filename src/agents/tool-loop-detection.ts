@@ -10,7 +10,8 @@ export type LoopDetectorKind =
   | "generic_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
-  | "ping_pong";
+  | "ping_pong"
+  | "unknown_tool";
 
 export type LoopDetectionResult =
   | { stuck: false }
@@ -28,16 +29,19 @@ export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+export const UNKNOWN_TOOL_CRITICAL_THRESHOLD = 3;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  unknownToolCriticalThreshold: UNKNOWN_TOOL_CRITICAL_THRESHOLD,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
     pingPong: true,
+    unknownTool: true,
   },
 };
 
@@ -47,10 +51,12 @@ type ResolvedLoopDetectionConfig = {
   warningThreshold: number;
   criticalThreshold: number;
   globalCircuitBreakerThreshold: number;
+  unknownToolCriticalThreshold: number;
   detectors: {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
     pingPong: boolean;
+    unknownTool: boolean;
   };
 };
 
@@ -88,6 +94,10 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     warningThreshold,
     criticalThreshold,
     globalCircuitBreakerThreshold,
+    unknownToolCriticalThreshold: asPositiveInt(
+      config?.unknownToolCriticalThreshold,
+      DEFAULT_LOOP_DETECTION_CONFIG.unknownToolCriticalThreshold,
+    ),
     detectors: {
       genericRepeat:
         config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
@@ -95,6 +105,8 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
         config?.detectors?.knownPollNoProgress ??
         DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
       pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
+      unknownTool:
+        config?.detectors?.unknownTool ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.unknownTool,
     },
   };
 }
@@ -142,6 +154,35 @@ function stableStringifyFallback(value: unknown): string {
     }
     return Object.prototype.toString.call(value);
   }
+}
+
+const UNKNOWN_TOOL_ERROR_RE = /^Tool\s+\S+\s+not\s+found$/;
+
+/**
+ * Check if a tool result error message indicates a non-existent tool.
+ * Matches the SDK's "Tool {name} not found" format from prepareToolCall().
+ */
+export function isUnknownToolErrorText(text: string): boolean {
+  return UNKNOWN_TOOL_ERROR_RE.test(text.trim());
+}
+
+function getUnknownToolStreak(
+  history: Array<{
+    toolName: string;
+    argsHash: string;
+    resultHash?: string;
+    unknownTool?: boolean;
+  }>,
+): number {
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record?.unknownTool) {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
@@ -495,6 +536,40 @@ export function detectToolCallLoop(
 }
 
 /**
+ * Detect if an agent is stuck calling non-existent tools.
+ * Unlike other detectors, this runs regardless of the `enabled` flag because
+ * calling a tool that does not exist is always an error — the SDK bypasses all
+ * OpenClaw beforeToolCall/afterToolCall hooks for unknown tools, so this is the
+ * only guard against infinite retry loops.
+ */
+export function detectUnknownToolLoop(
+  state: SessionState,
+  toolName: string,
+  config?: ToolLoopDetectionConfig,
+): LoopDetectionResult {
+  const resolvedConfig = resolveLoopDetectionConfig(config);
+  if (!resolvedConfig.detectors.unknownTool) {
+    return { stuck: false };
+  }
+  const history = state.toolCallHistory ?? [];
+  const streak = getUnknownToolStreak(history);
+  if (streak >= resolvedConfig.unknownToolCriticalThreshold) {
+    log.error(
+      `Unknown tool loop detected: ${streak} consecutive calls to non-existent tools (latest: ${toolName})`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "unknown_tool",
+      count: streak,
+      message: `CRITICAL: ${streak} consecutive calls to non-existent tools. The tool "${toolName}" does not exist. Do NOT call it again. Use only the tools listed in your tool definitions.`,
+      warningKey: `unknown_tool:${toolName}`,
+    };
+  }
+  return { stuck: false };
+}
+
+/**
  * Record a tool call in the session's history for loop detection.
  * Maintains sliding window of last N calls.
  */
@@ -504,6 +579,7 @@ export function recordToolCall(
   params: unknown,
   toolCallId?: string,
   config?: ToolLoopDetectionConfig,
+  options?: { unknownTool?: boolean },
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!state.toolCallHistory) {
@@ -515,6 +591,7 @@ export function recordToolCall(
     argsHash: hashToolCall(toolName, params),
     toolCallId,
     timestamp: Date.now(),
+    ...(options?.unknownTool ? { unknownTool: true } : {}),
   });
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {

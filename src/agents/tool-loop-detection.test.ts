@@ -5,10 +5,13 @@ import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
+  UNKNOWN_TOOL_CRITICAL_THRESHOLD,
   WARNING_THRESHOLD,
   detectToolCallLoop,
+  detectUnknownToolLoop,
   getToolCallStats,
   hashToolCall,
+  isUnknownToolErrorText,
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
@@ -589,6 +592,130 @@ describe("tool-loop-detection", () => {
       const stats = getToolCallStats(state);
       expect(stats.mostFrequent?.toolName).toBe("read");
       expect(stats.mostFrequent?.count).toBe(7);
+    });
+  });
+
+  describe("isUnknownToolErrorText", () => {
+    it("matches SDK 'Tool X not found' format", () => {
+      expect(isUnknownToolErrorText("Tool web_search not found")).toBe(true);
+      expect(isUnknownToolErrorText("Tool my_custom_tool not found")).toBe(true);
+    });
+
+    it("rejects unrelated error messages", () => {
+      expect(isUnknownToolErrorText("Permission denied")).toBe(false);
+      expect(isUnknownToolErrorText("Tool execution failed")).toBe(false);
+      expect(isUnknownToolErrorText("")).toBe(false);
+    });
+
+    it("handles whitespace", () => {
+      expect(isUnknownToolErrorText("  Tool foo not found  ")).toBe(true);
+    });
+  });
+
+  describe("detectUnknownToolLoop", () => {
+    function recordUnknownToolCall(state: SessionState, toolName: string, index: number): void {
+      const toolCallId = `unknown-${toolName}-${index}`;
+      recordToolCall(state, toolName, {}, toolCallId, undefined, { unknownTool: true });
+      recordToolCallOutcome(state, {
+        toolName,
+        toolParams: {},
+        toolCallId,
+        error: `Tool ${toolName} not found`,
+      });
+    }
+
+    it("returns not stuck below threshold", () => {
+      const state = createState();
+      for (let i = 0; i < UNKNOWN_TOOL_CRITICAL_THRESHOLD - 1; i += 1) {
+        recordUnknownToolCall(state, "web_search", i);
+      }
+      const result = detectUnknownToolLoop(state, "web_search");
+      expect(result.stuck).toBe(false);
+    });
+
+    it("returns critical at threshold", () => {
+      const state = createState();
+      for (let i = 0; i < UNKNOWN_TOOL_CRITICAL_THRESHOLD; i += 1) {
+        recordUnknownToolCall(state, "web_search", i);
+      }
+      const result = detectUnknownToolLoop(state, "web_search");
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.detector).toBe("unknown_tool");
+        expect(result.count).toBe(UNKNOWN_TOOL_CRITICAL_THRESHOLD);
+        expect(result.message).toContain("web_search");
+        expect(result.message).toContain("does not exist");
+      }
+    });
+
+    it("resets streak when a normal tool call intervenes", () => {
+      const state = createState();
+      recordUnknownToolCall(state, "web_search", 0);
+      recordUnknownToolCall(state, "web_search", 1);
+      // Normal tool call breaks the streak
+      recordSuccessfulCall(state, "read", { path: "/a.txt" }, { ok: true }, 100);
+      recordUnknownToolCall(state, "web_search", 2);
+
+      const result = detectUnknownToolLoop(state, "web_search");
+      expect(result.stuck).toBe(false);
+    });
+
+    it("counts different unknown tool names in the same streak", () => {
+      const state = createState();
+      recordUnknownToolCall(state, "web_search", 0);
+      recordUnknownToolCall(state, "browser", 1);
+      recordUnknownToolCall(state, "web_search", 2);
+
+      const result = detectUnknownToolLoop(state, "web_search");
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.count).toBe(3);
+      }
+    });
+
+    it("can be disabled via detector config", () => {
+      const state = createState();
+      for (let i = 0; i < UNKNOWN_TOOL_CRITICAL_THRESHOLD + 5; i += 1) {
+        recordUnknownToolCall(state, "web_search", i);
+      }
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        detectors: { unknownTool: false },
+      };
+      const result = detectUnknownToolLoop(state, "web_search", config);
+      expect(result.stuck).toBe(false);
+    });
+
+    it("works even when main enabled flag is false", () => {
+      const state = createState();
+      for (let i = 0; i < UNKNOWN_TOOL_CRITICAL_THRESHOLD; i += 1) {
+        recordUnknownToolCall(state, "web_search", i);
+      }
+      const config: ToolLoopDetectionConfig = { enabled: false };
+      const result = detectUnknownToolLoop(state, "web_search", config);
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.detector).toBe("unknown_tool");
+      }
+    });
+
+    it("respects custom unknownToolCriticalThreshold", () => {
+      const state = createState();
+      for (let i = 0; i < 5; i += 1) {
+        recordUnknownToolCall(state, "web_search", i);
+      }
+      const config: ToolLoopDetectionConfig = {
+        enabled: false,
+        unknownToolCriticalThreshold: 5,
+      };
+      const result = detectUnknownToolLoop(state, "web_search", config);
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.count).toBe(5);
+      }
     });
   });
 });

@@ -15,6 +15,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { getDiagnosticSessionState } from "../../../logging/diagnostic-session-state.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -1276,6 +1277,33 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      }
+
+      // Guard against infinite loops when the LLM repeatedly calls non-existent
+      // tools. The SDK bypasses all OpenClaw tool hooks for unknown tools, so the
+      // detection flag is set by handleToolExecutionEnd via diagnostic session state.
+      if (params.sessionKey) {
+        const innerUnknownGuard = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const diagState = getDiagnosticSessionState({
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+          });
+          if (diagState.unknownToolLoopDetected) {
+            const toolNames = diagState.unknownToolLoopDetected.toolNames.join(", ");
+            log.error(
+              `Aborting run due to unknown tool loop: tools=[${toolNames}] ` +
+                `runId=${params.runId} sessionKey=${params.sessionKey}`,
+            );
+            runAbortController.abort(
+              new Error(
+                `Run aborted: repeated calls to non-existent tool(s): ${toolNames}. ` +
+                  `The agent was stuck in an infinite retry loop.`,
+              ),
+            );
+          }
+          return innerUnknownGuard(model, context, options);
+        };
       }
 
       try {
