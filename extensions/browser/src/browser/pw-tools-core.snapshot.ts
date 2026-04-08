@@ -1,3 +1,4 @@
+import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -55,11 +56,14 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   nodes: AriaSnapshotNode[];
+  page?: Page;
 }): Promise<void> {
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
+  const page =
+    opts.page ??
+    (await getPageForTargetId({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+    }));
   ensurePageState(page);
 
   const markedRefs = await markBackendDomRefsOnPage({
@@ -110,6 +114,7 @@ export async function snapshotAriaViaPlaywright(opts: {
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     nodes: formatted,
+    page,
   });
   return { nodes: formatted };
 }

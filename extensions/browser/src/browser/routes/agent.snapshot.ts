@@ -590,7 +590,7 @@ export function registerBrowserAgentSnapshotRoutes(
         return;
       }
       if (!usePlaywrightAriaSnapshot) {
-        const pw = await requirePwAi(res, "aria snapshot");
+        const pw = await getPwAiModule();
         if (pw) {
           await pw.storeAriaSnapshotRefsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,

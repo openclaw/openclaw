@@ -1,141 +1,133 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot.js";
 
-type Tab = { targetId: string; url: string };
+const snapshotAria = vi.fn();
+const getPwAiModule = vi.fn();
+const resolveProfileContext = vi.fn();
+const resolveSnapshotPlan = vi.fn();
+const shouldUsePlaywrightForAriaSnapshot = vi.fn();
 
-function staticListTabs(tabs: Tab[]): () => Promise<Tab[]> {
-  return async () => tabs;
-}
+vi.mock("../cdp.js", () => ({
+  captureScreenshot: vi.fn(),
+  snapshotAria,
+}));
 
-describe("resolveTargetIdAfterNavigate", () => {
+vi.mock("../chrome-mcp.js", () => ({
+  evaluateChromeMcpScript: vi.fn(),
+  navigateChromeMcpPage: vi.fn(),
+  takeChromeMcpScreenshot: vi.fn(),
+  takeChromeMcpSnapshot: vi.fn(),
+}));
+
+vi.mock("../chrome-mcp.snapshot.js", () => ({
+  buildAiSnapshotFromChromeMcpSnapshot: vi.fn(),
+  flattenChromeMcpSnapshotToAriaNodes: vi.fn(),
+}));
+
+vi.mock("../navigation-guard.js", () => ({
+  assertBrowserNavigationAllowed: vi.fn(),
+  assertBrowserNavigationResultAllowed: vi.fn(),
+  withBrowserNavigationPolicy: vi.fn(),
+}));
+
+vi.mock("../profile-capabilities.js", () => ({
+  getBrowserProfileCapabilities: vi.fn(() => ({ usesChromeMcp: false })),
+}));
+
+vi.mock("../screenshot.js", () => ({
+  DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 1,
+  DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 1,
+  normalizeBrowserScreenshot: vi.fn(),
+}));
+
+vi.mock("../../media/store.js", () => ({
+  ensureMediaDir: vi.fn(),
+  saveMediaBuffer: vi.fn(),
+}));
+
+vi.mock("./agent.shared.js", () => ({
+  getPwAiModule,
+  handleRouteError: vi.fn((_, __, err) => {
+    throw err;
+  }),
+  readBody: vi.fn(() => ({})),
+  requirePwAi: vi.fn(),
+  resolveProfileContext,
+  withPlaywrightRouteContext: vi.fn(),
+  withRouteTabContext: vi.fn(),
+}));
+
+vi.mock("./agent.snapshot.plan.js", () => ({
+  resolveSnapshotPlan,
+  shouldUsePlaywrightForAriaSnapshot,
+  shouldUsePlaywrightForScreenshot: vi.fn(),
+}));
+
+vi.mock("./utils.js", () => ({
+  jsonError: vi.fn((res, _status, message) => res.json({ ok: false, message })),
+  toBoolean: vi.fn(),
+  toStringOrEmpty: vi.fn(() => ""),
+}));
+
+describe("registerBrowserAgentSnapshotRoutes", () => {
   beforeEach(() => {
-    vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
-  it("returns original targetId when old target still exists (no swap)", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([
-        { targetId: "old-123", url: "https://example.com" },
-        { targetId: "other-456", url: "https://other.com" },
-      ]),
+  it("keeps CDP aria snapshots working when Playwright is unavailable", async () => {
+    getPwAiModule.mockResolvedValue(null);
+    resolveSnapshotPlan.mockReturnValue({
+      format: "aria",
+      limit: 1,
+      labels: false,
+      mode: undefined,
     });
-    expect(result).toBe("old-123");
-  });
-
-  it("resolves new targetId when old target is gone (renderer swap)", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([{ targetId: "new-456", url: "https://example.com" }]),
+    shouldUsePlaywrightForAriaSnapshot.mockReturnValue(false);
+    resolveProfileContext.mockReturnValue({
+      profile: { cdpUrl: "http://127.0.0.1:9222", name: "openclaw" },
+      ensureTabAvailable: vi.fn(async () => ({
+        targetId: "tab-1",
+        wsUrl: "ws://127.0.0.1/devtools/page/tab-1",
+        url: "https://example.com",
+      })),
     });
-    expect(result).toBe("new-456");
-  });
-
-  it("prefers non-stale targetId when multiple tabs share the URL", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([
-        { targetId: "preexisting-000", url: "https://example.com" },
-        { targetId: "fresh-777", url: "https://example.com" },
-      ]),
-    });
-    // Ambiguous replacement; prefer staying on the old target rather than guessing wrong.
-    expect(result).toBe("old-123");
-  });
-
-  it("retries and resolves targetId when first listTabs has no URL match", async () => {
-    vi.useFakeTimers();
-    let calls = 0;
-
-    const result$ = resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://delayed.com",
-      listTabs: async () => {
-        calls++;
-        if (calls === 1) {
-          return [{ targetId: "unrelated-1", url: "https://unrelated.com" }];
-        }
-        return [{ targetId: "delayed-999", url: "https://delayed.com" }];
-      },
+    snapshotAria.mockResolvedValue({
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
     });
 
-    await vi.advanceTimersByTimeAsync(800);
-    const result = await result$;
+    const app = {
+      get: vi.fn(),
+      post: vi.fn(),
+      delete: vi.fn(),
+    };
+    const ctx = {
+      mapTabError: vi.fn(),
+      state: vi.fn(() => ({ resolved: { ssrfPolicy: {} } })),
+    };
+    const res = {
+      status: vi.fn(() => res),
+      json: vi.fn(),
+    };
 
-    expect(result).toBe("delayed-999");
-    expect(calls).toBe(2);
+    const mod = await import("./agent.snapshot.js");
+    mod.registerBrowserAgentSnapshotRoutes(app as never, ctx as never);
 
-    vi.useRealTimers();
-  });
+    const snapshotHandler = app.get.mock.calls.find(([path]) => path === "/snapshot")?.[1];
+    expect(snapshotHandler).toBeTypeOf("function");
 
-  it("falls back to original targetId when no match found after retry", async () => {
-    vi.useFakeTimers();
+    await snapshotHandler({ query: {}, params: {} }, res);
 
-    const result$ = resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://no-match.com",
-      listTabs: staticListTabs([
-        { targetId: "unrelated-1", url: "https://unrelated.com" },
-        { targetId: "unrelated-2", url: "https://unrelated2.com" },
-      ]),
+    expect(snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/tab-1",
+      limit: 1,
     });
-
-    await vi.advanceTimersByTimeAsync(800);
-    const result = await result$;
-
-    expect(result).toBe("old-123");
-
-    vi.useRealTimers();
-  });
-
-  it("falls back to single remaining tab when no URL match after retry", async () => {
-    vi.useFakeTimers();
-
-    const result$ = resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://single-tab.com",
-      listTabs: staticListTabs([{ targetId: "only-tab", url: "https://some-other.com" }]),
+    expect(getPwAiModule).toHaveBeenCalledTimes(2);
+    expect(res.json).toHaveBeenCalledTimes(1);
+    expect(res.json).toHaveBeenCalledWith({
+      ok: true,
+      format: "aria",
+      targetId: "tab-1",
+      url: "https://example.com",
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
     });
-
-    await vi.advanceTimersByTimeAsync(800);
-    const result = await result$;
-
-    expect(result).toBe("only-tab");
-
-    vi.useRealTimers();
-  });
-
-  it("falls back to original targetId when listTabs throws", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://error.com",
-      listTabs: async () => {
-        throw new Error("CDP connection lost");
-      },
-    });
-    expect(result).toBe("old-123");
-  });
-
-  it("keeps the old target when multiple replacement candidates still match after retry", async () => {
-    vi.useFakeTimers();
-
-    const result$ = resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([
-        { targetId: "preexisting-000", url: "https://example.com" },
-        { targetId: "fresh-777", url: "https://example.com" },
-      ]),
-    });
-
-    await vi.advanceTimersByTimeAsync(800);
-    const result = await result$;
-
-    expect(result).toBe("old-123");
-
-    vi.useRealTimers();
   });
 });

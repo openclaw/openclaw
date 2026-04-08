@@ -39,17 +39,6 @@ export async function markBackendDomRefsOnPage(opts: {
   page: Page;
   refs: MarkBackendDomRef[];
 }): Promise<Set<string>> {
-  const refs = opts.refs.filter(
-    (entry) =>
-      /^ax\d+$/.test(entry.ref) &&
-      Number.isFinite(entry.backendDOMNodeId) &&
-      Math.floor(entry.backendDOMNodeId) > 0,
-  );
-  const marked = new Set<string>();
-  if (!refs.length) {
-    return marked;
-  }
-
   await opts.page
     .locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`)
     .evaluateAll((elements, attr) => {
@@ -60,6 +49,17 @@ export async function markBackendDomRefsOnPage(opts: {
       }
     }, BROWSER_REF_MARKER_ATTRIBUTE)
     .catch(() => {});
+
+  const refs = opts.refs.filter(
+    (entry) =>
+      /^ax\d+$/.test(entry.ref) &&
+      Number.isFinite(entry.backendDOMNodeId) &&
+      Math.floor(entry.backendDOMNodeId) > 0,
+  );
+  const marked = new Set<string>();
+  if (!refs.length) {
+    return marked;
+  }
 
   return await withPlaywrightPageCdpSession(opts.page, async (session) => {
     const send = async (method: string, params?: Record<string, unknown>) =>

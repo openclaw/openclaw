@@ -85,4 +85,25 @@ describe("pw-session page-scoped CDP client", () => {
     expect(marked).toEqual(new Set(["ax1", "ax2"]));
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
+
+  it("clears stale markers even when no backend refs are valid", async () => {
+    const newCDPSession = vi.fn();
+    const evaluateAll = vi.fn(async () => {});
+    const page = {
+      context: () => ({
+        newCDPSession,
+      }),
+      locator: vi.fn(() => ({ evaluateAll })),
+    };
+
+    const marked = await markBackendDomRefsOnPage({
+      page: page as never,
+      refs: [{ ref: "e1", backendDOMNodeId: 0 }],
+    });
+
+    expect(page.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`);
+    expect(evaluateAll).toHaveBeenCalledTimes(1);
+    expect(newCDPSession).not.toHaveBeenCalled();
+    expect(marked).toEqual(new Set());
+  });
 });
