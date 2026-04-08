@@ -368,7 +368,7 @@ describe("setupPluginConfig", () => {
         intro: vi.fn(async () => {}),
         outro: vi.fn(async () => {}),
         note: vi.fn(async () => {}),
-        select: vi.fn(async () => ""),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => [
           "retry-plugin",
         ]) as unknown as WizardPrompter["multiselect"],
