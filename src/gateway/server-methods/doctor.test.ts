@@ -749,7 +749,6 @@ describe("doctor.memory.dreamDiary", () => {
         expect.objectContaining({
           agentId: "main",
           found: true,
-          path: "DREAMS.md",
           content: "lowercase diary\n",
           updatedAtMs: expect.any(Number),
         }),
@@ -811,7 +810,15 @@ describe("doctor.memory.dreamDiary", () => {
         workspaceDir,
         inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
       });
-      expect(writeBackfillDiaryEntries).toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              bodyLines: expect.arrayContaining(["What Happened", "1. Bunji — partner"]),
+            }),
+          ],
+        }),
+      );
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -820,6 +827,31 @@ describe("doctor.memory.dreamDiary", () => {
           scannedFiles: 1,
           written: 1,
           replaced: 1,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no-ops backfill when the workspace has no daily memory files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-empty-"));
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 0,
+          written: 0,
+          replaced: 0,
         }),
         undefined,
       );

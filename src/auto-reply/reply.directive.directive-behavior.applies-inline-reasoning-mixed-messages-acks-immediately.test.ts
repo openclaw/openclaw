@@ -1,12 +1,10 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config/sessions.js";
 import {
-  DEFAULT_TEST_MODEL_CATALOG,
   installDirectiveBehaviorE2EHooks,
-  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   replyText,
@@ -14,10 +12,7 @@ import {
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
-import {
-  loadModelCatalogMock,
-  runEmbeddedPiAgentMock,
-} from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
@@ -103,11 +98,7 @@ async function runInFlightVerboseToggleCase(params: {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
-    loadModelCatalogMock.mockReset();
-    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
-    installFreshDirectiveBehaviorReplyMocks();
+  beforeAll(async () => {
     ({ getReplyFromConfig } = await import("./reply.js"));
   });
 

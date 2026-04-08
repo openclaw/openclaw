@@ -28,6 +28,7 @@ import {
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 import {
@@ -706,7 +707,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       createHandleParams({
         ...base,
         directives: parseInlineDirectives("/elevated"),
-        currentElevatedLevel: sessionEntry.elevatedLevel,
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
       }),
     );
     expect(statusReply?.text).toContain("Current elevated level: on");
@@ -715,7 +716,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       createHandleParams({
         ...base,
         directives: parseInlineDirectives("/elevated off"),
-        currentElevatedLevel: sessionEntry.elevatedLevel,
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
       }),
     );
     expect(offReply?.text).toContain("Elevated mode disabled");

@@ -1066,10 +1066,31 @@ describe("memory cli", () => {
 
       const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(dreams).toContain("openclaw:dreaming:backfill-entry");
+      expect(dreams).toContain(`source=${historyPath}`);
       expect(dreams).toContain("January 1, 2025");
       expect(dreams).toContain("What Happened");
       expect(dreams).toContain("Possible Lasting Updates");
       expect(dreams).toContain("Happy Together");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("treats a missing historical path as a controlled empty-source error", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const errors = spyRuntimeErrors(defaultRuntime);
+      await runMemoryCli(["rem-backfill", "--path", path.join(workspaceDir, "missing-history")]);
+
+      expect(
+        errors.mock.calls.some((call) =>
+          String(call[0]).includes("found no YYYY-MM-DD.md files"),
+        ),
+      ).toBe(true);
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1297,6 +1318,44 @@ describe("memory cli", () => {
           item.text.includes("converting messy inbound information into routed workflows"),
         ),
       ).toBe(false);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not split hyphenated words into malformed grounded candidates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-02-20.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          "- Use long-term plans, avoid reactive task switching.",
+          "- A self-aware workflow note should stay intact.",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--grounded", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          files?: Array<{
+            renderedMarkdown?: string;
+          }>;
+        } | null;
+      }>(writeJson);
+      const rendered = payload?.grounded?.files?.[0]?.renderedMarkdown ?? "";
+      expect(rendered).not.toContain("Use long- term plans");
+      expect(rendered).not.toContain("A self- aware workflow note");
       expect(close).toHaveBeenCalled();
     });
   });

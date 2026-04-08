@@ -122,7 +122,15 @@ const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
-  const stat = await fs.stat(resolvedPath);
+  let stat;
+  try {
+    stat = await fs.stat(resolvedPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
   if (stat.isFile()) {
     return DAILY_MEMORY_FILE_NAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
   }
@@ -647,7 +655,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       purpose: managerPurpose,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
-        let embeddingProbe: { ok?: boolean; error?: string } | undefined;
+        let embeddingProbe:
+          | Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>
+          | undefined;
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
@@ -1732,6 +1742,11 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           workspaceDir: scratchDir,
           inputPaths: workspaceSourceFiles,
         });
+        const sourcePathByDay = new Map(
+          sourceFiles
+            .map((sourcePath) => [extractIsoDayFromPath(sourcePath), sourcePath] as const)
+            .filter((entry): entry is [string, string] => Boolean(entry[0])),
+        );
         const entries = grounded.files
           .map((file) => {
             const isoDay = extractIsoDayFromPath(file.path);
@@ -1740,7 +1755,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             }
             return {
               isoDay,
-              sourcePath: file.path,
+              sourcePath: sourcePathByDay.get(isoDay) ?? file.path,
               bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
             };
           })
