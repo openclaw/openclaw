@@ -460,7 +460,14 @@ export class QmdMemoryManager implements MemorySearchManager {
             addErrorMessage: message,
           });
           if (!rebound) {
-            log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
+            // Idempotent path: collection was already listed before this add attempt.
+            // Log as info — the collection is registered and usable.
+            const wasListed = listed != null;
+            if (wasListed) {
+              log.info(`qmd collection add skipped for ${collection.name}: already registered`);
+            } else {
+              log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
+            }
           }
           continue;
         }

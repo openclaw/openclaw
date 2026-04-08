@@ -912,6 +912,53 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+  it("logs info (not warn) when collection is already listed and add returns already-exists", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace-main" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // Collection is already listed with full path+pattern metadata.
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { name: "workspace-main", path: workspaceDir, pattern: "**/*.md" },
+          ]),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        // add reports already-exists even though it was already in the list.
+        emitAndClose(child, "stderr", "Collection 'workspace-main' already exists.", 1);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // Should log info (not warn) because collection was already registered.
+    expect(logInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd collection add skipped for workspace-main"),
+    );
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("qmd collection add skipped"),
+    );
+  });
+
   it("migrates unscoped legacy collections from plain-text collection list output", async () => {
     cfg = {
       ...cfg,
