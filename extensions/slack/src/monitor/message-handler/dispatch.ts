@@ -137,6 +137,7 @@ function buildSlackTurnDeliveryKey(params: {
   }
   return JSON.stringify({
     threadTs: params.threadTs ?? "",
+    replyToId: params.payload.replyToId ?? null,
     text: reply.trimmedText,
     mediaUrls: reply.mediaUrls,
     blocks: slackBlocks ?? null,

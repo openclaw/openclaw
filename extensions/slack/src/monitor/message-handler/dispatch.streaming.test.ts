@@ -30,6 +30,22 @@ describe("slack turn delivery tracker", () => {
     expect(tracker.hasDelivered({ payload, threadTs: "123.456" })).toBe(true);
     expect(tracker.hasDelivered({ payload, threadTs: "other-thread" })).toBe(false);
   });
+
+  it("keeps explicit reply targets distinct from the shared thread target", () => {
+    const tracker = createSlackTurnDeliveryTracker();
+
+    tracker.markDelivered({
+      payload: { text: "same reply", replyToId: "thread-A" },
+      threadTs: "123.456",
+    });
+
+    expect(
+      tracker.hasDelivered({
+        payload: { text: "same reply", replyToId: "thread-B" },
+        threadTs: "123.456",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("slack native streaming thread hint", () => {
