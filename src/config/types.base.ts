@@ -201,6 +201,11 @@ export type SessionMaintenanceConfig = {
    */
   resetArchiveRetention?: string | number | false;
   /**
+   * Retention for archived compaction transcripts (`*.compaction.<timestamp>`).
+   * Set `false` to disable compaction-archive cleanup. Default: "7d".
+   */
+  compactionArchiveRetention?: string | number | false;
+  /**
    * Optional per-agent sessions-directory disk budget (e.g. "500mb").
    * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
    */

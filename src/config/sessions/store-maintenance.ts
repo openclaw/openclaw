@@ -32,6 +32,7 @@ export type ResolvedSessionMaintenanceConfig = {
   maxEntries: number;
   rotateBytes: number;
   resetArchiveRetentionMs: number | null;
+  compactionArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
 };
@@ -78,6 +79,25 @@ function resolveResetArchiveRetentionMs(
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return pruneAfterMs;
+  }
+}
+
+const DEFAULT_COMPACTION_ARCHIVE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function resolveCompactionArchiveRetentionMs(
+  maintenance: SessionMaintenanceConfig | undefined,
+): number | null {
+  const raw = maintenance?.compactionArchiveRetention;
+  if (raw === false) {
+    return null;
+  }
+  if (raw === undefined || raw === null || raw === "") {
+    return DEFAULT_COMPACTION_ARCHIVE_RETENTION_MS;
+  }
+  try {
+    return parseDurationMs(String(raw).trim(), { defaultUnit: "d" });
+  } catch {
+    return DEFAULT_COMPACTION_ARCHIVE_RETENTION_MS;
   }
 }
 
@@ -148,6 +168,7 @@ export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     rotateBytes: resolveRotateBytes(maintenance),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
+    compactionArchiveRetentionMs: resolveCompactionArchiveRetentionMs(maintenance),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };

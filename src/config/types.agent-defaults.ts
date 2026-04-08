@@ -392,6 +392,13 @@ export type AgentCompactionConfig = {
    */
   truncateAfterCompaction?: boolean;
   /**
+   * Archive the session transcript before truncating compacted entries.
+   * Creates a `.compaction.<timestamp>` backup alongside the session file
+   * so data can be recovered if needed. Only applies when
+   * `truncateAfterCompaction` is enabled. Default: true.
+   */
+  archiveBeforeTruncation?: boolean;
+  /**
    * Send a "🧹 Compacting context..." notice to the user when compaction starts.
    * Default: false (silent by default).
    */

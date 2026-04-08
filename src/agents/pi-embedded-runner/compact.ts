@@ -10,6 +10,7 @@ import {
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatSessionArchiveTimestamp } from "../../config/sessions/artifacts.js";
 import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
@@ -1129,19 +1130,26 @@ export async function compactEmbeddedPiSessionDirect(
           // Truncate session file to remove compacted entries (#39953)
           if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
             try {
+              const archiveBeforeTruncation =
+                params.config?.agents?.defaults?.compaction?.archiveBeforeTruncation !== false;
+              const archivePath = archiveBeforeTruncation
+                ? `${params.sessionFile}.compaction.${formatSessionArchiveTimestamp()}`
+                : undefined;
               const heartbeatSummary = resolveHeartbeatSummaryForAgent(
                 params.config,
                 sessionAgentId,
               );
               const truncResult = await truncateSessionAfterCompaction({
                 sessionFile: params.sessionFile,
+                archivePath,
                 ackMaxChars: heartbeatSummary.ackMaxChars,
                 heartbeatPrompt: heartbeatSummary.prompt,
               });
               if (truncResult.truncated) {
                 log.info(
                   `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
-                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+                    `(sessionKey=${params.sessionKey ?? params.sessionId})` +
+                    (archivePath ? ` archived=${archivePath}` : ""),
                 );
               }
             } catch (err) {

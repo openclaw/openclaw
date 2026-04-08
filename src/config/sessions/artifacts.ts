@@ -1,4 +1,4 @@
-export type SessionArchiveReason = "bak" | "reset" | "deleted";
+export type SessionArchiveReason = "bak" | "reset" | "deleted" | "compaction";
 
 const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
@@ -20,7 +20,8 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   return (
     hasArchiveSuffix(fileName, "deleted") ||
     hasArchiveSuffix(fileName, "reset") ||
-    hasArchiveSuffix(fileName, "bak")
+    hasArchiveSuffix(fileName, "bak") ||
+    hasArchiveSuffix(fileName, "compaction")
   );
 }
 

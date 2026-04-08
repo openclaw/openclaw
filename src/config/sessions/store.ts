@@ -349,7 +349,11 @@ async function saveSessionStoreUnlocked(
       for (const archivedDir of archivedForDeletedSessions) {
         archivedDirs.add(archivedDir);
       }
-      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
+      if (
+        archivedDirs.size > 0 ||
+        maintenance.resetArchiveRetentionMs != null ||
+        maintenance.compactionArchiveRetentionMs != null
+      ) {
         const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
         const targetDirs =
           archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
@@ -363,6 +367,13 @@ async function saveSessionStoreUnlocked(
             directories: targetDirs,
             olderThanMs: maintenance.resetArchiveRetentionMs,
             reason: "reset",
+          });
+        }
+        if (maintenance.compactionArchiveRetentionMs != null) {
+          await cleanupArchivedSessionTranscripts({
+            directories: targetDirs,
+            olderThanMs: maintenance.compactionArchiveRetentionMs,
+            reason: "compaction",
           });
         }
       }
