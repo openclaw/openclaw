@@ -3,6 +3,7 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
@@ -499,6 +500,29 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamDiaryContent).toBeNull();
+    expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("clears grounded staged entries and reloads only dreaming status", async () => {
+    const { state, request } = createState();
+    state.dreamDiaryContent = "keep existing diary";
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.resetGroundedShortTerm") {
+        return { action: "resetGroundedShortTerm", removedShortTermEntries: 2 };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await resetGroundedShortTerm(state);
+
+    expect(ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
 });
