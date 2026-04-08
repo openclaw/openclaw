@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, type Mock, vi } from "vitest";
-import { createSlackOutboundPayloadHarness } from "../../../extensions/slack/contract-api.js";
+import { createSlackOutboundPayloadHarness } from "../../../extensions/slack/src/outbound-payload-harness.js";
 import { whatsappOutbound } from "../../../extensions/whatsapp/test-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
