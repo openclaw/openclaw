@@ -97,7 +97,7 @@ async function runYepSearch(params: {
   const body: Record<string, unknown> = {
     query: params.query,
     limit: params.count,
-    type: params.type ?? "basic",
+    type: params.type,
   };
 
   if (params.searchMode) {
@@ -282,7 +282,7 @@ function createYepToolDefinition(
           message: "result_type must be 'basic' or 'highlights'.",
         };
       }
-      const yepType = rawType as "basic" | "highlights" | undefined;
+      const yepType = (rawType ?? "basic") as "basic" | "highlights";
       const rawSearchMode = readStringParam(params, "search_mode");
       if (rawSearchMode && rawSearchMode !== "fast" && rawSearchMode !== "balanced") {
         return {
