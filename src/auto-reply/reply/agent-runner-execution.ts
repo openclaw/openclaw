@@ -320,11 +320,26 @@ function isToolResultTurnMismatchError(message: string): boolean {
   );
 }
 
+function collapseRepeatedFailureDetail(message: string): string {
+  const parts = message
+    .split(/\s+\|\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
+    return parts[0];
+  }
+  return message.trim();
+}
+
 function buildExternalRunFailureText(message: string): string {
-  if (isToolResultTurnMismatchError(message)) {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (isToolResultTurnMismatchError(normalizedMessage)) {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
   }
-  const oauthRefreshFailure = classifyOAuthRefreshFailure(message);
+  if (normalizedMessage.includes('No API key found for provider "')) {
+    return `⚠️ ${normalizedMessage}`;
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
     if (oauthRefreshFailure.reason) {

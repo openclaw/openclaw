@@ -34,6 +34,7 @@ import {
 } from "./model-selection.js";
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -171,15 +172,21 @@ async function waitForOutboundMessage(
   timeoutMs = 15_000,
   options?: { sinceIndex?: number },
 ) {
-  return await waitForCondition(
-    () =>
-      state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound")
-        .slice(options?.sinceIndex ?? 0)
-        .find(predicate),
-    timeoutMs,
-  );
+  return await waitForCondition(() => {
+    const match = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(options?.sinceIndex ?? 0)
+      .find(predicate);
+    if (!match) {
+      return undefined;
+    }
+    const failureReply = extractQaFailureReplyText(match.text);
+    if (failureReply) {
+      throw new Error(failureReply);
+    }
+    return match;
+  }, timeoutMs);
 }
 
 async function waitForNoOutbound(state: QaBusState, timeoutMs = 1_200) {
