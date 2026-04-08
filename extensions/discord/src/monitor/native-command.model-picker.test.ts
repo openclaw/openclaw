@@ -9,6 +9,7 @@ import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
+import * as routeModule from "./native-command-route.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import { replyWithDiscordModelPickerProviders } from "./native-command-ui.js";
 import {
@@ -244,6 +245,72 @@ function createBoundThreadBindingManager(params: {
   };
 }
 
+function createUnboundRouteState(params: {
+  sessionKey: string;
+  agentId?: string;
+  accountId?: string;
+}) {
+  return {
+    route: {
+      agentId: params.agentId ?? "main",
+      channel: "discord",
+      accountId: params.accountId ?? "default",
+      sessionKey: params.sessionKey,
+      mainSessionKey: `agent:${params.agentId ?? "main"}:main`,
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    },
+    effectiveRoute: {
+      agentId: params.agentId ?? "main",
+      channel: "discord",
+      accountId: params.accountId ?? "default",
+      sessionKey: params.sessionKey,
+      mainSessionKey: `agent:${params.agentId ?? "main"}:main`,
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    },
+    boundSessionKey: undefined,
+    configuredRoute: null,
+    configuredBinding: null,
+    bindingReadiness: null,
+  } satisfies Awaited<
+    ReturnType<typeof import("./native-command-route.js").resolveDiscordNativeInteractionRouteState>
+  >;
+}
+
+function createBoundRouteState(params: {
+  sessionKey: string;
+  agentId?: string;
+  accountId?: string;
+}) {
+  return {
+    route: {
+      agentId: params.agentId ?? "main",
+      channel: "discord",
+      accountId: params.accountId ?? "default",
+      sessionKey: params.sessionKey,
+      mainSessionKey: `agent:${params.agentId ?? "main"}:main`,
+      lastRoutePolicy: "session",
+      matchedBy: "binding.channel",
+    },
+    effectiveRoute: {
+      agentId: params.agentId ?? "main",
+      channel: "discord",
+      accountId: params.accountId ?? "default",
+      sessionKey: params.sessionKey,
+      mainSessionKey: `agent:${params.agentId ?? "main"}:main`,
+      lastRoutePolicy: "session",
+      matchedBy: "binding.channel",
+    },
+    boundSessionKey: params.sessionKey,
+    configuredRoute: null,
+    configuredBinding: null,
+    bindingReadiness: { ok: true } as const,
+  } satisfies Awaited<
+    ReturnType<typeof import("./native-command-route.js").resolveDiscordNativeInteractionRouteState>
+  >;
+}
+
 function createDispatchSpy() {
   const dispatchSpy = vi
     .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
@@ -259,10 +326,27 @@ describe("Discord model picker interactions", () => {
     nativeCommandTesting.setDispatchReplyWithDispatcher(
       dispatcherModule.dispatchReplyWithDispatcher,
     );
+    nativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
+      params.threadBinding
+        ? createBoundRouteState({
+            sessionKey: params.threadBinding.targetSessionKey,
+            agentId: params.threadBinding.agentId,
+            accountId: params.accountId,
+          })
+        : createUnboundRouteState({
+            sessionKey: params.isDirectMessage
+              ? `agent:main:discord:dm:${params.directUserId ?? "owner"}`
+              : `agent:main:discord:channel:${params.conversationId}`,
+            accountId: params.accountId,
+          }),
+    );
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    nativeCommandTesting.setResolveDiscordNativeInteractionRouteState(
+      routeModule.resolveDiscordNativeInteractionRouteState,
+    );
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {
