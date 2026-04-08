@@ -45,6 +45,48 @@ function hasLegacyMatrixAccountPrivateNetworkAliases(value: unknown): boolean {
   );
 }
 
+function hasLegacyTrustedDmPolicy(value: unknown): boolean {
+  const root = isRecord(value) ? value : null;
+  if (!root) {
+    return false;
+  }
+  const dm = isRecord(root.dm) ? root.dm : null;
+  return dm?.policy === "trusted";
+}
+
+function hasLegacyMatrixAccountTrustedDmPolicies(value: unknown): boolean {
+  const accounts = isRecord(value) ? value : null;
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyTrustedDmPolicy(account));
+}
+
+function migrateLegacyTrustedDmPolicy(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const dm = isRecord(params.entry.dm) ? params.entry.dm : null;
+  if (!dm || dm.policy !== "trusted") {
+    return { entry: params.entry, changed: false };
+  }
+  const allowFromRaw = dm.allowFrom;
+  const allowFromEntries = Array.isArray(allowFromRaw)
+    ? allowFromRaw.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    : [];
+  // "trusted" with an explicit allowFrom list maps to "allowlist" semantics.
+  // "trusted" with no entries maps to "pairing" (the default secure mode), since
+  // accepting all senders would silently widen access on upgrade.
+  const nextPolicy: "allowlist" | "pairing" = allowFromEntries.length > 0 ? "allowlist" : "pairing";
+  const nextDm = { ...dm, policy: nextPolicy };
+  params.changes.push(
+    `Migrated ${params.pathPrefix}.dm.policy "trusted" → "${nextPolicy}" (legacy alias removed; ` +
+      `${allowFromEntries.length > 0 ? `preserved ${allowFromEntries.length} ${params.pathPrefix}.dm.allowFrom entries` : "no allowFrom entries present, defaulting to pairing for safety"}).`,
+  );
+  return { entry: { ...params.entry, dm: nextDm }, changed: true };
+}
+
 function normalizeMatrixRoomAllowAliases(params: {
   rooms: Record<string, unknown>;
   pathPrefix: string;
@@ -102,6 +144,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixAccountRoomAllowAliases,
   },
+  {
+    path: ["channels", "matrix"],
+    message:
+      'channels.matrix.dm.policy "trusted" is legacy; use "allowlist" (with allowFrom entries) or "pairing" instead. Run "openclaw doctor --fix".',
+    match: hasLegacyTrustedDmPolicy,
+  },
+  {
+    path: ["channels", "matrix", "accounts"],
+    message:
+      'channels.matrix.accounts.<id>.dm.policy "trusted" is legacy; use "allowlist" (with allowFrom entries) or "pairing" instead. Run "openclaw doctor --fix".',
+    match: hasLegacyMatrixAccountTrustedDmPolicies,
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -126,6 +180,14 @@ export function normalizeCompatibilityConfig({
   });
   updatedMatrix = topLevelPrivateNetwork.entry;
   changed = changed || topLevelPrivateNetwork.changed;
+
+  const topLevelTrustedDmPolicy = migrateLegacyTrustedDmPolicy({
+    entry: updatedMatrix,
+    pathPrefix: "channels.matrix",
+    changes,
+  });
+  updatedMatrix = topLevelTrustedDmPolicy.entry;
+  changed = changed || topLevelTrustedDmPolicy.changed;
 
   const normalizeTopLevelRoomScope = (key: "groups" | "rooms") => {
     const rooms = isRecord(updatedMatrix[key]) ? updatedMatrix[key] : null;
@@ -165,6 +227,16 @@ export function normalizeCompatibilityConfig({
       });
       if (privateNetworkMigration.changed) {
         nextAccount = privateNetworkMigration.entry;
+        accountChanged = true;
+      }
+
+      const accountTrustedDmPolicy = migrateLegacyTrustedDmPolicy({
+        entry: nextAccount,
+        pathPrefix: `channels.matrix.accounts.${accountId}`,
+        changes,
+      });
+      if (accountTrustedDmPolicy.changed) {
+        nextAccount = accountTrustedDmPolicy.entry;
         accountChanged = true;
       }
 
