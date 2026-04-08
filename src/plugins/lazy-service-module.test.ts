@@ -20,6 +20,7 @@ function createLazyModuleLifecycle() {
 
 async function expectLifecycleStarted(params: {
   overrideEnvVar?: string;
+  validateOverrideSpecifier?: (specifier: string) => string;
   loadDefaultModule?: () => Promise<Record<string, unknown>>;
   loadOverrideModule?: (spec: string) => Promise<Record<string, unknown>>;
   startExportNames: string[];
@@ -27,6 +28,9 @@ async function expectLifecycleStarted(params: {
 }) {
   return startLazyPluginServiceModule({
     ...(params.overrideEnvVar ? { overrideEnvVar: params.overrideEnvVar } : {}),
+    ...(params.validateOverrideSpecifier
+      ? { validateOverrideSpecifier: params.validateOverrideSpecifier }
+      : {}),
     loadDefaultModule: params.loadDefaultModule ?? (async () => createLazyModuleLifecycle().module),
     ...(params.loadOverrideModule ? { loadOverrideModule: params.loadOverrideModule } : {}),
     startExportNames: params.startExportNames,
@@ -83,5 +87,35 @@ describe("startLazyPluginServiceModule", () => {
 
     expect(loadOverrideModule).toHaveBeenCalledWith("virtual:service");
     expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates the override specifier before loading it", async () => {
+    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "virtual:service";
+    const loadOverrideModule = vi.fn(async () => ({ startOverride: createAsyncHookMock() }));
+    const validateOverrideSpecifier = vi.fn((specifier: string) => `validated:${specifier}`);
+
+    await expectLifecycleStarted({
+      overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
+      validateOverrideSpecifier,
+      loadOverrideModule,
+      startExportNames: ["startOverride"],
+    });
+
+    expect(validateOverrideSpecifier).toHaveBeenCalledWith("virtual:service");
+    expect(loadOverrideModule).toHaveBeenCalledWith("validated:virtual:service");
+  });
+
+  it("surfaces override validation failures", async () => {
+    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "data:text/javascript,boom";
+
+    await expect(
+      expectLifecycleStarted({
+        overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
+        validateOverrideSpecifier: () => {
+          throw new Error("blocked override");
+        },
+        startExportNames: ["startDefault"],
+      }),
+    ).rejects.toThrow("blocked override");
   });
 });

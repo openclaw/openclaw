@@ -33,6 +33,7 @@ type LoadAuthProfileStoreOptions = {
 };
 
 type SaveAuthProfileStoreOptions = {
+  filterExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
 };
 
@@ -415,6 +416,9 @@ export function saveAuthProfileStore(
   const runtimeKey = resolveRuntimeStoreKey(agentDir);
   const payload = buildPersistedAuthProfileSecretsStore(store, ({ profileId, credential }) => {
     if (credential.type !== "oauth") {
+      return true;
+    }
+    if (options?.filterExternalAuthProfiles === false) {
       return true;
     }
     return shouldPersistExternalAuthProfile({

@@ -1,19 +1,14 @@
 import fs from "node:fs/promises";
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
-  DEFAULT_TEST_MODEL_CATALOG,
   MAIN_SESSION_KEY,
   installDirectiveBehaviorE2EHooks,
-  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
-import {
-  loadModelCatalogMock,
-  runEmbeddedPiAgentMock,
-} from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
@@ -51,6 +46,7 @@ function makeAgentExecConfig(home: string) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-6",
+        humanDelay: { mode: "off" },
         workspace: `${home}/openclaw`,
       },
       list: [
@@ -91,11 +87,7 @@ function expectLastExecOverrides(overrides: Partial<ExpectedExecOverrides> = {})
 describe("directive behavior exec agent defaults", () => {
   installDirectiveBehaviorE2EHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
-    loadModelCatalogMock.mockReset();
-    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
-    installFreshDirectiveBehaviorReplyMocks();
+  beforeAll(async () => {
     ({ getReplyFromConfig } = await import("./reply/get-reply.js"));
   });
 
