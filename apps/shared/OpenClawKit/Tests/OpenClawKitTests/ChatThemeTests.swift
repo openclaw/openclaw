@@ -9,7 +9,17 @@ import AppKit
 #if os(macOS)
 private func luminance(_ color: NSColor) throws -> CGFloat {
     let rgb = try #require(color.usingColorSpace(.deviceRGB))
-    return 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+
+    // Calculate relative luminance using WCAG formula with gamma linearization
+    func linearize(_ component: CGFloat) -> CGFloat {
+        component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+    }
+
+    let rLinear = linearize(rgb.redComponent)
+    let gLinear = linearize(rgb.greenComponent)
+    let bLinear = linearize(rgb.blueComponent)
+
+    return 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
 }
 #endif
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenClawKit
 
 #if os(macOS)
 import AppKit
@@ -101,7 +102,11 @@ enum OpenClawChatTheme {
     }
 
     static var userBubble: Color {
+        #if os(macOS)
+        ColorPreferencesStore.shared.resolvedColor
+        #else
         Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+        #endif
     }
 
     static var assistantBubble: Color {
@@ -128,7 +133,27 @@ enum OpenClawChatTheme {
         #endif
     }
 
-    static var userText: Color { .white }
+    static var userText: Color {
+        Self.userText(for: nil)
+    }
+
+    static func userText(for backgroundColor: Color?) -> Color {
+        let preference = ColorPreferencesStore.shared.textColorPreference
+
+        switch preference {
+        case .white:
+            return .white
+        case .black:
+            return .black
+        case .automatic:
+            #if os(macOS)
+            let effectiveBackground = backgroundColor ?? ColorPreferencesStore.shared.resolvedColor
+            return ColorHexSupport.contrastingTextColor(for: effectiveBackground)
+            #else
+            return .white
+            #endif
+        }
+    }
 
     static var assistantText: Color {
         #if os(macOS)

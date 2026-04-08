@@ -172,7 +172,9 @@ private struct ChatMessageBody: View {
 
     var body: some View {
         let text = self.primaryText
-        let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
+        let textColor = self.isUser
+            ? OpenClawChatTheme.userText(for: self.bubbleFillColor)
+            : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
             if self.isToolResultMessage, self.showsAssistantTrace {
@@ -181,7 +183,8 @@ private struct ChatMessageBody: View {
                         title: self.toolResultTitle,
                         text: text,
                         isUser: self.isUser,
-                        toolName: self.message.toolName)
+                        toolName: self.message.toolName,
+                        textColor: textColor)
                 }
             } else if self.isUser {
                 ChatMarkdownRenderer(
@@ -199,7 +202,7 @@ private struct ChatMessageBody: View {
 
             if !self.inlineAttachments.isEmpty {
                 ForEach(self.inlineAttachments.indices, id: \.self) { idx in
-                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
+                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser, textColor: textColor)
                 }
             }
 
@@ -219,7 +222,8 @@ private struct ChatMessageBody: View {
                         title: "\(display.emoji) \(display.title)",
                         text: toolResult.text ?? "",
                         isUser: self.isUser,
-                        toolName: toolResult.name)
+                        toolName: toolResult.name,
+                        textColor: textColor)
                 }
             }
         }
@@ -353,6 +357,7 @@ private struct ChatMessageBody: View {
 private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let textColor: Color
 
     var body: some View {
         HStack(spacing: 8) {
@@ -360,7 +365,7 @@ private struct AttachmentRow: View {
             Text(self.att.fileName ?? "Attachment")
                 .font(.footnote)
                 .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                .foregroundStyle(self.textColor)
             Spacer()
         }
         .padding(10)
@@ -415,6 +420,7 @@ private struct ToolResultCard: View {
     let text: String
     let isUser: Bool
     let toolName: String?
+    let textColor: Color
     @State private var expanded = false
 
     var body: some View {
@@ -428,7 +434,7 @@ private struct ToolResultCard: View {
 
                 Text(self.displayText)
                     .font(.footnote.monospaced())
-                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                    .foregroundStyle(self.textColor)
                     .lineLimit(self.expanded ? nil : Self.previewLineLimit)
 
                 if self.shouldShowToggle {
