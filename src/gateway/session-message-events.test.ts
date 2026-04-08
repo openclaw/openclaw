@@ -673,10 +673,8 @@ describe("session.message websocket events", () => {
             "agent:main:main",
       );
 
-      emitSessionLifecycleEvent({
-        sessionKey: "agent:main:main",
-        reason: "reset",
-      });
+      const resetRes = await rpcReq(ws, "sessions.reset", { key: "agent:main:main" });
+      expect(resetRes.ok).toBe(true);
 
       const drainEvent = await socketDrainPromise;
       expect(drainEvent.payload).toMatchObject({
