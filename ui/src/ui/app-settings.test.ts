@@ -158,6 +158,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamingStatus: null,
   dreamingModeSaving: false,
   dreamDiaryLoading: false,
+  dreamDiaryActionLoading: false,
   dreamDiaryError: null,
   dreamDiaryPath: null,
   dreamDiaryContent: null,
