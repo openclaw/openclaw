@@ -215,11 +215,13 @@ even if the gateway is healthy.
 
 ### 2c) Codex OAuth provider overrides
 
-If you previously added `models.providers.openai-codex` manually, that legacy
-override can shadow the built-in Codex OAuth provider path that newer releases
-use automatically. Doctor warns when it sees that override alongside Codex OAuth
-so you can remove the stale config and get the built-in routing/fallback behavior
-back.
+If you previously added legacy OpenAI transport settings under
+`models.providers.openai-codex`, they can shadow the built-in Codex OAuth
+provider path that newer releases use automatically. Doctor warns when it sees
+those old transport settings alongside Codex OAuth so you can remove or rewrite
+the stale transport override and get the built-in routing/fallback behavior
+back. Custom proxies and header-only overrides are still supported and do not
+trigger this warning.
 
 ### 3) Legacy state migrations (disk layout)
 

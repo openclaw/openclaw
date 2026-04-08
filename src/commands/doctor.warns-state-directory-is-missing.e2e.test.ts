@@ -262,7 +262,6 @@ describe("doctor command", () => {
     const warned = terminalNoteMock.mock.calls.some(([, title]) => title === "Codex OAuth");
     expect(warned).toBe(false);
   });
-
   it("does not warn about an openai-codex provider override without Codex OAuth", async () => {
     mockDoctorConfigSnapshot({
       config: {
