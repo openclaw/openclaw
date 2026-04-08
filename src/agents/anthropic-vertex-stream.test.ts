@@ -1,5 +1,5 @@
 import type { Model } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 const hoisted = vi.hoisted(() => {
@@ -31,28 +31,28 @@ vi.mock("@anthropic-ai/vertex-sdk", () => ({
   }),
 }));
 
+vi.mock("../plugin-sdk/anthropic-vertex.js", () => ({
+  resolveAnthropicVertexProjectId: (env: NodeJS.ProcessEnv = process.env) =>
+    env.ANTHROPIC_VERTEX_PROJECT_ID || env.GOOGLE_CLOUD_PROJECT || env.GOOGLE_CLOUD_PROJECT_ID,
+  resolveAnthropicVertexClientRegion: (params?: { baseUrl?: string; env?: NodeJS.ProcessEnv }) => {
+    const baseUrl = params?.baseUrl?.trim();
+    if (baseUrl) {
+      try {
+        const host = new URL(baseUrl).hostname;
+        const match = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/u.exec(host);
+        if (match?.[1]) {
+          return match[1];
+        }
+      } catch {
+        // noop; test seam only
+      }
+    }
+    return params?.env?.GOOGLE_CLOUD_LOCATION || params?.env?.CLOUD_ML_REGION || "global";
+  },
+}));
+
 let createAnthropicVertexStreamFn: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFnForModel;
-
-async function loadFreshAnthropicVertexStreamModuleForTest() {
-  vi.resetModules();
-  vi.doMock("@mariozechner/pi-ai", async () => {
-    const original =
-      await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-    return {
-      ...original,
-      streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
-        hoisted.streamAnthropicMock(model, context, options),
-    };
-  });
-  vi.doMock("@anthropic-ai/vertex-sdk", () => ({
-    AnthropicVertex: vi.fn(function MockAnthropicVertex(options: unknown) {
-      hoisted.anthropicVertexCtorMock(options);
-      return { options };
-    }),
-  }));
-  return await import("./anthropic-vertex-stream.js");
-}
 
 function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic-messages"> {
   return {
@@ -64,14 +64,14 @@ function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic
 }
 
 describe("createAnthropicVertexStreamFn", () => {
+  beforeAll(async () => {
+    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
+      await import("./anthropic-vertex-stream.js"));
+  });
+
   beforeEach(() => {
     hoisted.streamAnthropicMock.mockClear();
     hoisted.anthropicVertexCtorMock.mockClear();
-  });
-
-  beforeEach(async () => {
-    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
-      await loadFreshAnthropicVertexStreamModuleForTest());
   });
 
   it("omits projectId when ADC credentials are used without an explicit project", () => {
@@ -321,11 +321,6 @@ describe("createAnthropicVertexStreamFn", () => {
 describe("createAnthropicVertexStreamFnForModel", () => {
   beforeEach(() => {
     hoisted.anthropicVertexCtorMock.mockClear();
-  });
-
-  beforeEach(async () => {
-    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
-      await loadFreshAnthropicVertexStreamModuleForTest());
   });
 
   it("derives project and region from the model and env", () => {

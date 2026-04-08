@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   authorizeConfigWriteShared,
@@ -40,7 +41,7 @@ export function resolveExplicitConfigWriteTarget(scope: ConfigWriteScope): Confi
 export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTarget {
   return resolveConfigWriteTargetFromPathShared({
     path,
-    normalizeChannelId: (raw) => raw.trim().toLowerCase() as ChannelId,
+    normalizeChannelId: (raw) => normalizeLowercaseStringOrEmpty(raw) as ChannelId,
   });
 }
 

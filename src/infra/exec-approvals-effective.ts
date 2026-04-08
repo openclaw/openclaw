@@ -107,9 +107,6 @@ function resolveAskNote(params: {
   hostAsk: ExecAsk;
   effectiveAsk: ExecAsk;
 }): string {
-  if (params.hostAsk === "off" && params.requestedAsk !== "off") {
-    return "host ask=off suppresses prompts";
-  }
   if (params.effectiveAsk === params.requestedAsk) {
     return "requested ask applies";
   }
@@ -200,8 +197,8 @@ export function resolveExecPolicyScopeSnapshot(params: {
   });
   const hostPath = params.hostPath ?? DEFAULT_HOST_PATH;
   const effectiveSecurity = minSecurity(requestedSecurity.value, resolved.agent.security);
-  const effectiveAsk =
-    resolved.agent.ask === "off" ? "off" : maxAsk(requestedAsk.value, resolved.agent.ask);
+  const effectiveAsk = maxAsk(requestedAsk.value, resolved.agent.ask);
+  const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);
   return {
     scopeLabel: params.scopeLabel,
     configPath: params.configPath,
@@ -250,7 +247,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       }),
     },
     askFallback: {
-      effective: resolved.agent.askFallback,
+      effective: effectiveAskFallback,
       source: formatHostFieldSource({
         hostPath,
         field: "askFallback",

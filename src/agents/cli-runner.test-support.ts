@@ -106,6 +106,8 @@ type ManagedRunMock = {
 function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
   return {
     id: "codex-cli",
+    bundleMcp: true,
+    bundleMcpMode: "codex-config-overrides",
     config: {
       command: "codex",
       args: [
@@ -187,6 +189,7 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
   return {
     id: "claude-cli",
     bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
     config: {
       command: "claude",
       args: [
@@ -248,12 +251,16 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
 function buildGoogleGeminiCliBackendFixture(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
+    bundleMcp: true,
+    bundleMcpMode: "gemini-system-settings",
     config: {
       command: "gemini",
       args: ["--output-format", "json", "--prompt", "{prompt}"],
       resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
       output: "json",
       input: "arg",
+      imageArg: "@",
+      imagePathScope: "workspace",
       modelArg: "--model",
       modelAliases: {
         pro: "gemini-3.1-pro-preview",

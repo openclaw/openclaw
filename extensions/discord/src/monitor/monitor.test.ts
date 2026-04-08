@@ -42,6 +42,13 @@ let sendComponents: typeof import("../send.components.js");
 
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
+function getLastRecordedCtx(): Record<string, unknown> | undefined {
+  const params = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
+    | { ctx?: Record<string, unknown> }
+    | undefined;
+  return params?.ctx;
+}
+
 describe("discord component interactions", () => {
   let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;
   const createCfg = (): OpenClawConfig =>
@@ -299,6 +306,23 @@ describe("discord component interactions", () => {
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+  });
+
+  it("records DM component interactions with user originating targets", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry()],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(lastDispatchCtx?.OriginatingTo).toBe("user:123456789");
+    expect(lastDispatchCtx?.To).toBe("channel:dm-channel");
+    expect(getLastRecordedCtx()?.OriginatingTo).toBe("user:123456789");
+    expect(getLastRecordedCtx()?.To).toBe("channel:dm-channel");
   });
 
   it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {

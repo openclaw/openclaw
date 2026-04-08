@@ -8,6 +8,7 @@ import { createAutoReplyCoreVitestConfig } from "../vitest.auto-reply-core.confi
 import { createAutoReplyReplyVitestConfig } from "../vitest.auto-reply-reply.config.ts";
 import { createAutoReplyTopLevelVitestConfig } from "../vitest.auto-reply-top-level.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
+import bundledVitestConfig from "../vitest.bundled.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createCliVitestConfig } from "../vitest.cli.config.ts";
 import { createCommandsLightVitestConfig } from "../vitest.commands-light.config.ts";
@@ -49,12 +50,24 @@ import { createTasksVitestConfig } from "../vitest.tasks.config.ts";
 import { createToolingVitestConfig } from "../vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "../vitest.tui.config.ts";
 import { createUiVitestConfig } from "../vitest.ui.config.ts";
+import { bundledPluginDependentUnitTestFiles } from "../vitest.unit-paths.mjs";
 import { createUtilsVitestConfig } from "../vitest.utils.config.ts";
 import { createWizardVitestConfig } from "../vitest.wizard.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
+
+function bundledExcludePatternCouldMatchFile(pattern: string, file: string): boolean {
+  if (pattern === file) {
+    return true;
+  }
+  if (pattern.endsWith("/**")) {
+    const prefix = pattern.slice(0, -3);
+    return file === prefix || file.startsWith(`${prefix}/`);
+  }
+  return false;
+}
 
 describe("resolveVitestIsolation", () => {
   it("defaults shared scoped configs to the non-isolated runner", () => {
@@ -137,6 +150,15 @@ describe("createScopedVitestConfig", () => {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
+  });
+
+  it("keeps bundled unit test includes out of the bundled exclude list", () => {
+    const excludePatterns = bundledVitestConfig.test?.exclude ?? [];
+    for (const file of bundledPluginDependentUnitTestFiles) {
+      expect(
+        excludePatterns.some((pattern) => bundledExcludePatternCouldMatchFile(pattern, file)),
+      ).toBe(false);
+    }
   });
 });
 
@@ -291,7 +313,6 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionChannelsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionChannelsConfig.test?.include).toEqual(
       expect.arrayContaining([
-        "browser/**/*.test.ts",
         "discord/**/*.test.ts",
         "line/**/*.test.ts",
         "slack/**/*.test.ts",
@@ -527,6 +548,11 @@ describe("scoped vitest configs", () => {
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultGatewayConfig.test?.exclude).toContain("gateway.test.ts");
+    expect(defaultGatewayConfig.test?.exclude).toContain(
+      "server.startup-matrix-migration.integration.test.ts",
+    );
+    expect(defaultGatewayConfig.test?.exclude).toContain("sessions-history-http.test.ts");
   });
 
   it("normalizes infra include patterns relative to the scoped dir", () => {
@@ -635,6 +661,7 @@ describe("scoped vitest configs", () => {
   it("normalizes plugins include patterns relative to the scoped dir", () => {
     expect(defaultPluginsConfig.test?.dir).toBe("src/plugins");
     expect(defaultPluginsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultPluginsConfig.test?.exclude).toContain("contracts/**");
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

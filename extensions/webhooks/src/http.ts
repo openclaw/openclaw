@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "zod";
 import type { PluginRuntime } from "../api.js";
 import {
@@ -309,7 +310,7 @@ function extractSharedSecret(req: IncomingMessage): string {
   const authHeader = Array.isArray(req.headers.authorization)
     ? String(req.headers.authorization[0] ?? "")
     : String(req.headers.authorization ?? "");
-  if (authHeader.toLowerCase().startsWith("bearer ")) {
+  if (normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")) {
     return authHeader.slice("bearer ".length).trim();
   }
   const sharedHeader = req.headers["x-openclaw-webhook-secret"];

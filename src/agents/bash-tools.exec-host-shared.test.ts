@@ -41,6 +41,7 @@ let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared
 let maxExecApprovalFollowupFailureLogKeys: typeof import("./bash-tools.exec-host-shared.js").MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS;
 let enforceStrictInlineEvalApprovalBoundary: typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext;
+let resolveExecApprovalUnavailableState: typeof import("./bash-tools.exec-host-shared.js").resolveExecApprovalUnavailableState;
 let buildExecApprovalPendingToolResult: typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalPendingToolResult;
 let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
 let logWarn: typeof import("../logger.js").logWarn;
@@ -51,6 +52,7 @@ beforeAll(async () => {
     MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
     enforceStrictInlineEvalApprovalBoundary,
     resolveExecHostApprovalContext,
+    resolveExecApprovalUnavailableState,
     buildExecApprovalPendingToolResult,
   } = await import("./bash-tools.exec-host-shared.js"));
   ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
@@ -124,7 +126,7 @@ describe("sendExecApprovalFollowupResult", () => {
 });
 
 describe("resolveExecHostApprovalContext", () => {
-  it("uses exec-approvals.json agent security even when it is broader than the tool default", () => {
+  it("does not let exec-approvals.json broaden security beyond the requested policy", () => {
     mocks.resolveExecApprovals.mockReturnValue({
       defaults: {
         security: "allowlist",
@@ -149,7 +151,63 @@ describe("resolveExecHostApprovalContext", () => {
       host: "gateway",
     });
 
-    expect(result.hostSecurity).toBe("full");
+    expect(result.hostSecurity).toBe("allowlist");
+  });
+
+  it("does not let host ask=off suppress a stricter requested ask mode", () => {
+    mocks.resolveExecApprovals.mockReturnValue({
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+        autoAllowSkills: false,
+      },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+        autoAllowSkills: false,
+      },
+      allowlist: [],
+      file: { version: 1, agents: {} },
+    });
+
+    const result = resolveExecHostApprovalContext({
+      agentId: "agent-main",
+      security: "full",
+      ask: "always",
+      host: "gateway",
+    });
+
+    expect(result.hostAsk).toBe("always");
+  });
+
+  it("clamps askFallback to the effective host security", () => {
+    mocks.resolveExecApprovals.mockReturnValue({
+      defaults: {
+        security: "full",
+        ask: "always",
+        askFallback: "full",
+        autoAllowSkills: false,
+      },
+      agent: {
+        security: "full",
+        ask: "always",
+        askFallback: "full",
+        autoAllowSkills: false,
+      },
+      allowlist: [],
+      file: { version: 1, agents: {} },
+    });
+
+    const result = resolveExecHostApprovalContext({
+      agentId: "agent-main",
+      security: "allowlist",
+      ask: "always",
+      host: "gateway",
+    });
+
+    expect(result.askFallback).toBe("allowlist");
   });
 });
 
@@ -184,6 +242,19 @@ describe("enforceStrictInlineEvalApprovalBoundary", () => {
 });
 
 describe("buildExecApprovalPendingToolResult", () => {
+  it("does not infer approver DM delivery from unavailable approval state", () => {
+    expect(
+      resolveExecApprovalUnavailableState({
+        turnSourceChannel: "telegram",
+        turnSourceAccountId: "default",
+        preResolvedDecision: null,
+      }),
+    ).toMatchObject({
+      sentApproverDms: false,
+      unavailableReason: "no-approval-route",
+    });
+  });
+
   it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
     const result = buildExecApprovalPendingToolResult({
       host: "gateway",

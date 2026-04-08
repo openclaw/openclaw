@@ -4,6 +4,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
 
@@ -145,7 +146,7 @@ const REASONING_PATTERNS = [
 ];
 
 function inferReasoningSupport(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   return REASONING_PATTERNS.some((p) => lower.includes(p));
 }
 

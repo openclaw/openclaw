@@ -17,6 +17,7 @@ import {
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
 } from "../gateway/protocol/client-info.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
@@ -57,7 +58,7 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
 }
 
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }

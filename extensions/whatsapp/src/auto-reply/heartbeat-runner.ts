@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { newConnectionId } from "../reconnect.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -31,7 +32,7 @@ import { getSessionSnapshot } from "./session-snapshot.js";
 function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof loadConfig>): string {
   const agents = cfg.agents?.list ?? [];
   const chosen = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
-  return chosen.trim().toLowerCase() || "main";
+  return normalizeOptionalLowercaseString(chosen) ?? "main";
 }
 
 export async function runWebHeartbeatOnce(opts: {

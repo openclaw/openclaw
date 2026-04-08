@@ -31,6 +31,7 @@ export type StatefulBindingTargetDriver = {
     sessionKey: string;
     bindingTarget: StatefulBindingTargetDescriptor;
     reason: "new" | "reset";
+    commandSource?: string;
   }) => Promise<StatefulBindingTargetResetResult>;
 };
 

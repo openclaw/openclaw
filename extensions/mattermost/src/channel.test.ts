@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
 
@@ -28,14 +28,13 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
 
+import { mattermostPlugin } from "./channel.js";
+import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
-
-let mattermostPlugin: typeof import("./channel.js").mattermostPlugin;
-let resetMattermostReactionBotUserCacheForTests: typeof import("./mattermost/reactions.js").resetMattermostReactionBotUserCacheForTests;
 
 type MattermostHandleAction = NonNullable<
   NonNullable<typeof mattermostPlugin.actions>["handleAction"]
@@ -111,11 +110,6 @@ function createMattermostActionContext(
 }
 
 describe("mattermostPlugin", () => {
-  beforeAll(async () => {
-    ({ mattermostPlugin } = await import("./channel.js"));
-    ({ resetMattermostReactionBotUserCacheForTests } = await import("./mattermost/reactions.js"));
-  });
-
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
     sendMessageMattermostMock.mockResolvedValue({

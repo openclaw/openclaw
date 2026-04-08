@@ -90,9 +90,14 @@ export function resolvePdfModelConfigForTool(params: {
         continue;
       }
       const models = providerCfg?.models ?? [];
-      const modelId = models.find(
-        (model) => Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("image"),
-      )?.id?.trim();
+      const modelId = models
+        .find(
+          (model) =>
+            Boolean(model?.id?.trim()) &&
+            Array.isArray(model?.input) &&
+            model.input.includes("image"),
+        )
+        ?.id?.trim();
       if (!modelId) {
         continue;
       }

@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export type PluginsCommand =
   | { action: "list" }
@@ -20,7 +23,7 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
   }
 
   const [rawAction, ...rest] = tail.split(/\s+/);
-  const action = normalizeOptionalString(rawAction)?.toLowerCase();
+  const action = normalizeOptionalLowercaseString(rawAction);
   const name = rest.join(" ").trim();
 
   if (action === "list") {

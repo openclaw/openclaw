@@ -14,7 +14,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -113,23 +117,21 @@ async function hasBoundConversationForSession(params: {
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
 }): Promise<boolean> {
-  const channel = normalizeOptionalString(params.channelRaw)?.toLowerCase() ?? "";
+  const channel = normalizeOptionalLowercaseString(params.channelRaw) ?? "";
   if (!channel) {
     return false;
   }
-  const accountId = normalizeOptionalString(params.accountIdRaw)?.toLowerCase() ?? "";
+  const accountId = normalizeOptionalLowercaseString(params.accountIdRaw) ?? "";
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
   const normalizedAccountId =
-    accountId || normalizeOptionalString(configuredDefaultAccountId)?.toLowerCase() || "default";
+    accountId || normalizeOptionalLowercaseString(configuredDefaultAccountId) || "default";
   const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
-    const bindingChannel =
-      normalizeOptionalString(binding.conversation.channel)?.toLowerCase() ?? "";
-    const bindingAccountId =
-      normalizeOptionalString(binding.conversation.accountId)?.toLowerCase() ?? "";
+    const bindingChannel = normalizeOptionalLowercaseString(binding.conversation.channel) ?? "";
+    const bindingAccountId = normalizeOptionalLowercaseString(binding.conversation.accountId) ?? "";
     const conversationId = normalizeOptionalString(binding.conversation.conversationId) ?? "";
     return (
       bindingChannel === channel &&
@@ -137,24 +139,6 @@ async function hasBoundConversationForSession(params: {
       conversationId.length > 0
     );
   });
-}
-
-function resolveDispatchAccountId(params: {
-  cfg: OpenClawConfig;
-  channelRaw: string | undefined;
-  accountIdRaw: string | undefined;
-}): string | undefined {
-  const channel = normalizeOptionalString(params.channelRaw)?.toLowerCase() ?? "";
-  if (!channel) {
-    return normalizeOptionalString(params.accountIdRaw);
-  }
-  const explicit = normalizeOptionalString(params.accountIdRaw);
-  if (explicit) {
-    return explicit;
-  }
-  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
-  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
-  return normalizeOptionalString(configuredDefaultAccountId);
 }
 
 export type AcpDispatchAttemptResult = {
@@ -343,7 +327,10 @@ export async function tryDispatchAcpReply(params: {
   const shouldEmitResolvedIdentityNotice =
     !params.suppressUserDelivery &&
     identityPendingBeforeTurn &&
-    (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
+    (Boolean(
+      params.ctx.MessageThreadId != null &&
+      (normalizeOptionalString(String(params.ctx.MessageThreadId)) ?? ""),
+    ) ||
       (await hasBoundConversationForSession({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
@@ -357,11 +344,19 @@ export async function tryDispatchAcpReply(params: {
         normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
         resolveAgentIdFromSessionKey(canonicalSessionKey))
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
-  const effectiveDispatchAccountId = resolveDispatchAccountId({
-    cfg: params.cfg,
-    channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-    accountIdRaw: params.ctx.AccountId,
-  });
+  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
+  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const dispatchChannels = params.cfg.channels as
+    | Record<string, { defaultAccount?: unknown } | undefined>
+    | undefined;
+  const defaultDispatchAccount =
+    normalizedDispatchChannel == null
+      ? undefined
+      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
+  const effectiveDispatchAccountId =
+    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -392,7 +387,7 @@ export async function tryDispatchAcpReply(params: {
         `acp-dispatch: session=${sessionKey} outcome=error code=${acpResolution.error.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
       );
       params.recordProcessed("completed", {
-        reason: `acp_error:${acpResolution.error.code.toLowerCase()}`,
+        reason: `acp_error:${normalizeLowercaseStringOrEmpty(acpResolution.error.code)}`,
       });
       params.markIdle("message_completed");
       return { queuedFinal: delivered, counts };
@@ -515,7 +510,7 @@ export async function tryDispatchAcpReply(params: {
       `acp-dispatch: session=${sessionKey} outcome=error code=${acpError.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
     );
     params.recordProcessed("completed", {
-      reason: `acp_error:${acpError.code.toLowerCase()}`,
+      reason: `acp_error:${normalizeLowercaseStringOrEmpty(acpError.code)}`,
     });
     params.markIdle("message_completed");
     return { queuedFinal, counts };

@@ -16,6 +16,7 @@ import { getImageMetadata } from "../../media/image-ops.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
@@ -213,7 +214,7 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" {
   if (!raw) {
     return "generate";
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "generate" || normalized === "list") {
     return normalized;
   }
@@ -283,6 +284,14 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
     );
   }
   return normalized;
+}
+
+function pickConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
+  const configured = cfg?.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return undefined;
 }
 
 function resolveSelectedImageGenerationProvider(params: {
@@ -420,7 +429,7 @@ async function loadReferenceImages(params: {
     );
 
     const media = isDataUrl
-      ? decodeDataUrl(resolvedImage)
+      ? decodeDataUrl(resolvedImage, { maxBytes: params.maxBytes })
       : params.sandboxConfig
         ? await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
@@ -574,6 +583,7 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
+        maxBytes: pickConfiguredMediaMaxBytes(effectiveCfg),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
