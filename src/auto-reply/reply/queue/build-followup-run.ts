@@ -35,9 +35,21 @@ export type BuildFollowupRunParams = {
   source?: string;
 };
 
+/** Metadata from the session store resolution, available to callers
+ *  so they don't need to re-load the store a second time. */
+export type FollowupRunSessionMeta = {
+  _sessionMeta: {
+    storePath: string;
+    sessionStore: ReturnType<typeof loadSessionStore>;
+    sessionEntry: ReturnType<typeof loadSessionStore>[string];
+  };
+};
+
+export type BuildFollowupRunResult = FollowupRun & FollowupRunSessionMeta;
+
 export async function buildFollowupRunForSession(
   params: BuildFollowupRunParams,
-): Promise<FollowupRun | null> {
+): Promise<BuildFollowupRunResult | null> {
   const source = params.source ?? "plugin.followup";
   const agentId = params.agentId?.trim() || resolveAgentIdFromSessionKey(params.sessionKey);
   const cfg = loadConfig();
@@ -82,6 +94,7 @@ export async function buildFollowupRunForSession(
   );
 
   return {
+    _sessionMeta: { storePath, sessionStore: store, sessionEntry },
     prompt: params.prompt,
     enqueuedAt: Date.now(),
     originatingChannel:
