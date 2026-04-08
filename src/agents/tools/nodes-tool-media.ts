@@ -65,10 +65,10 @@ async function executeCameraSnap({
   workspaceDir,
   workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
-  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   const facings: CameraFacing[] =
     facingRaw === "both"
@@ -172,10 +172,10 @@ async function executePhotosLatest({
   workspaceDir,
   workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
-  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const limitRaw =
     typeof params.limit === "number" && Number.isFinite(params.limit)
       ? Math.floor(params.limit)
@@ -283,10 +283,10 @@ async function executeCameraClip({
   workspaceDir,
   workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
-  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
     throw new Error("invalid facing (front|back)");
@@ -340,7 +340,7 @@ async function executeScreenRecord({
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
   const nodeId = await resolveNodeId(gatewayOpts, node);
-  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const durationMs = Math.min(
     typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
       ? params.durationMs
@@ -396,7 +396,7 @@ function requireString(params: Record<string, unknown>, key: string): string {
   return raw.trim();
 }
 
-function resolveWorkspaceOnlyNodesTmpDir(params: {
+function resolveWorkspaceTempDir(params: {
   workspaceDir?: string;
   workspaceOnly?: boolean;
 }): string | undefined {
@@ -405,7 +405,7 @@ function resolveWorkspaceOnlyNodesTmpDir(params: {
   }
   const workspaceDir = normalizeWorkspaceDir(params.workspaceDir);
   if (!workspaceDir) {
-    throw new Error("workspaceDir is required when nodes workspaceOnly is enabled");
+    throw new Error("workspaceDir is required when workspaceOnly is enabled");
   }
   return workspaceDir;
 }

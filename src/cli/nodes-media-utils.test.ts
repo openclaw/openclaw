@@ -26,6 +26,16 @@ describe("cli/nodes-media-utils", () => {
       ext: ".png",
     });
     expect(resolveTempPathParts({ ext: ".jpg", tmpDir: "/tmp", id: "id2" }).ext).toBe(".jpg");
+    expect(resolveTempPathParts({ ext: " mp4 ", tmpDir: "/tmp", id: "id3" }).ext).toBe(".mp4");
+  });
+
+  it("rejects temp path extensions that include path syntax", () => {
+    expect(() =>
+      resolveTempPathParts({ ext: "mp4/../../escape", tmpDir: "/tmp", id: "id1" }),
+    ).toThrow(/invalid temp file extension/i);
+    expect(() => resolveTempPathParts({ ext: "..\\escape", tmpDir: "/tmp", id: "id2" })).toThrow(
+      /invalid temp file extension/i,
+    );
   });
 
   it("rejects temp path extensions with path syntax", () => {

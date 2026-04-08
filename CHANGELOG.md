@@ -10,7 +10,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/nodes: keep `tools.fs.workspaceOnly` node media outputs inside the configured workspace boundary and reject unsafe temp-file extensions for captured media.
 - Control UI: guard stale session-history reloads during fast session switches so the selected session and rendered transcript stay in sync. (#62975) Thanks @scoootscooob.
 - Slack/media: preserve bearer auth across same-origin `files.slack.com` redirects while still stripping it on cross-origin Slack CDN hops, so `url_private_download` image attachments load again. (#62960) Thanks @vincentkoc.
 - Agents/timeouts: make the LLM idle timeout inherit `agents.defaults.timeoutSeconds` when configured, disable the unconfigured idle watchdog for cron runs, and point idle-timeout errors at `agents.defaults.llm.idleTimeoutSeconds`. Thanks @drvoss.
@@ -74,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Z.AI: default onboarding and endpoint detection to GLM-5.1 instead of GLM-5. (#61998) Thanks @serg0x.
 - Reply execution: prefer the active runtime snapshot over stale queued reply config during embedded reply and follow-up execution so SecretRef-backed reply turns stop crashing after secrets have already resolved. (#62693) Thanks @mbelinky.
 - Android/manual connect: allow blank port input only for TLS manual gateway endpoints so standard HTTPS Tailscale hosts default to `443` without silently changing cleartext manual connects. (#63134) Thanks @Tyler-RNG.
+- Agents/nodes: keep `tools.fs.workspaceOnly` node media outputs inside the configured workspace boundary and reject unsafe temp-file extensions for captured media.
 
 ## 2026.4.5
 
