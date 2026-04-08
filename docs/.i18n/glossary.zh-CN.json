@@ -1,95 +1,335 @@
 [
   {
-    "source": "OpenClaw",
-    "target": "OpenClaw"
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
   },
   {
-    "source": "ClawHub",
-    "target": "ClawHub"
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
   },
   {
-    "source": "OpenAI",
-    "target": "OpenAI"
+    "source": "Additional bundled variants",
+    "target": "其他内置变体"
   },
   {
-    "source": "OpenAI provider",
-    "target": "OpenAI provider"
+    "source": "agent",
+    "target": "智能体"
   },
   {
-    "source": "Mantis",
-    "target": "Mantis"
+    "source": "Anthropic (API + Claude CLI)",
+    "target": "Anthropic（API + Claude CLI）"
   },
   {
-    "source": "OpenClaw App SDK",
-    "target": "OpenClaw 应用 SDK"
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
   },
   {
-    "source": "OpenClaw App SDK API design",
-    "target": "OpenClaw 应用 SDK API 设计"
+    "source": "block streaming",
+    "target": "分块流式传输"
   },
   {
-    "source": "Azure Speech",
-    "target": "Azure Speech"
+    "source": "Block streaming",
+    "target": "分块流式传输"
   },
   {
-    "source": "Azure Speech provider",
-    "target": "Azure Speech provider"
+    "source": "Bridge protocol (legacy nodes, historical)",
+    "target": "Bridge protocol（旧版节点，历史参考）"
   },
   {
-    "source": "Web tools",
-    "target": "Web 工具"
+    "source": "BytePlus (International)",
+    "target": "BytePlus（国际版）"
   },
   {
-    "source": "Status",
-    "target": "Status"
+    "source": "Capability Cookbook",
+    "target": "能力扩展手册"
+  },
+  {
+    "source": "channel",
+    "target": "渠道"
+  },
+  {
+    "source": "Channel Plugin SDK",
+    "target": "渠道插件 SDK"
+  },
+  {
+    "source": "Channel Plugins",
+    "target": "渠道插件"
+  },
+  {
+    "source": "Chutes",
+    "target": "Chutes"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "CLI 设置参考"
+  },
+  {
+    "source": "Companion apps",
+    "target": "配套应用"
+  },
+  {
+    "source": "Credits",
+    "target": "致谢"
+  },
+  {
+    "source": "Dev Container",
+    "target": "Dev Container"
+  },
+  {
+    "source": "Diffs",
+    "target": "Diffs"
+  },
+  {
+    "source": "Discovery",
+    "target": "设备发现"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "设备发现 + 传输协议"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "Docs directory",
+    "target": "文档目录"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "Entry Points",
+    "target": "入口点"
+  },
+  {
+    "source": "env var",
+    "target": "环境变量"
+  },
+  {
+    "source": "env vars",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variable",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "expected keys",
+    "target": "预期键名"
+  },
+  {
+    "source": "FAQ",
+    "target": "常见问题"
+  },
+  {
+    "source": "Features",
+    "target": "功能"
+  },
+  {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初的六十秒"
+  },
+  {
+    "source": "for full details",
+    "target": "了解详情"
   },
   {
     "source": "Gateway",
     "target": "Gateway 网关"
   },
   {
-    "source": "Gateway RPC reference",
-    "target": "Gateway RPC 参考"
+    "source": "get unstuck",
+    "target": "解决问题"
   },
   {
-    "source": "Sessions",
-    "target": "会话"
+    "source": "Getting Started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入门指南"
+  },
+  {
+    "source": "install sanity",
+    "target": "安装完整性检查"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
+    "source": "Memory Wiki",
+    "target": "Memory Wiki"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "Moonshot AI",
+    "target": "Moonshot AI"
+  },
+  {
+    "source": "Network model",
+    "target": "网络模型"
+  },
+  {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
+  },
+  {
+    "source": "onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "Onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
   },
   {
     "source": "Pi",
     "target": "Pi"
   },
   {
-    "source": "Agent runtimes",
-    "target": "Agent Runtimes"
+    "source": "Plugin Entry Points",
+    "target": "插件入口点"
   },
   {
-    "source": "Agent Runtimes",
-    "target": "Agent Runtimes"
+    "source": "Plugin Runtime",
+    "target": "插件运行时"
   },
   {
-    "source": "Codex harness",
-    "target": "Codex harness"
+    "source": "Plugin SDK",
+    "target": "插件 SDK"
   },
   {
-    "source": "Agent harness plugins",
-    "target": "Agent harness plugins"
+    "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
   },
   {
-    "source": "Agent loop",
-    "target": "Agent loop"
+    "source": "Plugin SDK Testing",
+    "target": "插件 SDK 测试"
   },
   {
-    "source": "Steering queue",
-    "target": "Steering queue"
+    "source": "Plugin Setup",
+    "target": "插件设置"
   },
   {
-    "source": "Steer",
-    "target": "Steer"
+    "source": "Polls",
+    "target": "投票"
   },
   {
-    "source": "Models",
-    "target": "Models"
+    "source": "provider",
+    "target": "提供商"
+  },
+  {
+    "source": "Provider Plugin SDK",
+    "target": "提供商插件 SDK"
+  },
+  {
+    "source": "Provider Plugins",
+    "target": "提供商插件"
+  },
+  {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "Quick start",
+    "target": "快速开始"
+  },
+  {
+    "source": "Quick Start",
+    "target": "快速开始"
+  },
+  {
+    "source": "Qwen",
+    "target": "Qwen"
+  },
+  {
+    "source": "Release Policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Release policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Runtime",
+    "target": "运行时"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "沙箱注意事项"
+  },
+  {
+    "source": "SDK Overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "session",
+    "target": "会话"
+  },
+  {
+    "source": "Setup",
+    "target": "设置"
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "设置向导（CLI）"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "设置向导参考"
   },
   {
     "source": "Skills",
@@ -104,639 +344,27 @@
     "target": "Skills 配置"
   },
   {
-    "source": "local loopback",
-    "target": "local loopback"
-  },
-  {
     "source": "Tailscale",
     "target": "Tailscale"
-  },
-  {
-    "source": "Getting Started",
-    "target": "入门指南"
-  },
-  {
-    "source": "Getting started",
-    "target": "入门指南"
-  },
-  {
-    "source": "Quick start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Quick Start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Chutes",
-    "target": "Chutes"
-  },
-  {
-    "source": "DeepInfra",
-    "target": "DeepInfra"
-  },
-  {
-    "source": "Qwen",
-    "target": "Qwen"
-  },
-  {
-    "source": "Feishu",
-    "target": "Feishu"
-  },
-  {
-    "source": "Yuanbao",
-    "target": "腾讯元宝"
-  },
-  {
-    "source": "WeChat",
-    "target": "微信"
-  },
-  {
-    "source": "Weixin",
-    "target": "微信"
-  },
-  {
-    "source": "Mattermost",
-    "target": "Mattermost"
-  },
-  {
-    "source": "BytePlus (International)",
-    "target": "BytePlus（国际版）"
-  },
-  {
-    "source": "Volcengine TTS HTTP API",
-    "target": "Volcengine TTS HTTP API"
-  },
-  {
-    "source": "Amazon Bedrock Mantle",
-    "target": "Amazon Bedrock Mantle"
-  },
-  {
-    "source": "Anthropic (API + Claude CLI)",
-    "target": "Anthropic（API + Claude CLI）"
-  },
-  {
-    "source": "Moonshot AI",
-    "target": "Moonshot AI"
-  },
-  {
-    "source": "Model providers",
-    "target": "模型提供商"
-  },
-  {
-    "source": "Model Providers",
-    "target": "模型提供商"
-  },
-  {
-    "source": "NVIDIA",
-    "target": "NVIDIA"
-  },
-  {
-    "source": "NVIDIA API key",
-    "target": "NVIDIA API key"
-  },
-  {
-    "source": "Provider directory",
-    "target": "提供商目录"
-  },
-  {
-    "source": "Additional bundled variants",
-    "target": "其他内置变体"
-  },
-  {
-    "source": "Diffs",
-    "target": "Diffs"
-  },
-  {
-    "source": "Dreaming",
-    "target": "Dreaming"
-  },
-  {
-    "source": "Capability Cookbook",
-    "target": "能力扩展手册"
-  },
-  {
-    "source": "WhatsApp group messages",
-    "target": "WhatsApp 群组消息"
-  },
-  {
-    "source": "Oracle Cloud",
-    "target": "Oracle Cloud"
-  },
-  {
-    "source": "Install overview",
-    "target": "安装概览"
-  },
-  {
-    "source": "VPS hosting",
-    "target": "VPS 托管"
-  },
-  {
-    "source": "Linux server",
-    "target": "Linux 服务器"
-  },
-  {
-    "source": "Platforms",
-    "target": "平台"
-  },
-  {
-    "source": "Adding capabilities (redirect)",
-    "target": "添加能力（重定向）"
-  },
-  {
-    "source": "Adding capabilities (contributor guide)",
-    "target": "添加能力（贡献者指南）"
-  },
-  {
-    "source": "Plugin internals",
-    "target": "插件内部机制"
-  },
-  {
-    "source": "SDK overview",
-    "target": "SDK 概览"
-  },
-  {
-    "source": "Creating skills",
-    "target": "创建技能"
-  },
-  {
-    "source": "Setup Wizard Reference",
-    "target": "设置向导参考"
-  },
-  {
-    "source": "CLI Setup Reference",
-    "target": "CLI 设置参考"
-  },
-  {
-    "source": "Setup Wizard (CLI)",
-    "target": "设置向导（CLI）"
-  },
-  {
-    "source": "Docs directory",
-    "target": "文档目录"
-  },
-  {
-    "source": "Credits",
-    "target": "致谢"
-  },
-  {
-    "source": "Features",
-    "target": "功能"
-  },
-  {
-    "source": "DMs",
-    "target": "私信"
-  },
-  {
-    "source": "DM",
-    "target": "私信"
-  },
-  {
-    "source": "sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "Sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing note",
-    "target": "沙箱注意事项"
-  },
-  {
-    "source": "Companion apps",
-    "target": "配套应用"
-  },
-  {
-    "source": "expected keys",
-    "target": "预期键名"
-  },
-  {
-    "source": "block streaming",
-    "target": "分块流式传输"
-  },
-  {
-    "source": "Block streaming",
-    "target": "分块流式传输"
-  },
-  {
-    "source": "Progress drafts",
-    "target": "进度草稿"
-  },
-  {
-    "source": "Streaming and chunking",
-    "target": "流式传输和分块"
-  },
-  {
-    "source": "Messages",
-    "target": "消息"
-  },
-  {
-    "source": "Channel configuration",
-    "target": "频道配置"
-  },
-  {
-    "source": "Discord",
-    "target": "Discord"
-  },
-  {
-    "source": "Matrix",
-    "target": "Matrix"
-  },
-  {
-    "source": "Microsoft Teams",
-    "target": "Microsoft Teams"
-  },
-  {
-    "source": "Slack",
-    "target": "Slack"
-  },
-  {
-    "source": "Telegram",
-    "target": "Telegram"
-  },
-  {
-    "source": "Discovery + transports",
-    "target": "设备发现 + 传输协议"
-  },
-  {
-    "source": "Discovery",
-    "target": "设备发现"
-  },
-  {
-    "source": "Network model",
-    "target": "网络模型"
-  },
-  {
-    "source": "Bridge protocol (legacy nodes, historical)",
-    "target": "Bridge protocol（旧版节点，历史参考）"
-  },
-  {
-    "source": "Doctor",
-    "target": "Doctor"
-  },
-  {
-    "source": "Config",
-    "target": "配置"
-  },
-  {
-    "source": "Memory Wiki",
-    "target": "Memory Wiki"
-  },
-  {
-    "source": "Memory overview",
-    "target": "记忆概览"
-  },
-  {
-    "source": "Active memory",
-    "target": "主动记忆"
-  },
-  {
-    "source": "Commitments",
-    "target": "跟进承诺"
-  },
-  {
-    "source": "Inferred Commitments",
-    "target": "推断式跟进承诺"
-  },
-  {
-    "source": "Inferred commitments",
-    "target": "推断式跟进承诺"
-  },
-  {
-    "source": "Heartbeat",
-    "target": "Heartbeat"
-  },
-  {
-    "source": "Scheduled tasks",
-    "target": "定时任务"
-  },
-  {
-    "source": "Configuration reference",
-    "target": "配置参考"
-  },
-  {
-    "source": "wiki",
-    "target": "wiki"
-  },
-  {
-    "source": "Polls",
-    "target": "投票"
-  },
-  {
-    "source": "QQ Bot",
-    "target": "QQ Bot"
-  },
-  {
-    "source": "Release Policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "Release policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "for full details",
-    "target": "了解详情"
-  },
-  {
-    "source": "First 60 seconds",
-    "target": "最初的六十秒"
-  },
-  {
-    "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
-  },
-  {
-    "source": "agent",
-    "target": "智能体"
-  },
-  {
-    "source": "channel",
-    "target": "渠道"
-  },
-  {
-    "source": "session",
-    "target": "会话"
-  },
-  {
-    "source": "provider",
-    "target": "提供商"
-  },
-  {
-    "source": "model",
-    "target": "模型"
-  },
-  {
-    "source": "tool",
-    "target": "工具"
-  },
-  {
-    "source": "CLI",
-    "target": "CLI"
-  },
-  {
-    "source": "/cli/gateway",
-    "target": "/cli/gateway"
-  },
-  {
-    "source": "/gateway#multiple-gateways-same-host",
-    "target": "/gateway#multiple-gateways-same-host"
-  },
-  {
-    "source": "install sanity",
-    "target": "安装完整性检查"
-  },
-  {
-    "source": "get unstuck",
-    "target": "解决问题"
-  },
-  {
-    "source": "troubleshooting",
-    "target": "故障排除"
-  },
-  {
-    "source": "FAQ",
-    "target": "常见问题"
-  },
-  {
-    "source": "Ollama Web Search",
-    "target": "Ollama Web 搜索"
-  },
-  {
-    "source": "Memory LanceDB",
-    "target": "Memory LanceDB"
-  },
-  {
-    "source": "onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "Onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "wizard",
-    "target": "向导"
-  },
-  {
-    "source": "environment variables",
-    "target": "环境变量"
-  },
-  {
-    "source": "environment variable",
-    "target": "环境变量"
-  },
-  {
-    "source": "env vars",
-    "target": "环境变量"
-  },
-  {
-    "source": "env var",
-    "target": "环境变量"
-  },
-  {
-    "source": "Google Meet Plugin",
-    "target": "Google Meet 插件"
-  },
-  {
-    "source": "Plugin SDK",
-    "target": "插件 SDK"
-  },
-  {
-    "source": "Plugins",
-    "target": "插件"
-  },
-  {
-    "source": "Manage plugins",
-    "target": "管理插件"
-  },
-  {
-    "source": "Plugin manifest",
-    "target": "插件清单"
-  },
-  {
-    "source": "Building plugins",
-    "target": "构建插件"
-  },
-  {
-    "source": "Plugin SDK Overview",
-    "target": "插件 SDK 概览"
-  },
-  {
-    "source": "Plugin SDK overview",
-    "target": "插件 SDK 概览"
-  },
-  {
-    "source": "SDK Overview",
-    "target": "SDK 概览"
-  },
-  {
-    "source": "Plugin Entry Points",
-    "target": "插件入口点"
-  },
-  {
-    "source": "Plugin entry points",
-    "target": "插件入口点"
-  },
-  {
-    "source": "Plugin hooks",
-    "target": "插件钩子"
-  },
-  {
-    "source": "Internal hooks",
-    "target": "内部钩子"
-  },
-  {
-    "source": "Plugin architecture internals",
-    "target": "插件架构内部机制"
-  },
-  {
-    "source": "Entry Points",
-    "target": "入口点"
-  },
-  {
-    "source": "Plugin Runtime",
-    "target": "插件运行时"
-  },
-  {
-    "source": "Runtime",
-    "target": "运行时"
-  },
-  {
-    "source": "Plugin Setup",
-    "target": "插件设置"
-  },
-  {
-    "source": "Setup",
-    "target": "设置"
-  },
-  {
-    "source": "Migrate",
-    "target": "迁移"
-  },
-  {
-    "source": "Migrating",
-    "target": "迁移"
-  },
-  {
-    "source": "Migrating from Hermes",
-    "target": "从 Hermes 迁移"
-  },
-  {
-    "source": "Migrating from Claude",
-    "target": "从 Claude 迁移"
-  },
-  {
-    "source": "Agent workspace",
-    "target": "Agent 工作区"
-  },
-  {
-    "source": "Migration",
-    "target": "迁移"
-  },
-  {
-    "source": "Hermes",
-    "target": "Hermes"
-  },
-  {
-    "source": "Archive-only",
-    "target": "仅归档"
-  },
-  {
-    "source": "Channel Plugin SDK",
-    "target": "渠道插件 SDK"
-  },
-  {
-    "source": "Channel Plugins",
-    "target": "渠道插件"
-  },
-  {
-    "source": "Provider Plugin SDK",
-    "target": "提供商插件 SDK"
-  },
-  {
-    "source": "Provider Plugins",
-    "target": "提供商插件"
-  },
-  {
-    "source": "Plugin SDK Testing",
-    "target": "插件 SDK 测试"
   },
   {
     "source": "Testing",
     "target": "测试"
   },
   {
-    "source": "Update and plugin tests",
-    "target": "更新和插件测试"
+    "source": "tool",
+    "target": "工具"
   },
   {
-    "source": "Testing updates and plugins",
-    "target": "更新和插件测试"
+    "source": "troubleshooting",
+    "target": "故障排除"
   },
   {
-    "source": "Testing: updates and plugins",
-    "target": "更新和插件测试"
+    "source": "wiki",
+    "target": "wiki"
   },
   {
-    "source": "Async Exec Duplicate Completion Investigation",
-    "target": "Async Exec Duplicate Completion Investigation"
-  },
-  {
-    "source": "QA Refactor",
-    "target": "QA 重构"
-  },
-  {
-    "source": "Matrix QA",
-    "target": "Matrix QA"
-  },
-  {
-    "source": "QA overview",
-    "target": "QA overview"
-  },
-  {
-    "source": "QA channel",
-    "target": "QA channel"
-  },
-  {
-    "source": "Rich Output Protocol",
-    "target": "富输出协议"
-  },
-  {
-    "source": "Tencent Cloud (TokenHub)",
-    "target": "腾讯云（TokenHub）"
-  },
-  {
-    "source": "Codex Harness Context Engine Port",
-    "target": "Codex Harness Context Engine Port"
-  },
-  {
-    "source": "/gateway/configuration#strict-validation",
-    "target": "/gateway/configuration#strict-validation"
-  },
-  {
-    "source": "/gateway/configuration#config-hot-reload",
-    "target": "/gateway/configuration#config-hot-reload"
-  },
-  {
-    "source": "/cli/config",
-    "target": "/cli/config"
+    "source": "wizard",
+    "target": "向导"
   }
 ]
