@@ -1,0 +1,32 @@
+{
+  "id": "serper",
+  "providerAuthEnvVars": {
+    "serper": ["SERPER_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Serper API Key",
+      "help": "Serper API key (fallback: SERPER_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "..."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["serper"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}

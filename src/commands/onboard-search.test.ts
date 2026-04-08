@@ -33,6 +33,7 @@ const SEARCH_PROVIDER_PLUGINS: Record<
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
     label: "Perplexity",
   },
+  serper: { pluginId: "serper", envVars: ["SERPER_API_KEY"], label: "Serper" },
   tavily: { pluginId: "tavily", envVars: ["TAVILY_API_KEY"], label: "Tavily" },
 };
 
@@ -110,7 +111,7 @@ function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
 
 const searchProviderFixture = vi.hoisted(() => ({
   resolvePluginWebSearchProviders: vi.fn(() =>
-    ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", "tavily"].map((id) =>
+    ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", "serper", "tavily"].map((id) =>
       createSearchProviderEntry(id),
     ),
   ),
@@ -137,6 +138,7 @@ const SEARCH_PROVIDER_ENV_VARS = [
   "MOONSHOT_API_KEY",
   "OPENROUTER_API_KEY",
   "PERPLEXITY_API_KEY",
+  "SERPER_API_KEY",
   "TAVILY_API_KEY",
   "XAI_API_KEY",
 ] as const;
@@ -653,6 +655,7 @@ describe("setupSearch", () => {
         "grok",
         "kimi",
         "perplexity",
+        "serper",
         "tavily",
       ]),
     );

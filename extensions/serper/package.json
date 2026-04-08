@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/serper-plugin",
+  "version": "2026.3.27",
+  "private": true,
+  "description": "OpenClaw Serper (Google Search) plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
