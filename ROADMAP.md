@@ -21,3 +21,4 @@
 
 - **Group behavior policies** — configurable per-group behavior rules for agents
 - **Moltbook integration** — integrate Moltbook into agent containers
+- **GEMA (Google open-source model) deploy option** — add GEMA as a selectable model for agent deployments
