@@ -543,17 +543,16 @@ export async function performGatewaySessionReset(params: {
       providerOverride: currentEntry?.providerOverride,
       modelOverride: currentEntry?.modelOverride,
       authProfileOverride:
-        currentEntry?.authProfileOverrideSource !== "auto"
-          ? currentEntry?.authProfileOverride
-          : undefined,
+        currentEntry?.authProfileOverrideSource === "auto" ||
+        typeof currentEntry?.authProfileOverrideCompactionCount === "number"
+          ? undefined
+          : currentEntry?.authProfileOverride,
       authProfileOverrideSource:
-        currentEntry?.authProfileOverrideSource !== "auto"
-          ? currentEntry?.authProfileOverrideSource
-          : undefined,
-      authProfileOverrideCompactionCount:
-        currentEntry?.authProfileOverrideSource !== "auto"
-          ? currentEntry?.authProfileOverrideCompactionCount
-          : undefined,
+        currentEntry?.authProfileOverrideSource === "auto" ||
+        typeof currentEntry?.authProfileOverrideCompactionCount === "number"
+          ? undefined
+          : currentEntry?.authProfileOverrideSource,
+      authProfileOverrideCompactionCount: undefined,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,
