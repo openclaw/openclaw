@@ -85,7 +85,14 @@ describe("slack web client config", () => {
 describe("slack proxy agent", () => {
   const originalEnv = { ...process.env };
 
-  const PROXY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"];
+  const PROXY_KEYS = [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ];
 
   beforeEach(() => {
     for (const key of PROXY_KEYS) {
@@ -139,7 +146,17 @@ describe("slack proxy agent", () => {
 
     expect(options.agent).toBeDefined();
     // HttpsProxyAgent stores the proxy URL — verify it picked the lower-case one
-    expect((options.agent as { proxy: { href: string } }).proxy.href).toContain("lower.example.com");
+    expect((options.agent as unknown as { proxy: { href: string } }).proxy.href).toContain(
+      "lower.example.com",
+    );
+  });
+
+  it("treats empty lowercase https_proxy as authoritative over uppercase", () => {
+    process.env.https_proxy = "";
+    process.env.HTTPS_PROXY = "http://upper.example.com:3128";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeUndefined();
   });
 
   it("also applies proxy agent to write client options", () => {
@@ -161,6 +178,14 @@ describe("slack proxy agent", () => {
   it("respects no_proxy (lowercase) excluding .slack.com", () => {
     process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
     process.env.no_proxy = ".slack.com";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeUndefined();
+  });
+
+  it("respects space-separated no_proxy entries", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    process.env.no_proxy = "localhost *.slack.com";
     const options = resolveSlackWebClientOptions();
 
     expect(options.agent).toBeUndefined();

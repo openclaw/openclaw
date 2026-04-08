@@ -1,5 +1,6 @@
 import { type RetryOptions, type WebClientOptions, WebClient } from "@slack/web-api";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { resolveEnvHttpProxyUrl } from "openclaw/plugin-sdk/infra-runtime";
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -17,43 +18,32 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
  * Check whether a hostname is excluded from proxying by `NO_PROXY` / `no_proxy`.
  * Supports comma-separated entries with optional leading dots (e.g. `.slack.com`).
  */
-function isHostExcludedByNoProxy(
-  hostname: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function isHostExcludedByNoProxy(hostname: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.no_proxy ?? env.NO_PROXY;
   if (!raw) {
     return false;
   }
-  const entries = raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const entries = raw
+    .split(/[,\s]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
   const lower = hostname.toLowerCase();
   for (const entry of entries) {
     if (entry === "*") {
       return true;
     }
-    // Strip optional leading dot for comparison so `.slack.com` matches both
-    // `slack.com` (apex) and `wss-primary.slack.com` (subdomain).
-    const bare = entry.startsWith(".") ? entry.slice(1) : entry;
+    // Strip optional wildcard/leading dot so `*.slack.com` and `.slack.com`
+    // match both `slack.com` (apex) and Slack subdomains.
+    const bare = entry.startsWith("*.")
+      ? entry.slice(2)
+      : entry.startsWith(".")
+        ? entry.slice(1)
+        : entry;
     if (lower === bare || lower.endsWith(`.${bare}`)) {
       return true;
     }
   }
   return false;
-}
-
-/**
- * Resolve the proxy URL from env vars following undici EnvHttpProxyAgent
- * semantics: lower-case takes precedence, HTTPS prefers https_proxy then
- * falls back to http_proxy.  Returns `undefined` when no proxy is configured.
- */
-function resolveProxyUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return (
-    env.https_proxy?.trim() ||
-    env.HTTPS_PROXY?.trim() ||
-    env.http_proxy?.trim() ||
-    env.HTTP_PROXY?.trim() ||
-    undefined
-  );
 }
 
 /**
@@ -72,7 +62,7 @@ function resolveProxyUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | 
  * are excluded by `NO_PROXY`.
  */
 function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl = resolveProxyUrlFromEnv();
+  const proxyUrl = resolveEnvHttpProxyUrl("https");
   if (!proxyUrl) {
     return undefined;
   }
@@ -81,7 +71,7 @@ function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
     return undefined;
   }
   try {
-    return new HttpsProxyAgent<string>(proxyUrl);
+    return new HttpsProxyAgent(proxyUrl);
   } catch {
     // Malformed proxy URL — degrade gracefully to direct connection.
     return undefined;
