@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-08 (run 13)
+**Date:** 2026-04-08 (run 14)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -8,12 +8,12 @@
 
 ## PRs Checked
 
-| PR     | Branch                                  | Status | CI                                    | Review                         | Conflicts (fork/main)             | Actions Taken               |
-| ------ | --------------------------------------- | ------ | ------------------------------------- | ------------------------------ | --------------------------------- | --------------------------- |
-| #45911 | fix/telegram-approval-callback-fallback | MERGED | N/A                                   | N/A                            | N/A                               | None (already merged)       |
-| #45584 | feat/cron-fresh-session-option          | OPEN   | Unknown (no GitHub API)               | Bot comments addressed in code | tasks/pr-monitor-report.md only   | None — no new activity      |
-| #54363 | fix/chat-send-button-contrast           | CLOSED | N/A                                   | N/A                            | N/A                               | None (closed without merge) |
-| #54730 | fix/subagent-identity-fallback          | OPEN   | GREEN (success, from run 12)          | No open reviews                | tasks/pr-monitor-report.md only   | None — no new activity      |
+| PR     | Branch                                  | Status | CI                           | Review                         | Conflicts (fork/main)       | Actions Taken               |
+| ------ | --------------------------------------- | ------ | ---------------------------- | ------------------------------ | --------------------------- | --------------------------- |
+| #45911 | fix/telegram-approval-callback-fallback | MERGED | N/A                          | N/A                            | N/A                         | None (already merged)       |
+| #45584 | feat/cron-fresh-session-option          | OPEN   | Unknown (no GitHub API)      | Bot comments addressed in code | None (resolved vs run 13)   | None — no new activity      |
+| #54363 | fix/chat-send-button-contrast           | CLOSED | N/A                          | N/A                            | N/A                         | None (closed without merge) |
+| #54730 | fix/subagent-identity-fallback          | OPEN   | GREEN (success, from run 12) | No open reviews                | None (resolved vs run 13)   | None — no new activity      |
 
 ---
 
@@ -31,12 +31,11 @@ run 12). No action required.
 **Status:** OPEN | **Branch:** `feat/cron-fresh-session-option`
 **Head SHA:** `46e2b30607303996c6423abd33ec854c42b57ac3` (unchanged since run 9 — no new commits)
 
-**Git-based conflict analysis (run 13):**
-`git merge-tree` against fork's `origin/main` shows exactly **1 conflict file**:
-`tasks/pr-monitor-report.md`. No conflicts in actual PR code files
-(`src/cron/`, `src/gateway/protocol/schema/cron.ts`, Swift models). The conflict is
-a pure artifact of monitoring runs having written to this file on both the PR branch and
-fork main independently.
+**Git-based conflict analysis (run 14):**
+`git merge-tree` against fork's `origin/main` shows **no conflict markers** in any file.
+The `tasks/pr-monitor-report.md` conflict from run 13 is resolved — fork main has advanced
+past the conflicting state. No conflicts in actual PR code files
+(`src/cron/`, `src/gateway/protocol/schema/cron.ts`, Swift models).
 
 **CI:** Unknown — no GitHub API access to check current check-run state. Last known: label
 checks passing; main CI pass depended on Swift model regeneration commit (`569a0bdfa`).
@@ -51,7 +50,7 @@ checks passing; main CI pass depended on Swift model regeneration commit (`569a0
 2. `chatgpt-codex-connector[bot]` P1 on `src/gateway/protocol/schema/cron.ts:74` —
    `freshSession` not persisted in `createJob`/`applyJobPatch`.
    **Status: Addressed in code.** `src/cron/service/jobs.ts:542` assigns
-   `freshSession: input.freshSession`; lines 580–581 apply the patch conditionally.
+   `freshSession: input.freshSession`; lines 580-581 apply the patch conditionally.
 
 Neither bot has re-reviewed; conversations may still show as unresolved on GitHub.
 
@@ -67,9 +66,10 @@ The legitimate PR commits are:
 
 **Needs human attention:**
 
-1. Rebase against upstream `openclaw/openclaw:main` to resolve dirty merge state.
-2. Clean up monitoring-artifact commits (`89065a6b2`, `46e2b3060`) from the branch before merge
+1. Clean up monitoring-artifact commits (`89065a6b2`, `46e2b3060`) from the branch before merge
    via interactive rebase — these add `tasks/pr-monitor-report.md` to the PR diff.
+2. Rebase against upstream `openclaw/openclaw:main` (cannot verify from this environment; last
+   known dirty state may have cleared, but confirm before merge).
 3. Re-trigger main CI to confirm all checks pass after the Swift protocol regeneration.
 
 ---
@@ -88,14 +88,14 @@ required.
 **Status:** OPEN | **Branch:** `fix/subagent-identity-fallback`
 **Head SHA:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (unchanged since run 9 — no new commits)
 
-**Git-based conflict analysis (run 13):**
-`git merge-tree` against fork's `origin/main` shows **7 conflict markers**, all within
-`tasks/pr-monitor-report.md`. No conflicts in actual PR code files
-(`src/gateway/assistant-identity.ts`, `src/gateway/assistant-identity.test.ts`). Same root
-cause as #45584 — monitoring artifact written independently to branch and fork main.
+**Git-based conflict analysis (run 14):**
+`git merge-tree` against fork's `origin/main` shows **no conflict markers** in any file.
+The 7 conflict markers in `tasks/pr-monitor-report.md` reported in run 13 are resolved — fork
+main has advanced past the conflicting state. No conflicts in actual PR code files
+(`src/gateway/assistant-identity.ts`, `src/gateway/assistant-identity.test.ts`).
 
-**CI:** GREEN (success) — 1 GitHub Actions check suite confirmed passing in run 12. No new
-commits since, so status should still hold.
+**CI:** GREEN (success) — last confirmed passing in run 12. No new commits since; status
+should still hold.
 
 **Review comments:** No reviews from any reviewer on this PR.
 
@@ -115,32 +115,33 @@ The actual PR fix commits are:
 
 1. Clean up monitoring-artifact commits (`f052129db`, `d18c8771b`, `89065a6b2`) from the branch
    before merge via interactive rebase — these add `tasks/pr-monitor-report.md` to the PR diff.
-2. CI is passing; PR fix is otherwise complete and ready for review/merge.
+2. CI is passing; PR fix is otherwise complete and ready for review/merge once contamination is
+   cleaned.
 
 ---
 
-## Actions Taken This Run (run 13 — 2026-04-08)
+## Actions Taken This Run (run 14 — 2026-04-08)
 
-**None — blocked by missing GitHub access.**
+**None — blocked by missing GitHub access (same as runs 11-13).**
 
 This run could not query any live PR data from GitHub:
 
 - `gh` CLI: not installed in this environment
 - GitHub MCP server tools (`mcp__github__*`): not loaded (ToolSearch returned no matches)
-- Unauthenticated GitHub REST API: no auth token; not attempted
+- Unauthenticated GitHub REST API: no auth token available
 
 **What was verified via git (without GitHub API):**
 
-- All 4 PR branches still exist in fork (`suboss87/openclaw`) with unchanged tip SHAs vs run 12.
-- `feat/cron-fresh-session-option` (#45584): 1 conflict file against fork main
-  (`tasks/pr-monitor-report.md` only — no code conflicts).
-- `fix/subagent-identity-fallback` (#54730): 7 conflict markers against fork main, all in
-  `tasks/pr-monitor-report.md` — no code conflicts.
-- `fix/telegram-approval-callback-fallback` (#45911) and `fix/chat-send-button-contrast`
-  (#54363): no text conflicts against fork main.
+- All 4 PR branches still exist in fork (`suboss87/openclaw`) with unchanged tip SHAs vs run 13.
+- `git merge-tree` against fork `origin/main` shows **no conflict markers** in any of the 4
+  branches. The `tasks/pr-monitor-report.md` conflicts reported in run 13 are now resolved (fork
+  main has advanced). No code file conflicts exist in any branch.
+- Branch SHAs unchanged since the last commit activity (run 9 for #45584 and #54730).
+- Upstream `openclaw/openclaw:main` conflict state for #45584 cannot be verified from this
+  environment (only fork remote is accessible).
 
-PR statuses, CI conclusions, and review states carried over from run 12 (2026-04-07). They
-may be stale. Human review is required to confirm current GitHub state.
+PR statuses, CI conclusions, and review states carried over from runs 12-13. They may be stale.
+Human review is required to confirm current GitHub state.
 
 **To unblock future monitoring runs**, one of the following must be in place:
 
@@ -154,7 +155,7 @@ may be stale. Human review is required to confirm current GitHub state.
 - openclaw/openclaw#45584
   - **Branch contamination:** remove monitoring-artifact commits before merge (`89065a6b2`,
     `46e2b3060` touch only `tasks/pr-monitor-report.md`)
-  - **Rebase needed:** likely dirty against upstream `openclaw/openclaw:main`; rebase + push
+  - **Rebase check:** verify clean state against upstream `openclaw/openclaw:main` before merge
   - **Re-trigger CI** for full test/build pass after Swift protocol regeneration
 
 - openclaw/openclaw#54730
