@@ -86,6 +86,53 @@ describe("loadBundledEntryExportSync", () => {
     }
   });
 
+  it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "setup-entry.js");
+    const setupApiPath = path.join(pluginRoot, "setup-plugin-api.js");
+    const secretsApiPath = path.join(pluginRoot, "secret-contract-api.js");
+
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(
+      setupApiPath,
+      'export const telegramSetupPlugin = { id: "telegram" };\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      secretsApiPath,
+      [
+        "export const collectRuntimeConfigAssignments = () => [];",
+        "export const secretTargetRegistryEntries = [];",
+        'export const channelSecrets = { TELEGRAM_TOKEN: { env: "TELEGRAM_TOKEN" } };',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    expect(
+      loadBundledEntryExportSync<{ id: string }>(pathToFileURL(importerPath).href, {
+        specifier: "./setup-plugin-api.js",
+        exportName: "telegramSetupPlugin",
+      }),
+    ).toEqual({ id: "telegram" });
+
+    expect(
+      loadBundledEntryExportSync<Record<string, unknown>>(pathToFileURL(importerPath).href, {
+        specifier: "./secret-contract-api.js",
+        exportName: "channelSecrets",
+      }),
+    ).toEqual({
+      TELEGRAM_TOKEN: {
+        env: "TELEGRAM_TOKEN",
+      },
+    });
+  });
+
   it("can disable source-tree fallback for dist bundled entry checks", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
