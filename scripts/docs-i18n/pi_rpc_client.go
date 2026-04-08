@@ -71,10 +71,12 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	}
 
 	args := append([]string{}, command.Args...)
+	args = append(args, "--mode", "rpc")
+	if provider := docsPiProviderArg(); provider != "" && !docsPiOmitProvider() {
+		args = append(args, "--provider", provider)
+	}
 	args = append(args,
-		"--mode", "rpc",
-		"--provider", docsPiProvider(),
-		"--model", docsPiModel(),
+		"--model", docsPiModelRef(),
 		"--thinking", options.Thinking,
 		"--no-session",
 	)
@@ -83,7 +85,7 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	}
 
 	process := exec.Command(command.Executable, args...)
-	agentDir, err := getDocsPiAgentDir()
+	agentDir, err := resolveDocsPiAgentDir()
 	if err != nil {
 		return nil, err
 	}
@@ -299,4 +301,14 @@ func getDocsPiAgentDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func resolveDocsPiAgentDir() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); override != "" {
+		if err := os.MkdirAll(override, 0o700); err != nil {
+			return "", err
+		}
+		return override, nil
+	}
+	return getDocsPiAgentDir()
 }

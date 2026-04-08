@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,19 +49,20 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 		}
 	}
 	frontTemplate, markers := buildFrontmatterTemplate(frontData)
-	taggedInput := formatTaggedDocument(frontTemplate, sourceBody)
-
-	translatedDoc, err := translator.TranslateRaw(ctx, taggedInput, srcLang, tgtLang)
-	if err != nil {
-		return false, "", fmt.Errorf("translate failed (%s): %w", relPath, err)
-	}
-
-	translatedFront, translatedBody, err := parseTaggedDocument(translatedDoc)
-	if err != nil {
-		return false, "", fmt.Errorf("tagged output invalid for %s: %w", relPath, err)
-	}
-	if sourceFront != "" && strings.TrimSpace(translatedFront) == "" {
-		return false, "", fmt.Errorf("translation removed frontmatter for %s", relPath)
+	translatedFront := sourceFront
+	if len(markers) > 0 {
+		frontInput := formatTaggedDocument(frontTemplate, "")
+		translatedDoc, err := translator.TranslateRaw(ctx, frontInput, srcLang, tgtLang)
+		if err != nil {
+			return false, "", fmt.Errorf("frontmatter translate failed (%s): %w", relPath, err)
+		}
+		translatedFront, _, err = parseTaggedDocument(translatedDoc)
+		if err != nil {
+			return false, "", fmt.Errorf("frontmatter output invalid for %s: %w", relPath, err)
+		}
+		if sourceFront != "" && strings.TrimSpace(translatedFront) == "" {
+			return false, "", fmt.Errorf("translation removed frontmatter for %s", relPath)
+		}
 	}
 	if err := applyFrontmatterTranslations(frontData, markers, translatedFront); err != nil {
 		return false, "", fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
@@ -68,6 +70,10 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
 		return false, "", err
+	}
+	translatedBody, err := translateDocBodyChunked(ctx, translator, relPath, sourceBody, srcLang, tgtLang)
+	if err != nil {
+		return false, "", fmt.Errorf("body translate failed for %s: %w", relPath, err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
@@ -107,10 +113,7 @@ func parseTaggedDocument(text string) (string, string, error) {
 		body = trimTagNewlines(text[bodyStart:bodyEnd])
 		suffix = strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
 	} else {
-		// Some model replies omit the final closing tag but otherwise return a
-		// valid document. Treat EOF as the end of <body> so doc retries do not
-		// burn through the whole workflow on a recoverable formatting slip.
-		body = trimTagNewlines(text[bodyStart:])
+		return "", "", fmt.Errorf("missing %s", bodyTagEnd)
 	}
 
 	prefix := strings.TrimSpace(text[:frontStart-len(frontmatterTagStart)])
@@ -256,6 +259,14 @@ func extractSourceHash(frontData map[string]any) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func logDocChunkPlan(relPath string, blocks []string, groups [][]string) {
+	totalBytes := 0
+	for _, block := range blocks {
+		totalBytes += len(block)
+	}
+	log.Printf("docs-i18n: body-chunks %s blocks=%d groups=%d bytes=%d", relPath, len(blocks), len(groups), totalBytes)
 }
 
 func resolveDocsPath(docsRoot, filePath string) (string, string, error) {
