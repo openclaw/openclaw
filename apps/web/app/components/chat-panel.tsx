@@ -530,7 +530,7 @@ function AttachmentStrip({
 			</div>
 
 			<Dialog open={previewSrc !== null} onOpenChange={(open) => { if (!open) {setPreviewSrc(null);} }}>
-				<DialogContent className="!max-w-[90vw] !w-auto !p-2 !rounded-2xl" showCloseButton={false}>
+				<DialogContent className="!max-w-[90vw] !w-auto !p-0 !rounded-2xl !bg-transparent !border-none !shadow-none" showCloseButton={false}>
 					<button
 						type="button"
 						onClick={() => setPreviewSrc(null)}
