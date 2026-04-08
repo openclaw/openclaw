@@ -101,9 +101,9 @@ const VideoGenerateToolSchema = Type.Object({
         "Optional semantic roles for the combined reference image list, parallel by index. " +
         "The list is `image` (if provided) followed by each entry in `images`, in order, " +
         "after de-duplication. " +
-        'Provider-interpreted; common values: "first_frame", "last_frame", ' +
-        '"reference_image". Entries beyond the combined image count are ignored. ' +
-        "Use an empty string to leave a position unset.",
+        'Canonical values: "first_frame", "last_frame", "reference_image". ' +
+        "Providers may accept additional role strings. " +
+        "Must not have more entries than the combined image list; use an empty string to leave a position unset.",
     }),
   ),
   video: Type.Optional(
@@ -122,9 +122,8 @@ const VideoGenerateToolSchema = Type.Object({
         "Optional semantic roles for the combined reference video list, parallel by index. " +
         "The list is `video` (if provided) followed by each entry in `videos`, in order, " +
         "after de-duplication. " +
-        'Provider-interpreted; common values: "reference_video". ' +
-        "Entries beyond the combined video count are ignored. " +
-        "Use an empty string to leave a position unset.",
+        'Canonical value: "reference_video". Providers may accept additional role strings. ' +
+        "Must not have more entries than the combined video list; use an empty string to leave a position unset.",
     }),
   ),
   audioRef: Type.Optional(
@@ -143,9 +142,8 @@ const VideoGenerateToolSchema = Type.Object({
         "Optional semantic roles for the combined reference audio list, parallel by index. " +
         "The list is `audioRef` (if provided) followed by each entry in `audioRefs`, in order, " +
         "after de-duplication. " +
-        'Provider-interpreted; common values: "reference_audio". ' +
-        "Entries beyond the combined audio count are ignored. " +
-        "Use an empty string to leave a position unset.",
+        'Canonical value: "reference_audio". Providers may accept additional role strings. ' +
+        "Must not have more entries than the combined audio list; use an empty string to leave a position unset.",
     }),
   ),
   model: Type.Optional(
@@ -193,7 +191,11 @@ const VideoGenerateToolSchema = Type.Object({
   providerOptions: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), {
       description:
-        "Optional provider-specific options (JSON object). Forwarded as-is to the active provider; core does not validate the contents. See individual provider documentation for supported keys.",
+        'Optional provider-specific options as a JSON object, e.g. `{"seed": 42, "draft": true}`. ' +
+        "Each provider declares its own accepted keys and primitive types (number/boolean/string) " +
+        "via its capabilities; unknown keys or type mismatches skip the candidate during fallback " +
+        "and never silently reach the wrong provider. Run `video_generate action=list` to see which " +
+        "keys each provider accepts.",
     }),
   ),
 });
@@ -245,6 +247,53 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   throw new ToolInputError(
     "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
   );
+}
+
+function readBooleanToolParam(params: Record<string, unknown>, key: string): boolean | undefined {
+  const raw = readSnakeCaseParamRaw(params, key);
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const normalized = normalizeOptionalLowercaseString(raw);
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Parse a `*Roles` parallel string array for `video_generate`. Throws when
+ * the caller supplies more roles than assets so off-by-one alignment bugs
+ * fail loudly at the tool boundary instead of silently dropping the
+ * trailing roles. Empty strings in the array are allowed and mean "no
+ * role at this position". Non-string entries are coerced to empty strings
+ * and treated as "unset" so providers can leave individual slots empty.
+ */
+function parseRoleArray(params: {
+  raw: unknown;
+  kind: "imageRoles" | "videoRoles" | "audioRoles";
+  assetCount: number;
+}): string[] {
+  if (params.raw === undefined || params.raw === null) {
+    return [];
+  }
+  if (!Array.isArray(params.raw)) {
+    throw new ToolInputError(
+      `${params.kind} must be a JSON array of role strings, parallel to the reference list.`,
+    );
+  }
+  const roles = params.raw.map((entry) => (typeof entry === "string" ? entry.trim() : ""));
+  if (roles.length > params.assetCount) {
+    throw new ToolInputError(
+      `${params.kind} has ${roles.length} entries but only ${params.assetCount} reference ${params.kind === "imageRoles" ? "image" : params.kind === "videoRoles" ? "video" : "audio"}${params.assetCount === 1 ? "" : "s"} were provided; extra roles cannot be aligned positionally.`,
+    );
+  }
+  return roles;
 }
 
 function normalizeReferenceInputs(params: {
@@ -776,23 +825,33 @@ export function createVideoGenerateTool(options?: {
       });
       // *Roles: parallel string arrays giving each asset a semantic role hint.
       // Use readSnakeCaseParamRaw so both camelCase and snake_case keys are accepted.
-      const parseRolesArg = (raw: unknown): string[] =>
-        (Array.isArray(raw) ? raw : []).map((r) => (typeof r === "string" ? r.trim() : ""));
-      const imageRoles = parseRolesArg(readSnakeCaseParamRaw(args, "imageRoles"));
+      const imageRoles = parseRoleArray({
+        raw: readSnakeCaseParamRaw(args, "imageRoles"),
+        kind: "imageRoles",
+        assetCount: imageInputs.length,
+      });
       const videoInputs = normalizeReferenceInputs({
         args,
         singularKey: "video",
         pluralKey: "videos",
         maxCount: MAX_INPUT_VIDEOS,
       });
-      const videoRoles = parseRolesArg(readSnakeCaseParamRaw(args, "videoRoles"));
+      const videoRoles = parseRoleArray({
+        raw: readSnakeCaseParamRaw(args, "videoRoles"),
+        kind: "videoRoles",
+        assetCount: videoInputs.length,
+      });
       const audioInputs = normalizeReferenceInputs({
         args,
         singularKey: "audioRef",
         pluralKey: "audioRefs",
         maxCount: MAX_INPUT_AUDIOS,
       });
-      const audioRoles = parseRolesArg(readSnakeCaseParamRaw(args, "audioRoles"));
+      const audioRoles = parseRoleArray({
+        raw: readSnakeCaseParamRaw(args, "audioRoles"),
+        kind: "audioRoles",
+        assetCount: audioInputs.length,
+      });
 
       const selectedProvider = resolveSelectedVideoGenerationProvider({
         config: effectiveCfg,
