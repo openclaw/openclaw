@@ -2,9 +2,9 @@ import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import {
   type ModelAliasIndex,
   modelKey,
-  normalizeProviderIdForAuth,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -84,8 +84,12 @@ export function resolveModelSelectionFromDirective(params: {
     : null;
   const useStoredNumericProfile =
     Boolean(storedNumericProfileSelection?.selection) &&
-    normalizeProviderIdForAuth(storedNumericProfileSelection?.selection?.provider ?? "") ===
-      normalizeProviderIdForAuth(storedNumericProfile?.profileProvider ?? "");
+    resolveProviderIdForAuth(storedNumericProfileSelection?.selection?.provider ?? "", {
+      config: params.cfg,
+    }) ===
+      resolveProviderIdForAuth(storedNumericProfile?.profileProvider ?? "", {
+        config: params.cfg,
+      });
   const modelRaw =
     useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
   let modelSelection: ModelDirectiveSelection | undefined;

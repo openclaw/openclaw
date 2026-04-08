@@ -21,7 +21,11 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
-import { resolveQueuedReplyRuntimeConfig, resolveRunAuthProfile } from "./agent-runner-utils.js";
+import {
+  resolveQueuedReplyExecutionConfig,
+  resolveQueuedReplyRuntimeConfig,
+  resolveRunAuthProfile,
+} from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -127,6 +131,7 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config);
     const replySessionKey = queued.run.sessionKey ?? sessionKey;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const effectiveQueued =

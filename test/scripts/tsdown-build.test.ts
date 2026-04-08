@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { resolveTsdownBuildInvocation } from "../../scripts/tsdown-build.mjs";
+import fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  pruneSourceCheckoutBundledPluginNodeModules,
+  resolveTsdownBuildInvocation,
+} from "../../scripts/tsdown-build.mjs";
 
 describe("resolveTsdownBuildInvocation", () => {
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
@@ -29,5 +33,27 @@ describe("resolveTsdownBuildInvocation", () => {
         env: {},
       },
     });
+  });
+
+  it("keeps source-checkout prune best-effort", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rmSync = vi.spyOn(fs, "rmSync");
+
+    rmSync.mockImplementation(() => {
+      throw new Error("locked");
+    });
+
+    expect(() =>
+      pruneSourceCheckoutBundledPluginNodeModules({
+        cwd: process.cwd(),
+      }),
+    ).not.toThrow();
+
+    expect(warn).toHaveBeenCalledWith(
+      "tsdown: could not prune bundled plugin source node_modules: Error: locked",
+    );
+
+    warn.mockRestore();
+    rmSync.mockRestore();
   });
 });

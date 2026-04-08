@@ -4,6 +4,10 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+} from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -54,6 +58,8 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -107,6 +113,7 @@ type FallbackSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -115,6 +122,7 @@ type FallbackSelectionState = Pick<
 const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -135,6 +143,12 @@ function setFallbackSelectionStateField(
     case "modelOverride":
       if (entry.modelOverride !== value) {
         entry.modelOverride = value as SessionEntry["modelOverride"];
+        return true;
+      }
+      return false;
+    case "modelOverrideSource":
+      if (entry.modelOverrideSource !== value) {
+        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
         return true;
       }
       return false;
@@ -164,6 +178,7 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
   return {
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -179,6 +194,7 @@ function buildFallbackSelectionState(params: {
   return {
     providerOverride: params.provider,
     modelOverride: params.model,
+    modelOverrideSource: "auto",
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,
@@ -307,6 +323,14 @@ function isToolResultTurnMismatchError(message: string): boolean {
 function buildExternalRunFailureText(message: string): string {
   if (isToolResultTurnMismatchError(message)) {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(message);
+  if (oauthRefreshFailure) {
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+    if (oauthRefreshFailure.reason) {
+      return `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`;
+    }
+    return `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`;
   }
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 }
@@ -668,6 +692,9 @@ export async function runAgentTurnWithFallback(params: {
           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
         ) {
           return { skip: true };
+        }
+        if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
+          text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.

@@ -323,6 +323,11 @@ Anthropic setup-token path.
 Refresh prompts only appear when running interactively (TTY); `--non-interactive`
 skips refresh attempts.
 
+When an OAuth refresh fails permanently (for example `refresh_token_reused`,
+`invalid_grant`, or a provider telling you to sign in again), doctor reports
+that re-auth is required and prints the exact `openclaw models auth login --provider ...`
+command to run.
+
 Doctor also reports auth profiles that are temporarily unusable due to:
 
 - short cooldowns (rate limits/timeouts/auth failures)

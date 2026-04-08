@@ -1,43 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { getMessageMSTeams, listPinsMSTeams, listReactionsMSTeams } from "./graph-messages.js";
+import {
+  CHANNEL_TO,
+  CHAT_ID,
+  TOKEN,
+  type GraphMessagesTestModule,
+  getGraphMessagesMockState,
+  installGraphMessagesMockDefaults,
+  loadGraphMessagesTestModule,
+} from "./graph-messages.test-helpers.js";
 
-const mockState = vi.hoisted(() => ({
-  resolveGraphToken: vi.fn(),
-  fetchGraphJson: vi.fn(),
-  postGraphJson: vi.fn(),
-  postGraphBetaJson: vi.fn(),
-  deleteGraphRequest: vi.fn(),
-  findPreferredDmByUserId: vi.fn(),
-}));
+const mockState = getGraphMessagesMockState();
+installGraphMessagesMockDefaults();
+let getMessageMSTeams: GraphMessagesTestModule["getMessageMSTeams"];
+let listPinsMSTeams: GraphMessagesTestModule["listPinsMSTeams"];
+let listReactionsMSTeams: GraphMessagesTestModule["listReactionsMSTeams"];
 
-vi.mock("./graph.js", () => {
-  return {
-    resolveGraphToken: mockState.resolveGraphToken,
-    fetchGraphJson: mockState.fetchGraphJson,
-    postGraphJson: mockState.postGraphJson,
-    postGraphBetaJson: mockState.postGraphBetaJson,
-    deleteGraphRequest: mockState.deleteGraphRequest,
-    escapeOData: vi.fn((value: string) => value.replaceAll("'", "''")),
-  };
+beforeAll(async () => {
+  ({ getMessageMSTeams, listPinsMSTeams, listReactionsMSTeams } =
+    await loadGraphMessagesTestModule());
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
-    findPreferredDmByUserId: mockState.findPreferredDmByUserId,
-  }),
-}));
-
-const TOKEN = "test-graph-token";
-const CHAT_ID = "19:abc@thread.tacv2";
-const CHANNEL_TO = "team-id-1/channel-id-1";
-
 describe("getMessageMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("resolves user: target using graphChatId from store", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "a:bot-framework-dm-id",
@@ -186,11 +170,6 @@ describe("getMessageMSTeams", () => {
 });
 
 describe("listPinsMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("lists pinned messages in a chat", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
@@ -233,11 +212,6 @@ describe("listPinsMSTeams", () => {
 });
 
 describe("listReactionsMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("lists reactions grouped by type with user details", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-1",

@@ -32,6 +32,8 @@ GUEST_OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
 GUEST_OPENCLAW_ENTRY="/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs"
 GUEST_NODE_BIN="/opt/homebrew/bin/node"
 GUEST_NPM_BIN="/opt/homebrew/bin/npm"
+GUEST_CURRENT_USER=""
+GUEST_CURRENT_USER_TRANSPORT="prlctl"
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
@@ -49,6 +51,7 @@ TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=60
 TIMEOUT_SNAPSHOT_S=180
+TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
 
 FRESH_MAIN_VERSION="skip"
@@ -480,11 +483,55 @@ wait_for_vm_status() {
   return 1
 }
 
+resolve_headless_guest_user() {
+  prlctl exec "$VM_NAME" /usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null \
+    | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ && $1 != "Shared" && $1 != ".localized" { print $1; exit }'
+}
+
+guest_current_user_transport_path() {
+  printf '%s/guest-current-user.tsv\n' "$RUN_DIR"
+}
+
+save_guest_current_user_transport() {
+  printf '%s\t%s\n' "$GUEST_CURRENT_USER" "$GUEST_CURRENT_USER_TRANSPORT" >"$(guest_current_user_transport_path)"
+}
+
+load_guest_current_user_transport() {
+  local transport_path
+  transport_path="$(guest_current_user_transport_path)"
+  if [[ -f "$transport_path" ]]; then
+    IFS=$'\t' read -r GUEST_CURRENT_USER GUEST_CURRENT_USER_TRANSPORT <"$transport_path"
+  fi
+}
+
 wait_for_current_user() {
-  local deadline
+  local deadline prlctl_deadline user_name
   deadline=$((SECONDS + TIMEOUT_SNAPSHOT_S))
+  prlctl_deadline=$((SECONDS + TIMEOUT_CURRENT_USER_PRLCTL_S))
+  while (( SECONDS < prlctl_deadline && SECONDS < deadline )); do
+    if user_name="$(prlctl exec "$VM_NAME" --current-user whoami 2>/dev/null | tr -d '\r' | tail -n 1)" \
+      && [[ "$user_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      GUEST_CURRENT_USER="$user_name"
+      GUEST_CURRENT_USER_TRANSPORT="prlctl"
+      save_guest_current_user_transport
+      return 0
+    fi
+    sleep 2
+  done
+  user_name="$(resolve_headless_guest_user || true)"
+  if [[ -n "$user_name" ]] && prlctl exec "$VM_NAME" /usr/bin/sudo -u "$user_name" /usr/bin/whoami >/dev/null 2>&1; then
+    GUEST_CURRENT_USER="$user_name"
+    GUEST_CURRENT_USER_TRANSPORT="sudo"
+    save_guest_current_user_transport
+    warn "desktop user unavailable via Parallels --current-user; using root sudo fallback for $user_name"
+    return 0
+  fi
   while (( SECONDS < deadline )); do
-    if prlctl exec "$VM_NAME" --current-user whoami >/dev/null 2>&1; then
+    if user_name="$(prlctl exec "$VM_NAME" --current-user whoami 2>/dev/null | tr -d '\r' | tail -n 1)" \
+      && [[ "$user_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      GUEST_CURRENT_USER="$user_name"
+      GUEST_CURRENT_USER_TRANSPORT="prlctl"
+      save_guest_current_user_transport
       return 0
     fi
     sleep 2
@@ -527,7 +574,7 @@ snapshot_switch_with_retry() {
   rc=0
   for attempt in 1 2; do
     set +e
-    host_timeout_exec "$TIMEOUT_SNAPSHOT_S" prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+    host_timeout_exec "$TIMEOUT_SNAPSHOT_S" prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" --skip-resume >/dev/null
     rc=$?
     set -e
     if [[ $rc -eq 0 ]]; then
@@ -550,9 +597,23 @@ snapshot_switch_with_retry() {
 
 GUEST_EXEC_PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+headless_guest_fallback() {
+  load_guest_current_user_transport
+  [[ "$GUEST_CURRENT_USER_TRANSPORT" == "sudo" ]]
+}
+
 guest_current_user_exec_path() {
   local path_value="$1"
   shift
+  if headless_guest_fallback; then
+    prlctl exec "$VM_NAME" /usr/bin/sudo -H -u "$GUEST_CURRENT_USER" /usr/bin/env \
+      "HOME=/Users/$GUEST_CURRENT_USER" \
+      "USER=$GUEST_CURRENT_USER" \
+      "LOGNAME=$GUEST_CURRENT_USER" \
+      "PATH=$path_value" \
+      "$@"
+    return
+  fi
   prlctl exec "$VM_NAME" --current-user /usr/bin/env \
     "PATH=$path_value" \
     "$@"
@@ -642,15 +703,30 @@ EOF
 }
 
 guest_current_user_sh() {
-  local script
+  local script script_path rc
   script=$'set -eu\n'
   script+=$'set -o pipefail\n'
   script+=$'trap "" PIPE\n'
   script+=$'umask 022\n'
-  script+=$'export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"\n'
+  script+=$'export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"\n'
   script+=$'if [ -z "${HOME:-}" ]; then export HOME="/Users/$(id -un)"; fi\n'
   script+=$'cd "$HOME"\n'
   script+="$1"
+  if headless_guest_fallback; then
+    script_path="/tmp/openclaw-prl-${BASHPID:-$$}-$RANDOM.sh"
+    printf '%s' "$script" | /usr/bin/base64 | prlctl exec "$VM_NAME" \
+      /usr/bin/sudo -H -u "$GUEST_CURRENT_USER" /usr/bin/env \
+      "HOME=/Users/$GUEST_CURRENT_USER" \
+      "USER=$GUEST_CURRENT_USER" \
+      "LOGNAME=$GUEST_CURRENT_USER" \
+      /usr/bin/base64 -D -o "$script_path"
+    set +e
+    guest_current_user_exec_path "$GUEST_EXEC_PATH" /bin/bash "$script_path"
+    rc=$?
+    set -e
+    guest_current_user_exec /bin/rm -f "$script_path" >/dev/null 2>&1 || true
+    return "$rc"
+  fi
   guest_script current-user "$script"
 }
 
@@ -667,13 +743,20 @@ run_logged_guest_current_user_sh() {
   local timeout_s="$4"
   local runner_path="$5"
   local deadline rc runner_body write_runner_cmd
+  if headless_guest_fallback; then
+    set +e
+    guest_current_user_sh "$script" >"$log_path" 2>&1
+    rc=$?
+    set -e
+    return "$rc"
+  fi
   guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
   runner_body="$(cat <<EOF
 set -eu
 set -o pipefail
 trap 'status=\$?; printf "%s\n" "\$status" > "$done_path"; exit "\$status"' EXIT
 umask 022
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
 if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
 cd "\$HOME"
 $script
@@ -703,12 +786,17 @@ EOF
 
 restore_snapshot() {
   local snapshot_id="$1"
+  local status
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
   snapshot_switch_with_retry "$snapshot_id" || die "snapshot switch failed for $VM_NAME"
-  if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
+  status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+  if [[ "$SNAPSHOT_STATE" == "poweroff" || "$status" == *" stopped" ]]; then
     wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
-    say "Start restored poweroff snapshot $SNAPSHOT_NAME"
+    say "Start restored snapshot $SNAPSHOT_NAME"
     prlctl start "$VM_NAME" >/dev/null
+  elif [[ "$status" == *" suspended" ]]; then
+    say "Resume restored snapshot $SNAPSHOT_NAME"
+    prlctl resume "$VM_NAME" >/dev/null
   fi
   wait_for_current_user || die "desktop user did not become ready in $VM_NAME"
 }
@@ -797,7 +885,8 @@ run_dev_channel_update() {
   run_logged_guest_current_user_sh "$(cat <<EOF
 rm -rf $(shell_quote "$update_root")
 export PATH=$(shell_quote "$bootstrap_bin:$GUEST_EXEC_PATH")
-$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 \
+  $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
 EOF
 )" "$update_log" "$update_done" "$TIMEOUT_UPDATE_DEV_S" "$update_runner"
   update_rc=$?
@@ -980,10 +1069,14 @@ verify_bundle_permissions() {
 root=\$($npm_q root -g); check_path() { local path="\$1"; [ -e "\$path" ] || return 0; local perm perm_oct; perm=\$(/usr/bin/stat -f '%OLp' "\$path"); perm_oct=\$((8#\$perm)); if (( perm_oct & 0002 )); then echo "world-writable install artifact: \$path (\$perm)" >&2; exit 1; fi; }; check_path "\$root/openclaw"; check_path "\$root/openclaw/extensions"; if [ -d "\$root/openclaw/extensions" ]; then while IFS= read -r -d '' extension_dir; do check_path "\$extension_dir"; done < <(/usr/bin/find "\$root/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0); fi
 EOF
 )"
-  guest_current_user_exec /bin/bash -lc "$cmd"
+  guest_current_user_sh "$cmd"
 }
 
 run_ref_onboard() {
+  local daemon_args=("--install-daemon")
+  if headless_guest_fallback; then
+    daemon_args=("--skip-health")
+  fi
   guest_current_user_cli \
     /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
     "$GUEST_OPENCLAW_BIN" onboard \
@@ -993,10 +1086,24 @@ run_ref_onboard() {
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
-    --install-daemon \
+    "${daemon_args[@]}" \
     --skip-skills \
     --accept-risk \
     --json
+}
+
+start_manual_gateway_if_needed() {
+  if ! headless_guest_fallback; then
+    return 0
+  fi
+  guest_current_user_sh "$(cat <<EOF
+pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
+/usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
+  $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY gateway run --bind loopback --port 18789 --force \
+  >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+EOF
+)"
 }
 
 verify_gateway() {
@@ -1023,7 +1130,7 @@ show_gateway_status_compat() {
 
 verify_turn() {
   guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" models set "$MODEL_ID"
-  guest_current_user_exec /bin/sh -lc "$(cat <<EOF
+  guest_current_user_sh "$(cat <<EOF
 export PATH=$(shell_quote "$GUEST_EXEC_PATH")
 exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
   $(shell_quote "$GUEST_NODE_BIN") $(shell_quote "$GUEST_OPENCLAW_ENTRY") agent \
@@ -1050,7 +1157,7 @@ resolve_dashboard_url() {
 }
 
 verify_dashboard_load() {
-  local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd
+  local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd headless_flag
   # `openclaw dashboard --no-open` can hang under the Tahoe Parallels transport
   # even when the dashboard itself is healthy. Probe the local dashboard URL
   # directly so the smoke still validates HTML readiness and browser reachability.
@@ -1058,13 +1165,18 @@ verify_dashboard_load() {
   dashboard_http_url="$dashboard_url"
   dashboard_url_q="$(shell_quote "$dashboard_url")"
   dashboard_http_url_q="$(shell_quote "$dashboard_http_url")"
+  headless_flag=0
+  if headless_guest_fallback; then
+    headless_flag=1
+  fi
   cmd="$(cat <<EOF
 set -eu
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
 if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
 cd "\$HOME"
 dashboard_url=$dashboard_url_q
 dashboard_http_url=$dashboard_http_url_q
+headless_flag=$(shell_quote "$headless_flag")
 dashboard_port=\$(printf '%s\n' "\$dashboard_http_url" | sed -E 's#^https?://[^:/]+:([0-9]+).*\$#\1#')
 if [ -z "\$dashboard_port" ] || [ "\$dashboard_port" = "\$dashboard_http_url" ]; then
   echo "failed to parse dashboard port from \$dashboard_http_url" >&2
@@ -1089,6 +1201,9 @@ done
 }
 grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null
 grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null
+if [ "\$headless_flag" = "1" ]; then
+  exit 0
+fi
 pkill -x Safari >/dev/null 2>&1 || true
 open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
@@ -1106,7 +1221,7 @@ echo "Safari did not establish a dashboard client connection on port \$dashboard
 exit 1
 EOF
 )"
-  guest_current_user_exec /bin/sh -lc "$cmd"
+  guest_current_user_sh "$cmd"
 }
 
 configure_discord_smoke() {
@@ -1156,9 +1271,7 @@ $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY channels status --probe --json
 rm -f /tmp/openclaw-discord-token /tmp/openclaw-discord-guilds.json
 EOF
 )"
-  prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
-    /bin/sh -lc "$script"
+  guest_current_user_sh "$script"
 }
 
 discord_message_id_from_send_log() {
@@ -1434,6 +1547,7 @@ run_fresh_main_lane() {
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
+  phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load
@@ -1475,6 +1589,7 @@ run_upgrade_lane() {
     phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update
   fi
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
+  phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_manual_gateway_if_needed
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.dashboard-load" "$TIMEOUT_DASHBOARD_S" verify_dashboard_load

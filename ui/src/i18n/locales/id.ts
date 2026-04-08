@@ -294,10 +294,24 @@ export const id: TranslationMap = {
       promotedSuffix: "dipromosikan",
       nextSweepPrefix: "penyapuan berikutnya",
     },
+    scene: {
+      backfill: "Isi ulang",
+      reset: "Setel ulang",
+      working: "Sedang bekerja…",
+    },
     stats: {
       shortTerm: "Jangka pendek",
       signals: "Sinyal",
+      promoted: "Dipromosikan",
       phaseHits: "Hit Fase",
+    },
+    trace: {
+      shortTerm: "Jangka pendek",
+      signals: "Sinyal",
+      promoted: "Dipromosikan",
+      emptyShortTerm: "Tidak ada item jangka pendek yang aktif.",
+      emptySignals: "Tidak ada sinyal aktif.",
+      emptyPromoted: "Belum ada yang dipromosikan hari ini.",
     },
     diary: {
       title: "Buku Harian Mimpi",

@@ -25,6 +25,7 @@ import {
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
+  writeCliSystemPromptFile,
 } from "./helpers.js";
 import {
   cliBackendLog,
@@ -113,6 +114,13 @@ export async function executePreparedCliRun(
     isNewSession: isNew,
     systemPrompt: context.systemPrompt,
   });
+  const systemPromptFile =
+    !useResume && systemPromptArg
+      ? await writeCliSystemPromptFile({
+          backend,
+          systemPrompt: systemPromptArg,
+        })
+      : undefined;
 
   let prompt = prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
     preserveExactPrompt: context.heartbeatPrompt,
@@ -144,6 +152,7 @@ export async function executePreparedCliRun(
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
     systemPrompt: systemPromptArg,
+    systemPromptFilePath: systemPromptFile?.filePath,
     imagePaths,
     promptArg: argsPrompt,
     useResume,
@@ -350,6 +359,9 @@ export async function executePreparedCliRun(
       });
     });
   } finally {
+    if (systemPromptFile) {
+      await systemPromptFile.cleanup();
+    }
     if (cleanupImages) {
       await cleanupImages();
     }

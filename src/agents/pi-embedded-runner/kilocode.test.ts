@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.unmock("../../plugins/provider-runtime.js");
+vi.unmock("../../plugins/provider-runtime.runtime.js");
+
 let isCacheTtlEligibleProvider: typeof import("./cache-ttl.js").isCacheTtlEligibleProvider;
 
 describe("kilocode cache-ttl eligibility", () => {

@@ -1,5 +1,6 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -23,16 +24,24 @@ import {
   resolveSharedMatrixClient,
 } from "../client.js";
 import { releaseSharedClientInstance } from "../client/shared.js";
+import type { MatrixClient } from "../sdk.js";
+import { isMatrixStartupAbortError } from "../startup-abort.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import {
+  createMatrixInboundEventDeduper,
+  type MatrixInboundEventDeduper,
+} from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
+import { createMatrixMonitorStatusController } from "./status.js";
+import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
+import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -42,6 +51,7 @@ export type MonitorMatrixOpts = {
   initialSyncLimit?: number;
   replyToMode?: ReplyToMode;
   accountId?: string | null;
+  setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
 
 const DEFAULT_MEDIA_MAX_MB = 20;
@@ -140,38 +150,41 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     resolvedInitialSyncLimit === auth.initialSyncLimit
       ? auth
       : { ...auth, initialSyncLimit: resolvedInitialSyncLimit };
-  const client = await resolveSharedMatrixClient({
-    cfg,
-    auth: authWithLimit,
-    startClient: false,
+  const statusController = createMatrixMonitorStatusController({
     accountId: auth.accountId,
+    baseUrl: auth.homeserver,
+    statusSink: opts.setStatus,
   });
-  setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
+  let client: MatrixClient | null = null;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  const inboundDeduper = await createMatrixInboundEventDeduper({
-    auth,
-    env: process.env,
+  let inboundDeduper: MatrixInboundEventDeduper | null = null;
+  const monitorTaskRunner = createMatrixMonitorTaskRunner({
+    logger,
+    logVerboseMessage,
   });
-  const inFlightRoomMessages = new Set<Promise<void>>();
-  const waitForInFlightRoomMessages = async () => {
-    while (inFlightRoomMessages.size > 0) {
-      await Promise.allSettled(Array.from(inFlightRoomMessages));
-    }
-  };
-  const cleanup = async () => {
+  let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
+  const cleanup = async (mode: "persist" | "stop" = "persist") => {
     if (cleanedUp) {
       return;
     }
     cleanedUp = true;
     try {
-      client.stopSyncWithoutPersist();
-      await client.drainPendingDecryptions("matrix monitor shutdown");
-      await waitForInFlightRoomMessages();
+      client?.stopSyncWithoutPersist();
+      if (client && mode === "persist") {
+        await client.drainPendingDecryptions("matrix monitor shutdown");
+      }
+      if (mode === "persist") {
+        await monitorTaskRunner.waitForIdle();
+      }
       threadBindingManager?.stop();
-      await inboundDeduper.stop();
-      await releaseSharedClientInstance(client, "persist");
+      await inboundDeduper?.stop();
+      if (client) {
+        await releaseSharedClientInstance(client, mode);
+      }
     } finally {
+      syncLifecycle?.dispose();
+      statusController.markStopped();
       setActiveMatrixClient(null, auth.accountId);
     }
   };
@@ -225,84 +238,92 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const blockStreamingEnabled = accountConfig.blockStreaming === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
-  // Cold starts should ignore old room history, but once we have a persisted
-  // /sync cursor we want restart backlogs to replay just like other channels.
-  const dropPreStartupMessages = !client.hasPersistedSyncState();
-  const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
-  const directTracker = createDirectRoomTracker(client, {
-    log: logVerboseMessage,
-    canPromoteRecentInvite: async (roomId) =>
-      shouldPromoteRecentInviteRoom({
-        roomId,
-        roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
-        rooms: roomsConfig,
-      }),
-    shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
-      try {
-        const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
-        if (!roomInfo.nameResolved || !roomInfo.aliasesResolved) {
-          return undefined;
-        }
-        return shouldPromoteRecentInviteRoom({
-          roomId,
-          roomInfo,
-          rooms: roomsConfig,
-        });
-      } catch (err) {
-        logVerboseMessage(
-          `matrix: local promotion revalidation failed room=${roomId} (${String(err)})`,
-        );
-        return undefined;
-      }
-    },
-  });
-  registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
 
-  const handleRoomMessage = createMatrixRoomMessageHandler({
-    client,
-    core,
-    cfg,
-    accountId: effectiveAccountId,
-    runtime,
-    logger,
-    logVerboseMessage,
-    allowFrom,
-    groupAllowFrom,
-    roomsConfig,
-    accountAllowBots,
-    configuredBotUserIds,
-    groupPolicy,
-    replyToMode,
-    threadReplies,
-    dmThreadReplies,
-    dmSessionScope,
-    streaming,
-    blockStreamingEnabled,
-    dmEnabled,
-    dmPolicy,
-    textLimit,
-    mediaMaxBytes,
-    historyLimit,
-    startupMs,
-    startupGraceMs,
-    dropPreStartupMessages,
-    inboundDeduper,
-    directTracker,
-    getRoomInfo,
-    getMemberDisplayName,
-    needsRoomAliasesForConfig,
-  });
-  const trackRoomMessage = (roomId: string, event: Parameters<typeof handleRoomMessage>[1]) => {
-    const task = Promise.resolve(handleRoomMessage(roomId, event)).finally(() => {
-      inFlightRoomMessages.delete(task);
-    });
-    inFlightRoomMessages.add(task);
-    return task;
-  };
-
   try {
+    client = await resolveSharedMatrixClient({
+      cfg,
+      auth: authWithLimit,
+      startClient: false,
+      accountId: auth.accountId,
+    });
+    setActiveMatrixClient(client, auth.accountId);
+    inboundDeduper = await createMatrixInboundEventDeduper({
+      auth,
+      env: process.env,
+    });
+    syncLifecycle = createMatrixMonitorSyncLifecycle({
+      client,
+      statusController,
+      isStopping: () => cleanedUp || opts.abortSignal?.aborted === true,
+    });
+    // Cold starts should ignore old room history, but once we have a persisted
+    // /sync cursor we want restart backlogs to replay just like other channels.
+    const dropPreStartupMessages = !client.hasPersistedSyncState();
+    const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+    const directTracker = createDirectRoomTracker(client, {
+      log: logVerboseMessage,
+      canPromoteRecentInvite: async (roomId) =>
+        shouldPromoteRecentInviteRoom({
+          roomId,
+          roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+          rooms: roomsConfig,
+        }),
+      shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
+        try {
+          const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
+          if (!roomInfo.nameResolved || !roomInfo.aliasesResolved) {
+            return undefined;
+          }
+          return shouldPromoteRecentInviteRoom({
+            roomId,
+            roomInfo,
+            rooms: roomsConfig,
+          });
+        } catch (err) {
+          logVerboseMessage(
+            `matrix: local promotion revalidation failed room=${roomId} (${String(err)})`,
+          );
+          return undefined;
+        }
+      },
+    });
+    registerMatrixAutoJoin({ client, accountConfig, runtime });
+    const handleRoomMessage = createMatrixRoomMessageHandler({
+      client,
+      core,
+      cfg,
+      accountId: effectiveAccountId,
+      runtime,
+      logger,
+      logVerboseMessage,
+      allowFrom,
+      groupAllowFrom,
+      roomsConfig,
+      accountAllowBots,
+      configuredBotUserIds,
+      groupPolicy,
+      replyToMode,
+      threadReplies,
+      dmThreadReplies,
+      dmSessionScope,
+      streaming,
+      blockStreamingEnabled,
+      dmEnabled,
+      dmPolicy,
+      textLimit,
+      mediaMaxBytes,
+      historyLimit,
+      startupMs,
+      startupGraceMs,
+      dropPreStartupMessages,
+      inboundDeduper,
+      directTracker,
+      getRoomInfo,
+      getMemberDisplayName,
+      needsRoomAliasesForConfig,
+    });
     threadBindingManager = await createMatrixThreadBindingManager({
       accountId: effectiveAccountId,
       auth,
@@ -337,7 +358,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       warnedCryptoMissingRooms,
       logger,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: trackRoomMessage,
+      onRoomMessage: handleRoomMessage,
+      runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 
     // Register Matrix thread bindings before the client starts syncing so threaded
@@ -347,6 +369,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       cfg,
       auth: authWithLimit,
       accountId: auth.accountId,
+      abortSignal: opts.abortSignal,
     });
     logVerboseMessage("matrix: client started");
 
@@ -383,10 +406,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       writeConfigFile: async (nextCfg) => await core.config.writeConfigFile(nextCfg),
       loadWebMedia: async (url, maxBytes) => await core.media.loadWebMedia(url, maxBytes),
       env: process.env,
+      abortSignal: opts.abortSignal,
     });
 
-    await new Promise<void>((resolve) => {
-      const stopAndResolve = async () => {
+    await Promise.race([
+      waitUntilAbort(opts.abortSignal, async () => {
         try {
           logVerboseMessage("matrix: stopping client");
           await cleanup();
@@ -394,23 +418,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           logger.warn("matrix: failed during monitor shutdown cleanup", {
             error: String(err),
           });
-        } finally {
-          resolve();
         }
-      };
-      if (opts.abortSignal?.aborted) {
-        void stopAndResolve();
-        return;
-      }
-      opts.abortSignal?.addEventListener(
-        "abort",
-        () => {
-          void stopAndResolve();
-        },
-        { once: true },
-      );
-    });
+      }),
+      syncLifecycle.waitForFatalStop(),
+    ]);
   } catch (err) {
+    if (opts.abortSignal?.aborted === true && isMatrixStartupAbortError(err)) {
+      await cleanup("stop");
+      return;
+    }
+    statusController.noteUnexpectedError(err);
     await cleanup();
     throw err;
   }
