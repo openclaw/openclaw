@@ -7,11 +7,11 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Control UI/dreaming: add a structured diary view with timeline navigation, backfill/reset controls, and traceable dreaming summaries. Thanks @mbelinky.
-- Control UI/dreaming: surface grounded historical replay as its own Scene lane with grounded-led promotion hints and a safe clear-grounded action for staged backfill-only signals. (#63395) Thanks @mbelinky.
 - Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit/reset flows, cleaner durable-fact extraction, and live short-term promotion integration so old daily notes can replay into Dreams and durable memory without a second memory stack. Thanks @mbelinky.
 - QA/lab: add character-vibes evaluation reports with model selection and parallel runs so live QA can compare candidate behavior faster.
 - Plugins/provider-auth: let provider manifests declare `providerAuthAliases` so provider variants can share env vars, auth profiles, config-backed auth, and API-key onboarding choices without core-specific wiring.
 - iOS: pin release versioning to an explicit CalVer in `apps/ios/version.json`, keep TestFlight iteration on the same short version until maintainers intentionally promote the next gateway version, and add the documented `pnpm ios:version:pin -- --from-gateway` workflow for release trains. (#63001) Thanks @ngutman.
+- Control UI/dreaming: surface grounded historical replay as its own Scene lane with grounded-led promotion hints and a safe clear-grounded action for staged backfill-only signals. (#63395) Thanks @mbelinky.
 
 ### Fixes
 
