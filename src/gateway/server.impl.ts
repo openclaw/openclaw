@@ -1247,7 +1247,7 @@ export async function startGatewayServer(
           );
           if (event.reason === "reset" || event.reason === "deleted") {
             broadcastToConnIds(
-              "socket_drain",
+              "socket.drain",
               { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
               connIds,
               { dropIfSlow: true },
