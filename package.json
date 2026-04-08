@@ -1344,7 +1344,7 @@
     "gaxios": "7.1.4",
     "google-auth-library": "^10.6.2",
     "grammy": "^1.42.0",
-    "hono": "4.12.10",
+    "hono": "4.12.12",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
     "jimp": "^1.6.0",
@@ -1420,8 +1420,8 @@
   "pnpm": {
     "overrides": {
       "@anthropic-ai/sdk": "0.81.0",
-      "hono": "4.12.10",
-      "@hono/node-server": "1.19.10",
+      "hono": "4.12.12",
+      "@hono/node-server": "1.19.13",
       "axios": "1.13.6",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",

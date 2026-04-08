@@ -17,6 +17,33 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
 
 export type QaThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
+export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | undefined {
+  const value = typeof input === "string" ? input.trim().toLowerCase() : "";
+  const collapsed = value.replace(/[\s_-]+/g, "");
+  if (collapsed === "off") {
+    return "off";
+  }
+  if (collapsed === "minimal" || collapsed === "min") {
+    return "minimal";
+  }
+  if (collapsed === "low") {
+    return "low";
+  }
+  if (collapsed === "medium" || collapsed === "med") {
+    return "medium";
+  }
+  if (collapsed === "high") {
+    return "high";
+  }
+  if (collapsed === "xhigh" || collapsed === "extrahigh") {
+    return "xhigh";
+  }
+  if (collapsed === "adaptive" || collapsed === "auto") {
+    return "adaptive";
+  }
+  return undefined;
+}
+
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
@@ -147,6 +174,7 @@ export function buildQaGatewayConfig(params: {
           transport: "sse",
           openaiWsWarmup: false,
           ...(params.fastMode === true || isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
+          ...(params.thinkingDefault ? { thinking: params.thinkingDefault } : {}),
         })
       : (_modelRef: string) => ({
           transport: "sse",

@@ -87,17 +87,45 @@ refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.4 \
-  --model anthropic/claude-opus-4-6 \
-  --model minimax/MiniMax-M2.7 \
-  --judge-model openai/gpt-5.4
+  --model openai/gpt-5.4,thinking=xhigh \
+  --model openai/gpt-5.2,thinking=xhigh \
+  --model anthropic/claude-opus-4-6,thinking=high \
+  --model anthropic/claude-sonnet-4-6,thinking=high \
+  --model minimax/MiniMax-M2.7,thinking=high \
+  --model zai/glm-5.1,thinking=high \
+  --model moonshot/kimi-k2.5,thinking=high \
+  --model qwen/qwen3.6-plus,thinking=high \
+  --model xiaomi/mimo-v2-pro,thinking=high \
+  --model google/gemini-3.1-pro-preview,thinking=high \
+  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
+  --judge-model anthropic/claude-opus-4-6,thinking=high
 ```
 
-The command runs local QA gateway child processes, not Docker. It preserves each
-full transcript, records basic run stats, then asks the judge model in fast mode
-with `xhigh` reasoning to rank the runs by naturalness, vibe, and humor.
+The command runs local QA gateway child processes, not Docker. Character eval
+scenarios should set the persona through `SOUL.md`, then run ordinary user turns
+such as chat, workspace help, and small file tasks. The candidate model should
+not be told that it is being evaluated. The command preserves each full
+transcript, records basic run stats, then asks the judge models in fast mode with
+`xhigh` reasoning to rank the runs by naturalness, vibe, and humor.
+Candidate runs default to `high` thinking, with `xhigh` for OpenAI models that
+support it. Override a specific candidate inline with
+`--model provider/model,thinking=<level>`. `--thinking <level>` still sets a
+global fallback, and the older `--model-thinking <provider/model=level>` form is
+kept for compatibility.
+OpenAI candidate refs default to fast mode so priority processing is used where
+the provider supports it. Add `,fast`, `,no-fast`, or `,fast=false` inline when a
+single candidate or judge needs an override. Pass `--fast` only when you want to
+force fast mode on for every candidate model. Candidate and judge durations are
+recorded in the report for benchmark analysis, but judge prompts explicitly say
+not to rank by speed.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.4` and `anthropic/claude-opus-4-6`.
+`openai/gpt-5.4`, `openai/gpt-5.2`, `anthropic/claude-opus-4-6`,
+`anthropic/claude-sonnet-4-6`, `minimax/MiniMax-M2.7`, `zai/glm-5.1`,
+`moonshot/kimi-k2.5`, `qwen/qwen3.6-plus`, `xiaomi/mimo-v2-pro`, and
+`google/gemini-3.1-pro-preview`.
+When no `--judge-model` is passed, the judges default to
+`openai/gpt-5.4,thinking=xhigh,fast` and
+`anthropic/claude-opus-4-6,thinking=high`.
 
 ## Related docs
 

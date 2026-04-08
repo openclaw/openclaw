@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
+
+async function loadSecretsModule() {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  vi.resetModules();
+  ({ createProviderAuthResolver } = await import("./models-config.providers.secrets.js"));
+}
+
+beforeAll(loadSecretsModule);
 
 describe("Volcengine and BytePlus providers", () => {
   it("shares VOLCANO_ENGINE_API_KEY across volcengine auth aliases", () => {

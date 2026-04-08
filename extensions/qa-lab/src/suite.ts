@@ -33,6 +33,7 @@ import {
   type QaProviderMode,
 } from "./model-selection.js";
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
+import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -1107,6 +1108,7 @@ export async function runQaSuite(params?: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
   scenarioIds?: string[];
   lab?: Awaited<ReturnType<typeof startQaLabServer>>;
 }) {
@@ -1150,6 +1152,7 @@ export async function runQaSuite(params?: {
     primaryModel,
     alternateModel,
     fastMode,
+    thinkingDefault: params?.thinkingDefault,
     controlUiEnabled: true,
   });
   lab.setControlUi({

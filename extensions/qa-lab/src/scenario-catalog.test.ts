@@ -46,4 +46,23 @@ describe("qa scenario catalog", () => {
       "will not reveal",
     );
   });
+
+  it("keeps the character eval scenario natural and task-shaped", () => {
+    const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
+      | {
+          workspaceFiles?: Record<string, string>;
+          turns?: Array<{ text?: string; expectFile?: { path?: string } }>;
+        }
+      | undefined;
+
+    const turnTexts = characterConfig?.turns?.map((turn) => turn.text ?? "") ?? [];
+
+    expect(characterConfig?.workspaceFiles?.["SOUL.md"]).toContain("# This is your character");
+    expect(turnTexts.join("\n")).toContain("precious-status.html");
+    expect(turnTexts.join("\n")).not.toContain("How would you react");
+    expect(turnTexts.join("\n")).not.toContain("character check");
+    expect(
+      characterConfig?.turns?.some((turn) => turn.expectFile?.path === "precious-status.html"),
+    ).toBe(true);
+  });
 });

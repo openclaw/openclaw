@@ -148,10 +148,15 @@ describe("qa cli runtime", () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/character",
-      model: ["openai/gpt-5.4", "codex-cli/test-model"],
+      model: [
+        "openai/gpt-5.4,thinking=xhigh,fast=false",
+        "codex-cli/test-model,thinking=high,fast",
+      ],
       scenario: "character-vibes-gollum",
       fast: true,
-      judgeModel: "openai/gpt-5.4",
+      thinking: "medium",
+      modelThinking: ["codex-cli/test-model=medium"],
+      judgeModel: ["openai/gpt-5.4,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
       judgeTimeoutMs: 180_000,
     });
 
@@ -161,9 +166,72 @@ describe("qa cli runtime", () => {
       models: ["openai/gpt-5.4", "codex-cli/test-model"],
       scenarioId: "character-vibes-gollum",
       candidateFastMode: true,
-      judgeModel: "openai/gpt-5.4",
+      candidateThinkingDefault: "medium",
+      candidateThinkingByModel: { "codex-cli/test-model": "medium" },
+      candidateModelOptions: {
+        "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: false },
+        "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
+      },
+      judgeModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+      judgeModelOptions: {
+        "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: true },
+        "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+      },
       judgeTimeoutMs: 180_000,
     });
+  });
+
+  it("lets character eval auto-select candidate fast mode when --fast is omitted", async () => {
+    await runQaCharacterEvalCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      model: ["openai/gpt-5.4"],
+    });
+
+    expect(runQaCharacterEval).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      models: ["openai/gpt-5.4"],
+      scenarioId: undefined,
+      candidateFastMode: undefined,
+      candidateThinkingDefault: undefined,
+      candidateThinkingByModel: undefined,
+      candidateModelOptions: undefined,
+      judgeModels: undefined,
+      judgeModelOptions: undefined,
+      judgeTimeoutMs: undefined,
+    });
+  });
+
+  it("rejects invalid character eval thinking levels", async () => {
+    await expect(
+      runQaCharacterEvalCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        model: ["openai/gpt-5.4"],
+        thinking: "enormous",
+      }),
+    ).rejects.toThrow("--thinking must be one of");
+
+    await expect(
+      runQaCharacterEvalCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        model: ["openai/gpt-5.4,thinking=galaxy"],
+      }),
+    ).rejects.toThrow("--model thinking must be one of");
+
+    await expect(
+      runQaCharacterEvalCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        model: ["openai/gpt-5.4,warp"],
+      }),
+    ).rejects.toThrow("--model options must be thinking=<level>");
+
+    await expect(
+      runQaCharacterEvalCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        model: ["openai/gpt-5.4"],
+        modelThinking: ["openai/gpt-5.4"],
+      }),
+    ).rejects.toThrow("--model-thinking must use provider/model=level");
   });
 
   it("passes the explicit repo root into manual runs", async () => {

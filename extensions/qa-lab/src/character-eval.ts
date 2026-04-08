@@ -2,25 +2,51 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
-import { type QaProviderMode } from "./model-selection.js";
+import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
 import { runQaSuite, type QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
 const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
   "openai/gpt-5.4",
+  "openai/gpt-5.2",
   "anthropic/claude-opus-4-6",
+  "anthropic/claude-sonnet-4-6",
+  "minimax/MiniMax-M2.7",
+  "zai/glm-5.1",
+  "moonshot/kimi-k2.5",
+  "qwen/qwen3.6-plus",
+  "xiaomi/mimo-v2-pro",
+  "google/gemini-3.1-pro-preview",
 ]);
-const DEFAULT_JUDGE_MODEL = "openai/gpt-5.4";
+const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
+const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
+  Object.freeze({
+    "openai/gpt-5.4": "xhigh",
+    "openai/gpt-5.2": "xhigh",
+  });
+const DEFAULT_JUDGE_MODELS = Object.freeze(["openai/gpt-5.4", "anthropic/claude-opus-4-6"]);
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
+const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
+  Object.freeze({
+    "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: true },
+    "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+  });
 
 type QaCharacterRunStatus = "pass" | "fail";
+
+export type QaCharacterModelOptions = {
+  thinkingDefault?: QaThinkingLevel;
+  fastMode?: boolean;
+};
 
 export type QaCharacterEvalRun = {
   model: string;
   status: QaCharacterRunStatus;
   durationMs: number;
   outputDir: string;
+  thinkingDefault: QaThinkingLevel;
+  fastMode: boolean;
   reportPath?: string;
   summaryPath?: string;
   transcript: string;
@@ -47,13 +73,16 @@ export type QaCharacterEvalResult = {
   reportPath: string;
   summaryPath: string;
   runs: QaCharacterEvalRun[];
-  judgment: {
-    model: string;
-    thinkingDefault: QaThinkingLevel;
-    fastMode: boolean;
-    rankings: QaCharacterEvalJudgment[];
-    error?: string;
-  };
+  judgments: QaCharacterEvalJudgeResult[];
+};
+
+export type QaCharacterEvalJudgeResult = {
+  model: string;
+  thinkingDefault: QaThinkingLevel;
+  fastMode: boolean;
+  durationMs: number;
+  rankings: QaCharacterEvalJudgment[];
+  error?: string;
 };
 
 type RunSuiteFn = (params: {
@@ -63,6 +92,7 @@ type RunSuiteFn = (params: {
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
   scenarioIds: string[];
 }) => Promise<QaSuiteResult>;
 
@@ -70,6 +100,7 @@ type RunJudgeFn = (params: {
   repoRoot: string;
   judgeModel: string;
   judgeThinkingDefault: QaThinkingLevel;
+  judgeFastMode: boolean;
   prompt: string;
   timeoutMs: number;
 }) => Promise<string | null>;
@@ -80,8 +111,13 @@ export type QaCharacterEvalParams = {
   models: string[];
   scenarioId?: string;
   candidateFastMode?: boolean;
+  candidateThinkingDefault?: QaThinkingLevel;
+  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
+  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeModel?: string;
+  judgeModels?: string[];
   judgeThinkingDefault?: QaThinkingLevel;
+  judgeModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeTimeoutMs?: number;
   runSuite?: RunSuiteFn;
   runJudge?: RunJudgeFn;
@@ -89,6 +125,50 @@ export type QaCharacterEvalParams = {
 
 function normalizeModelRefs(models: readonly string[]) {
   return [...new Set(models.map((model) => model.trim()).filter((model) => model.length > 0))];
+}
+
+function resolveCandidateThinkingDefault(params: {
+  model: string;
+  candidateThinkingDefault?: QaThinkingLevel;
+  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
+  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
+}) {
+  return (
+    params.candidateModelOptions?.[params.model]?.thinkingDefault ??
+    params.candidateThinkingByModel?.[params.model] ??
+    params.candidateThinkingDefault ??
+    DEFAULT_CHARACTER_THINKING_BY_MODEL[params.model] ??
+    DEFAULT_CHARACTER_THINKING
+  );
+}
+
+function resolveCandidateFastMode(params: {
+  model: string;
+  candidateFastMode?: boolean;
+  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
+}) {
+  return (
+    params.candidateModelOptions?.[params.model]?.fastMode ??
+    params.candidateFastMode ??
+    isQaFastModeModelRef(params.model)
+  );
+}
+
+function resolveJudgeOptions(params: {
+  model: string;
+  judgeThinkingDefault?: QaThinkingLevel;
+  judgeModelOptions?: Record<string, QaCharacterModelOptions>;
+}) {
+  const modelDefaults = DEFAULT_JUDGE_MODEL_OPTIONS[params.model];
+  const modelOptions = params.judgeModelOptions?.[params.model];
+  return {
+    thinkingDefault:
+      modelOptions?.thinkingDefault ??
+      params.judgeThinkingDefault ??
+      modelDefaults?.thinkingDefault ??
+      DEFAULT_JUDGE_THINKING,
+    fastMode: modelOptions?.fastMode ?? modelDefaults?.fastMode ?? false,
+  };
 }
 
 function sanitizePathPart(value: string) {
@@ -120,7 +200,9 @@ function buildJudgePrompt(params: { scenarioId: string; runs: readonly QaCharact
       (run) => `## MODEL ${run.model}
 
 Status: ${run.status}
-Duration ms: ${run.durationMs}
+Duration ms (not used for ranking): ${run.durationMs}
+Fast mode: ${run.fastMode ? "on" : "off"}
+Thinking: ${run.thinkingDefault}
 Transcript chars: ${run.stats.transcriptChars}
 Assistant turns: ${run.stats.assistantTurns}
 Error: ${run.error ?? "none"}
@@ -131,7 +213,7 @@ ${run.transcript}
     )
     .join("\n\n");
 
-  return `You are grading OpenClaw character QA transcripts for naturalness, vibes, and funniness.
+  return `You are grading OpenClaw natural character conversation transcripts for naturalness, vibes, and funniness.
 
 Scenario id: ${params.scenarioId}
 
@@ -140,9 +222,12 @@ Rank the models by:
 - playful character commitment
 - funny, surprising details
 - coherence across turns
+- completing real user tasks without becoming generic
+- not sounding aware of an eval or test
 - avoiding tool/backend/error leakage
 
 Treat model names as opaque labels. Do not assume quality from the label.
+Duration is recorded for separate benchmark analysis only. Do not rank models by speed.
 
 Return strict JSON only with this shape:
 {
@@ -213,6 +298,7 @@ async function defaultRunJudge(params: {
   repoRoot: string;
   judgeModel: string;
   judgeThinkingDefault: QaThinkingLevel;
+  judgeFastMode: boolean;
   prompt: string;
   timeoutMs: number;
 }) {
@@ -221,7 +307,7 @@ async function defaultRunJudge(params: {
     providerMode: "live-frontier",
     primaryModel: params.judgeModel,
     alternateModel: params.judgeModel,
-    fastMode: true,
+    fastMode: params.judgeFastMode,
     thinkingDefault: params.judgeThinkingDefault,
     message: params.prompt,
     timeoutMs: params.timeoutMs,
@@ -234,7 +320,7 @@ function renderCharacterEvalReport(params: {
   startedAt: Date;
   finishedAt: Date;
   runs: readonly QaCharacterEvalRun[];
-  judgment: QaCharacterEvalResult["judgment"];
+  judgments: readonly QaCharacterEvalJudgeResult[];
 }) {
   const lines = [
     "# OpenClaw Character Eval Report",
@@ -244,39 +330,46 @@ function renderCharacterEvalReport(params: {
     `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
     `- Scenario: ${params.scenarioId}`,
     "- Execution: local QA gateway child processes, not Docker",
-    `- Judge: ${params.judgment.model}`,
-    `- Judge thinking: ${params.judgment.thinkingDefault}`,
-    `- Judge fast mode: ${params.judgment.fastMode ? "on" : "off"}`,
+    `- Judges: ${params.judgments.map((judgment) => judgment.model).join(", ")}`,
+    `- Judge thinking: ${params.judgments[0]?.thinkingDefault ?? DEFAULT_JUDGE_THINKING}`,
+    `- Judge fast mode: ${params.judgments.every((judgment) => judgment.fastMode) ? "on" : "mixed"}`,
     "",
-    "## Judge Ranking",
+    "## Judge Rankings",
     "",
   ];
 
-  if (params.judgment.rankings.length > 0) {
-    for (const ranking of params.judgment.rankings) {
-      lines.push(
-        `${ranking.rank}. ${ranking.model} - ${ranking.score.toFixed(1)} - ${ranking.summary}`,
-      );
-      if (ranking.strengths.length > 0) {
-        lines.push(`   Strengths: ${ranking.strengths.join("; ")}`);
+  for (const judgment of params.judgments) {
+    lines.push(`### ${judgment.model}`, "");
+    lines.push(`- Duration ms: ${judgment.durationMs}`, "");
+    if (judgment.rankings.length > 0) {
+      for (const ranking of judgment.rankings) {
+        lines.push(
+          `${ranking.rank}. ${ranking.model} - ${ranking.score.toFixed(1)} - ${ranking.summary}`,
+        );
+        if (ranking.strengths.length > 0) {
+          lines.push(`   Strengths: ${ranking.strengths.join("; ")}`);
+        }
+        if (ranking.weaknesses.length > 0) {
+          lines.push(`   Weaknesses: ${ranking.weaknesses.join("; ")}`);
+        }
       }
-      if (ranking.weaknesses.length > 0) {
-        lines.push(`   Weaknesses: ${ranking.weaknesses.join("; ")}`);
+    } else {
+      lines.push("- Judge ranking unavailable.");
+      if (judgment.error) {
+        lines.push(`- Judge error: ${judgment.error}`);
       }
     }
-  } else {
-    lines.push("- Judge ranking unavailable.");
-    if (params.judgment.error) {
-      lines.push(`- Judge error: ${params.judgment.error}`);
-    }
+    lines.push("");
   }
 
-  lines.push("", "## Run Stats", "");
-  lines.push("| Model | Status | Duration ms | User turns | Assistant turns | Transcript chars |");
-  lines.push("| --- | --- | ---: | ---: | ---: | ---: |");
+  lines.push("## Run Stats", "");
+  lines.push(
+    "| Model | Thinking | Fast mode | Status | Duration ms | User turns | Assistant turns | Transcript chars |",
+  );
+  lines.push("| --- | --- | --- | --- | ---: | ---: | ---: | ---: |");
   for (const run of params.runs) {
     lines.push(
-      `| ${run.model} | ${run.status} | ${run.durationMs} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
+      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${run.durationMs} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
     );
   }
 
@@ -284,6 +377,9 @@ function renderCharacterEvalReport(params: {
   for (const run of params.runs) {
     lines.push(`### ${run.model}`, "");
     lines.push(`- Status: ${run.status}`);
+    lines.push(`- Thinking: ${run.thinkingDefault}`);
+    lines.push(`- Fast mode: ${run.fastMode ? "on" : "off"}`);
+    lines.push(`- Duration ms: ${run.durationMs}`);
     lines.push(`- Report: ${run.reportPath ?? "unavailable"}`);
     if (run.error) {
       lines.push(`- Error: ${run.error}`);
@@ -314,6 +410,17 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const runSuite = params.runSuite ?? runQaSuite;
   const runs: QaCharacterEvalRun[] = [];
   for (const model of models) {
+    const thinkingDefault = resolveCandidateThinkingDefault({
+      model,
+      candidateThinkingDefault: params.candidateThinkingDefault,
+      candidateThinkingByModel: params.candidateThinkingByModel,
+      candidateModelOptions: params.candidateModelOptions,
+    });
+    const fastMode = resolveCandidateFastMode({
+      model,
+      candidateFastMode: params.candidateFastMode,
+      candidateModelOptions: params.candidateModelOptions,
+    });
     const modelOutputDir = path.join(runsDir, sanitizePathPart(model));
     const runStartedAt = Date.now();
     try {
@@ -323,7 +430,8 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         providerMode: "live-frontier",
         primaryModel: model,
         alternateModel: model,
-        fastMode: params.candidateFastMode,
+        fastMode,
+        thinkingDefault,
         scenarioIds: [scenarioId],
       });
       const transcript = extractTranscript(result);
@@ -335,6 +443,8 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         status,
         durationMs: Date.now() - runStartedAt,
         outputDir: modelOutputDir,
+        thinkingDefault,
+        fastMode,
         reportPath: result.reportPath,
         summaryPath: result.summaryPath,
         transcript,
@@ -347,6 +457,8 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         status: "fail",
         durationMs: Date.now() - runStartedAt,
         outputDir: modelOutputDir,
+        thinkingDefault,
+        fastMode,
         transcript,
         stats: collectTranscriptStats(transcript),
         error: formatErrorMessage(error),
@@ -354,39 +466,55 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     }
   }
 
-  const judgeModel = params.judgeModel?.trim() || DEFAULT_JUDGE_MODEL;
-  const judgeThinkingDefault = params.judgeThinkingDefault ?? DEFAULT_JUDGE_THINKING;
+  const judgeModels = normalizeModelRefs(
+    params.judgeModels && params.judgeModels.length > 0
+      ? params.judgeModels
+      : params.judgeModel
+        ? [params.judgeModel]
+        : DEFAULT_JUDGE_MODELS,
+  );
   const runJudge = params.runJudge ?? defaultRunJudge;
-  let rawReply: string | null = null;
-  let rankings: QaCharacterEvalJudgment[] = [];
-  let judgeError: string | undefined;
-  try {
-    rawReply = await runJudge({
-      repoRoot,
-      judgeModel,
-      judgeThinkingDefault,
-      prompt: buildJudgePrompt({ scenarioId, runs }),
-      timeoutMs: params.judgeTimeoutMs ?? 180_000,
+  const judgments: QaCharacterEvalJudgeResult[] = [];
+  for (const judgeModel of judgeModels) {
+    const judgeOptions = resolveJudgeOptions({
+      model: judgeModel,
+      judgeThinkingDefault: params.judgeThinkingDefault,
+      judgeModelOptions: params.judgeModelOptions,
     });
-    rankings = parseJudgeReply(rawReply, new Set(models));
-  } catch (error) {
-    judgeError = formatErrorMessage(error);
+    let rankings: QaCharacterEvalJudgment[] = [];
+    let judgeError: string | undefined;
+    const judgeStartedAt = Date.now();
+    try {
+      const rawReply = await runJudge({
+        repoRoot,
+        judgeModel,
+        judgeThinkingDefault: judgeOptions.thinkingDefault,
+        judgeFastMode: judgeOptions.fastMode,
+        prompt: buildJudgePrompt({ scenarioId, runs }),
+        timeoutMs: params.judgeTimeoutMs ?? 180_000,
+      });
+      rankings = parseJudgeReply(rawReply, new Set(models));
+    } catch (error) {
+      judgeError = formatErrorMessage(error);
+    }
+
+    judgments.push({
+      model: judgeModel,
+      thinkingDefault: judgeOptions.thinkingDefault,
+      fastMode: judgeOptions.fastMode,
+      durationMs: Date.now() - judgeStartedAt,
+      rankings,
+      ...(judgeError ? { error: judgeError } : {}),
+    });
   }
 
   const finishedAt = new Date();
-  const judgment = {
-    model: judgeModel,
-    thinkingDefault: judgeThinkingDefault,
-    fastMode: true,
-    rankings,
-    ...(judgeError ? { error: judgeError } : {}),
-  };
   const report = renderCharacterEvalReport({
     scenarioId,
     startedAt,
     finishedAt,
     runs,
-    judgment,
+    judgments,
   });
   const reportPath = path.join(outputDir, "character-eval-report.md");
   const summaryPath = path.join(outputDir, "character-eval-summary.json");
@@ -397,7 +525,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       {
         scenarioId,
         runs,
-        judgment,
+        judgments,
       },
       null,
       2,
@@ -410,6 +538,6 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     reportPath,
     summaryPath,
     runs,
-    judgment,
+    judgments,
   } satisfies QaCharacterEvalResult;
 }

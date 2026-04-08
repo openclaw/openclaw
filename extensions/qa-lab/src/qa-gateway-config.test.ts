@@ -112,6 +112,9 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.params).toMatchObject({
+      thinking: "xhigh",
+    });
   });
 
   it("can disable control ui for suite-only gateway children", () => {
