@@ -199,6 +199,12 @@ function warnEscapedSkillPath(params: {
   });
 }
 
+// Sources where the user explicitly manages skill entries (e.g. via symlinks
+// created by external tooling like obsidian-wiki setup.sh). For these roots,
+// accept a symlink whose logical (pre-resolution) path is inside the root even
+// when the physical target lives elsewhere on disk.
+const USER_MANAGED_SKILL_SOURCES = new Set(["agents-skills-personal", "agents-skills-project"]);
+
 function resolveContainedSkillPath(params: {
   source: string;
   rootDir: string;
@@ -211,6 +217,12 @@ function resolveContainedSkillPath(params: {
   }
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
     return candidateRealPath;
+  }
+  if (USER_MANAGED_SKILL_SOURCES.has(params.source)) {
+    const candidateLogical = path.resolve(params.candidatePath);
+    if (isPathInside(params.rootDir, candidateLogical)) {
+      return candidateRealPath;
+    }
   }
   warnEscapedSkillPath({
     source: params.source,
