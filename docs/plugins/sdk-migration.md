@@ -262,6 +262,7 @@ Current bundled provider examples:
   | `plugin-sdk/request-url` | Request URL helpers | Extract string URLs from request-like inputs |
   | `plugin-sdk/run-command` | Timed command helpers | Timed command runner with normalized stdout/stderr |
   | `plugin-sdk/param-readers` | Param readers | Common tool/CLI param readers |
+  | `plugin-sdk/tool-payload` | Tool payload extraction | Extract normalized payloads from tool result objects |
   | `plugin-sdk/tool-send` | Tool send extraction | Extract canonical send target fields from tool args |
   | `plugin-sdk/temp-path` | Temp path helpers | Shared temp-download path helpers |
   | `plugin-sdk/logging-core` | Logging helpers | Subsystem logger and redaction helpers |
@@ -279,7 +280,8 @@ Current bundled provider examples:
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers |
   | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
-  | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+  | `plugin-sdk/provider-web-search-config-contract` | Provider web-search config helpers | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
+  | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
   | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/runtime helpers |
   | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
   | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |

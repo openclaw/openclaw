@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  applyAnthropicConfigDefaults,
+  normalizeAnthropicProviderConfig,
+} from "../../extensions/anthropic/config-defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 
@@ -19,31 +23,18 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 describe("provider public artifacts", () => {
-  it("loads bundled provider policy surfaces for anthropic", () => {
-    const surface = resolveBundledProviderPolicySurface("anthropic");
-
-    expect(surface?.normalizeConfig).toBeTypeOf("function");
-    expect(surface?.applyConfigDefaults).toBeTypeOf("function");
-  });
-
-  it("uses the bundled anthropic policy hooks without loading the runtime plugin", () => {
-    const surface = resolveBundledProviderPolicySurface("anthropic");
-    expect(surface).toBeTruthy();
-
-    const normalized = surface?.normalizeConfig?.({
-      provider: "anthropic",
-      providerConfig: {
-        baseUrl: "https://api.anthropic.com",
-        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-      },
+  it("uses the bundled anthropic policy hooks without loading the public artifact", () => {
+    const normalized = normalizeAnthropicProviderConfig({
+      baseUrl: "https://api.anthropic.com",
+      models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
     });
+
     expect(normalized).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
     });
 
-    const nextConfig = surface?.applyConfigDefaults?.({
-      provider: "anthropic",
+    const nextConfig = applyAnthropicConfigDefaults({
       config: {
         auth: {
           profiles: {

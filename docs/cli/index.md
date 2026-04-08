@@ -37,6 +37,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`models`](/cli/models)
 - [`infer`](/cli/infer)
 - [`memory`](/cli/memory)
+- [`wiki`](/cli/wiki)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
 - [`devices`](/cli/devices)
@@ -162,6 +163,19 @@ openclaw [--dev] [--profile <name>] <command>
     status
     index
     search
+  wiki
+    status
+    doctor
+    init
+    ingest
+    compile
+    lint
+    search
+    get
+    apply
+    bridge import
+    unsafe-local import
+    obsidian status|search|open|command|daily
   message
     send
     broadcast

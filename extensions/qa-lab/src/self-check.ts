@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { startQaLabServer } from "./lab-server.js";
 import { renderQaMarkdownReport } from "./report.js";

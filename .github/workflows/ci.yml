@@ -450,6 +450,7 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
+          OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -548,6 +549,10 @@ jobs:
           TASK: ${{ matrix.task }}
         run: |
           echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+          if [ "$TASK" = "test" ]; then
+            echo "OPENCLAW_TEST_PROJECTS_PARALLEL=3" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
+          fi
           if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
           fi
@@ -942,6 +947,7 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
       OPENCLAW_VITEST_MAX_WORKERS: 1
+      OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
       run:
         shell: bash

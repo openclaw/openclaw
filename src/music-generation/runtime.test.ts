@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetGenerationRuntimeMocks } from "../../test/helpers/media-generation/runtime-test-mocks.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";
@@ -68,23 +69,12 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("music-generation runtime", () => {
   beforeEach(() => {
-    mocks.createSubsystemLogger.mockClear();
-    mocks.describeFailoverError.mockReset();
-    mocks.getMusicGenerationProvider.mockReset();
-    mocks.getProviderEnvVars.mockReset();
-    mocks.getProviderEnvVars.mockReturnValue([]);
-    mocks.resolveProviderAuthEnvVarCandidates.mockReset();
-    mocks.resolveProviderAuthEnvVarCandidates.mockReturnValue({});
-    mocks.isFailoverError.mockReset();
-    mocks.isFailoverError.mockReturnValue(false);
-    mocks.listMusicGenerationProviders.mockReset();
-    mocks.listMusicGenerationProviders.mockReturnValue([]);
-    mocks.parseMusicGenerationModelRef.mockClear();
-    mocks.resolveAgentModelFallbackValues.mockReset();
-    mocks.resolveAgentModelFallbackValues.mockReturnValue([]);
-    mocks.resolveAgentModelPrimaryValue.mockReset();
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
-    mocks.debug.mockReset();
+    resetGenerationRuntimeMocks({
+      ...mocks,
+      getProvider: mocks.getMusicGenerationProvider,
+      listProviders: mocks.listMusicGenerationProviders,
+      parseModelRef: mocks.parseMusicGenerationModelRef,
+    });
   });
 
   it("generates tracks through the active music-generation provider", async () => {

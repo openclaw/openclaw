@@ -56,7 +56,7 @@ else
 fi
 
 echo "==> Run official installer one-liner"
-curl -fsSL "$INSTALL_URL" | bash
+curl -fsSL "$INSTALL_URL" | bash -s -- --no-prompt
 
 echo "==> Verify installed version"
 if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
