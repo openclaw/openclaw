@@ -96,6 +96,12 @@ export function collectInstalledPackageErrors(params: {
   return errors;
 }
 
+export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
+  return platform === "win32"
+    ? join(prefixDir, "openclaw.cmd")
+    : join(prefixDir, "bin", "openclaw");
+}
+
 function collectRuntimeDependencySpecs(packageJson: InstalledPackageJson): Map<string, string> {
   return new Map([
     ...Object.entries(packageJson.dependencies ?? {}),
@@ -123,6 +129,7 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
+      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
       continue;
     }
 
@@ -245,9 +252,10 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
 }
 
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
-  return execFileSync(join(prefixDir, "bin", "openclaw"), ["--version"], {
+  return execFileSync(resolveInstalledBinaryPath(prefixDir), ["--version"], {
     cwd,
     encoding: "utf8",
+    shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }

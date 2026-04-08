@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Slack/media: preserve bearer auth across same-origin `files.slack.com` redirects while still stripping it on cross-origin Slack CDN hops, so `url_private_download` image attachments load again. (#62960) Thanks @vincentkoc.
 - Control UI: guard stale session-history reloads during fast session switches so the selected session and rendered transcript stay in sync. (#62975) Thanks @scoootscooob.
 - Agents/failover: classify Z.ai vendor code `1311` as billing and `1113` as auth, including long wrapped `1311` payloads, so these errors stop falling through to generic failover handling. (#49552) Thanks @1bcMax.
+- npm packaging: mirror bundled Slack, Telegram, Discord, and Feishu channel runtime deps at the root and harden published-install verification so fresh installs fail fast on manifest drift instead of missing-module crashes. (#63065) Thanks @scoootscooob.
 
 ## 2026.4.8
 
