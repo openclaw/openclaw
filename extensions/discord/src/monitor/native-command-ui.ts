@@ -57,6 +57,21 @@ import { resolveDiscordThreadParentInfo } from "./threading.js";
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
+const DISCORD_MODEL_PICKER_APPLY_SETTLE_MS = 250;
+
+let waitForDiscordModelPickerApplyImpl = async (delayMs: number): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+};
+
+export const __testing = {
+  setDiscordModelPickerApplyWaitImpl(
+    next: typeof waitForDiscordModelPickerApplyImpl,
+  ): typeof waitForDiscordModelPickerApplyImpl {
+    const previous = waitForDiscordModelPickerApplyImpl;
+    waitForDiscordModelPickerApplyImpl = next;
+    return previous;
+  },
+};
 
 export type DiscordCommandArgContext = {
   cfg: ReturnType<typeof loadConfig>;
@@ -810,7 +825,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await waitForDiscordModelPickerApplyImpl(DISCORD_MODEL_PICKER_APPLY_SETTLE_MS);
 
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,
