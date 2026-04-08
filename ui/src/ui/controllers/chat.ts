@@ -40,6 +40,8 @@ export type ChatState = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
+  chatHistoryLoadSeq?: number;
+  chatHistoryLoadingSessionKey?: string | null;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -73,16 +75,23 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const sessionKey = state.sessionKey;
+  const loadSeq = (state.chatHistoryLoadSeq ?? 0) + 1;
+  state.chatHistoryLoadSeq = loadSeq;
+  state.chatHistoryLoadingSessionKey = sessionKey;
   state.chatLoading = true;
   state.lastError = null;
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey,
         limit: 200,
       },
     );
+    if (state.chatHistoryLoadSeq !== loadSeq || state.sessionKey !== sessionKey) {
+      return;
+    }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -92,6 +101,9 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
+    if (state.chatHistoryLoadSeq !== loadSeq || state.sessionKey !== sessionKey) {
+      return;
+    }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
@@ -100,7 +112,12 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = String(err);
     }
   } finally {
-    state.chatLoading = false;
+    if (state.chatHistoryLoadingSessionKey === sessionKey) {
+      state.chatHistoryLoadingSessionKey = null;
+    }
+    if (state.chatHistoryLoadSeq === loadSeq && state.sessionKey === sessionKey) {
+      state.chatLoading = false;
+    }
   }
 }
 

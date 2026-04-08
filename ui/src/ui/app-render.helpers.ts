@@ -504,6 +504,14 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  const chatState = state as unknown as ChatState;
+  if (
+    !nextSessionKey ||
+    (state.sessionKey === nextSessionKey &&
+      chatState.chatHistoryLoadingSessionKey === nextSessionKey)
+  ) {
+    return;
+  }
   state.sessionKey = nextSessionKey;
   state.chatMessage = "";
   state.chatStream = null;
@@ -524,7 +532,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     nextSessionKey,
     true,
   );
-  void loadChatHistory(state as unknown as ChatState);
+  void loadChatHistory(chatState);
   void refreshSessionOptions(state);
 }
 
