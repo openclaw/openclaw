@@ -83,6 +83,9 @@ export function resolveCronSession(params: {
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      // Clear sessionFile so the new session gets a fresh transcript file
+      // instead of appending to the previous session's file indefinitely.
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };

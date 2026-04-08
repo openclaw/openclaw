@@ -717,7 +717,10 @@ export async function runHeartbeatOnce(opts: {
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
-    const isolatedKey = `${sessionKey}:heartbeat`;
+    // Strip any existing :heartbeat suffix (and deeper nesting) to prevent
+    // infinite session key nesting when targeted wakes pass the previous
+    // isolated session key as forcedSessionKey.
+    const isolatedKey = `${sessionKey.replace(/:heartbeat(:.+)?$/, "")}:heartbeat`;
     const cronSession = resolveCronSession({
       cfg,
       sessionKey: isolatedKey,
