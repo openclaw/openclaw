@@ -93,7 +93,7 @@ The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams Ap
       appId: "<CLIENT_ID>",
       appPassword: "<CLIENT_SECRET>",
       tenantId: "<TENANT_ID>",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { host: "127.0.0.1", port: 3978, path: "/api/messages" },
     },
   },
 }
@@ -681,6 +681,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.enabled`: enable/disable the channel.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
 - `channels.msteams.webhook.port` (default `3978`)
+- `channels.msteams.webhook.host` (optional; if omitted, binds to all interfaces)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). The wizard resolves names to IDs during setup when Graph access is available.
