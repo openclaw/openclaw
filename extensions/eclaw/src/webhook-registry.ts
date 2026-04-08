@@ -38,10 +38,19 @@ export function unregisterEclawWebhookToken(callbackToken: string): void {
 export function lookupEclawWebhookToken(
   authHeader: string | undefined,
 ): EclawTokenEntry | undefined {
-  if (!authHeader?.startsWith("Bearer ")) {
+  if (!authHeader) {
     return undefined;
   }
-  const token = authHeader.slice("Bearer ".length).trim();
+  // RFC 7235 §2.1: auth-scheme is case-insensitive. Clients or proxies
+  // may send `bearer <token>` (lowercase) or any other case variant,
+  // and rejecting those as unauthorized would break inbound delivery
+  // even when the token is valid. Match the scheme case-insensitively,
+  // then extract the token from whatever the client actually sent.
+  const match = /^\s*Bearer\s+(.+?)\s*$/i.exec(authHeader);
+  if (!match) {
+    return undefined;
+  }
+  const token = match[1];
   if (!token) {
     return undefined;
   }

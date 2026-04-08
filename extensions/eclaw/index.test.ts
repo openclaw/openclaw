@@ -542,3 +542,111 @@ describe("eclaw client strict response validation", () => {
     await expect(client.speakTo(3, "hi")).resolves.toBeUndefined();
   });
 });
+
+describe("eclaw webhook Bearer scheme case-insensitivity (RFC 7235)", () => {
+  beforeEach(() => {
+    registerEclawWebhookToken("rfc-token", "default");
+  });
+  afterEach(() => {
+    unregisterEclawWebhookToken("rfc-token");
+  });
+
+  it("accepts lowercase `bearer` scheme", () => {
+    expect(lookupEclawWebhookToken("bearer rfc-token")?.accountId).toBe("default");
+  });
+
+  it("accepts uppercase `BEARER` scheme", () => {
+    expect(lookupEclawWebhookToken("BEARER rfc-token")?.accountId).toBe("default");
+  });
+
+  it("accepts mixed-case `BeArEr` scheme", () => {
+    expect(lookupEclawWebhookToken("BeArEr rfc-token")?.accountId).toBe("default");
+  });
+
+  it("accepts `Bearer` with extra leading/trailing whitespace", () => {
+    expect(lookupEclawWebhookToken("  Bearer rfc-token  ")?.accountId).toBe("default");
+  });
+
+  it("still rejects unknown token even when scheme case differs", () => {
+    expect(lookupEclawWebhookToken("bearer wrong-token")).toBeUndefined();
+  });
+
+  it("still rejects non-Bearer schemes", () => {
+    expect(lookupEclawWebhookToken("Basic rfc-token")).toBeUndefined();
+    expect(lookupEclawWebhookToken("token rfc-token")).toBeUndefined();
+  });
+});
+
+describe("eclaw active-event suppression is async-local, not global", () => {
+  it("does NOT suppress a concurrent outbound send on the same account", async () => {
+    // Import the per-request helper + outbound sender. We stub EclawClient
+    // directly via the client-registry so we can count sendMessage calls
+    // without running real HTTP.
+    const { runWithActiveEclawEvent, getActiveEclawEvent, setEclawClient, clearEclawClient } =
+      await import("./src/client-registry.js");
+    const { sendEclawText } = await import("./src/send.js");
+
+    let sendCount = 0;
+    const fakeClient = {
+      sendMessage: vi.fn(async () => {
+        sendCount += 1;
+        return { success: true } as unknown;
+      }),
+    };
+    setEclawClient("default", fakeClient as unknown as EclawClient);
+
+    try {
+      // Start a webhook dispatch that holds the flag open while we race
+      // a concurrent outbound send from a DIFFERENT async context.
+      let releaseDispatch: (() => void) | undefined;
+      const dispatchHeld = new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+
+      const dispatchPromise = runWithActiveEclawEvent(
+        "default",
+        "entity_message",
+        async () => {
+          // Inside the dispatch, the flag IS set (suppression is the desired
+          // behavior for b2b duplicate-delivery).
+          expect(getActiveEclawEvent("default")).toBe("entity_message");
+          await dispatchHeld;
+          // Inside the dispatch, a send should be suppressed (returns ok=true
+          // without calling sendMessage).
+          const inside = await sendEclawText({
+            accountId: "default",
+            to: "dev:2",
+            text: "suppressed",
+          });
+          expect(inside.ok).toBe(true);
+        },
+      );
+
+      // From OUTSIDE the dispatch's async context, do a concurrent send.
+      // Before the fix, this would see the global flag and be dropped.
+      // After the fix (AsyncLocalStorage), it's not in the frame so the
+      // flag reads as "message" and the send goes through.
+      const outside = await sendEclawText({
+        accountId: "default",
+        to: "dev:3",
+        text: "should NOT be suppressed",
+      });
+      expect(outside.ok).toBe(true);
+
+      releaseDispatch?.();
+      await dispatchPromise;
+
+      // The outside send must have reached sendMessage exactly once.
+      // The inside send was suppressed and must NOT have reached it.
+      expect(sendCount).toBe(1);
+      expect(fakeClient.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      clearEclawClient("default");
+    }
+  });
+
+  it("reads `message` outside any runWithActiveEclawEvent frame", async () => {
+    const { getActiveEclawEvent } = await import("./src/client-registry.js");
+    expect(getActiveEclawEvent("default")).toBe("message");
+  });
+});

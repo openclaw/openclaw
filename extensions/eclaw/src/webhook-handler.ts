@@ -13,9 +13,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 
 import {
-  clearActiveEclawEvent,
   getEclawClient,
-  setActiveEclawEvent,
+  runWithActiveEclawEvent,
 } from "./client-registry.js";
 import { getEclawRuntime } from "./runtime.js";
 import type { EclawInboundMessage } from "./types.js";
@@ -129,8 +128,10 @@ export async function dispatchEclawWebhookMessage(params: {
 
   const ctxPayload = runtime.channel.reply.finalizeInboundContext(inboundCtx);
 
-  setActiveEclawEvent(accountId, event);
-  try {
+  // Bind the active-event flag to this webhook's async context only,
+  // so concurrent unrelated outbound sends on the same account are NOT
+  // suppressed. See client-registry.ts for rationale.
+  await runWithActiveEclawEvent(accountId, event, async () => {
     await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
@@ -212,9 +213,7 @@ export async function dispatchEclawWebhookMessage(params: {
         },
       },
     });
-  } finally {
-    clearActiveEclawEvent(accountId);
-  }
+  });
 }
 
 /**
