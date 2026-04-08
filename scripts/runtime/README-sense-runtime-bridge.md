@@ -911,6 +911,123 @@ For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides
 
 UI consumers should prefer `digest_bucket_ui_layouts.meta.summary_parts` as the first rendering entry for digest badge/leader/percent/share display before falling back to flatter fields. Preview and list/card rendering should share the same shallow selector so the same summary entrypoint works across both views. `render_parts` is intentionally not introduced yet; the current goal is to use `summary_parts` as the primary UI entrypoint.
 
+## NemoClaw Control Via Slack
+
+The current digest structures are intended to stay reusable across preview, list/card UI, and Slack notifications without introducing a larger render contract. The initial position is:
+
+- OpenClaw remains the management/control-plane home
+- NemoClaw Control via Slack starts as an execution visibility layer
+- Slack is the first mobile-friendly operating surface
+- the existing digest structures are reused as shallow display contracts
+- `render_parts` is still intentionally not introduced
+
+Slack notification/event minimum set:
+
+- `job_queued`
+  - sent when a NemoClaw async job is accepted and enters `queued`
+  - required: `job_id`, `status`, `target`
+  - optional: `stage`, `message`, `notification_group_key`
+  - digest: optional, normally omitted unless a digest row is already available
+- `job_running`
+  - sent when a queued job transitions to `running`
+  - required: `job_id`, `status`
+  - optional: `stage`, `message`
+  - digest: optional
+- `job_done`
+  - sent when a job finishes successfully
+  - required: `job_id`, `status`
+  - optional: `summary`, `key_points`, `suggested_next_action`, `notification_digest_summary`
+  - digest: yes when digest rows are available
+- `job_failed`
+  - sent when a job ends in `failed`
+  - required: `job_id`, `status`
+  - optional: `message`, `error_code`, `error_detail_code`, `notification_digest_summary`
+  - digest: optional, use only if a digest row helps explain the failure
+- `digest_ready`
+  - sent when `notification_digest_summary` is emitted for operator review
+  - required: `notification_digest_summary`
+  - optional: `digest_sort_key`, `notification_group_key`
+  - digest: yes, this event is digest-first
+- `digest_alert`
+  - sent when a digest row represents the current top alertable issue
+  - required: `notification_digest_summary[0]`
+  - optional: `sample_error_code`, `route_signature`, `notification_group_key`
+  - digest: yes
+
+Slack display contract minimum:
+
+- primary source:
+  - `notification_digest_summary`
+  - `digest_title`
+  - `digest_sort_key`
+  - `digest_bucket_ui_layouts.meta.summary_parts`
+- shallow fallback only when `summary_parts` is missing:
+  - `digest_bucket_ui_layouts.meta.display_parts`
+  - `digest_bucket_ui_layouts.meta.badge_parts`
+  - `digest_bucket_ui_layouts.meta.leader_parts`
+  - `digest_bucket_ui_layouts.meta.percent`
+  - `digest_bucket_ui_layouts.meta.share`
+  - top-level `digest_bucket_percent`
+  - top-level `digest_bucket_share`
+
+Minimal Slack row contract:
+
+- line 1:
+  - `title`
+- line 2:
+  - `badge.short | percent | leader.compact`
+- optional suffix:
+  - `share`
+  - `sample_error_code`
+  - `notification_group_key` or `route_signature`
+
+Example shallow formatting target:
+
+```text
+Auth failures (immediate)
+MAJ | 50.0% | Leader ★ | share=0.5
+```
+
+Slack command minimum set:
+
+- `/nemoclaw recent`
+  - input: optional count/window
+  - returns: recent jobs and latest state changes
+  - digest: optional
+  - current digest structures are sufficient for compact summaries; additional recent-job sourcing is still needed
+- `/nemoclaw job <id>`
+  - input: `job_id`
+  - returns: status, stage, message, result summary if present
+  - digest: optional
+  - current digest structures help only when the job result includes `notification_digest_summary`
+- `/nemoclaw failures`
+  - input: optional recent window
+  - returns: recent failed jobs and top failure summaries
+  - digest: yes when digest rows exist
+  - current digest structures are sufficient for the display layer
+- `/nemoclaw digest`
+  - input: optional filter such as owner/bucket/top-n
+  - returns: top digest rows ordered for operator review
+  - digest: yes
+  - current digest structures are the primary payload
+- `/nemoclaw gpu`
+  - input: optional sandbox/runner target
+  - returns: current GPU/runtime readiness summary
+  - digest: usually no
+  - additional GPU/runtime status sourcing is still needed beyond the digest contract
+- `/nemoclaw help`
+  - input: none
+  - returns: supported commands and one-line intent
+  - digest: no
+
+Implementation guidance for the first Slack layer:
+
+- use `summary_parts` as the primary display entrypoint
+- keep formatting shallow and string-oriented
+- do not add a new loop or retry layer
+- do not change runtime orchestration semantics
+- treat Slack as an execution visibility/output surface first, not a new control-plane authority
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`
