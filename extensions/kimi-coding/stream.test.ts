@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
+import { createAnthropicToolPayloadCompatibilityWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { describe, expect, it } from "vitest";
 import { createKimiToolCallMarkupWrapper, wrapKimiProviderStream } from "./stream.js";
 
@@ -242,5 +243,64 @@ describe("kimi tool-call markup wrapper", () => {
       ],
       stopReason: "toolUse",
     });
+  });
+
+  it("keeps Kimi anthropic tool payloads native even if an upstream compat wrapper leaked in", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            },
+          },
+        ],
+        tool_choice: { type: "tool", name: "read" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: [], stopReason: "stop" },
+      }) as ReturnType<StreamFn>;
+    };
+
+    const wrapped = wrapKimiProviderStream({
+      streamFn: createAnthropicToolPayloadCompatibilityWrapper(baseStreamFn),
+    } as never);
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "k2p5",
+        compat: {
+          requiresOpenAiAnthropicToolPayload: true,
+        },
+      } as unknown as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payloads).toEqual([
+      {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            },
+          },
+        ],
+        tool_choice: { type: "tool", name: "read" },
+      },
+    ]);
   });
 });

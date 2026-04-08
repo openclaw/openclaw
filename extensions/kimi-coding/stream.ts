@@ -131,6 +131,29 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   }
 }
 
+function stripKimiAnthropicToolPayloadCompat<TModel extends { api?: unknown; compat?: unknown }>(
+  model: TModel,
+): TModel {
+  if (model.api !== "anthropic-messages") {
+    return model;
+  }
+  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
+    return model;
+  }
+
+  const compat = model.compat as Record<string, unknown>;
+  if (compat.requiresOpenAiAnthropicToolPayload !== true) {
+    return model;
+  }
+
+  const nextCompat = { ...compat };
+  delete nextCompat.requiresOpenAiAnthropicToolPayload;
+  return {
+    ...model,
+    compat: Object.keys(nextCompat).length > 0 ? nextCompat : undefined,
+  } as TModel;
+}
+
 function wrapKimiTaggedToolCalls(
   stream: ReturnType<typeof streamSimple>,
 ): ReturnType<typeof streamSimple> {
@@ -173,7 +196,7 @@ function wrapKimiTaggedToolCalls(
 export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
+    const maybeStream = underlying(stripKimiAnthropicToolPayloadCompat(model), context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) => wrapKimiTaggedToolCalls(stream));
     }
