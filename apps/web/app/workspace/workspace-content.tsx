@@ -1325,6 +1325,11 @@ function WorkspacePageInner() {
         handleNavigate("cloud");
         return;
       }
+      // Workspace-mode folders are expanded/collapsed inline in the sidebar
+      // tree — don't open them in the main content panel.
+      if (node.type === "folder") {
+        return;
+      }
       openTabForNode(node);
       void loadContent(node);
     },

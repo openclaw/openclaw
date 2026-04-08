@@ -307,11 +307,19 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 					drop: (_view, event) => {
 						const de = event;
 
+						const clearDragHover = () => {
+							const target = de.target instanceof HTMLElement
+								? de.target.closest("[data-chat-drop-target]")
+								: null;
+							target?.removeAttribute("data-drag-hover");
+						};
+
 						// Sidebar file mention drop
 						const data = de.dataTransfer?.getData("application/x-file-mention");
 						if (data) {
 							de.preventDefault();
 							de.stopPropagation();
+							clearDragHover();
 							try {
 								const { name, path } = JSON.parse(data) as { name: string; path: string };
 								if (name && path) {
@@ -338,6 +346,7 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 						if (files && files.length > 0) {
 							de.preventDefault();
 							de.stopPropagation();
+							clearDragHover();
 							nativeFileDropRef.current?.(files);
 							return true;
 						}

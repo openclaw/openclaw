@@ -21,6 +21,7 @@ import {
 	type ComposioChatAction,
 	parseComposioChatAction,
 } from "@/lib/composio-chat-actions";
+import { Dialog, DialogContent } from "./ui/dialog";
 import { resolveComposioToolkitLogo } from "@/lib/composio-toolkit-brand";
 
 // Lazy-load ReportCard (uses Recharts which is heavy)
@@ -479,7 +480,10 @@ function _AttachFileIcon({ category }: { category: string }) {
 }
 
 function AttachedFilesCard({ paths }: { paths: string[] }) {
+	const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+
 	return (
+		<>
 		<div className="flex flex-wrap gap-1.5 mb-2 justify-end">
 			{paths.map((filePath, i) => {
 				const category = getCategoryFromPath(filePath);
@@ -491,7 +495,8 @@ function AttachedFilesCard({ paths }: { paths: string[] }) {
 				return (
 					<div
 						key={i}
-						className="relative rounded-xl overflow-hidden shrink-0"
+						className="relative rounded-xl overflow-hidden shrink-0 cursor-pointer transition-all duration-200 hover:opacity-95"
+						onClick={() => setPreviewSrc(src)}
 					>
 						<img
 							src={src}
@@ -517,6 +522,27 @@ function AttachedFilesCard({ paths }: { paths: string[] }) {
 				);
 			})}
 		</div>
+		<Dialog open={previewSrc !== null} onOpenChange={(open) => { if (!open) {setPreviewSrc(null);} }}>
+			<DialogContent className="!max-w-[90vw] !w-auto !p-0 !rounded-2xl !bg-transparent !border-none !shadow-[0_0_120px_rgba(0,0,0,0.4)]" showCloseButton={false}>
+				<button
+					type="button"
+					onClick={() => setPreviewSrc(null)}
+					className="absolute top-3 right-3 z-10 w-7 h-7 rounded-full flex items-center justify-center cursor-pointer outline-none transition-all hover:opacity-85"
+					style={{ background: "rgba(0,0,0,0.55)", color: "white", backdropFilter: "blur(4px)", boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}
+				>
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+				</button>
+				{previewSrc && (
+					<img
+						src={previewSrc}
+						alt="Preview"
+						className="block rounded-xl"
+						style={{ maxHeight: "80vh", maxWidth: "85vw", objectFit: "contain" }}
+					/>
+				)}
+			</DialogContent>
+		</Dialog>
+		</>
 	);
 }
 
@@ -669,6 +695,43 @@ function FilePathCode({
 	);
 }
 
+function PreviewableImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) {
+	const [open, setOpen] = useState(false);
+	return (
+		<>
+			{/* eslint-disable-next-line @next/next/no-img-element */}
+			<img
+				src={src}
+				alt={alt ?? ""}
+				loading="lazy"
+				className="cursor-pointer transition-all duration-200 hover:opacity-95"
+				onClick={() => setOpen(true)}
+				{...props}
+			/>
+			<Dialog open={open} onOpenChange={setOpen}>
+				<DialogContent className="!max-w-[90vw] !w-auto !p-0 !rounded-2xl !bg-transparent !border-none !shadow-[0_0_120px_rgba(0,0,0,0.4)]" showCloseButton={false}>
+					<button
+						type="button"
+						onClick={() => setOpen(false)}
+						className="absolute top-3 right-3 z-10 w-7 h-7 rounded-full flex items-center justify-center cursor-pointer outline-none transition-all hover:opacity-85"
+						style={{ background: "rgba(0,0,0,0.55)", color: "white", backdropFilter: "blur(4px)", boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+					</button>
+					{src && (
+						<img
+							src={src}
+							alt={alt ?? "Preview"}
+							className="block rounded-xl"
+							style={{ maxHeight: "80vh", maxWidth: "85vw", objectFit: "contain" }}
+						/>
+					)}
+				</DialogContent>
+			</Dialog>
+		</>
+	);
+}
+
 /* ─── Markdown component overrides for chat ─── */
 
 function ComposioActionButton({
@@ -786,15 +849,11 @@ function createMarkdownComponents(
 				</a>
 			);
 		},
-		// Route local image paths through raw-file API so workspace images render
 		img: ({ src, alt, ...props }) => {
 			const resolvedSrc = typeof src === "string" && !src.startsWith("http://") && !src.startsWith("https://") && !src.startsWith("data:")
 				? `/api/workspace/raw-file?path=${encodeURIComponent(src)}`
 				: src;
-			return (
-				// eslint-disable-next-line @next/next/no-img-element
-				<img src={resolvedSrc} alt={alt ?? ""} loading="lazy" {...props} />
-			);
+			return <PreviewableImage src={resolvedSrc} alt={alt ?? ""} {...props} />;
 		},
 		// Syntax-highlighted fenced code blocks
 		pre: ({ children, ...props }) => {
