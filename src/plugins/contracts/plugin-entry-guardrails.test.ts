@@ -46,11 +46,8 @@ function resolvePublicSurfaceSourcePath(
   const stem = artifactBasename.replace(/\.[^.]+$/u, "");
   for (const extension of SOURCE_MODULE_EXTENSIONS) {
     const candidate = resolve(pluginDir, `${stem}${extension}`);
-    try {
-      readFileSync(candidate, "utf8");
+    if (existsSync(candidate)) {
       return candidate;
-    } catch {
-      // Keep trying.
     }
   }
   return null;
@@ -85,7 +82,11 @@ function formatRepoRelativePath(filePath: string): string {
   return relative(REPO_ROOT, filePath).replaceAll(path.sep, "/");
 }
 
-function collectSourceModuleSpecifiers(params: { filePath: string; source: string }): string[] {
+function analyzeSourceModule(params: { filePath: string; source: string }): {
+  specifiers: string[];
+  relativeSpecifiers: string[];
+  importsDefinePluginEntryFromCore: boolean;
+} {
   const sourceFile = ts.createSourceFile(
     params.filePath,
     params.source,
@@ -93,11 +94,27 @@ function collectSourceModuleSpecifiers(params: { filePath: string; source: strin
     true,
   );
   const specifiers = new Set<string>();
+  let importsDefinePluginEntryFromCore = false;
+
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement)) {
-      if (ts.isStringLiteral(statement.moduleSpecifier)) {
-        specifiers.add(statement.moduleSpecifier.text);
+      const specifier =
+        ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
+      if (specifier) {
+        specifiers.add(specifier);
       }
+
+      if (
+        specifier === "openclaw/plugin-sdk/core" &&
+        statement.importClause?.namedBindings &&
+        ts.isNamedImports(statement.importClause.namedBindings) &&
+        statement.importClause.namedBindings.elements.some(
+          (element) => (element.propertyName?.text ?? element.name.text) === "definePluginEntry",
+        )
+      ) {
+        importsDefinePluginEntryFromCore = true;
+      }
+
       continue;
     }
 
@@ -109,55 +126,21 @@ function collectSourceModuleSpecifiers(params: { filePath: string; source: strin
       specifiers.add(statement.moduleSpecifier.text);
     }
   }
-  return [...specifiers];
+
+  const nextSpecifiers = [...specifiers];
+  return {
+    specifiers: nextSpecifiers,
+    relativeSpecifiers: nextSpecifiers.filter((specifier) => specifier.startsWith(".")),
+    importsDefinePluginEntryFromCore,
+  };
 }
 
 function matchesForbiddenContractSpecifier(specifier: string): boolean {
-  for (const pattern of FORBIDDEN_CONTRACT_MODULE_SPECIFIER_PATTERNS) {
-    if (pattern.test(specifier)) {
-      return true;
-    }
-  }
-  return false;
+  return FORBIDDEN_CONTRACT_MODULE_SPECIFIER_PATTERNS.some((pattern) => pattern.test(specifier));
 }
 
-function collectRelativeDependencySpecifiers(params: { filePath: string; source: string }): string[] {
-  return collectSourceModuleSpecifiers(params).filter((specifier) => specifier.startsWith("."));
-}
-
-function importsDefinePluginEntryFromCore(source: string, filePath: string): boolean {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-  for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement)) {
-      continue;
-    }
-    if (
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== "openclaw/plugin-sdk/core"
-    ) {
-      continue;
-    }
-    if (
-      statement.importClause?.namedBindings &&
-      ts.isNamedImports(statement.importClause.namedBindings) &&
-      statement.importClause.namedBindings.elements.some(
-        (element) => (element.propertyName?.text ?? element.name.text) === "definePluginEntry",
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function collectForbiddenContractSpecifiers(params: { filePath: string; source: string }): string[] {
-  const failures: string[] = [];
-  for (const specifier of collectSourceModuleSpecifiers(params)) {
-    if (matchesForbiddenContractSpecifier(specifier)) {
-      failures.push(specifier);
-    }
-  }
-  return failures;
+function collectForbiddenContractSpecifiers(specifiers: readonly string[]): string[] {
+  return specifiers.filter((specifier) => matchesForbiddenContractSpecifier(specifier));
 }
 
 function resolveRelativeSourceModulePath(fromPath: string, specifier: string): string | null {
@@ -209,11 +192,12 @@ function findForbiddenContractModuleGraphPaths(params: {
     }
 
     const source = readFileSync(currentPath, "utf8");
-    for (const specifier of collectForbiddenContractSpecifiers({ filePath: currentPath, source })) {
+    const analysis = analyzeSourceModule({ filePath: currentPath, source });
+    for (const specifier of collectForbiddenContractSpecifiers(analysis.specifiers)) {
       failures.push(`${repoRelativePath} imported ${specifier}`);
     }
 
-    for (const specifier of collectRelativeDependencySpecifiers({ filePath: currentPath, source })) {
+    for (const specifier of analysis.relativeSpecifiers) {
       const resolvedModulePath = resolveRelativeSourceModulePath(currentPath, specifier);
       if (!resolvedModulePath) {
         continue;
@@ -239,7 +223,7 @@ describe("plugin entry guardrails", () => {
       const indexPath = resolve(plugin.rootDir, "index.ts");
       try {
         const source = readFileSync(indexPath, "utf8");
-        if (importsDefinePluginEntryFromCore(source, indexPath)) {
+        if (analyzeSourceModule({ filePath: indexPath, source }).importsDefinePluginEntryFromCore) {
           failures.push(`extensions/${plugin.pluginId}/index.ts`);
         }
       } catch {
@@ -289,7 +273,7 @@ describe("plugin entry guardrails", () => {
 
   it("follows relative import edges while scanning guarded contract graphs", () => {
     expect(
-      collectRelativeDependencySpecifiers({
+      analyzeSourceModule({
         filePath: "guardrail-fixture.ts",
         source: `
         import { x } from "./safe.js";
@@ -298,19 +282,19 @@ describe("plugin entry guardrails", () => {
         export * from "./barrel.js";
         import { y } from "openclaw/plugin-sdk/testing";
       `,
-      }).toSorted(),
+      }).relativeSpecifiers.toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);
   });
 
   it("detects aliased definePluginEntry imports from core", () => {
     expect(
-      importsDefinePluginEntryFromCore(
-        `
+      analyzeSourceModule({
+        filePath: "aliased-plugin-entry.ts",
+        source: `
           import { definePluginEntry as dpe } from "openclaw/plugin-sdk/core";
           import { somethingElse } from "openclaw/plugin-sdk/core";
         `,
-        "aliased-plugin-entry.ts",
-      ),
+      }).importsDefinePluginEntryFromCore,
     ).toBe(true);
   });
 });
