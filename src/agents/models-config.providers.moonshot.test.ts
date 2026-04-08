@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -10,6 +11,7 @@ async function loadSecretsModule() {
 }
 
 beforeEach(() => {
+  resetProviderRuntimeHookCacheForTest();
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
 });

@@ -1,12 +1,15 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
-  const value = normalizeOptionalString(raw)?.toLowerCase();
+  const value = normalizeOptionalLowercaseString(raw);
   if (value === "allow") {
     return "allow";
   }
@@ -17,7 +20,7 @@ export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecis
 }
 
 function normalizeMatchValue(raw?: string | null) {
-  const value = normalizeOptionalString(raw)?.toLowerCase();
+  const value = normalizeOptionalLowercaseString(raw);
   return value ? value : undefined;
 }
 
@@ -46,7 +49,7 @@ function deriveChannelFromKey(key?: string) {
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
-  const normalizedKey = normalizeOptionalString(stripAgentSessionKeyPrefix(key))?.toLowerCase();
+  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
   if (!normalizedKey) {
     return undefined;
   }
@@ -102,8 +105,8 @@ export function resolveSendPolicy(params: {
     normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
-  const rawSessionKeyNorm = rawSessionKey.toLowerCase();
-  const strippedSessionKeyNorm = strippedSessionKey.toLowerCase();
+  const rawSessionKeyNorm = normalizeLowercaseStringOrEmpty(rawSessionKey);
+  const strippedSessionKeyNorm = normalizeLowercaseStringOrEmpty(strippedSessionKey);
 
   let allowedMatch = false;
   for (const rule of policy.rules ?? []) {

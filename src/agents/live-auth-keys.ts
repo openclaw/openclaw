@@ -1,5 +1,8 @@
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -161,7 +164,7 @@ export function collectGeminiApiKeys(): string[] {
 }
 
 export function isApiKeyRateLimitError(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   if (lower.includes("rate_limit")) {
     return true;
   }
@@ -188,7 +191,7 @@ export function isAnthropicRateLimitError(message: string): boolean {
 }
 
 export function isAnthropicBillingError(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   if (lower.includes("credit balance")) {
     return true;
   }

@@ -282,7 +282,7 @@ async function wakeSubagentRunAfterDescendants(params: {
           timeoutMs: announceTimeoutMs,
         }),
     });
-    wakeRunId = typeof wakeResponse?.runId === "string" ? wakeResponse.runId.trim() : "";
+    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
     return false;
   }

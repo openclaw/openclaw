@@ -22,7 +22,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -60,7 +60,7 @@ function shouldLoadUsageSummary(params: {
   if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
     return true;
   }
-  const auth = normalizeOptionalString(params.selectedModelAuth)?.toLowerCase();
+  const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
 }
 

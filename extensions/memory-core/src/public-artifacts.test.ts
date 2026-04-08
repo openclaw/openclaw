@@ -24,7 +24,7 @@ describe("listMemoryCorePublicArtifacts", () => {
   });
 
   it("lists public workspace artifacts with stable kinds", async () => {
-    const workspaceDir = path.join(fixtureRoot, "workspace");
+    const workspaceDir = path.join(fixtureRoot, "workspace-stable-kinds");
     await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
     await fs.writeFile(
@@ -61,14 +61,6 @@ describe("listMemoryCorePublicArtifacts", () => {
         contentType: "markdown",
       },
       {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "memory.md",
-        absolutePath: path.join(workspaceDir, "memory.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
         kind: "daily-note",
         workspaceDir,
         relativePath: "memory/2026-04-06.md",
@@ -91,6 +83,29 @@ describe("listMemoryCorePublicArtifacts", () => {
         absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
         agentIds: ["main"],
         contentType: "json",
+      },
+    ]);
+  });
+
+  it("lists lowercase memory root when only the legacy filename exists", async () => {
+    const workspaceDir = path.join(fixtureRoot, "workspace-lowercase-root");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory.md"), "# Legacy Durable Memory\n", "utf8");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "memory.md",
+        absolutePath: path.join(workspaceDir, "memory.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
       },
     ]);
   });

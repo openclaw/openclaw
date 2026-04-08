@@ -222,20 +222,37 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expect(isModernGoogleModel("gemma-3-4b-it")).toBe(true);
   });
 
-  it("resolves gemma model with reasoning forced off regardless of template", () => {
+  it("resolves Gemma 4 models with reasoning enabled regardless of template", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google",
       ctx: createContext({
         provider: "google",
         modelId: "gemma-4-26b-a4b-it",
-        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: true })],
+        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: false })],
       }),
     });
 
     expect(model).toMatchObject({
       provider: "google",
       id: "gemma-4-26b-a4b-it",
-      reasoning: false, // patch must override the template value
+      reasoning: true,
+    });
+  });
+
+  it("preserves template reasoning for non-Gemma 4 gemma models", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemma-3-4b-it",
+        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: false })],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google",
+      id: "gemma-3-4b-it",
+      reasoning: false,
     });
   });
 });

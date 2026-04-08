@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { devices as playwrightDevices } from "playwright-core";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
@@ -69,7 +70,7 @@ export async function setGeolocationViaPlaywright(opts: {
     accuracy: typeof opts.accuracy === "number" ? opts.accuracy : undefined,
   });
   const origin =
-    opts.origin?.trim() ||
+    normalizeOptionalString(opts.origin) ||
     (() => {
       try {
         return new URL(page.url()).origin;
@@ -99,7 +100,7 @@ export async function setLocaleViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const locale = String(opts.locale ?? "").trim();
+  const locale = normalizeOptionalString(opts.locale) ?? "";
   if (!locale) {
     throw new Error("locale is required");
   }
@@ -127,7 +128,7 @@ export async function setTimezoneViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const timezoneId = String(opts.timezoneId ?? "").trim();
+  const timezoneId = normalizeOptionalString(opts.timezoneId) ?? "";
   if (!timezoneId) {
     throw new Error("timezoneId is required");
   }
@@ -159,7 +160,7 @@ export async function setDeviceViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const name = String(opts.name ?? "").trim();
+  const name = normalizeOptionalString(opts.name) ?? "";
   if (!name) {
     throw new Error("device name is required");
   }

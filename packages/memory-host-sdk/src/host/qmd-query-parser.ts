@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -52,7 +53,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
 function isQmdNoResultsOutput(raw: string): boolean {
   const lines = raw
     .split(/\r?\n/)
-    .map((line) => line.trim().toLowerCase().replace(/\s+/g, " "))
+    .map((line) => normalizeLowercaseStringOrEmpty(line).replace(/\s+/g, " "))
     .filter((line) => line.length > 0);
   return lines.some((line) => isQmdNoResultsLine(line));
 }

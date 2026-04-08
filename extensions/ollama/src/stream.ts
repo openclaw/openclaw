@@ -26,7 +26,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
@@ -91,7 +91,7 @@ export function isOllamaCompatProvider(model: {
   }
   try {
     const parsed = new URL(model.baseUrl);
-    const hostname = parsed.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
     const isLocalhost =
       hostname === "localhost" ||
       hostname === "127.0.0.1" ||
@@ -165,7 +165,7 @@ function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
 }
 
 function isOllamaCloudKimiModelRef(modelId: string): boolean {
-  const normalizedModelId = modelId.trim().toLowerCase();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
 }
 

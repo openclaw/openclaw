@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 /**
  * Channel-agnostic status reaction controller.
@@ -104,7 +104,7 @@ export function resolveToolEmoji(
   toolName: string | undefined,
   emojis: Required<StatusReactionEmojis>,
 ): string {
-  const normalized = normalizeOptionalString(toolName)?.toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(toolName) ?? "";
   if (!normalized) {
     return emojis.tool;
   }

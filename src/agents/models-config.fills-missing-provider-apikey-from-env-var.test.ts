@@ -2,14 +2,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function loadSecretsModule() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
+  const [{ resetProviderRuntimeHookCacheForTest }, { resetPluginLoaderTestStateForTest }] =
+    await Promise.all([
+      import("../plugins/provider-runtime.js"),
+      import("../plugins/loader.test-fixtures.js"),
+    ]);
+  resetPluginLoaderTestStateForTest();
+  resetProviderRuntimeHookCacheForTest();
   return import("./models-config.providers.secrets.js");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
+  vi.resetModules();
+  const [{ resetProviderRuntimeHookCacheForTest }, { resetPluginLoaderTestStateForTest }] =
+    await Promise.all([
+      import("../plugins/provider-runtime.js"),
+      import("../plugins/loader.test-fixtures.js"),
+    ]);
+  resetPluginLoaderTestStateForTest();
+  resetProviderRuntimeHookCacheForTest();
 });
 
 describe("models-config", () => {

@@ -22,6 +22,7 @@ describe("prepareCliBundleMcpConfig", () => {
 
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
+      mode: "claude-config-file",
       backend: {
         command: "node",
         args: ["./fake-claude.mjs"],
@@ -62,6 +63,7 @@ describe("prepareCliBundleMcpConfig", () => {
 
       const prepared = await prepareCliBundleMcpConfig({
         enabled: true,
+        mode: "claude-config-file",
         backend: {
           command: "node",
           args: ["./fake-claude.mjs"],
@@ -117,6 +119,7 @@ describe("prepareCliBundleMcpConfig", () => {
 
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
+      mode: "claude-config-file",
       backend: {
         command: "node",
         args: ["./fake-claude.mjs"],
@@ -160,6 +163,7 @@ describe("prepareCliBundleMcpConfig", () => {
 
       const prepared = await prepareCliBundleMcpConfig({
         enabled: true,
+        mode: "claude-config-file",
         backend: {
           command: "node",
           args: ["./fake-claude.mjs"],
@@ -199,6 +203,7 @@ describe("prepareCliBundleMcpConfig", () => {
 
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
+      mode: "claude-config-file",
       backend: {
         command: "node",
         args: ["./fake-claude.mjs"],
@@ -231,5 +236,86 @@ describe("prepareCliBundleMcpConfig", () => {
 
     expect(prepared.backend.args).toEqual(["./fake-cli.mjs"]);
     expect(prepared.cleanup).toBeUndefined();
+  });
+
+  it("injects codex MCP config overrides with env-backed loopback headers", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "codex-config-overrides",
+      backend: {
+        command: "codex",
+        args: ["exec", "--json"],
+        resumeArgs: ["exec", "resume", "{sessionId}"],
+      },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-codex",
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+            },
+          },
+        },
+      },
+    });
+
+    expect(prepared.backend.args).toEqual([
+      "exec",
+      "--json",
+      "-c",
+      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY" } } }',
+    ]);
+    expect(prepared.backend.resumeArgs).toEqual([
+      "exec",
+      "resume",
+      "{sessionId}",
+      "-c",
+      'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY" } } }',
+    ]);
+    expect(prepared.cleanup).toBeUndefined();
+  });
+
+  it("writes Gemini system settings for bundle MCP servers", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+      },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+      },
+    });
+
+    expect(prepared.backend.args).toEqual(["--prompt", "{prompt}"]);
+    expect(prepared.env?.OPENCLAW_MCP_TOKEN).toBe("loopback-token-123");
+    expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+    ) as {
+      mcp?: { allowed?: string[] };
+      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+    };
+    expect(raw.mcp?.allowed).toEqual(["openclaw"]);
+    expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+
+    await prepared.cleanup?.();
   });
 });

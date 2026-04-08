@@ -229,6 +229,9 @@ async function expectResolvedAsyncValues(
 describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
+    vi.doMock("./provider-public-artifacts.js", () => ({
+      resolveBundledProviderPolicySurface: () => null,
+    }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),
@@ -325,6 +328,49 @@ describe("provider-runtime", () => {
       provider: "claude-cli",
       expectedPluginId: "anthropic",
     });
+  });
+
+  it("returns provider-prepared runtime auth for the matched provider", async () => {
+    const prepareRuntimeAuth = vi.fn(async () => ({
+      apiKey: "runtime-token",
+      baseUrl: "https://runtime.example.com/v1",
+      expiresAt: 123,
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        prepareRuntimeAuth,
+      },
+    ]);
+
+    await expect(
+      prepareProviderRuntimeAuth({
+        provider: DEMO_PROVIDER_ID,
+        context: {
+          config: undefined,
+          workspaceDir: "/tmp/demo-workspace",
+          env: process.env,
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model: MODEL,
+          apiKey: "raw-token",
+          authMode: "token",
+        },
+      }),
+    ).resolves.toEqual({
+      apiKey: "runtime-token",
+      baseUrl: "https://runtime.example.com/v1",
+      expiresAt: 123,
+    });
+    expect(prepareRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "raw-token",
+        modelId: MODEL.id,
+        provider: DEMO_PROVIDER_ID,
+      }),
+    );
   });
 
   it("returns no runtime plugin when the provider has no owning plugin", () => {

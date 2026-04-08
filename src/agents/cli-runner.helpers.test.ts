@@ -168,14 +168,25 @@ describe("buildCliArgs", () => {
 
 describe("writeCliImages", () => {
   it("uses stable hashed file paths so repeated image hydration reuses the same path", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-images-"),
+    );
     const image: ImageContent = {
       type: "image",
       data: "c29tZS1pbWFnZQ==",
       mimeType: "image/png",
     };
 
-    const first = await writeCliImages([image]);
-    const second = await writeCliImages([image]);
+    const first = await writeCliImages({
+      backend: { command: "codex" },
+      workspaceDir,
+      images: [image],
+    });
+    const second = await writeCliImages({
+      backend: { command: "codex" },
+      workspaceDir,
+      images: [image],
+    });
 
     try {
       expect(first.paths).toHaveLength(1);
@@ -185,22 +196,31 @@ describe("writeCliImages", () => {
       await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
       await fs.rm(first.paths[0], { force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
   it("uses the shared media extension map for image formats beyond the tiny builtin list", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-heic-"),
+    );
     const image: ImageContent = {
       type: "image",
       data: "aGVpYy1pbWFnZQ==",
       mimeType: "image/heic",
     };
 
-    const written = await writeCliImages([image]);
+    const written = await writeCliImages({
+      backend: { command: "codex" },
+      workspaceDir,
+      images: [image],
+    });
 
     try {
       expect(written.paths[0]).toMatch(/\.heic$/);
     } finally {
       await fs.rm(written.paths[0], { force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
@@ -279,6 +299,57 @@ describe("writeCliImages", () => {
       expect(promptWithImages).toContain("openclaw-cli-images");
       expect(promptWithImages).toContain(prepared.imagePaths?.[0] ?? "");
       expect(promptWithImages.trimEnd().endsWith(prepared.imagePaths?.[0] ?? "")).toBe(true);
+
+      await prepared.cleanupImages?.();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("appends Gemini prompt refs with @-prefixed image paths", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-gemini-"),
+    );
+    const explicitImage: ImageContent = {
+      type: "image",
+      data: "c29tZS1leHBsaWNpdC1pbWFnZQ==",
+      mimeType: "image/png",
+    };
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "gemini",
+          imageArg: "@",
+          imagePathScope: "workspace",
+          input: "arg",
+        },
+        prompt: "What is in this image?",
+        workspaceDir: tempDir,
+        images: [explicitImage],
+      });
+
+      expect(prepared.prompt).toContain("\n\n@");
+      expect(prepared.prompt).toContain(prepared.imagePaths?.[0] ?? "");
+      expect(prepared.prompt.trimEnd().endsWith(`@${prepared.imagePaths?.[0] ?? ""}`)).toBe(true);
+      expect(prepared.imagePaths?.[0]?.startsWith(path.join(tempDir, ".openclaw-cli-images"))).toBe(
+        true,
+      );
+
+      const argv = buildCliArgs({
+        backend: {
+          command: "gemini",
+          imageArg: "@",
+          imagePathScope: "workspace",
+        },
+        baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
+        modelId: "gemini-3.1-pro-preview",
+        promptArg: prepared.prompt,
+        imagePaths: prepared.imagePaths,
+        useResume: false,
+      });
+
+      expect(argv).toEqual(["--output-format", "json", "--prompt", prepared.prompt]);
 
       await prepared.cleanupImages?.();
     } finally {

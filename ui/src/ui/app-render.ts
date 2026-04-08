@@ -68,6 +68,7 @@ import {
 import {
   loadDreamDiary,
   loadDreamingStatus,
+  resolveConfiguredDreaming,
   updateDreamingEnabled,
 } from "./controllers/dreaming.ts";
 import {
@@ -100,14 +101,19 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
+import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "./string-coerce.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -158,24 +164,6 @@ const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 const lazyDreamingView = createLazy(() => import("./views/dreaming.ts"));
 
-function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
-  enabled: boolean;
-} {
-  if (!configValue) {
-    return {
-      enabled: false,
-    };
-  }
-  const plugins = configValue.plugins as Record<string, unknown> | undefined;
-  const entries = plugins?.entries as Record<string, unknown> | undefined;
-  const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
-  const config = memoryCore?.config as Record<string, unknown> | undefined;
-  const dreaming = config?.dreaming as Record<string, unknown> | undefined;
-  return {
-    enabled: typeof dreaming?.enabled === "boolean" ? dreaming.enabled : false,
-  };
-}
-
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
     return null;
@@ -224,7 +212,7 @@ function isHttpUrl(value: string): boolean {
 }
 
 function normalizeSuggestionValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function uniquePreserveOrder(values: string[]): string[] {
@@ -235,7 +223,7 @@ function uniquePreserveOrder(values: string[]): string[] {
     if (!normalized) {
       continue;
     }
-    const key = normalized.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized);
     if (seen.has(key)) {
       continue;
     }
@@ -424,9 +412,7 @@ export function renderApp(state: AppViewState) {
     new Set(
       [
         ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
-        ...state.cronJobs
-          .map((job) => (typeof job.agentId === "string" ? job.agentId.trim() : ""))
-          .filter(Boolean),
+        ...state.cronJobs.map((job) => normalizeOptionalString(job.agentId) ?? "").filter(Boolean),
       ].filter(Boolean),
     ),
   );
@@ -440,7 +426,7 @@ export function renderApp(state: AppViewState) {
             if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
               return "";
             }
-            return job.payload.model.trim();
+            return normalizeOptionalString(job.payload.model) ?? "";
           })
           .filter(Boolean),
       ].filter(Boolean),
@@ -1305,7 +1291,7 @@ export function renderApp(state: AppViewState) {
                   const entry = Array.isArray(list)
                     ? (list[index] as { skills?: unknown })
                     : undefined;
-                  const normalizedSkill = skillName.trim();
+                  const normalizedSkill = normalizeOptionalString(skillName) ?? "";
                   if (!normalizedSkill) {
                     return;
                   }
@@ -1313,7 +1299,9 @@ export function renderApp(state: AppViewState) {
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
                   const existing = Array.isArray(entry?.skills)
-                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                    ? entry.skills
+                        .map((name) => normalizeStringifiedOptionalString(name) ?? "")
+                        .filter(Boolean)
                     : undefined;
                   const base = existing ?? allSkills;
                   const next = new Set(base);

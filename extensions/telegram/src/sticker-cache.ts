@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
@@ -75,12 +76,12 @@ export function cacheSticker(sticker: CachedSticker): void {
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
   const cache = loadCache();
-  const queryLower = query.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
   for (const sticker of Object.values(cache.stickers)) {
     let score = 0;
-    const descLower = sticker.description.toLowerCase();
+    const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 
     // Exact substring match in description
     if (descLower.includes(queryLower)) {
@@ -102,7 +103,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
     }
 
     // Set name match
-    if (sticker.setName?.toLowerCase().includes(queryLower)) {
+    if (normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower)) {
       score += 3;
     }
 
@@ -193,7 +194,8 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   const selectCatalogModel = (provider: string) => {
     const entries = catalog.filter(
       (entry) =>
-        entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
+        normalizeLowercaseStringOrEmpty(entry.provider) ===
+          normalizeLowercaseStringOrEmpty(provider) && modelSupportsVision(entry),
     );
     if (entries.length === 0) {
       return undefined;

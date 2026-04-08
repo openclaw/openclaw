@@ -35,18 +35,24 @@ async function collectWorkspaceArtifacts(params: {
   agentIds: string[];
 }): Promise<MemoryPluginPublicArtifact[]> {
   const artifacts: MemoryPluginPublicArtifact[] = [];
+  const workspaceEntries = new Set(
+    (await fs.readdir(params.workspaceDir, { withFileTypes: true }).catch(() => []))
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name),
+  );
   for (const relativePath of ["MEMORY.md", "memory.md"]) {
-    const absolutePath = path.join(params.workspaceDir, relativePath);
-    if (await pathExists(absolutePath)) {
-      artifacts.push({
-        kind: "memory-root",
-        workspaceDir: params.workspaceDir,
-        relativePath,
-        absolutePath,
-        agentIds: [...params.agentIds],
-        contentType: "markdown",
-      });
+    if (!workspaceEntries.has(relativePath)) {
+      continue;
     }
+    const absolutePath = path.join(params.workspaceDir, relativePath);
+    artifacts.push({
+      kind: "memory-root",
+      workspaceDir: params.workspaceDir,
+      relativePath,
+      absolutePath,
+      agentIds: [...params.agentIds],
+      contentType: "markdown",
+    });
   }
 
   const memoryDir = path.join(params.workspaceDir, "memory");

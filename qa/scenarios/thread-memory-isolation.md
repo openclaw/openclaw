@@ -1,0 +1,24 @@
+# Thread memory isolation
+
+```yaml qa-scenario
+id: thread-memory-isolation
+title: Thread memory isolation
+surface: memory
+objective: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
+successCriteria:
+  - Agent uses memory tools inside the thread.
+  - The hidden fact is answered correctly in the thread.
+  - No root-channel outbound message leaks during the threaded memory reply.
+docsRefs:
+  - docs/concepts/memory-search.md
+  - docs/channels/qa-channel.md
+  - docs/channels/group-messages.md
+codeRefs:
+  - extensions/memory-core/src/tools.ts
+  - extensions/qa-channel/src/protocol.ts
+  - extensions/qa-lab/src/suite.ts
+execution:
+  kind: custom
+  handler: thread-memory-isolation
+  summary: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
+```

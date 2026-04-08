@@ -30,6 +30,7 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
+  resolveEventCoverImage,
 } from "../send.js";
 import { readDiscordParentIdParam } from "./runtime.shared.js";
 
@@ -37,6 +38,7 @@ export const discordGuildActionRuntime = {
   addRoleDiscord,
   createChannelDiscord,
   createScheduledEventDiscord,
+  resolveEventCoverImage,
   deleteChannelDiscord,
   editChannelDiscord,
   fetchChannelInfoDiscord,
@@ -95,6 +97,7 @@ export async function handleDiscordGuildAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg?: OpenClawConfig,
+  options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   switch (action) {
@@ -299,8 +302,14 @@ export async function handleDiscordGuildAction(
       const description = readStringParam(params, "description");
       const channelId = readStringParam(params, "channelId");
       const location = readStringParam(params, "location");
+      const imageUrl = readStringParam(params, "image", { trim: false });
       const entityTypeRaw = readStringParam(params, "entityType");
       const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
+      const image = imageUrl
+        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
+            localRoots: options?.mediaLocalRoots,
+          })
+        : undefined;
       const payload = {
         name,
         description,
@@ -309,6 +318,7 @@ export async function handleDiscordGuildAction(
         entity_type: entityType,
         channel_id: channelId,
         entity_metadata: entityType === 3 && location ? { location } : undefined,
+        image,
         privacy_level: 2,
       };
       const event = accountId

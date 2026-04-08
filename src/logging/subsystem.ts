@@ -2,6 +2,7 @@ import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
@@ -29,12 +30,15 @@ export type SubsystemLogger = {
 };
 
 function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
@@ -73,7 +77,7 @@ function formatRuntimeArg(arg: unknown): string {
 }
 
 function isRichConsoleEnv(): boolean {
-  const term = (process.env.TERM ?? "").toLowerCase();
+  const term = normalizeLowercaseStringOrEmpty(process.env.TERM);
   if (process.env.COLORTERM || process.env.TERM_PROGRAM) {
     return true;
   }
@@ -151,7 +155,10 @@ export function stripRedundantSubsystemPrefixForConsole(
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
       const bracketTag = message.slice(1, closeIdx);
-      if (bracketTag.toLowerCase() === displaySubsystem.toLowerCase()) {
+      if (
+        normalizeLowercaseStringOrEmpty(bracketTag) ===
+        normalizeLowercaseStringOrEmpty(displaySubsystem)
+      ) {
         let i = closeIdx + 1;
         while (message[i] === " ") {
           i += 1;
@@ -162,7 +169,9 @@ export function stripRedundantSubsystemPrefixForConsole(
   }
 
   const prefix = message.slice(0, displaySubsystem.length);
-  if (prefix.toLowerCase() !== displaySubsystem.toLowerCase()) {
+  if (
+    normalizeLowercaseStringOrEmpty(prefix) !== normalizeLowercaseStringOrEmpty(displaySubsystem)
+  ) {
     return message;
   }
 
