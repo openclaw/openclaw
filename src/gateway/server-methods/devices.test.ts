@@ -60,6 +60,36 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
+function mockPairedOperatorDevice(): void {
+  getPairedDeviceMock.mockResolvedValue({
+    deviceId: "device-1",
+    role: "operator",
+    roles: ["operator"],
+    scopes: ["operator.pairing"],
+    tokens: {
+      operator: {
+        token: "old-token",
+        role: "operator",
+        scopes: ["operator.pairing"],
+        createdAtMs: 123,
+      },
+    },
+  });
+}
+
+function mockRotateOperatorTokenSuccess(): void {
+  rotateDeviceTokenMock.mockResolvedValue({
+    ok: true,
+    entry: {
+      token: "new-token",
+      role: "operator",
+      scopes: ["operator.pairing"],
+      createdAtMs: 456,
+      rotatedAtMs: 789,
+    },
+  });
+}
+
 describe("deviceHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -197,30 +227,8 @@ describe("deviceHandlers", () => {
   });
 
   it("disconnects active clients after rotating a device token", async () => {
-    getPairedDeviceMock.mockResolvedValue({
-      deviceId: "device-1",
-      role: "operator",
-      roles: ["operator"],
-      scopes: ["operator.pairing"],
-      tokens: {
-        operator: {
-          token: "old-token",
-          role: "operator",
-          scopes: ["operator.pairing"],
-          createdAtMs: 123,
-        },
-      },
-    });
-    rotateDeviceTokenMock.mockResolvedValue({
-      ok: true,
-      entry: {
-        token: "new-token",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        createdAtMs: 456,
-        rotatedAtMs: 789,
-      },
-    });
+    mockPairedOperatorDevice();
+    mockRotateOperatorTokenSuccess();
     const opts = createOptions(
       "device.token.rotate",
       {
@@ -262,30 +270,8 @@ describe("deviceHandlers", () => {
   });
 
   it("treats normalized device ids as self-owned for token rotation", async () => {
-    getPairedDeviceMock.mockResolvedValue({
-      deviceId: "device-1",
-      role: "operator",
-      roles: ["operator"],
-      scopes: ["operator.pairing"],
-      tokens: {
-        operator: {
-          token: "old-token",
-          role: "operator",
-          scopes: ["operator.pairing"],
-          createdAtMs: 123,
-        },
-      },
-    });
-    rotateDeviceTokenMock.mockResolvedValue({
-      ok: true,
-      entry: {
-        token: "new-token",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        createdAtMs: 456,
-        rotatedAtMs: 789,
-      },
-    });
+    mockPairedOperatorDevice();
+    mockRotateOperatorTokenSuccess();
     const opts = createOptions(
       "device.token.rotate",
       {
@@ -317,20 +303,7 @@ describe("deviceHandlers", () => {
   });
 
   it("rejects rotating a token for a role that was never approved", async () => {
-    getPairedDeviceMock.mockResolvedValue({
-      deviceId: "device-1",
-      role: "operator",
-      roles: ["operator"],
-      scopes: ["operator.pairing"],
-      tokens: {
-        operator: {
-          token: "old-token",
-          role: "operator",
-          scopes: ["operator.pairing"],
-          createdAtMs: 123,
-        },
-      },
-    });
+    mockPairedOperatorDevice();
     const opts = createOptions(
       "device.token.rotate",
       {

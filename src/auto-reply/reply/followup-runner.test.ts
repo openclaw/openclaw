@@ -11,6 +11,7 @@ const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
+const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
@@ -267,12 +268,20 @@ async function loadFreshFollowupRunnerModuleForTest() {
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
   }));
   vi.doMock("./agent-runner-memory.js", () => ({
+    runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
     runPreflightCompactionIfNeeded: (...args: unknown[]) =>
       runPreflightCompactionIfNeededMock(...args),
   }));
   vi.doMock("./route-reply.js", () => ({
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  }));
+  vi.doMock("../../cli/command-secret-gateway.js", () => ({
+    resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
+      resolveCommandSecretRefsViaGatewayMock(...args),
+  }));
+  vi.doMock("../../cli/command-secret-targets.js", () => ({
+    getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries."]),
   }));
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -300,9 +309,16 @@ beforeEach(async () => {
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
+  resolveCommandSecretRefsViaGatewayMock.mockReset();
   runPreflightCompactionIfNeededMock.mockImplementation(
     async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
   );
+  resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+    targetStatesByPath: {},
+    hadUnresolvedTargets: false,
+  }));
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -424,6 +440,69 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          config?: unknown;
+        }
+      | undefined;
+    expect(call?.config).toBe(runtimeConfig);
+  });
+
+  it("resolves queued embedded followups before preflight helpers read config", async () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          whisper: {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          whisper: {
+            apiKey: "resolved-runtime-key",
+          },
+        },
+      },
+    };
+    resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
+      resolvedConfig: runtimeConfig,
+      diagnostics: [],
+      targetStatesByPath: { "skills.entries.whisper.apiKey": "resolved_local" },
+      hadUnresolvedTargets: false,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+    const queued = createQueuedRun({
+      run: {
+        config: sourceConfig,
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    await runner(queued);
+
+    expect(queued.run.config).toBe(runtimeConfig);
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: runtimeConfig,
+      }),
+    );
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
       | {
           config?: unknown;

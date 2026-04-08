@@ -68,6 +68,38 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENAI_API_KEY).toBe("openai-explicit");
   });
 
+  it("preserves Codex CLI auth home for live frontier runs while sandboxing OpenClaw home", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+    const codexHome = path.join(hostHome, ".codex");
+    await mkdir(codexHome);
+
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HOME: hostHome,
+      }),
+      providerMode: "live-frontier",
+    });
+
+    expect(env.HOME).toBe("/tmp/openclaw-qa/home");
+    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
+    expect(env.CODEX_HOME).toBe(codexHome);
+  });
+
+  it("keeps explicit Codex CLI auth home for live frontier runs", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        CODEX_HOME: "/custom/codex-home",
+        HOME: "/host/home",
+      }),
+      providerMode: "live-frontier",
+    });
+
+    expect(env.CODEX_HOME).toBe("/custom/codex-home");
+  });
+
   it("scrubs direct and live provider keys in mock mode", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -78,6 +110,7 @@ describe("buildQaRuntimeEnv", () => {
         GOOGLE_API_KEY: "google-live",
         OPENAI_API_KEY: "openai-live",
         OPENAI_API_KEYS: "openai-a,openai-b",
+        CODEX_HOME: "/host/.codex",
         OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
         OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
         OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
@@ -88,6 +121,7 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEYS).toBeUndefined();
+    expect(env.CODEX_HOME).toBeUndefined();
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
@@ -212,6 +246,30 @@ describe("qa bundled plugin dir", () => {
         ),
       ),
     ).resolves.toBeTruthy();
+  });
+
+  it("maps cli backend provider ids to their owning bundled plugin ids", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-plugin-owner-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "openai"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        providers: ["openai", "openai-codex"],
+        cliBackends: ["codex-cli"],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.resolveQaOwnerPluginIdsForProviderIds({
+        repoRoot,
+        providerIds: ["codex-cli"],
+      }),
+    ).resolves.toEqual(["openai"]);
   });
 
   it("raises the QA runtime host version to the highest allowed plugin floor", async () => {

@@ -6,6 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
+import {
+  isSourceCheckoutRoot,
+  pruneBundledPluginSourceNodeModules,
+} from "./postinstall-bundled-plugins.mjs";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const extraArgs = process.argv.slice(2);
@@ -43,7 +47,23 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
-pruneStaleRuntimeSymlinks();
+export function pruneSourceCheckoutBundledPluginNodeModules(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const logger = params.logger ?? console;
+  if (!isSourceCheckoutRoot({ packageRoot: cwd, existsSync: fs.existsSync })) {
+    return;
+  }
+  try {
+    pruneBundledPluginSourceNodeModules({
+      extensionsDir: path.join(cwd, "extensions"),
+      existsSync: fs.existsSync,
+      readdirSync: fs.readdirSync,
+      rmSync: fs.rmSync,
+    });
+  } catch (error) {
+    logger.warn(`tsdown: could not prune bundled plugin source node_modules: ${String(error)}`);
+  }
+}
 
 function findFatalUnresolvedImport(lines) {
   for (const line of lines) {
@@ -94,6 +114,8 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
+  pruneSourceCheckoutBundledPluginNodeModules();
+  pruneStaleRuntimeSymlinks();
   const invocation = resolveTsdownBuildInvocation();
   const result = spawnSync(invocation.command, invocation.args, invocation.options);
 

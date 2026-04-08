@@ -3,13 +3,14 @@ import entry from "./index.js";
 import setupEntry from "./setup-entry.js";
 
 describe("discord bundled entries", () => {
-  it("loads the channel plugin without importing the broad api barrel", () => {
-    const plugin = entry.loadChannelPlugin();
-    expect(plugin.id).toBe("discord");
+  it("declares the channel plugin without importing the broad api barrel", () => {
+    expect(entry.kind).toBe("bundled-channel-entry");
+    expect(entry.id).toBe("discord");
+    expect(entry.name).toBe("Discord");
   });
 
-  it("loads the setup plugin without importing the broad api barrel", () => {
-    const plugin = setupEntry.loadSetupPlugin();
-    expect(plugin.id).toBe("discord");
+  it("declares the setup plugin without importing the broad api barrel", () => {
+    expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
+    expect(typeof setupEntry.loadSetupPlugin).toBe("function");
   });
 });

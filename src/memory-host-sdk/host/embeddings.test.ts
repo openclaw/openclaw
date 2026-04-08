@@ -2,6 +2,13 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import {
+  createEmbeddingDataFetchMock,
+  createGeminiFetchMock,
+  installFetchMock,
+  mockResolvedProviderKey as mockResolvedProviderKeyBase,
+  readFirstFetchRequest,
+} from "./embeddings-provider.test-support.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
@@ -18,25 +25,6 @@ const {
   }),
   defaultProviderMock: vi.fn(),
   resolveCredentialsMock: vi.fn(),
-}));
-
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: typeof fetch;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    if (!fetchImpl) {
-      throw new Error("fetch is not available");
-    }
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
 }));
 
 vi.mock("./embeddings-ollama.js", () => ({
@@ -60,28 +48,7 @@ vi.mock("@aws-sdk/credential-provider-node", () => ({
   defaultProvider: defaultProviderMock.mockImplementation(() => resolveCredentialsMock),
 }));
 
-const createFetchMock = () =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
-  }));
-
-const createGeminiFetchMock = () =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ embedding: { values: [1, 2, 3] } }),
-  }));
-
-function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  vi.stubGlobal("fetch", fetchMock);
-}
-
-function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
-  const [url, init] = fetchMock.mock.calls[0] ?? [];
-  return { url, init: init as RequestInit | undefined };
-}
+const createFetchMock = () => createEmbeddingDataFetchMock([1, 2, 3]);
 
 type ResolvedProviderAuth = Awaited<ReturnType<typeof authModule.resolveApiKeyForProvider>>;
 
@@ -108,11 +75,7 @@ function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvid
 }
 
 function mockResolvedProviderKey(apiKey = "provider-key") {
-  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-    apiKey,
-    mode: "api-key",
-    source: "test",
-  });
+  mockResolvedProviderKeyBase(authModule.resolveApiKeyForProvider, apiKey);
 }
 
 function mockMissingLocalEmbeddingDependency() {
@@ -192,7 +155,7 @@ describe("embedding provider remote overrides", () => {
 
     expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
     const url = fetchMock.mock.calls[0]?.[0];
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const init = fetchMock.mock.calls[0]?.[1];
     expect(url).toBe("https://example.com/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-key");
@@ -233,7 +196,7 @@ describe("embedding provider remote overrides", () => {
     await provider.embedQuery("hello");
 
     expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledTimes(1);
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = (init?.headers as Record<string, string>) ?? {};
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
