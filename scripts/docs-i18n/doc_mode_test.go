@@ -130,6 +130,26 @@ func (docProtocolLeakTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 
 func (docProtocolLeakTranslator) Close() {}
 
+type docWrappedLeafTranslator struct{}
+
+func (docWrappedLeafTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (docWrappedLeafTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return strings.Join([]string{
+		"<frontmatter>",
+		"title: leaked",
+		"</frontmatter>",
+		"",
+		"<body>",
+		"# Fly.io 部署",
+		"</body>",
+	}, "\n"), nil
+}
+
+func (docWrappedLeafTranslator) Close() {}
+
 type docPromptBudgetTranslator struct {
 	rawInputs []string
 }
@@ -340,6 +360,29 @@ func TestTranslateDocBodyChunkedPreSplitsOversizedPromptBudget(t *testing.T) {
 	}
 	if !strings.Contains(translated, "第一块") || !strings.Contains(translated, "第二块") {
 		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedUnwrapsTaggedLeafProtocolLeakage(t *testing.T) {
+	body := "# Fly.io Deployment\n\n"
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	translated, err := translateDocBodyChunked(
+		context.Background(),
+		docWrappedLeafTranslator{},
+		"install/fly.md",
+		body,
+		"en",
+		"zh-CN",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if strings.Contains(translated, "<frontmatter>") || strings.Contains(translated, "<body>") {
+		t.Fatalf("expected wrapped leaf translation to unwrap protocol tags:\n%s", translated)
+	}
+	if !strings.Contains(translated, "# Fly.io 部署") {
+		t.Fatalf("expected unwrapped body translation:\n%s", translated)
 	}
 }
 

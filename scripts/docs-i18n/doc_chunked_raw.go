@@ -80,6 +80,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	log.Printf("docs-i18n: chunk start %s blocks=%d bytes=%d", chunkID, len(blocks), len(source))
 	translated, err := translator.TranslateRaw(ctx, normalizedSource, srcLang, tgtLang)
 	if err == nil {
+		translated = sanitizeDocChunkProtocolWrappers(source, translated)
 		translated = reapplyCommonIndent(translated, commonIndent)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
@@ -117,6 +118,7 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	if err != nil {
 		return "", err
 	}
+	translated = sanitizeDocChunkProtocolWrappers(source, translated)
 	translated = reapplyCommonIndent(translated, commonIndent)
 	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
 		return "", validationErr
@@ -209,6 +211,25 @@ func validateDocChunkTranslation(source, translated string) error {
 		}
 	}
 	return nil
+}
+
+func sanitizeDocChunkProtocolWrappers(source, translated string) string {
+	if !strings.Contains(translated, bodyTagStart) && !strings.Contains(translated, frontmatterTagStart) {
+		return translated
+	}
+	for _, token := range docsProtocolTokens {
+		if strings.Contains(source, token) {
+			return translated
+		}
+	}
+	_, body, err := parseTaggedDocument(strings.TrimSpace(translated))
+	if err != nil {
+		return translated
+	}
+	if strings.TrimSpace(body) == "" {
+		return translated
+	}
+	return body
 }
 
 func summarizeDocChunkStructure(text string) docChunkStructure {
