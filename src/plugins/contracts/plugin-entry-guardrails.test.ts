@@ -15,7 +15,7 @@ const GUARDED_CONTRACT_ARTIFACT_BASENAMES = new Set([
   "secret-contract-api.js",
   "security-contract-api.js",
 ]);
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
+const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".cts"] as const;
 const FORBIDDEN_CONTRACT_BARREL_PATTERNS = [
   /["']vitest["']/u,
   /["']openclaw\/plugin-sdk\/testing["']/u,
