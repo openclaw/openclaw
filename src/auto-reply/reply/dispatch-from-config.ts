@@ -82,6 +82,8 @@ function loadTtsRuntime() {
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+const EMPTY_RUN_FALLBACK_TEXT =
+  "I couldn't produce a sendable reply for that request. A tool may have failed, timed out, or been blocked. Please retry with a narrower task or a different source.";
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -828,6 +830,26 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+
+    const shouldSendEmptyRunFallback =
+      !shouldRouteToOriginating &&
+      replies.length === 0 &&
+      blockCount === 0 &&
+      counts.tool === 0 &&
+      counts.block === 0 &&
+      counts.final === 0;
+
+    if (shouldSendEmptyRunFallback) {
+      const didQueueFallback = dispatcher.sendFinalReply({
+        text: EMPTY_RUN_FALLBACK_TEXT,
+        isError: true,
+      });
+      queuedFinal = didQueueFallback || queuedFinal;
+      if (didQueueFallback) {
+        counts.final += 1;
+      }
+    }
+
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
