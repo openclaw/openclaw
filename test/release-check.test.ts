@@ -256,6 +256,12 @@ describe("collectForbiddenPackPaths", () => {
       "docs/.generated/config-baseline.json",
     ]);
   });
+
+  it("blocks plugin SDK TypeScript build info from npm pack output", () => {
+    expect(collectForbiddenPackPaths(["dist/index.js", "dist/plugin-sdk/.tsbuildinfo"])).toEqual([
+      "dist/plugin-sdk/.tsbuildinfo",
+    ]);
+  });
 });
 
 describe("collectMissingPackPaths", () => {

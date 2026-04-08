@@ -1,4 +1,8 @@
-import { normalizeOptionalString } from "./string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "./string-coerce.js";
 
 export type NodeMatchCandidate = {
   nodeId: string;
@@ -15,8 +19,7 @@ type ScoredNodeMatch = {
 };
 
 export function normalizeNodeKey(value: string) {
-  return value
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(value)
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
@@ -40,12 +43,12 @@ function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
 }
 
 function isCurrentOpenClawClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalString(clientId)?.toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
   return normalized.startsWith("openclaw-");
 }
 
 function isLegacyClawdbotClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalString(clientId)?.toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
   return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
 }
 

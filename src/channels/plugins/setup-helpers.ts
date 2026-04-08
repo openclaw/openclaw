@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
@@ -499,8 +500,9 @@ export function resolveSingleAccountPromotionTarget(params: {
   const resolved = surface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
   });
-  if (typeof resolved === "string" && resolved.trim()) {
-    return resolveExistingAccountId(resolved);
+  const normalizedResolved = normalizeOptionalString(resolved);
+  if (normalizedResolved) {
+    return resolveExistingAccountId(normalizedResolved);
   }
   return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
 }

@@ -36,6 +36,7 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { defaultRuntime } from "../../runtime.js";
 import {
   hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
@@ -58,6 +59,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   buildEmbeddedRunExecutionParams,
+  resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -183,6 +185,29 @@ function buildFallbackSelectionState(params: {
   };
 }
 
+export function applyFallbackCandidateSelectionToEntry(params: {
+  entry: SessionEntry;
+  run: FollowupRun["run"];
+  provider: string;
+  model: string;
+  now?: number;
+}): { updated: boolean; nextState?: FallbackSelectionState } {
+  if (params.provider === params.run.provider && params.model === params.run.model) {
+    return { updated: false };
+  }
+  const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
+  const nextState = buildFallbackSelectionState({
+    provider: params.provider,
+    model: params.model,
+    authProfileId: scopedAuthProfile.authProfileId,
+    authProfileIdSource: scopedAuthProfile.authProfileIdSource,
+  });
+  return {
+    updated: applyFallbackSelectionState(params.entry, nextState, params.now),
+    nextState,
+  };
+}
+
 function applyFallbackSelectionState(
   entry: SessionEntry,
   nextState: FallbackSelectionState,
@@ -270,7 +295,7 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
 }
 
 function isToolResultTurnMismatchError(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return (
     lower.includes("toolresult") &&
     lower.includes("tooluse") &&
@@ -499,10 +524,18 @@ export async function runAgentTurnWithFallback(params: {
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(params.followupRun.run.config);
+  const effectiveRun =
+    runtimeConfig === params.followupRun.run.config
+      ? params.followupRun.run
+      : {
+          ...params.followupRun.run,
+          config: runtimeConfig,
+        };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg: params.followupRun.run.config,
+    cfg: runtimeConfig,
     sessionKey: params.sessionKey,
     workspaceDir: params.followupRun.run.workspaceDir,
   });
@@ -553,14 +586,14 @@ export async function runAgentTurnWithFallback(params: {
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
-    const scopedAuthProfile = resolveRunAuthProfile(params.followupRun.run, provider);
-    const nextState = buildFallbackSelectionState({
+    const applied = applyFallbackCandidateSelectionToEntry({
+      entry: activeSessionEntry,
+      run: params.followupRun.run,
       provider,
       model,
-      authProfileId: scopedAuthProfile.authProfileId,
-      authProfileIdSource: scopedAuthProfile.authProfileIdSource,
     });
-    if (!applyFallbackSelectionState(activeSessionEntry, nextState)) {
+    const nextState = applied.nextState;
+    if (!applied.updated || !nextState) {
       return;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
@@ -704,7 +737,7 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          if (isCliProvider(provider, params.followupRun.run.config)) {
+          if (isCliProvider(provider, runtimeConfig)) {
             const startedAt = Date.now();
             notifyAgentRunStart();
             emitAgentEvent({
@@ -732,7 +765,7 @@ export async function runAgentTurnWithFallback(params: {
                   agentId: params.followupRun.run.agentId,
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
+                  config: runtimeConfig,
                   prompt: params.commandBody,
                   provider,
                   model,
@@ -826,7 +859,7 @@ export async function runAgentTurnWithFallback(params: {
           }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
-              run: params.followupRun.run,
+              run: effectiveRun,
               sessionCtx: params.sessionCtx,
               hasRepliedRef: params.opts?.hasRepliedRef,
               provider,
@@ -1006,8 +1039,7 @@ export async function runAgentTurnWithFallback(params: {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
                       const notifyUser =
-                        params.followupRun.run.config.agents?.defaults?.compaction?.notifyUser ===
-                        true;
+                        runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
                       } else if (notifyUser && params.opts?.onBlockReply) {

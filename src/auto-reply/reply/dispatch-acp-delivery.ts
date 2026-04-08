@@ -3,7 +3,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -53,31 +56,6 @@ type ToolMessageHandle = {
   messageId: string;
 };
 
-function normalizeDeliveryChannel(value: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
-  return normalized || undefined;
-}
-
-function resolveDeliveryAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: string | undefined;
-  accountId: string | undefined;
-}): string | undefined {
-  const explicit = normalizeOptionalString(params.accountId);
-  if (explicit) {
-    return explicit;
-  }
-  const channelId = normalizeDeliveryChannel(params.channel);
-  if (!channelId) {
-    return undefined;
-  }
-  const channelCfg = (
-    params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-  )?.[channelId];
-  const configuredDefault = channelCfg?.defaultAccount;
-  return normalizeOptionalString(configuredDefault);
-}
-
 async function shouldTreatDeliveredTextAsVisible(params: {
   channel: string | undefined;
   kind: ReplyDispatchKind;
@@ -90,7 +68,7 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   if (params.kind === "final") {
     return true;
   }
-  const channelId = normalizeDeliveryChannel(params.channel);
+  const channelId = normalizeOptionalLowercaseString(params.channel);
   if (!channelId) {
     return false;
   }
@@ -205,13 +183,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeDeliveryChannel(params.ctx.Provider ?? params.ctx.Surface);
-  const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
-  const resolvedAccountId = resolveDeliveryAccountId({
-    cfg: params.cfg,
-    channel: routedChannel ?? directChannel,
-    accountId: params.ctx.AccountId,
-  });
+  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId =
+    explicitAccountId ??
+    normalizeOptionalString(
+      (
+        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
+    );
 
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
@@ -234,7 +215,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    await params.onReplyStart?.();
+    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+      logVerbose(
+        `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   };
 
   const tryEditToolMessage = async (

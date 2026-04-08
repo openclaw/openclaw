@@ -3,6 +3,7 @@ import type { ModelDefinitionConfig } from "../config/types.js";
 import type { ConfiguredModelProviderRequest } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -358,7 +359,7 @@ export function mergeProviderRequestHeaders(
       merged = Object.create(null) as Record<string, string>;
     }
     for (const [key, value] of Object.entries(headers)) {
-      const normalizedKey = key.toLowerCase();
+      const normalizedKey = normalizeLowercaseStringOrEmpty(key);
       if (FORBIDDEN_HEADER_KEYS.has(normalizedKey)) {
         continue;
       }
@@ -496,12 +497,12 @@ function applyResolvedAuthHeader(
     return headers;
   }
   const next = mergeProviderRequestHeaders(headers) ?? Object.create(null);
-  const keysToDelete = new Set([auth.headerName.toLowerCase()]);
+  const keysToDelete = new Set([normalizeLowercaseStringOrEmpty(auth.headerName)]);
   if (auth.mode === "header") {
     keysToDelete.add("authorization");
   }
   for (const key of Object.keys(next)) {
-    if (keysToDelete.has(key.toLowerCase())) {
+    if (keysToDelete.has(normalizeLowercaseStringOrEmpty(key))) {
       delete next[key];
     }
   }
@@ -601,12 +602,12 @@ export function resolveProviderRequestPolicyConfig(
     auth,
   );
   const protectedAttributionKeys = new Set(
-    Object.keys(policy.attributionHeaders ?? {}).map((key) => key.toLowerCase()),
+    Object.keys(policy.attributionHeaders ?? {}).map((key) => normalizeLowercaseStringOrEmpty(key)),
   );
   const unprotectedCallerHeaders = params.callerHeaders
     ? Object.fromEntries(
         Object.entries(params.callerHeaders).filter(
-          ([key]) => !protectedAttributionKeys.has(key.toLowerCase()),
+          ([key]) => !protectedAttributionKeys.has(normalizeLowercaseStringOrEmpty(key)),
         ),
       )
     : undefined;

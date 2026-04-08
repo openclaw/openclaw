@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,7 +20,14 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-const PROTECTED_GATEWAY_CONFIG_PATHS = ["tools.exec.ask", "tools.exec.security"] as const;
+const PROTECTED_GATEWAY_CONFIG_PATHS = [
+  "tools.exec.ask",
+  "tools.exec.security",
+  "tools.exec.safeBins",
+  "tools.exec.safeBinProfiles",
+  "tools.exec.safeBinTrustedDirs",
+  "tools.exec.strictInlineEval",
+] as const;
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -98,7 +106,11 @@ function assertGatewayConfigMutationAllowed(params: {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) => getValueAtPath(params.currentConfig, path) !== getValueAtPath(nextConfig, path),
+    (path) =>
+      !isDeepStrictEqual(
+        getValueAtPath(params.currentConfig, path),
+        getValueAtPath(nextConfig, path),
+      ),
   );
   if (changedProtectedPaths.length === 0) {
     return;
@@ -153,7 +165,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

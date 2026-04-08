@@ -21,7 +21,10 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -34,7 +37,7 @@ const execFileAsync = promisify(execFile);
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
   if (first) {
-    const base = path.basename(first).toLowerCase();
+    const base = normalizeLowercaseStringOrEmpty(path.basename(first));
     if (base === "bun" || base === "bun.exe") {
       return "bun";
     }

@@ -3,6 +3,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
@@ -52,7 +53,7 @@ function normalizeSignalUuid(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  if (trimmed.toLowerCase().startsWith("uuid:")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("uuid:")) {
     return trimmed.slice("uuid:".length).trim();
   }
   return trimmed;

@@ -87,6 +87,8 @@ export type CliBackendConfig = {
   imageArg?: string;
   /** How to pass multiple images. */
   imageMode?: "repeat" | "list";
+  /** Where staged image files should live before handing them to the CLI. */
+  imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
@@ -377,6 +379,12 @@ export type AgentCompactionConfig = {
   model?: string;
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
+  /**
+   * Id of a registered compaction provider plugin.
+   * When set, the provider's summarize() is called instead of
+   * the built-in summarizeInStages(). Falls back to built-in on failure.
+   */
+  provider?: string;
   /**
    * Truncate the session JSONL file after compaction to remove entries that
    * were summarized. Prevents unbounded file growth in long-running sessions.

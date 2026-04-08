@@ -67,13 +67,6 @@ function extractScopes(payload: unknown): string[] {
   return normalizeScopes(scopes);
 }
 
-function readError(payload: unknown): string | undefined {
-  if (!isRecord(payload)) {
-    return undefined;
-  }
-  return normalizeOptionalString(payload.error);
-}
-
 async function callSlack(
   client: WebClient,
   method: SlackScopesSource,
@@ -103,7 +96,7 @@ export async function fetchSlackScopes(
     if (scopes.length > 0) {
       return { ok: true, scopes, source: method };
     }
-    const error = readError(result);
+    const error = isRecord(result) ? normalizeOptionalString(result.error) : undefined;
     if (error) {
       errors.push(`${method}: ${error}`);
     }

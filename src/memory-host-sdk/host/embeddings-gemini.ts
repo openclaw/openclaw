@@ -9,6 +9,7 @@ import {
   normalizeGoogleApiBaseUrl,
 } from "../../infra/google-api-base-url.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
@@ -306,7 +307,9 @@ export async function resolveGeminiEmbeddingClient(
 
   const providerConfig = options.config.models?.providers?.google;
   const rawBaseUrl =
-    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GOOGLE_API_BASE_URL;
+    remoteBaseUrl ||
+    normalizeOptionalString(providerConfig?.baseUrl) ||
+    DEFAULT_GOOGLE_API_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);

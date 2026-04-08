@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   type ChunkMode,
   isSilentReplyText,
@@ -305,7 +306,9 @@ export async function buildActivity(
 
       // Determine conversation type and file type
       // Teams only accepts base64 data URLs for images
-      const conversationType = conversationRef.conversation?.conversationType?.toLowerCase();
+      const conversationType = normalizeOptionalLowercaseString(
+        conversationRef.conversation?.conversationType,
+      );
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
 

@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { normalizeOptionalString } from "../string-coerce.js";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.js";
 
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
@@ -176,7 +176,7 @@ export function normalizeIpAddress(raw: string | undefined): string | undefined 
     return undefined;
   }
   const normalized = normalizeIpv4MappedAddress(parsed);
-  return normalized.toString().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalized.toString());
 }
 
 export function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean {

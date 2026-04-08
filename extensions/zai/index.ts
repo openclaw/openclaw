@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition } from "./model-definitions.js";
@@ -39,7 +40,7 @@ function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  if (!trimmedModelId.toLowerCase().startsWith("glm-5")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
     return undefined;
   }
 
@@ -292,7 +293,7 @@ export default definePluginEntry({
       ...ZAI_TOOL_STREAM_HOOKS,
       isBinaryThinking: () => true,
       isModernModelRef: ({ modelId }) => {
-        const lower = modelId.trim().toLowerCase();
+        const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (
           lower.startsWith("glm-5") ||
           lower.startsWith("glm-4.7") ||

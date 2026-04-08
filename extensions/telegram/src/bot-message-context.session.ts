@@ -19,6 +19,7 @@ import {
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -241,7 +242,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
   });
   const commandBody = normalizeCommandBody(rawBody, {
-    botUsername: primaryCtx.me?.username?.toLowerCase(),
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0

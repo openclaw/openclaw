@@ -169,7 +169,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
+    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments, {
+      maxInlineBytes: mediaMaxBytes,
+      maxInlineTotalBytes: mediaMaxBytes,
+    });
     const rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;

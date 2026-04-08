@@ -1,130 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  ChannelDirectoryEntryKind,
-  ChannelMessagingAdapter,
-  ChannelOutboundAdapter,
-  ChannelPlugin,
-} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
-
-const slackConfig = {
-  channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-    },
-  },
-} as OpenClawConfig;
-
-const runDrySend = (params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-}) =>
-  runMessageAction({
-    cfg: params.cfg,
-    action: "send",
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
-    dryRun: true,
-  });
-
-type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
-
-const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
-
-function normalizeSlackTarget(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("#")) {
-    return trimmed.slice(1).trim();
-  }
-  if (/^channel:/i.test(trimmed)) {
-    return trimmed.replace(/^channel:/i, "").trim();
-  }
-  if (/^user:/i.test(trimmed)) {
-    return trimmed.replace(/^user:/i, "").trim();
-  }
-  const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-  if (mention?.[1]) {
-    return mention[1];
-  }
-  return trimmed;
-}
-
-function createConfiguredTestPlugin(params: {
-  id: "slack" | "telegram";
-  isConfigured: (cfg: OpenClawConfig) => boolean;
-  normalizeTarget: (raw: string) => string | undefined;
-  resolveTarget: (input: string) => ResolvedTestTarget | null;
-}): ChannelPlugin {
-  const messaging: ChannelMessagingAdapter = {
-    normalizeTarget: params.normalizeTarget,
-    targetResolver: {
-      looksLikeId: (raw) => Boolean(params.resolveTarget(raw.trim())),
-      hint: "<id>",
-      resolveTarget: async (resolverParams) => {
-        const resolved = params.resolveTarget(resolverParams.input);
-        return resolved ? { ...resolved, source: "normalized" } : null;
-      },
-    },
-    inferTargetChatType: (inferParams) =>
-      params.resolveTarget(inferParams.to)?.kind === "user" ? "direct" : "group",
-  };
-  return {
-    ...createChannelTestPluginBase({
-      id: params.id,
-      config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: (_account, cfg) => params.isConfigured(cfg),
-      },
-    }),
-    outbound: directOutbound,
-    messaging,
-  };
-}
-
-const slackTestPlugin = createConfiguredTestPlugin({
-  id: "slack",
-  isConfigured: (cfg) => Boolean(cfg.channels?.slack?.botToken?.trim()),
-  normalizeTarget: (raw) => normalizeSlackTarget(raw) || undefined,
-  resolveTarget: (input) => {
-    const normalized = normalizeSlackTarget(input);
-    if (!normalized) {
-      return null;
-    }
-    if (/^[A-Z0-9]+$/i.test(normalized)) {
-      const kind = /^U/i.test(normalized) ? "user" : "group";
-      return { to: normalized, kind };
-    }
-    return null;
-  },
-});
-
-const telegramTestPlugin = createConfiguredTestPlugin({
-  id: "telegram",
-  isConfigured: (cfg) => Boolean(cfg.channels?.telegram?.botToken?.trim()),
-  normalizeTarget: (raw) => raw.trim() || undefined,
-  resolveTarget: (input) => {
-    const normalized = input.trim();
-    if (!normalized) {
-      return null;
-    }
-    return {
-      to: normalized.replace(/^telegram:/i, ""),
-      kind: normalized.startsWith("@") ? "user" : "group",
-    };
-  },
-});
+  runDrySend,
+  slackConfig,
+  slackTestPlugin,
+  telegramTestPlugin,
+} from "./message-action-runner.test-helpers.js";
 
 describe("runMessageAction send validation", () => {
   beforeEach(() => {

@@ -28,6 +28,16 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function createActiveStreamingState() {
   return createState({
     sessionKey: "main",
@@ -661,5 +671,52 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.lastError).toContain("operator.read");
     expect(state.chatLoading).toBe(false);
+  });
+
+  it("ignores stale history responses after switching sessions", async () => {
+    const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
+      if (params?.sessionKey === "main") {
+        return mainRequest.promise;
+      }
+      if (params?.sessionKey === "other") {
+        return otherRequest.promise;
+      }
+      throw new Error(`Unexpected sessionKey: ${String(params?.sessionKey)}`);
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    state.sessionKey = "other";
+    const secondLoad = loadChatHistory(state);
+
+    mainRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
+      thinkingLevel: "high",
+    });
+    await firstLoad;
+
+    expect(state.chatLoading).toBe(true);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBeNull();
+
+    otherRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
+      thinkingLevel: "low",
+    });
+    await secondLoad;
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "other history" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
   });
 });

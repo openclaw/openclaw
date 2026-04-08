@@ -5,10 +5,12 @@
     "declarationMap": false,
     "emitDeclarationOnly": true,
     "ignoreDeprecations": "6.0",
+    "incremental": true,
     "noEmit": false,
     "noEmitOnError": false,
     "outDir": "dist",
-    "rootDir": "../.."
+    "rootDir": "../..",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": [
     "../../src/plugin-sdk/**/*.ts",

@@ -2,13 +2,38 @@ import path from "node:path";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { startQaLabServer } from "./lab-server.js";
+import { runQaManualLane } from "./manual-lane.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import {
+  defaultQaModelForMode,
+  normalizeQaProviderMode,
+  type QaProviderMode,
+  type QaProviderModeInput,
+} from "./run-config.js";
 import { runQaSuite } from "./suite.js";
 
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
+
+function resolveQaManualLaneModels(opts: {
+  providerMode: QaProviderMode;
+  primaryModel?: string;
+  alternateModel?: string;
+}) {
+  const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(opts.providerMode);
+  const alternateModel = opts.alternateModel?.trim();
+  return {
+    primaryModel,
+    alternateModel:
+      alternateModel && alternateModel.length > 0
+        ? alternateModel
+        : opts.primaryModel?.trim()
+          ? primaryModel
+          : defaultQaModelForMode(opts.providerMode, true),
+  };
+}
 
 async function runInterruptibleServer(label: string, server: InterruptibleServer) {
   process.stdout.write(`${label}: ${server.baseUrl}\n`);
@@ -30,9 +55,11 @@ async function runInterruptibleServer(label: string, server: InterruptibleServer
   await new Promise(() => undefined);
 }
 
-export async function runQaLabSelfCheckCommand(opts: { output?: string }) {
+export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output?: string }) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
-    outputPath: opts.output,
+    repoRoot,
+    outputPath: opts.output ? path.resolve(repoRoot, opts.output) : undefined,
   });
   try {
     const result = await server.runSelfCheck();
@@ -43,23 +70,62 @@ export async function runQaLabSelfCheckCommand(opts: { output?: string }) {
 }
 
 export async function runQaSuiteCommand(opts: {
+  repoRoot?: string;
   outputDir?: string;
-  providerMode?: "mock-openai" | "live-openai";
+  providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
 }) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode = normalizeQaProviderMode(opts.providerMode);
   const result = await runQaSuite({
-    outputDir: opts.outputDir ? path.resolve(opts.outputDir) : undefined,
-    providerMode: opts.providerMode,
+    repoRoot,
+    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
+    fastMode: opts.fastMode,
+    scenarioIds: opts.scenarioIds,
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
 }
 
+export async function runQaManualLaneCommand(opts: {
+  repoRoot?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  message: string;
+  timeoutMs?: number;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode: QaProviderMode =
+    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
+  const models = resolveQaManualLaneModels({
+    providerMode,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
+  });
+  const result = await runQaManualLane({
+    repoRoot,
+    providerMode,
+    primaryModel: models.primaryModel,
+    alternateModel: models.alternateModel,
+    fastMode: opts.fastMode,
+    message: opts.message,
+    timeoutMs: opts.timeoutMs,
+  });
+  process.stdout.write(JSON.stringify(result, null, 2));
+  process.stdout.write("\n");
+}
+
 export async function runQaLabUiCommand(opts: {
+  repoRoot?: string;
   host?: string;
   port?: number;
   advertiseHost?: string;
@@ -72,7 +138,9 @@ export async function runQaLabUiCommand(opts: {
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
 }) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
+    repoRoot,
     host: opts.host,
     port: Number.isFinite(opts.port) ? opts.port : undefined,
     advertiseHost: opts.advertiseHost,
@@ -89,6 +157,7 @@ export async function runQaLabUiCommand(opts: {
 }
 
 export async function runQaDockerScaffoldCommand(opts: {
+  repoRoot?: string;
   outputDir: string;
   gatewayPort?: number;
   qaLabPort?: number;
@@ -97,10 +166,11 @@ export async function runQaDockerScaffoldCommand(opts: {
   usePrebuiltImage?: boolean;
   bindUiDist?: boolean;
 }) {
-  const outputDir = path.resolve(opts.outputDir);
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const outputDir = path.resolve(repoRoot, opts.outputDir);
   const result = await writeQaDockerHarnessFiles({
     outputDir,
-    repoRoot: process.cwd(),
+    repoRoot,
     gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
     qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
     providerBaseUrl: opts.providerBaseUrl,
@@ -111,15 +181,17 @@ export async function runQaDockerScaffoldCommand(opts: {
   process.stdout.write(`QA docker scaffold: ${result.outputDir}\n`);
 }
 
-export async function runQaDockerBuildImageCommand(opts: { image?: string }) {
+export async function runQaDockerBuildImageCommand(opts: { repoRoot?: string; image?: string }) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const result = await buildQaDockerHarnessImage({
-    repoRoot: process.cwd(),
+    repoRoot,
     imageName: opts.image,
   });
   process.stdout.write(`QA docker image: ${result.imageName}\n`);
 }
 
 export async function runQaDockerUpCommand(opts: {
+  repoRoot?: string;
   outputDir?: string;
   gatewayPort?: number;
   qaLabPort?: number;
@@ -129,9 +201,10 @@ export async function runQaDockerUpCommand(opts: {
   bindUiDist?: boolean;
   skipUiBuild?: boolean;
 }) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const result = await runQaDockerUp({
-    repoRoot: process.cwd(),
-    outputDir: opts.outputDir ? path.resolve(opts.outputDir) : undefined,
+    repoRoot,
+    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
     gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
     qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
     providerBaseUrl: opts.providerBaseUrl,

@@ -3,7 +3,7 @@ import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
-import type { ContextEngine } from "../../../context-engine/types.js";
+import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
@@ -42,6 +42,16 @@ export type EmbeddedRunAttemptResult = {
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
   promptError: unknown;
+  /**
+   * Identifies which phase produced the promptError.
+   * - "prompt": the LLM call itself failed and may be eligible for retry/fallback.
+   * - "compaction": the prompt succeeded, but waiting for compaction/retry teardown was aborted;
+   *   this must not be retried as a fresh prompt or the same tool turn can replay.
+   * - "precheck": pre-prompt overflow recovery intentionally short-circuited the prompt so the
+   *   outer run loop can recover via compaction/truncation before any model call is made.
+   * - null: no promptError.
+   */
+  promptErrorSource: "prompt" | "compaction" | "precheck" | null;
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
@@ -69,6 +79,7 @@ export type EmbeddedRunAttemptResult = {
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
+  promptCache?: ContextEnginePromptCacheInfo;
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };

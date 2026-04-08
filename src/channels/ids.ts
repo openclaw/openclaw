@@ -1,5 +1,5 @@
 import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type ChatChannelId = string;
 
@@ -12,12 +12,12 @@ type BundledChatChannelEntry = {
 function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
   return listChannelCatalogEntries({ origin: "bundled" })
     .flatMap(({ channel }) => {
-      const id = normalizeOptionalString(channel.id)?.toLowerCase();
+      const id = normalizeOptionalLowercaseString(channel.id);
       if (!id) {
         return [];
       }
       const aliases = (channel.aliases ?? [])
-        .map((alias) => normalizeOptionalString(alias)?.toLowerCase())
+        .map((alias) => normalizeOptionalLowercaseString(alias))
         .filter((alias): alias is string => Boolean(alias));
       return [
         {
@@ -55,7 +55,7 @@ export function listChatChannelAliases(): string[] {
 }
 
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return null;
   }
