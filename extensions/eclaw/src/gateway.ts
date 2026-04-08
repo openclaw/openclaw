@@ -40,6 +40,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   readJsonWebhookBodyOrReject,
   registerPluginHttpRoute,
@@ -125,7 +126,7 @@ function acquireSharedEclawHttpRoute(params: {
     const authHeader =
       typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
     const result = await handleEclawWebhookRequest({
-      cfg: params.cfg,
+      cfg: getRuntimeConfigSnapshot() ?? params.cfg,
       authHeader,
       body: (body.value ?? {}) as EclawInboundMessage,
     });

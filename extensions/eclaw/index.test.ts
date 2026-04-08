@@ -1014,3 +1014,152 @@ describe("eclaw inbound backupUrl fallback (round 7)", () => {
     expect(capturedCtx[0]?.MediaUrl).toBe("https://primary.example.test/asset.jpg");
   });
 });
+
+describe("eclaw webhook handler uses live config snapshot (round 9)", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    const mod = await import("./src/gateway.js");
+    mod.__resetEclawSharedRouteForTests();
+    vi.doUnmock("openclaw/plugin-sdk/runtime-config-snapshot");
+    vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
+    vi.doUnmock("openclaw/plugin-sdk/channel-lifecycle");
+    vi.doUnmock("./src/webhook-handler.js");
+    vi.restoreAllMocks();
+  });
+
+  it("passes getRuntimeConfigSnapshot() result to handleEclawWebhookRequest instead of startup cfg", async () => {
+    const startupCfg = { _tag: "startup-cfg" } as never;
+    const snapshotCfg = { _tag: "live-snapshot-cfg" } as never;
+
+    // Capture the cfg seen by the webhook request handler
+    const capturedCfgArgs: unknown[] = [];
+    vi.doMock("./src/webhook-handler.js", () => ({
+      handleEclawWebhookRequest: async (params: { cfg: unknown }) => {
+        capturedCfgArgs.push(params.cfg);
+        return { status: 200, body: { ok: true } };
+      },
+    }));
+
+    // Provide a live config snapshot that differs from startupCfg
+    vi.doMock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
+      getRuntimeConfigSnapshot: () => snapshotCfg,
+    }));
+
+    // Capture the registered HTTP handler so we can invoke it directly
+    let capturedHandler: ((req: unknown, res: unknown) => Promise<void>) | null = null;
+    vi.doMock("openclaw/plugin-sdk/webhook-ingress", () => ({
+      readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+      registerPluginHttpRoute: (p: {
+        handler: (req: unknown, res: unknown) => Promise<void>;
+        log?: (msg: string) => void;
+      }) => {
+        capturedHandler = p.handler;
+        return () => {};
+      },
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+      waitUntilAbort: () => new Promise(() => { /* never resolves */ }),
+    }));
+
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "env-key";
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+
+    const abortCtrl = new AbortController();
+    // Start without awaiting — account stays alive until aborted
+    const startPromise = startEclawAccount({
+      cfg: startupCfg,
+      accountId: "default",
+      abortSignal: abortCtrl.signal,
+    });
+
+    // Poll until the route handler is registered
+    for (let i = 0; i < 50 && !capturedHandler; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(capturedHandler).not.toBeNull();
+
+    // Simulate a POST to /eclaw-webhook
+    const mockReq = { method: "POST", headers: { authorization: "Bearer token" } };
+    const chunks: unknown[] = [];
+    const mockRes = {
+      statusCode: 0,
+      setHeader: () => {},
+      end: (body: unknown) => { chunks.push(body); },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    await capturedHandler!(mockReq, mockRes);
+
+    // The handler must have forwarded the LIVE snapshot config, not the startup snapshot
+    expect(capturedCfgArgs).toHaveLength(1);
+    expect(capturedCfgArgs[0]).toBe(snapshotCfg);
+    expect(capturedCfgArgs[0]).not.toBe(startupCfg);
+
+    abortCtrl.abort();
+    await startPromise.catch(() => { /* aborted */ });
+  });
+
+  it("falls back to startup cfg when getRuntimeConfigSnapshot() returns null", async () => {
+    const startupCfg = { _tag: "startup-cfg" } as never;
+    const capturedCfgArgs: unknown[] = [];
+
+    vi.doMock("./src/webhook-handler.js", () => ({
+      handleEclawWebhookRequest: async (params: { cfg: unknown }) => {
+        capturedCfgArgs.push(params.cfg);
+        return { status: 200, body: { ok: true } };
+      },
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
+      getRuntimeConfigSnapshot: () => null,
+    }));
+
+    let capturedHandler: ((req: unknown, res: unknown) => Promise<void>) | null = null;
+    vi.doMock("openclaw/plugin-sdk/webhook-ingress", () => ({
+      readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+      registerPluginHttpRoute: (p: {
+        handler: (req: unknown, res: unknown) => Promise<void>;
+      }) => {
+        capturedHandler = p.handler;
+        return () => {};
+      },
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+      waitUntilAbort: () => new Promise(() => { /* never resolves */ }),
+    }));
+
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "env-key";
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+
+    const abortCtrl = new AbortController();
+    const startPromise = startEclawAccount({
+      cfg: startupCfg,
+      accountId: "default",
+      abortSignal: abortCtrl.signal,
+    });
+
+    for (let i = 0; i < 50 && !capturedHandler; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(capturedHandler).not.toBeNull();
+
+    const mockReq = { method: "POST", headers: { authorization: "Bearer token" } };
+    const mockRes = { statusCode: 0, setHeader: () => {}, end: () => {} };
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    await capturedHandler!(mockReq, mockRes);
+
+    // When snapshot is null, must fall back to startup cfg
+    expect(capturedCfgArgs).toHaveLength(1);
+    expect(capturedCfgArgs[0]).toBe(startupCfg);
+
+    abortCtrl.abort();
+    await startPromise.catch(() => { /* aborted */ });
+  });
+});
