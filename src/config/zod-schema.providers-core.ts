@@ -212,6 +212,8 @@ export const TelegramAccountSchemaBase = z
       .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
+    /** Route this account to a specific agent (overrides binding routing). */
+    agentId: z.string().optional(),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
     configWrites: z.boolean().optional(),

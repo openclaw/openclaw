@@ -234,4 +234,34 @@ describe("telegram disableAudioPreflight schema", () => {
     expect(res.data.channels?.telegram?.botToken).toBe("fallback:token");
     expect(res.data.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
   });
+
+  it("accepts agentId in telegram account config (multi-account routing)", () => {
+    const res = OpenClawSchema.safeParse({
+      channels: {
+        telegram: {
+          accounts: {
+            main: {
+              botToken: "123:AAA",
+              dmPolicy: "pairing",
+              agentId: "main",
+            },
+            builder: {
+              botToken: "456:BBB",
+              dmPolicy: "pairing",
+              agentId: "builder",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      console.error(res.error.format());
+      return;
+    }
+    expect(res.data.channels?.telegram?.accounts?.main?.agentId).toBe("main");
+    expect(res.data.channels?.telegram?.accounts?.builder?.agentId).toBe("builder");
+    expect(res.data.channels?.telegram?.accounts?.main?.botToken).toBe("123:AAA");
+  });
 });

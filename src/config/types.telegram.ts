@@ -116,6 +116,8 @@ export type TelegramAccountConfig = {
   dmPolicy?: DmPolicy;
   /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
+  /** Route this account to a specific agent (overrides binding routing). */
+  agentId?: string;
   botToken?: string;
   /** Path to a regular file containing the bot token; symlinks are rejected. */
   tokenFile?: string;
