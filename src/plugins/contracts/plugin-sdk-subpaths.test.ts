@@ -368,6 +368,22 @@ describe("plugin-sdk subpath exports", () => {
         "resolveCitationRedirectUrl",
       ],
     });
+    expectSourceContract("provider-web-search-config-contract", {
+      mentions: [
+        "getScopedCredentialValue",
+        "resolveProviderWebSearchPluginConfig",
+        "setScopedCredentialValue",
+        "setProviderWebSearchPluginConfigValue",
+        "WebSearchProviderPlugin",
+      ],
+      omits: [
+        "enablePluginInConfig",
+        "buildSearchCacheKey",
+        "withTrustedWebSearchEndpoint",
+        "writeCachedSearchPayload",
+        "resolveCitationRedirectUrl",
+      ],
+    });
     expectSourceContract("provider-web-fetch-contract", {
       mentions: ["enablePluginInConfig", "WebFetchProviderPlugin"],
       omits: [

@@ -222,6 +222,7 @@
   "provider-usage",
   "provider-web-fetch-contract",
   "provider-web-fetch",
+  "provider-web-search-config-contract",
   "provider-web-search-contract",
   "provider-web-search",
   "retry-runtime",

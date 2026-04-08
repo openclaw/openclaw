@@ -933,6 +933,10 @@
       "types": "./dist/plugin-sdk/provider-web-fetch.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch.js"
     },
+    "./plugin-sdk/provider-web-search-config-contract": {
+      "types": "./dist/plugin-sdk/provider-web-search-config-contract.d.ts",
+      "default": "./dist/plugin-sdk/provider-web-search-config-contract.js"
+    },
     "./plugin-sdk/provider-web-search-contract": {
       "types": "./dist/plugin-sdk/provider-web-search-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search-contract.js"

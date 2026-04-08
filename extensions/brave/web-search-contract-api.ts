@@ -2,7 +2,7 @@ import {
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
