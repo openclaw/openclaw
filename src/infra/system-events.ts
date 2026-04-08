@@ -214,9 +214,12 @@ export function removeExecEventsForSession(sessionKey: string, sessionId: string
   if (!entry || entry.queue.length === 0) {
     return 0;
   }
-  const marker = `(${sessionId},`;
+  // Match exec completion events specifically: "Exec [status] (sessionId, exitLabel)"
+  const execPattern = new RegExp(
+    `^Exec \\w+ \\(${sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")},`,
+  );
   const before = entry.queue.length;
-  entry.queue = entry.queue.filter((e) => !e.text.includes(marker));
+  entry.queue = entry.queue.filter((e) => !execPattern.test(e.text));
   const removed = before - entry.queue.length;
   if (entry.queue.length === 0) {
     entry.lastText = null;

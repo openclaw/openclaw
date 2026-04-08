@@ -344,7 +344,7 @@ export function createProcessTool(
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           // Suppress maybeNotifyOnExit while poll is actively waiting;
           // the poll result itself is the notification path.
-          scopedSession.pollWaiting = true;
+          scopedSession.pollWaitingCount = (scopedSession.pollWaitingCount ?? 0) + 1;
           if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
@@ -353,7 +353,7 @@ export function createProcessTool(
               );
             }
           }
-          scopedSession.pollWaiting = false;
+          scopedSession.pollWaitingCount = Math.max(0, (scopedSession.pollWaitingCount ?? 1) - 1);
           const { stdout, stderr } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
@@ -368,7 +368,7 @@ export function createProcessTool(
               status,
             );
             // Remove any exec-completion events that raced into the queue
-            // before pollWaiting was set (fallback for the race window).
+            // before pollWaitingCount was set (fallback for the race window).
             if (scopedSession.sessionKey) {
               removeExecEventsForSession(scopedSession.sessionKey, scopedSession.id);
             }
