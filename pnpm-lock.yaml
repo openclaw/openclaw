@@ -158,7 +158,7 @@ importers:
         version: 1.59.1
       proxy-agent:
         specifier: ^8.0.0
-        version: 8.0.0
+        version: 8.0.1
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
@@ -277,7 +277,7 @@ importers:
   extensions/aimlapi:
     dependencies:
       '@sinclair/typebox':
-        specifier: 0.34.48
+        specifier: 0.34.49
         version: 0.34.49
 
   extensions/alibaba:
@@ -1109,8 +1109,6 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-
-  extensions/vydra: {}
 
   extensions/whatsapp:
     dependencies:
@@ -4600,11 +4598,11 @@ packages:
     resolution: {integrity: sha512-TllpMR/t0M5sqCXfj85i4XaAzxmS5tVA16dqvdkMwGmzI+dXLXnw3J+3Vdv7VKw+ThlTMboK6i9rnZ6Nntj5CQ==}
     engines: {node: '>= 14'}
 
-  degenerator@7.0.0:
-    resolution: {integrity: sha512-YIz9P5gRq4qThp4X5E7O0i/K3w4Jd9akZUt5wUPk6+6zZrSudknhi/IlDn4JJ281XcfSpcEz1lFD4C+tf0ymmQ==}
+  degenerator@7.0.1:
+    resolution: {integrity: sha512-ABErK0IefDSyHjlPH7WUEenIAX2rPPnrDcDM+TS3z3+zu9TfyKKi07BQM+8rmxpdE2y1v5fjjdoAS/x4D2U60w==}
     engines: {node: '>= 20'}
     peerDependencies:
-      quickjs-wasi: ^0.0.1
+      quickjs-wasi: ^2.2.0
 
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
@@ -5388,8 +5386,8 @@ packages:
     resolution: {integrity: sha512-dhG34DXATL5hSxJbIexCft8FChFXtmskoZYnoPWjXQuebWYCNkVeV3KkGegCK9CP1oswI/vQibS2GY7Em/sJJA==}
     engines: {node: '>= 8'}
 
-  koffi@2.15.4:
-    resolution: {integrity: sha512-6l7xxt8heHWQ63WyGd8ofne4TrzhqeKHhvSlI3GnxMIHp3PlDrOPyZbW5YNINXNma1qrKkpM/PGLY8U0V8Hxbw==}
+  koffi@2.15.2:
+    resolution: {integrity: sha512-r9tjJLVRSOhCRWdVyQlF3/Ugzeg13jlzS4czS82MAgLff4W+BcYOW7g8Y62t9O5JYjYOLAjAovAZDNlDfZNu+g==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -5972,19 +5970,19 @@ packages:
     resolution: {integrity: sha512-TEB8ESquiLMc0lV8vcd5Ql/JAKAoyzHFXaStwjkzpOpC5Yv+pIzLfHvjTSdf3vpa2bMiUQrg9i6276yn8666aA==}
     engines: {node: '>= 14'}
 
-  pac-proxy-agent@9.0.0:
-    resolution: {integrity: sha512-/0mL/nYpzA1iT+QOzO/e7KAMaVPs2TqTcK9Hfl1nh+uwtFwSlODwM/Jie+ps22T4kkKWwOz1A+WvitB9yker2Q==}
+  pac-proxy-agent@9.0.1:
+    resolution: {integrity: sha512-3ZOSpLboOlpW4yp8Cuv21KlTULRqyJ5Uuad3wXpSKFrxdNgcHEyoa22GRaZ2UlgCVuR6z+5BiavtYVvbajL/Yw==}
     engines: {node: '>= 20'}
 
   pac-resolver@7.0.1:
     resolution: {integrity: sha512-5NPgf87AT2STgwa2ntRMr45jTKrYBGkVU36yT0ig/n/GMAa3oPqhZfIQ2kMEimReg0+t9kZViDVZ83qfVUlckg==}
     engines: {node: '>= 14'}
 
-  pac-resolver@9.0.0:
-    resolution: {integrity: sha512-7vnhwZvvnXgqOFy7sXt6yJh2KASD5xqW9SYt4yGsbTNNUDoF5ryL84itpoERN7a2dF6AXJsIiXwcZchazLS/vw==}
+  pac-resolver@9.0.1:
+    resolution: {integrity: sha512-lJbS008tmkj08VhoM8Hzuv/VE5tK9MS0OIQ/7+s0lIF+BYhiQWFYzkSpML7lXs9iBu2jfmzBTLzhe9n6BX+dYw==}
     engines: {node: '>= 20'}
     peerDependencies:
-      quickjs-wasi: ^0.0.1
+      quickjs-wasi: ^2.2.0
 
   pako@1.0.11:
     resolution: {integrity: sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==}
@@ -6171,8 +6169,8 @@ packages:
     resolution: {integrity: sha512-TmatMXdr2KlRiA2CyDu8GqR8EjahTG3aY3nXjdzFyoZbmB8hrBsTyMezhULIXKnC0jpfjlmiZ3+EaCzoInSu/A==}
     engines: {node: '>= 14'}
 
-  proxy-agent@8.0.0:
-    resolution: {integrity: sha512-VHE3bM8demARMgO9DCUvmaIoknpJUbfIanlIRvme+0fGAg7RC8NYRcOsuy31p1qyQhv4PFzipgL9FiwhCng/+w==}
+  proxy-agent@8.0.1:
+    resolution: {integrity: sha512-kccqGBqHZXR8onQhY/ganJjoO8QIKKRiFBhPOzbTZK16attzSZ/0XSmp9H7jrRxPKHjhGyx1q32lMPrJ3uLFgA==}
     engines: {node: '>= 20'}
 
   proxy-from-env@1.1.0:
@@ -6259,8 +6257,8 @@ packages:
   quick-format-unescaped@4.0.4:
     resolution: {integrity: sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==}
 
-  quickjs-wasi@0.0.1:
-    resolution: {integrity: sha512-fBWNLTBkxkLAhe1AzF1hyXEvuA+N+vV1WMP2D6iiMUblvmOt8Pp5t8zUcgvz7aYA1ldUdxDlgUse15dmcKjkNg==}
+  quickjs-wasi@2.2.0:
+    resolution: {integrity: sha512-zQxXmQMrEoD3S+jQdYsloq4qAuaxKFHZj6hHqOYGwB2iQZH+q9e/lf5zQPXCKOk0WJuAjzRFbO4KwHIp2D05Iw==}
 
   range-parser@1.2.1:
     resolution: {integrity: sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==}
@@ -8953,7 +8951,7 @@ snapshots:
       marked: 15.0.12
       mime-types: 3.0.2
     optionalDependencies:
-      koffi: 2.15.4
+      koffi: 2.15.2
 
   '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
     dependencies:
@@ -11138,12 +11136,12 @@ snapshots:
       escodegen: 2.1.0
       esprima: 4.0.1
 
-  degenerator@7.0.0(quickjs-wasi@0.0.1):
+  degenerator@7.0.1(quickjs-wasi@2.2.0):
     dependencies:
       ast-types: 0.13.4
       escodegen: 2.1.0
       esprima: 4.0.1
-      quickjs-wasi: 0.0.1
+      quickjs-wasi: 2.2.0
 
   delayed-stream@1.0.0: {}
 
@@ -12106,7 +12104,7 @@ snapshots:
 
   klona@2.0.6: {}
 
-  koffi@2.15.4:
+  koffi@2.15.2:
     optional: true
 
   lie@3.3.0:
@@ -12739,15 +12737,15 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  pac-proxy-agent@9.0.0:
+  pac-proxy-agent@9.0.1:
     dependencies:
       agent-base: 9.0.0
       debug: 4.4.3
       get-uri: 8.0.0
       http-proxy-agent: 9.0.0
       https-proxy-agent: 9.0.0
-      pac-resolver: 9.0.0(quickjs-wasi@0.0.1)
-      quickjs-wasi: 0.0.1
+      pac-resolver: 9.0.1(quickjs-wasi@2.2.0)
+      quickjs-wasi: 2.2.0
       socks-proxy-agent: 10.0.0
     transitivePeerDependencies:
       - supports-color
@@ -12757,11 +12755,11 @@ snapshots:
       degenerator: 5.0.1
       netmask: 2.0.2
 
-  pac-resolver@9.0.0(quickjs-wasi@0.0.1):
+  pac-resolver@9.0.1(quickjs-wasi@2.2.0):
     dependencies:
-      degenerator: 7.0.0(quickjs-wasi@0.0.1)
+      degenerator: 7.0.1(quickjs-wasi@2.2.0)
       netmask: 2.0.2
-      quickjs-wasi: 0.0.1
+      quickjs-wasi: 2.2.0
 
   pako@1.0.11: {}
 
@@ -12951,14 +12949,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  proxy-agent@8.0.0:
+  proxy-agent@8.0.1:
     dependencies:
       agent-base: 9.0.0
       debug: 4.4.3
       http-proxy-agent: 9.0.0
       https-proxy-agent: 9.0.0
       lru-cache: 7.18.3
-      pac-proxy-agent: 9.0.0
+      pac-proxy-agent: 9.0.1
       proxy-from-env: 2.1.0
       socks-proxy-agent: 10.0.0
     transitivePeerDependencies:
@@ -13071,7 +13069,7 @@ snapshots:
 
   quick-format-unescaped@4.0.4: {}
 
-  quickjs-wasi@0.0.1: {}
+  quickjs-wasi@2.2.0: {}
 
   range-parser@1.2.1: {}
 
