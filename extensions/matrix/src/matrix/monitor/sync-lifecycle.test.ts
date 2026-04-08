@@ -63,6 +63,30 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     );
   });
 
+  it("marks unexpected STOPPED sync as an error state", async () => {
+    const client = createClientEmitter();
+    const setStatus = vi.fn();
+    const lifecycle = createMatrixMonitorSyncLifecycle({
+      client: client as never,
+      statusController: createMatrixMonitorStatusController({
+        accountId: "default",
+        statusSink: setStatus,
+      }),
+    });
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    client.emit("sync.state", "STOPPED", "SYNCING", undefined);
+
+    await expect(waitPromise).rejects.toThrow("Matrix sync stopped unexpectedly");
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        healthState: "error",
+        lastError: "Matrix sync stopped unexpectedly",
+      }),
+    );
+  });
+
   it("ignores unexpected sync errors emitted during intentional shutdown", async () => {
     const client = createClientEmitter();
     const setStatus = vi.fn();

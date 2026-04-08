@@ -36,10 +36,13 @@ export function createMatrixMonitorSyncLifecycle(params: {
   };
 
   const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
-    params.statusController.noteSyncState(state, error);
     if (isMatrixTerminalSyncState(state) && !params.isStopping?.()) {
-      settleFatal(formatSyncLifecycleError(state, error));
+      const fatalError = formatSyncLifecycleError(state, error);
+      params.statusController.noteUnexpectedError(fatalError);
+      settleFatal(fatalError);
+      return;
     }
+    params.statusController.noteSyncState(state, error);
   };
 
   const onUnexpectedError = (error: Error) => {
