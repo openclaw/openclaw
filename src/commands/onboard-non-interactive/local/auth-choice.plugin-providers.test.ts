@@ -104,12 +104,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
     const runtime = createRuntime();
     resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
-    resolveManifestProviderAuthChoice
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce({
-        pluginId: "workspace-provider",
-        providerId: "workspace-provider",
-      } as never);
+    resolveManifestProviderAuthChoice.mockReturnValueOnce(undefined).mockReturnValueOnce({
+      pluginId: "workspace-provider",
+      providerId: "workspace-provider",
+    } as never);
 
     const result = await applyNonInteractivePluginProviderChoice({
       nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
@@ -133,6 +131,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     );
+    expect(resolveProviderPluginChoice).toHaveBeenCalledTimes(1);
     expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
     expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
       "workspace-provider-api-key",
