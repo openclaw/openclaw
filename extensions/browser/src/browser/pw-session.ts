@@ -14,6 +14,7 @@ import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   appendCdpPath,
+  assertCdpEndpointAllowed,
   fetchJson,
   getHeadersWithAuth,
   normalizeCdpHttpBaseForJsonEndpoints,
@@ -424,8 +425,9 @@ function observeBrowser(browser: Browser) {
   }
 }
 
-async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
+async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
+  await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
     return cached;
@@ -440,7 +442,9 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
+          () => null,
+        );
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
         // Bypass proxy for loopback CDP connections (#31219)
@@ -562,8 +566,10 @@ async function findPageByTargetIdViaTargetList(
   pages: Page[],
   targetId: string,
   cdpUrl: string,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<Page | null> {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+  await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   const targets = await fetchJson<
     Array<{
       id: string;
@@ -578,6 +584,7 @@ async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
@@ -595,7 +602,7 @@ async function findPageByTargetId(
   }
   if (cdpUrl) {
     try {
-      return await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
+      return await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl, ssrfPolicy);
     } catch {
       // Ignore fetch errors and fall through to return null.
     }
@@ -609,12 +616,13 @@ async function findPageByTargetId(
 async function resolvePageByTargetIdOrThrow(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   if (isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.ssrfPolicy);
   if (!page) {
     throw new BrowserTabNotFoundError();
   }
@@ -624,11 +632,12 @@ async function resolvePageByTargetIdOrThrow(opts: {
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -648,7 +657,7 @@ export async function getPageForTargetId(opts: {
   if (!opts.targetId) {
     return first;
   }
-  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.ssrfPolicy);
   if (found) {
     if (isBlockedPageRef(opts.cdpUrl, found)) {
       throw new BlockedBrowserTargetError();
@@ -1007,7 +1016,10 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
  */
-export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
+export async function listPagesViaPlaywright(opts: {
+  cdpUrl: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<
   Array<{
     targetId: string;
     title: string;
@@ -1015,7 +1027,7 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
     type: string;
   }>
 > {
-  const { browser } = await connectBrowser(opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   const pages = await getAllPages(browser);
   const results: Array<{
     targetId: string;
@@ -1056,7 +1068,7 @@ export async function createPageViaPlaywright(opts: {
   url: string;
   type: string;
 }> {
-  const { browser } = await connectBrowser(opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   ensureContextState(context);
 
@@ -1119,6 +1131,7 @@ export async function createPageViaPlaywright(opts: {
 export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await resolvePageByTargetIdOrThrow(opts);
   await page.close();
@@ -1131,6 +1144,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await resolvePageByTargetIdOrThrow(opts);
   try {
