@@ -220,6 +220,30 @@ describe("memory plugin state", () => {
     ).resolves.toEqual([{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }]);
   });
 
+  it("listMemoryCorpusSupplements returns supplements in pluginId order regardless of registration order", () => {
+    const makeSupp = () => ({ search: async () => [], get: async () => null });
+
+    // Register in reverse alphabetical order
+    registerMemoryCorpusSupplement("plugin-z", makeSupp());
+    registerMemoryCorpusSupplement("plugin-a", makeSupp());
+    registerMemoryCorpusSupplement("plugin-m", makeSupp());
+
+    const ids = listMemoryCorpusSupplements().map((s) => s.pluginId);
+    expect(ids).toEqual(["plugin-a", "plugin-m", "plugin-z"]);
+  });
+
+  it("listMemoryCorpusSupplements order is stable when re-registering the same plugin", () => {
+    const makeSupp = () => ({ search: async () => [], get: async () => null });
+
+    registerMemoryCorpusSupplement("plugin-b", makeSupp());
+    registerMemoryCorpusSupplement("plugin-a", makeSupp());
+    // Re-register plugin-b (simulates plugin reload)
+    registerMemoryCorpusSupplement("plugin-b", makeSupp());
+
+    const ids = listMemoryCorpusSupplements().map((s) => s.pluginId);
+    expect(ids).toEqual(["plugin-a", "plugin-b"]);
+  });
+
   it("uses the registered flush plan resolver", () => {
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,

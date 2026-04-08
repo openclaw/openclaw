@@ -184,7 +184,10 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
 }
 
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
-  return [...memoryPluginState.corpusSupplements];
+  // Keep supplement order stable even if plugin registration order changes.
+  return [...memoryPluginState.corpusSupplements].toSorted((a, b) =>
+    a.pluginId.localeCompare(b.pluginId),
+  );
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { promptBuilder }) instead. */
