@@ -53,6 +53,12 @@ struct VoiceWakeRuntimeTests {
         #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "openclaw")
     }
 
+    @Test func `matched trigger rejects larger word suffix matches`() {
+        let triggers = ["computer"]
+        let text = "uh computers"
+        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == nil)
+    }
+
     @Test func `matched trigger prefers most specific overlapping phrase`() {
         let triggers = ["openclaw", "hey openclaw"]
         let text = "hey openclaw"
@@ -91,6 +97,17 @@ struct VoiceWakeRuntimeTests {
             config: config,
             trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
         #expect(match?.trigger == "openclaw")
+    }
+
+    @Test func `text only fallback rejects filler prefixed larger word suffix matches`() {
+        let transcript = "uh computers"
+        let config = WakeWordGateConfig(triggers: ["computer"], minCommandLength: 1)
+        let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            transcript: transcript,
+            triggers: ["computer"],
+            config: config,
+            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+        #expect(match == nil)
     }
     @Test func `trims after chinese trigger keeps post speech`() {
         let triggers = ["小爪", "openclaw"]

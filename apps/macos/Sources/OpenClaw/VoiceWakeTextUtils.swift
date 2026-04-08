@@ -24,6 +24,39 @@ enum VoiceWakeTextUtils {
             .filter { !$0.isEmpty }
     }
 
+    private static func isASCIIWordScalar(_ scalar: UnicodeScalar) -> Bool {
+        scalar.isASCII && CharacterSet.alphanumerics.contains(scalar)
+    }
+
+    private static func requiresASCIIWordBoundaries(_ value: String) -> Bool {
+        value.unicodeScalars.contains(where: self.isASCIIWordScalar)
+    }
+
+    private static func hasASCIIWordBoundaries(
+        transcript: String,
+        range: Range<String.Index>,
+        trigger: String) -> Bool
+    {
+        guard self.requiresASCIIWordBoundaries(trigger) else { return true }
+
+        if range.lowerBound > transcript.startIndex {
+            let beforeIndex = transcript.index(before: range.lowerBound)
+            let beforeScalars = transcript[beforeIndex].unicodeScalars
+            if beforeScalars.contains(where: self.isASCIIWordScalar) {
+                return false
+            }
+        }
+
+        if range.upperBound < transcript.endIndex {
+            let afterScalars = transcript[range.upperBound].unicodeScalars
+            if afterScalars.contains(where: self.isASCIIWordScalar) {
+                return false
+            }
+        }
+
+        return true
+    }
+
     private static func bestRawTriggerMatch(
         transcript: String,
         triggers: [String]) -> (range: Range<String.Index>, normalizedTrigger: String)?
@@ -34,21 +67,49 @@ enum VoiceWakeTextUtils {
             let normalizedTokens = self.normalizedTriggerTokens(trigger)
             guard !normalizedTokens.isEmpty else { continue }
             let rawTrigger = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
-            guard !rawTrigger.isEmpty,
+            let tokenCount = normalizedTokens.count
+            guard !rawTrigger.isEmpty else { continue }
+
+            var searchStart = transcript.startIndex
+            while searchStart < transcript.endIndex,
                   let range = transcript.range(
                       of: rawTrigger,
-                      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive])
-            else { continue }
+                      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                      range: searchStart..<transcript.endIndex)
+            {
+                defer {
+                    searchStart = transcript.index(after: range.lowerBound)
+                }
+                guard self.hasASCIIWordBoundaries(
+                    transcript: transcript,
+                    range: range,
+                    trigger: rawTrigger)
+                else { continue }
 
-            let tokenCount = normalizedTokens.count
-            if let bestMatch {
-                if range.lowerBound > bestMatch.range.lowerBound { continue }
-                if range.lowerBound == bestMatch.range.lowerBound, tokenCount <= bestMatch.tokenCount {
+                if let bestMatch {
+                    if range.lowerBound > bestMatch.range.lowerBound { continue }
+                    if range.lowerBound == bestMatch.range.lowerBound,
+                       tokenCount <= bestMatch.tokenCount
+                    {
+                        continue
+                    }
+                }
+
+                bestMatch = (range, normalizedTokens.joined(separator: " "), tokenCount)
+                break
+            }
+
+            if let bestMatch,
+               bestMatch.range.lowerBound == transcript.startIndex,
+               bestMatch.tokenCount >= tokenCount
+            {
+                // Earlier matches take precedence, so once we match from the
+                // start there is no need to scan later triggers with fewer
+                // tokens at the same offset.
+                if bestMatch.tokenCount > tokenCount {
                     continue
                 }
             }
-
-            bestMatch = (range, normalizedTokens.joined(separator: " "), tokenCount)
         }
 
         return bestMatch.map { (range: $0.range, normalizedTrigger: $0.normalizedTrigger) }
