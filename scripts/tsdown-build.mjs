@@ -6,6 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
+import {
+  isSourceCheckoutRoot,
+  pruneBundledPluginSourceNodeModules,
+} from "./postinstall-bundled-plugins.mjs";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const extraArgs = process.argv.slice(2);
@@ -43,6 +47,20 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
+function pruneSourceCheckoutBundledPluginNodeModules() {
+  const cwd = process.cwd();
+  if (!isSourceCheckoutRoot({ packageRoot: cwd, existsSync: fs.existsSync })) {
+    return;
+  }
+  pruneBundledPluginSourceNodeModules({
+    extensionsDir: path.join(cwd, "extensions"),
+    existsSync: fs.existsSync,
+    readdirSync: fs.readdirSync,
+    rmSync: fs.rmSync,
+  });
+}
+
+pruneSourceCheckoutBundledPluginNodeModules();
 pruneStaleRuntimeSymlinks();
 
 function findFatalUnresolvedImport(lines) {
