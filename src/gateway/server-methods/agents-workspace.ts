@@ -197,16 +197,17 @@ async function workspaceDelete(
   const fullPath = path.join(workspaceDir, relativePath);
 
   try {
-    const stat = await fs.stat(fullPath);
+    // Use lstat to check the entry itself, not the symlink target
+    const lstat = await fs.lstat(fullPath);
 
-    if (stat.isDirectory() && !recursive) {
+    if (lstat.isDirectory() && !recursive) {
       const items = await fs.readdir(fullPath);
       if (items.length > 0) {
         throw new Error("Directory not empty");
       }
     }
 
-    if (stat.isDirectory() && recursive) {
+    if (lstat.isDirectory() && recursive) {
       // removePathWithinRoot does not support recursive directory removal,
       // so use fs.rm with recursive flag after verifying the path is within root
       const realRoot = await fs.realpath(workspaceDir);
@@ -239,14 +240,27 @@ async function workspaceDelete(
 async function workspaceMkdir(
   workspaceDir: string,
   relativePath: string,
-  _parents: boolean, // mkdirPathWithinRoot always creates intermediate directories (recursive: true)
+  parents: boolean,
 ): Promise<boolean> {
   try {
-    await mkdirPathWithinRoot({
-      rootDir: workspaceDir,
-      relativePath,
-      allowRoot: false,
-    });
+    if (parents) {
+      await mkdirPathWithinRoot({
+        rootDir: workspaceDir,
+        relativePath,
+        allowRoot: false,
+      });
+    } else {
+      // Non-recursive: only create if the parent directory already exists
+      const fullPath = path.join(workspaceDir, relativePath);
+      // Verify parent stays within workspace root
+      const realRoot = await fs.realpath(workspaceDir);
+      const parentDir = path.dirname(fullPath);
+      const realParent = await fs.realpath(parentDir);
+      if (!realParent.startsWith(realRoot + path.sep) && realParent !== realRoot) {
+        throw new Error("Path resolves outside workspace root");
+      }
+      await fs.mkdir(fullPath, { recursive: false });
+    }
     return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
