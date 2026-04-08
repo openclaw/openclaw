@@ -68,6 +68,10 @@ function readPollyProviderConfig(config: SpeechProviderConfig): PollyProviderCon
 }
 
 function isAwsCredentialsAvailable(): boolean {
+  // Only return true when at least one explicit credential signal is
+  // present. Avoids marking Polly as "configured" on non-AWS hosts
+  // where it would be attempted first, timeout, then fall back —
+  // adding avoidable latency to normal TTS flows.
   return Boolean(
     process.env.AWS_ACCESS_KEY_ID ||
     process.env.AWS_PROFILE ||
@@ -76,13 +80,10 @@ function isAwsCredentialsAvailable(): boolean {
     process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
     process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
     process.env.ECS_CONTAINER_METADATA_URI ||
-    // EC2 instance profiles / IMDS: no env vars are set, but the SDK
-    // resolves credentials via the metadata endpoint. Trust the SDK
-    // credential chain — if none of the explicit signals above are
-    // present, assume an instance profile may be available and let
-    // the SDK attempt resolution at synthesis time.
+    // EC2 instance profiles: explicit IMDS endpoint or the metadata
+    // service explicitly NOT disabled signals an instance role.
     process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT ||
-    process.env.AWS_EC2_METADATA_DISABLED !== "true",
+    process.env.AWS_EC2_METADATA_DISABLED === "false",
   );
 }
 
@@ -137,13 +138,20 @@ export function buildPollySpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.languageCode) == null
           ? {}
           : { languageCode: trimToUndefined(talkProviderConfig.languageCode) }),
+        // Map Talk's modelId to Polly engine for provider-specific defaults
+        ...(trimToUndefined(talkProviderConfig.modelId) == null
+          ? {}
+          : { engine: trimToUndefined(talkProviderConfig.modelId) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
       ...(trimToUndefined(params.voiceId) == null
         ? {}
         : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.engine) == null ? {} : { engine: trimToUndefined(params.engine) }),
+      // Map Talk's modelId to Polly engine for per-utterance overrides
+      ...(trimToUndefined(params.modelId) == null
+        ? {}
+        : { engine: trimToUndefined(params.modelId) }),
     }),
     listVoices: async (req) => {
       const config = req.providerConfig

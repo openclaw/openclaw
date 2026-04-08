@@ -103,23 +103,35 @@ export async function pollyListVoices(params: {
   engine?: string;
 }): Promise<PollyVoiceEntry[]> {
   const client = getClient(params.region);
+  const allVoices: PollyVoiceEntry[] = [];
+  let nextToken: string | undefined;
 
-  const command = new DescribeVoicesCommand({
-    ...(params.languageCode ? { LanguageCode: params.languageCode as LanguageCode } : {}),
-    ...(params.engine ? { Engine: params.engine as Engine } : {}),
-  });
+  // Paginate through all results — Polly may return multiple pages
+  do {
+    const command = new DescribeVoicesCommand({
+      ...(params.languageCode ? { LanguageCode: params.languageCode as LanguageCode } : {}),
+      ...(params.engine ? { Engine: params.engine as Engine } : {}),
+      ...(nextToken ? { NextToken: nextToken } : {}),
+    });
 
-  const response = await client.send(command);
-  const voices = response.Voices ?? [];
+    const response = await client.send(command);
+    const voices = response.Voices ?? [];
 
-  return voices
-    .map((voice) => ({
-      id: voice.Id ?? "",
-      name: voice.Name ?? voice.Id ?? "",
-      gender: voice.Gender,
-      languageCode: voice.LanguageCode,
-      languageName: voice.LanguageName,
-      supportedEngines: (voice.SupportedEngines ?? []) as string[],
-    }))
-    .filter((voice) => voice.id.length > 0);
+    allVoices.push(
+      ...voices
+        .map((voice) => ({
+          id: voice.Id ?? "",
+          name: voice.Name ?? voice.Id ?? "",
+          gender: voice.Gender,
+          languageCode: voice.LanguageCode,
+          languageName: voice.LanguageName,
+          supportedEngines: (voice.SupportedEngines ?? []) as string[],
+        }))
+        .filter((voice) => voice.id.length > 0),
+    );
+
+    nextToken = response.NextToken;
+  } while (nextToken);
+
+  return allVoices;
 }
