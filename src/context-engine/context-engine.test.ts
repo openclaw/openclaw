@@ -709,6 +709,71 @@ describe("Invalid engine fallback", () => {
       expect(message).toContain("legacy");
     }
   });
+
+  it("rejects resolved engines that omit info metadata", async () => {
+    const engineId = `invalid-info-${Date.now().toString(36)}`;
+    registerContextEngine(
+      engineId,
+      () =>
+        ({
+          async ingest() {
+            return { ingested: false };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        }) as unknown as ContextEngine,
+    );
+
+    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
+      `Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.`,
+    );
+  });
+
+  it("rejects resolved engines that omit required info fields", async () => {
+    const engineId = `invalid-info-fields-${Date.now().toString(36)}`;
+    registerContextEngine(
+      engineId,
+      () =>
+        ({
+          info: { id: engineId },
+          async ingest() {
+            return { ingested: false };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        }) as unknown as ContextEngine,
+    );
+
+    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
+      `Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.name.`,
+    );
+  });
+
+  it("rejects resolved engines that omit required lifecycle methods", async () => {
+    const engineId = `invalid-methods-${Date.now().toString(36)}`;
+    registerContextEngine(
+      engineId,
+      () =>
+        ({
+          info: { id: engineId, name: "Broken Engine" },
+          async ingest() {
+            return { ingested: false };
+          },
+        }) as unknown as ContextEngine,
+    );
+
+    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
+      `Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().`,
+    );
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
