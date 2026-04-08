@@ -6,6 +6,7 @@ import {
   type RequestData,
   type RequestClientOptions,
 } from "@buape/carbon";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 export type ProxyRequestClientOptions = RequestClientOptions & {
   fetch?: typeof fetch;
@@ -33,10 +34,7 @@ type Attachment = {
   description?: string;
 };
 
-const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHeader">> & {
-  baseUrl: string;
-  tokenHeader: "Bot" | "Bearer";
-} = {
+const defaultOptions = {
   tokenHeader: "Bot",
   baseUrl: "https://discord.com/api",
   apiVersion: 10,
@@ -44,11 +42,12 @@ const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHead
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
+  runtimeProfile: "persistent",
+  scheduler: {},
+} satisfies Omit<ProxyRequestClientOptions, "fetch"> & {
+  runtimeProfile: string;
+  scheduler: object;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function getMultipartFiles(payload: unknown): MultipartFile[] {
   if (!isRecord(payload)) {
@@ -91,6 +90,19 @@ function toRateLimitBody(parsedBody: unknown, rawBody: string, headers: Headers)
       retryAfterHeader && !Number.isNaN(Number(retryAfterHeader)) ? Number(retryAfterHeader) : 1,
     global: headers.get("X-RateLimit-Scope") === "global",
   };
+}
+
+type RateLimitBody = ReturnType<typeof toRateLimitBody>;
+
+function createRateLimitErrorCompat(
+  response: Response,
+  body: RateLimitBody,
+  request: Request,
+): RateLimitError {
+  const RateLimitErrorCtor = RateLimitError as unknown as {
+    new (response: Response, body: RateLimitBody, request?: Request): RateLimitError;
+  };
+  return new RateLimitErrorCtor(response, body, request);
 }
 
 function toDiscordErrorBody(parsedBody: unknown, rawBody: string): DiscordRawError {
@@ -242,6 +254,7 @@ class ProxyRequestClientCompat {
           .join("&")}`
       : "";
     const url = `${this.options.baseUrl}${path}${queryString}`;
+    const originalRequest = new Request(url, { method });
     const headers =
       this.token === "webhook"
         ? new Headers()
@@ -332,7 +345,7 @@ class ProxyRequestClientCompat {
 
     if (response.status === 429) {
       const rateLimitBody = toRateLimitBody(parsedBody, rawBody, response.headers);
-      const rateLimitError = new RateLimitError(response, rateLimitBody);
+      const rateLimitError = createRateLimitErrorCompat(response, rateLimitBody, originalRequest);
       this.scheduleRateLimit(
         routeKey,
         rateLimitError.retryAfter,

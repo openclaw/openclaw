@@ -12,13 +12,14 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitAssistantTextDelta({ emit, delta: "Good morning!" });
     emitAssistantTextEnd({ emit, content: "Good morning!" });
+    await Promise.resolve();
 
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
     expect(subscription.assistantTexts).toEqual(["Good morning!"]);
   });
-  it("does not duplicate block chunks when text_end repeats full content", () => {
+  it("does not duplicate block chunks when text_end repeats full content", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createTextEndBlockReplyHarness({
       onBlockReply,
@@ -32,11 +33,13 @@ describe("subscribeEmbeddedPiSession", () => {
     const fullText = "First line\nSecond line\nThird line\n";
 
     emitAssistantTextDelta({ emit, delta: fullText });
+    await Promise.resolve();
 
     const callsAfterDelta = onBlockReply.mock.calls.length;
     expect(callsAfterDelta).toBeGreaterThan(0);
 
     emitAssistantTextEnd({ emit, content: fullText });
+    await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(callsAfterDelta);
   });

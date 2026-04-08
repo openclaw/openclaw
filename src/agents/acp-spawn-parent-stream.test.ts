@@ -109,6 +109,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
     expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
     expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    expect(
+      enqueueSystemEventMock.mock.calls.every(
+        (call) => (call[1] as { trusted?: boolean } | undefined)?.trusted === false,
+      ),
+    ).toBe(true);
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",

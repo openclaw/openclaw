@@ -690,9 +690,17 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]?.strict).toBe(true);
+    expect(params.tools?.[0]).toMatchObject({
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+        required: [],
+      },
+    });
   });
 
-  it("omits responses strict tool shaping when a native OpenAI tool schema is not strict-compatible", () => {
+  it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -713,14 +721,19 @@ describe("openai transport stream", () => {
           {
             name: "read",
             description: "Read file",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { path: { type: "string" } },
+              required: [],
+            },
           },
         ],
       } as never,
       undefined,
     ) as { tools?: Array<{ strict?: boolean }> };
 
-    expect(params.tools?.[0]).not.toHaveProperty("strict");
+    expect(params.tools?.[0]?.strict).toBe(false);
   });
 
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
@@ -1066,6 +1079,41 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
+  it("flattens pure text content arrays for string-only completions backends when opted in", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gg-hf-gg/gemma-4-E2B-it",
+        name: "Gemma 4 E2B",
+        api: "openai-completions",
+        provider: "inferrs",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 4096,
+        compat: {
+          requiresStringContent: true,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "What is 2 + 2?" }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ role?: string; content?: unknown }> };
+
+    expect(params.messages?.[0]).toMatchObject({ role: "system", content: "system" });
+    expect(params.messages?.[1]).toMatchObject({ role: "user", content: "What is 2 + 2?" });
+  });
+
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1155,7 +1203,7 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(true);
   });
 
-  it("omits completions strict tool shaping when a native OpenAI tool schema is not strict-compatible", () => {
+  it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "gpt-5",
@@ -1183,7 +1231,7 @@ describe("openai transport stream", () => {
       undefined,
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
-    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+    expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

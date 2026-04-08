@@ -6,6 +6,7 @@ const {
   getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersionMock,
   getRemoteSkillEligibilityMock,
+  resolveAgentConfigMock,
   resolveSessionAgentIdMock,
   resolveAgentIdFromSessionKeyMock,
 } = vi.hoisted(() => ({
@@ -18,11 +19,13 @@ const {
     hasBin: () => false,
     hasAnyBin: () => false,
   })),
+  resolveAgentConfigMock: vi.fn(() => undefined),
   resolveSessionAgentIdMock: vi.fn(() => "writer"),
   resolveAgentIdFromSessionKeyMock: vi.fn(() => "main"),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  resolveAgentConfig: resolveAgentConfigMock,
   resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
@@ -63,6 +66,7 @@ describe("ensureSkillSnapshot", () => {
       hasBin: () => false,
       hasAnyBin: () => false,
     });
+    resolveAgentConfigMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("writer");
     resolveAgentIdFromSessionKeyMock.mockReturnValue("main");
   });

@@ -1,24 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
   discoverBundledPluginRuntimeDeps,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const cleanupDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const { createTempDirAsync } = createScriptTestHarness();
 
 async function createExtensionsDir() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-postinstall-"));
-  cleanupDirs.push(root);
+  const root = await createTempDirAsync("openclaw-postinstall-");
   const extensionsDir = path.join(root, "dist", "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
   return extensionsDir;
@@ -38,16 +31,38 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
-  function createBareNpmRunner(args: string[]) {
+  function createNpmInstallArgs(...packages: string[]) {
+    return ["install", "--omit=dev", "--no-save", "--package-lock=false", ...packages];
+  }
+
+  function createBareNpmRunner(packages: string[]) {
     return {
       command: "npm",
-      args,
+      args: createNpmInstallArgs(...packages),
       env: {
         HOME: "/tmp/home",
         PATH: "/tmp/node/bin",
       },
       shell: false as const,
     };
+  }
+
+  function expectNpmInstallSpawn(
+    spawnSync: ReturnType<typeof vi.fn>,
+    packageRoot: string,
+    packages: string[],
+  ) {
+    expect(spawnSync).toHaveBeenCalledWith("npm", createNpmInstallArgs(...packages), {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp/home",
+        PATH: "/tmp/node/bin",
+      },
+      shell: false,
+      stdio: "pipe",
+      windowsVerbatimArguments: undefined,
+    });
   }
 
   it("clears global npm config before nested installs", () => {
@@ -77,13 +92,7 @@ describe("bundled plugin postinstall", () => {
       env: { HOME: "/tmp/home" },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner([
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "acpx@0.4.1",
-      ]),
+      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
@@ -110,32 +119,12 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner([
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "acpx@0.4.1",
-      ]),
+      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalledWith(
-      "npm",
-      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.1"],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          HOME: "/tmp/home",
-          PATH: "/tmp/node/bin",
-        },
-        shell: false,
-        stdio: "pipe",
-        windowsVerbatimArguments: undefined,
-      },
-    );
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["acpx@0.4.1"]);
   });
 
   it("skips reinstall when the bundled sentinel package already exists", async () => {
@@ -244,40 +233,12 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner([
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "@slack/web-api@7.11.0",
-        "grammy@1.38.4",
-      ]),
+      npmRunner: createBareNpmRunner(["@slack/web-api@7.11.0", "grammy@1.38.4"]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalledWith(
-      "npm",
-      [
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "@slack/web-api@7.11.0",
-        "grammy@1.38.4",
-      ],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          HOME: "/tmp/home",
-          PATH: "/tmp/node/bin",
-        },
-        shell: false,
-        stdio: "pipe",
-        windowsVerbatimArguments: undefined,
-      },
-    );
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["@slack/web-api@7.11.0", "grammy@1.38.4"]);
   });
 
   it("installs only missing bundled plugin runtime deps", async () => {
@@ -308,32 +269,12 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner([
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "grammy@1.38.4",
-      ]),
+      npmRunner: createBareNpmRunner(["grammy@1.38.4"]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalledWith(
-      "npm",
-      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          HOME: "/tmp/home",
-          PATH: "/tmp/node/bin",
-        },
-        shell: false,
-        stdio: "pipe",
-        windowsVerbatimArguments: undefined,
-      },
-    );
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["grammy@1.38.4"]);
   });
 
   it("installs bundled plugin deps when npm location is global", async () => {
@@ -354,31 +295,11 @@ describe("bundled plugin postinstall", () => {
       },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner([
-        "install",
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        "grammy@1.38.4",
-      ]),
+      npmRunner: createBareNpmRunner(["grammy@1.38.4"]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalledWith(
-      "npm",
-      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: {
-          HOME: "/tmp/home",
-          PATH: "/tmp/node/bin",
-        },
-        shell: false,
-        stdio: "pipe",
-        windowsVerbatimArguments: undefined,
-      },
-    );
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["grammy@1.38.4"]);
   });
 });

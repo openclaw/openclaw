@@ -111,9 +111,8 @@ For Claude Code through ACP, the stack is:
 
 Important distinction:
 
-- ACP Claude is not the same thing as the direct `claude-cli/...` fallback runtime.
 - ACP Claude is a harness session with ACP controls, session resume, background-task tracking, and optional conversation/thread binding.
-- `claude-cli/...` is a text-only local CLI backend. See [CLI Backends](/gateway/cli-backends).
+- CLI backends are separate text-only local fallback runtimes. See [CLI Backends](/gateway/cli-backends).
 
 For operators, the practical rule is:
 
@@ -774,6 +773,19 @@ Security and trust notes:
 
 Custom `mcpServers` still work as before. The built-in plugin-tools bridge is an
 additional opt-in convenience, not a replacement for generic MCP server config.
+
+### Runtime timeout configuration
+
+The bundled `acpx` plugin defaults embedded runtime turns to a 120-second
+timeout. This gives slower harnesses such as Gemini CLI enough time to complete
+ACP startup and initialization. Override it if your host needs a different
+runtime limit:
+
+```bash
+openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
+```
+
+Restart the gateway after changing this value.
 
 ## Permission configuration
 

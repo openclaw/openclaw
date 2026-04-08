@@ -639,7 +639,7 @@ export const registerTelegramHandlers = ({
   type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
   const getChat =
     typeof (bot.api as { getChat?: unknown }).getChat === "function"
-      ? ((bot.api as { getChat: TelegramGetChat }).getChat.bind(bot.api) as TelegramGetChat)
+      ? (bot.api as { getChat: TelegramGetChat }).getChat.bind(bot.api)
       : undefined;
 
   const TELEGRAM_EVENT_AUTH_RULES: Record<

@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 type ErrorPattern = RegExp | string;
 
 const PERIODIC_USAGE_LIMIT_RE =
@@ -36,6 +38,14 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "no credentials found",
   "no api key found",
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
+] as const satisfies readonly ErrorPattern[];
+
+const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
+const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
+
+const ZAI_AUTH_ERROR_PATTERNS = [
+  // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
+  ZAI_AUTH_CODE_1113_RE,
 ] as const satisfies readonly ErrorPattern[];
 
 const ERROR_PATTERNS = {
@@ -120,9 +130,18 @@ const ERROR_PATTERNS = {
     "insufficient balance",
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
+    /out of extra usage/i,
+    /draw from your extra usage/i,
+    /extra usage is required(?: for long context requests)?/i,
+    // Z.ai: error 1311 = model not included in current subscription plan (#48988)
+    ZAI_BILLING_CODE_1311_RE,
   ],
   authPermanent: HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS,
-  auth: [...AMBIGUOUS_AUTH_ERROR_PATTERNS, ...COMMON_AUTH_ERROR_PATTERNS],
+  auth: [
+    ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
+    ...COMMON_AUTH_ERROR_PATTERNS,
+    ...ZAI_AUTH_ERROR_PATTERNS,
+  ],
   format: [
     "string should match pattern",
     "tool_use.id",
@@ -143,7 +162,7 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
   if (!raw) {
     return false;
   }
-  const value = raw.toLowerCase();
+  const value = normalizeLowercaseStringOrEmpty(raw);
   return patterns.some((pattern) =>
     pattern instanceof RegExp ? pattern.test(value) : value.includes(pattern),
   );
@@ -173,13 +192,13 @@ export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
 }
 
 export function isBillingErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
+  const value = normalizeLowercaseStringOrEmpty(raw);
   if (!value) {
     return false;
   }
 
   if (raw.length > BILLING_ERROR_MAX_LENGTH) {
-    return BILLING_ERROR_HARD_402_RE.test(value);
+    return BILLING_ERROR_HARD_402_RE.test(value) || ZAI_BILLING_CODE_1311_RE.test(value);
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
     return true;
@@ -203,6 +222,7 @@ export function isAuthErrorMessage(raw: string): boolean {
   return matchesErrorPatternGroups(raw, [
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
     COMMON_AUTH_ERROR_PATTERNS,
+    ZAI_AUTH_ERROR_PATTERNS,
   ]);
 }
 

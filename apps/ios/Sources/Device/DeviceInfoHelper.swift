@@ -50,9 +50,11 @@ enum DeviceInfoHelper {
         return trimmed.isEmpty ? "unknown" : trimmed
     }
 
-    /// App marketing version only, e.g. "2026.2.0" or "dev".
+    /// Canonical app version when present, otherwise the Apple marketing version.
     static func appVersion() -> String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        (Bundle.main.infoDictionary?["OpenClawCanonicalVersion"] as? String)
+            ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+            ?? "dev"
     }
 
     /// App build string, e.g. "123" or "".

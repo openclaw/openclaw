@@ -4,6 +4,7 @@ import {
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
@@ -170,7 +171,9 @@ export default definePluginEntry({
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
-        COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
+        COPILOT_XHIGH_MODEL_IDS.includes(
+          (normalizeOptionalLowercaseString(modelId) ?? "") as never,
+        ),
       prepareRuntimeAuth: async (ctx) => {
         const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
         const token = await resolveCopilotApiToken({

@@ -1,5 +1,6 @@
-import { expect, it, type Mock, vi } from "vitest";
+import { beforeEach, expect, it, type Mock, vi } from "vitest";
 import { createSlackOutboundPayloadHarness } from "../../../extensions/slack/contract-api.js";
+import { whatsappOutbound } from "../../../extensions/whatsapp/test-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
@@ -9,29 +10,30 @@ import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { resetGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
+import {
+  loadBundledPluginTestApiSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 
-let discordOutboundCache: ChannelOutboundAdapter | undefined;
-let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
+const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "discord",
+  artifactBasename: "src/outbound-adapter.js",
+});
+
+let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
 let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
 
-function getDiscordOutbound(): ChannelOutboundAdapter {
-  if (!discordOutboundCache) {
-    ({ discordOutbound: discordOutboundCache } = loadBundledPluginTestApiSync<{
+async function getDiscordOutbound(): Promise<ChannelOutboundAdapter> {
+  discordOutboundCache ??= (async () => {
+    const module = (await import(discordOutboundAdapterModuleId)) as {
       discordOutbound: ChannelOutboundAdapter;
-    }>("discord"));
-  }
-  return discordOutboundCache;
-}
-
-function getWhatsAppOutbound(): ChannelOutboundAdapter {
-  if (!whatsappOutboundCache) {
-    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
-      whatsappOutbound: ChannelOutboundAdapter;
-    }>("whatsapp"));
-  }
-  return whatsappOutboundCache;
+    };
+    return module.discordOutbound;
+  })();
+  return await discordOutboundCache;
 }
 
 function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
@@ -80,6 +82,10 @@ function installChannelOutboundPayloadContractSuite(params: {
     to: string;
   };
 }) {
+  beforeEach(() => {
+    resetGlobalHookRunner();
+  });
+
   it("text-only delegates to sendText", async () => {
     const { run, sendMock, to } = params.createHarness({
       payload: { text: "hello" },
@@ -195,7 +201,7 @@ function createDiscordHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await getDiscordOutbound().sendPayload!(ctx),
+    run: async () => await (await getDiscordOutbound()).sendPayload!(ctx),
     sendMock: sendDiscord,
     to: ctx.to,
   };
@@ -214,7 +220,7 @@ function createWhatsAppHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await getWhatsAppOutbound().sendPayload!(ctx),
+    run: async () => await whatsappOutbound.sendPayload!(ctx),
     sendMock: sendWhatsApp,
     to: ctx.to,
   };

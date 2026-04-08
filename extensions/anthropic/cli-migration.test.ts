@@ -125,6 +125,9 @@ describe("anthropic cli migration", () => {
           models: {
             "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
             "claude-cli/claude-opus-4-6": { alias: "Opus" },
+            "claude-cli/claude-opus-4-5": {},
+            "claude-cli/claude-sonnet-4-5": {},
+            "claude-cli/claude-haiku-4-5": {},
             "openai/gpt-5.2": {},
           },
         },
@@ -151,6 +154,37 @@ describe("anthropic cli migration", () => {
           models: {
             "openai/gpt-5.2": {},
             "claude-cli/claude-sonnet-4-6": {},
+            "claude-cli/claude-opus-4-6": {},
+            "claude-cli/claude-opus-4-5": {},
+            "claude-cli/claude-sonnet-4-5": {},
+            "claude-cli/claude-haiku-4-5": {},
+          },
+        },
+      },
+    });
+  });
+
+  it("backfills the Claude CLI allowlist when older configs only stored sonnet", () => {
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-sonnet-4-6" },
+          models: {
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    });
+
+    expect(result.configPatch).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            "claude-cli/claude-sonnet-4-6": {},
+            "claude-cli/claude-opus-4-6": {},
+            "claude-cli/claude-opus-4-5": {},
+            "claude-cli/claude-sonnet-4-5": {},
+            "claude-cli/claude-haiku-4-5": {},
           },
         },
       },

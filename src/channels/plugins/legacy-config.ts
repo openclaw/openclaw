@@ -1,24 +1,40 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import { listBootstrapChannelPlugins } from "./bootstrap-registry.js";
+import { listPluginDoctorLegacyConfigRules } from "../../plugins/doctor-contract-registry.js";
+import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
+import type { ChannelId } from "./types.js";
 
-export function collectChannelLegacyConfigRules(): LegacyConfigRule[] {
-  return listBootstrapChannelPlugins().flatMap((plugin) => plugin.doctor?.legacyConfigRules ?? []);
+function collectConfiguredChannelIds(raw: unknown): ChannelId[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const channels = (raw as { channels?: unknown }).channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  return Object.keys(channels)
+    .filter((channelId) => channelId !== "defaults")
+    .map((channelId) => channelId as ChannelId);
 }
 
-export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
-  next: Record<string, unknown>;
-  changes: string[];
-} {
-  let nextCfg = cfg as OpenClawConfig & Record<string, unknown>;
-  const changes: string[] = [];
-  for (const plugin of listBootstrapChannelPlugins()) {
-    const mutation = plugin.doctor?.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+export function collectChannelLegacyConfigRules(raw?: unknown): LegacyConfigRule[] {
+  const channelIds = collectConfiguredChannelIds(raw);
+  const rules: LegacyConfigRule[] = [];
+  for (const channelId of channelIds) {
+    const plugin = getBootstrapChannelPlugin(channelId);
+    if (!plugin) {
       continue;
     }
-    nextCfg = mutation.config as OpenClawConfig & Record<string, unknown>;
-    changes.push(...mutation.changes);
+    rules.push(...(plugin.doctor?.legacyConfigRules ?? []));
   }
-  return { next: nextCfg, changes };
+  rules.push(...listPluginDoctorLegacyConfigRules({ pluginIds: channelIds }));
+
+  const seen = new Set<string>();
+  return rules.filter((rule) => {
+    const key = `${rule.path.join(".")}::${rule.message}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }

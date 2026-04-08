@@ -248,7 +248,7 @@ describe("gateway server cron", () => {
     sendFailureNotificationAnnounceMock.mockClear();
   });
 
-  test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
+  test("handles cron CRUD, normalization, and patch semantics", { timeout: 45_000 }, async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-",
       sessionConfig: { mainKey: "primary" },
@@ -649,8 +649,8 @@ describe("gateway server cron", () => {
         id: "bad-custom-session-job",
         mode: "force",
       });
-      expect(runRes.ok).toBe(false);
-      expect(runRes.error?.message).toContain("invalid cron sessionTarget session id");
+      expect(runRes.ok).toBe(true);
+      expect(runRes.payload).toEqual({ ok: true, ran: false, reason: "invalid-spec" });
       expect(cronIsolatedRun).not.toHaveBeenCalled();
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });

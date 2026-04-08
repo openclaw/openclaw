@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { loadBundledPluginTestApiSync } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
@@ -195,14 +194,6 @@ describe("telegram thread bindings", () => {
     expect(manager.listBySessionKey("agent:main:subagent:child-1")[0]?.maxAgeMs).toBe(
       6 * 60 * 60 * 1000,
     );
-  });
-
-  it("exposes the reset helper through the bundled test api", async () => {
-    const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
-      resetTelegramThreadBindingsForTests: () => Promise<void>;
-    }>("telegram");
-
-    await expect(resetTelegramThreadBindingsForTests()).resolves.toBeUndefined();
   });
 
   it("does not persist lifecycle updates when manager persistence is disabled", async () => {

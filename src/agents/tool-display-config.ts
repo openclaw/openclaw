@@ -249,6 +249,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    update_plan: {
+      emoji: "🗺️",
+      title: "Update Plan",
+      detailKeys: ["explanation", "plan.0.step"],
+    },
     gateway: {
       emoji: "🔌",
       title: "Gateway",
@@ -628,6 +633,42 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         generate: {
           label: "generate",
           detailKeys: ["prompt", "model", "count", "resolution", "aspectRatio"],
+        },
+        list: {
+          label: "list",
+          detailKeys: ["provider", "model"],
+        },
+      },
+    },
+    music_generate: {
+      emoji: "🎵",
+      title: "Music Generation",
+      actions: {
+        generate: {
+          label: "generate",
+          detailKeys: ["prompt", "model", "durationSeconds", "format", "instrumental"],
+        },
+        list: {
+          label: "list",
+          detailKeys: ["provider", "model"],
+        },
+      },
+    },
+    video_generate: {
+      emoji: "🎬",
+      title: "Video Generation",
+      actions: {
+        generate: {
+          label: "generate",
+          detailKeys: [
+            "prompt",
+            "model",
+            "durationSeconds",
+            "resolution",
+            "aspectRatio",
+            "audio",
+            "watermark",
+          ],
         },
         list: {
           label: "list",

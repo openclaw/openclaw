@@ -8,6 +8,7 @@ import {
   applyAgentDefaultModelPrimary,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId };
@@ -31,7 +32,7 @@ function isCanonicalGoogleApiOriginShorthand(value: string): boolean {
 }
 
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
-  const raw = trimTrailingSlashes(baseUrl?.trim() || DEFAULT_GOOGLE_API_BASE_URL);
+  const raw = trimTrailingSlashes(normalizeOptionalString(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL);
   try {
     const url = new URL(raw);
     url.hash = "";

@@ -8,7 +8,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 
-type StreamContext = Parameters<StreamFn>[1];
+type _StreamContext = Parameters<StreamFn>[1];
 
 export function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -25,10 +25,10 @@ export function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): 
         ...options,
         headers: {
           ...buildCopilotDynamicHeaders({
-            messages: context.messages as StreamContext["messages"],
-            hasImages: hasCopilotVisionInput(context.messages as StreamContext["messages"]),
+            messages: context.messages,
+            hasImages: hasCopilotVisionInput(context.messages),
           }),
-          ...(options?.headers ?? {}),
+          ...options?.headers,
         },
       },
       applyAnthropicEphemeralCacheControlMarkers,

@@ -9,10 +9,12 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
@@ -60,7 +62,8 @@ function createThinkingPolicyProvider(
     id: providerId,
     label: providerId,
     auth: [],
-    supportsXHighThinking: ({ modelId }) => xhighModelIds.includes(modelId.trim().toLowerCase()),
+    supportsXHighThinking: ({ modelId }) =>
+      xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId)),
   };
 }
 
@@ -136,7 +139,7 @@ export function makeWhatsAppDirectiveConfig(
   defaults: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
         workspace: path.join(home, "openclaw"),
@@ -146,7 +149,7 @@ export function makeWhatsAppDirectiveConfig(
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: sessionStorePath(home) },
     ...extra,
-  };
+  });
 }
 
 export const AUTHORIZED_WHATSAPP_COMMAND = {
@@ -229,6 +232,16 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
     isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
     isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   }));
+  vi.doMock("../agents/pi-embedded.runtime.js", () => ({
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+    waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
+  }));
   vi.doMock("../agents/model-catalog.js", () => ({
     loadModelCatalog: loadModelCatalogMock,
   }));
@@ -248,7 +261,7 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
 }
 
 export function makeRestrictedElevatedDisabledConfig(home: string) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-6",
@@ -270,5 +283,5 @@ export function makeRestrictedElevatedDisabledConfig(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["+1222"] } },
     session: { store: path.join(home, "sessions.json") },
-  } as const;
+  } as const);
 }

@@ -1,5 +1,5 @@
 ---
-summary: "Slack setup and runtime behavior (Socket Mode + HTTP Events API)"
+summary: "Slack setup and runtime behavior (Socket Mode + HTTP Request URLs)"
 read_when:
   - Setting up Slack or debugging Slack socket/HTTP mode
 title: "Slack"
@@ -7,7 +7,7 @@ title: "Slack"
 
 # Slack
 
-Status: production-ready for DMs + channels via Slack app integrations. Default mode is Socket Mode; HTTP Events API mode is also supported.
+Status: production-ready for DMs + channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -26,12 +26,13 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
 <Tabs>
   <Tab title="Socket Mode (default)">
     <Steps>
-      <Step title="Create Slack app and tokens">
-        In Slack app settings:
+      <Step title="Create a new Slack app">
+        In Slack app settings press the **[Create New App](https://api.slack.com/apps/new)** button:
 
-        - enable **Socket Mode**
-        - create **App Token** (`xapp-...`) with `connections:write`
-        - install app and copy **Bot Token** (`xoxb-...`)
+        - choose **from a manifest** and select a workspace for your app
+        - paste the [example manifest](#manifest-and-scope-checklist) from below and continue to create
+        - generate an **App-Level Token** (`xapp-...`) with `connections:write`
+        - install app and copy the **Bot Token** (`xoxb-...`) shown
       </Step>
 
       <Step title="Configure OpenClaw">
@@ -58,19 +59,6 @@ SLACK_BOT_TOKEN=xoxb-...
 
       </Step>
 
-      <Step title="Subscribe app events">
-        Subscribe bot events for:
-
-        - `app_mention`
-        - `message.channels`, `message.groups`, `message.im`, `message.mpim`
-        - `reaction_added`, `reaction_removed`
-        - `member_joined_channel`, `member_left_channel`
-        - `channel_rename`
-        - `pin_added`, `pin_removed`
-
-        Also enable App Home **Messages Tab** for DMs.
-      </Step>
-
       <Step title="Start gateway">
 
 ```bash
@@ -82,17 +70,19 @@ openclaw gateway
 
   </Tab>
 
-  <Tab title="HTTP Events API mode">
+  <Tab title="HTTP Request URLs">
     <Steps>
-      <Step title="Configure Slack app for HTTP">
+      <Step title="Create a new Slack app">
+        In Slack app settings press the **[Create New App](https://api.slack.com/apps/new)** button:
 
-        - set mode to HTTP (`channels.slack.mode="http"`)
-        - copy Slack **Signing Secret**
-        - set Event Subscriptions + Interactivity + Slash command Request URL to the same webhook path (default `/slack/events`)
+        - choose **from a manifest** and select a workspace for your app
+        - paste the [example manifest](#manifest-and-scope-checklist) and update the URLs before create
+        - save the **Signing Secret** for request verification
+        - install app and copy the **Bot Token** (`xoxb-...`) shown
 
       </Step>
 
-      <Step title="Configure OpenClaw HTTP mode">
+      <Step title="Configure OpenClaw">
 
 ```json5
 {
@@ -108,12 +98,20 @@ openclaw gateway
 }
 ```
 
+        <Note>
+        Use unique webhook paths for multi-account HTTP
+
+        Give each account a distinct `webhookPath` (default `/slack/events`) so registrations do not collide.
+        </Note>
+
       </Step>
 
-      <Step title="Use unique webhook paths for multi-account HTTP">
-        Per-account HTTP mode is supported.
+      <Step title="Start gateway">
 
-        Give each account a distinct `webhookPath` so registrations do not collide.
+```bash
+openclaw gateway
+```
+
       </Step>
     </Steps>
 
@@ -122,8 +120,8 @@ openclaw gateway
 
 ## Manifest and scope checklist
 
-<AccordionGroup>
-  <Accordion title="Slack app manifest example" defaultOpen>
+<Tabs>
+  <Tab title="Socket Mode (default)">
 
 ```json
 {
@@ -198,8 +196,99 @@ openclaw gateway
 }
 ```
 
-  </Accordion>
+  </Tab>
 
+  <Tab title="HTTP Request URLs">
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw",
+    "description": "Slack connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "OpenClaw",
+      "always_online": true
+    },
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "slash_commands": [
+      {
+        "command": "/openclaw",
+        "description": "Send a message to OpenClaw",
+        "should_escape": false,
+        "url": "https://gateway-host.example.com/slack/events"
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "assistant:write",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "pins:read",
+        "pins:write",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "bot_events": [
+        "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "message_menu_options_url": "https://gateway-host.example.com/slack/events"
+    }
+  }
+}
+```
+
+  </Tab>
+</Tabs>
+
+<AccordionGroup>
+  <Accordion title="Optional authorship scopes (write operations)">
+    Add the `chat:write.customize` bot scope if you want outgoing messages to use the active agent identity (custom username and icon) instead of the default Slack app identity.
+
+    If you use an emoji icon, Slack expects `:emoji_name:` syntax.
+
+  </Accordion>
   <Accordion title="Optional user-token scopes (read operations)">
     If you configure `channels.slack.userToken`, typical read scopes are:
 
@@ -223,7 +312,6 @@ openclaw gateway
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
-- Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
 
 Status snapshot behavior:
 
@@ -311,7 +399,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     - explicit app mention (`<@botId>`)
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - implicit reply-to-bot thread behavior
+    - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
@@ -335,10 +423,11 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
+- `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
 
 Reply threading controls:
 
-- `channels.slack.replyToMode`: `off|first|all` (default `off`)
+- `channels.slack.replyToMode`: `off|first|all|batched` (default `off`)
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
 - legacy fallback for direct chats: `channels.slack.dm.replyToMode`
 
@@ -374,9 +463,11 @@ Notes:
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 
-`channels.slack.nativeStreaming` controls Slack native text streaming when `streaming` is `partial` (default: `true`).
+`channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-- A reply thread must be available for native text streaming to appear. Thread selection still follows `replyToMode`. Without one, the normal draft preview is used.
+- A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
+- Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
+- Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
 - Media and non-text payloads fall back to normal delivery.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
@@ -386,8 +477,10 @@ Use draft preview instead of Slack native text streaming:
 {
   channels: {
     slack: {
-      streaming: "partial",
-      nativeStreaming: false,
+      streaming: {
+        mode: "partial",
+        nativeTransport: false,
+      },
     },
   },
 }
@@ -395,8 +488,9 @@ Use draft preview instead of Slack native text streaming:
 
 Legacy keys:
 
-- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
-- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
+- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming.mode`.
+- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
+- legacy `channels.slack.nativeStreaming` is auto-migrated to `channels.slack.streaming.nativeTransport`.
 
 ## Typing reaction fallback
 
@@ -598,7 +692,7 @@ Primary reference:
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Troubleshooting

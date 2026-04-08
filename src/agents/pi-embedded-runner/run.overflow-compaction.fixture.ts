@@ -37,6 +37,7 @@ export function makeAttemptResult(
     timedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
     toolMetas,
@@ -112,8 +113,8 @@ export function queueOverflowAttemptWithOversizedToolOutput(
       promptError: overflowError,
       messagesSnapshot: [
         {
-          role: "assistant",
-          content: "big tool output",
+          role: "toolResult",
+          content: [{ type: "text", text: "x".repeat(80_000) }],
         } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
       ],
     }),

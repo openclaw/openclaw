@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
@@ -35,11 +36,9 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
     : [];
   const selected = list.find((entry) => entry.default === true) ?? list[0];
 
-  const id =
-    typeof selected?.id === "string" && selected.id.trim() ? selected.id.trim() : "unknown";
-  const identityName =
-    typeof selected?.identity?.name === "string" ? selected.identity.name.trim() : "";
-  const fallbackName = typeof selected?.name === "string" ? selected.name.trim() : "";
+  const id = normalizeOptionalString(selected?.id) ?? "unknown";
+  const identityName = normalizeOptionalString(selected?.identity?.name) ?? "";
+  const fallbackName = normalizeOptionalString(selected?.name) ?? "";
   const name = identityName || fallbackName;
 
   return { id, name };
@@ -67,12 +66,16 @@ export default definePluginEntry({
     const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
 
     api.on("message_received", async (event, ctx) => {
-      if (ctx.channelId !== "slack") return;
+      if (ctx.channelId !== "slack") {
+        return;
+      }
 
       const text = event.content ?? "";
       const threadTs = (event.metadata?.threadTs as string) ?? "";
       const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
-      if (!threadTs || !channelId) return;
+      if (!threadTs || !channelId) {
+        return;
+      }
 
       const mentioned =
         (agentName && text.includes(`@${agentName}`)) ||
@@ -84,15 +87,23 @@ export default definePluginEntry({
     });
 
     api.on("message_sending", async (event, ctx) => {
-      if (ctx.channelId !== "slack") return;
+      if (ctx.channelId !== "slack") {
+        return;
+      }
 
       const threadTs = (event.metadata?.threadTs as string) ?? "";
       const channelId = (event.metadata?.channelId as string) ?? event.to;
-      if (!threadTs) return;
-      if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) return;
+      if (!threadTs) {
+        return;
+      }
+      if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) {
+        return;
+      }
 
       cleanExpiredMentions();
-      if (mentionedThreads.has(`${channelId}:${threadTs}`)) return;
+      if (mentionedThreads.has(`${channelId}:${threadTs}`)) {
+        return;
+      }
 
       try {
         // The forwarder is an internal service (e.g. a Docker container); allow private-network

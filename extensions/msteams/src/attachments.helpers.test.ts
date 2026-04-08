@@ -7,7 +7,7 @@ import {
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-const GRAPH_HOST = "graph.microsoft.com";
+const _GRAPH_HOST = "graph.microsoft.com";
 const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
@@ -182,6 +182,22 @@ describe("msteams attachment helpers", () => {
   describe("buildMSTeamsAttachmentPlaceholder", () => {
     it.each(ATTACHMENT_PLACEHOLDER_CASES)("$label", ({ attachments, expected }) => {
       expect(buildMSTeamsAttachmentPlaceholder(attachments)).toBe(expected);
+    });
+
+    it("respects inline image limits when counting placeholder images", () => {
+      const attachments = [
+        {
+          contentType: "text/html",
+          content: `<img src="data:image/png;base64,${"A".repeat(16)}" />`,
+        },
+      ];
+
+      expect(
+        buildMSTeamsAttachmentPlaceholder(attachments, {
+          maxInlineBytes: 4,
+          maxInlineTotalBytes: 4,
+        }),
+      ).toBe("<media:document>");
     });
   });
 

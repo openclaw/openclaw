@@ -1,5 +1,11 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
+import {
+  normalizeBlueBubblesAccountsMap,
+  normalizeBlueBubblesPrivateNetworkAliases,
+  resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+  resolveBlueBubblesPrivateNetworkConfigValue as resolveBlueBubblesPrivateNetworkConfigValueFromConfig,
+} from "./accounts-normalization.js";
 import { _setFetchGuardForTesting } from "./types.js";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
@@ -31,17 +37,29 @@ export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
 }) {
-  const baseConfig = params.cfg?.channels?.bluebubbles ?? {};
+  const baseConfig =
+    normalizeBlueBubblesPrivateNetworkAliases(params.cfg?.channels?.bluebubbles ?? {}) ?? {};
+  const accounts = normalizeBlueBubblesAccountsMap(
+    baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined,
+  );
   const accountId = params.accountId ?? "default";
   const accountConfig =
-    accountId === "default"
-      ? {}
-      : ((baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined)?.[
-          accountId
-        ] ?? {});
-  const config = {
+    normalizeBlueBubblesPrivateNetworkAliases(accounts?.[accountId] ?? {}) ?? {};
+  const config: Record<string, unknown> = {
     ...baseConfig,
     ...accountConfig,
+    network:
+      typeof baseConfig.network === "object" &&
+      baseConfig.network &&
+      !Array.isArray(baseConfig.network) &&
+      typeof accountConfig.network === "object" &&
+      accountConfig.network &&
+      !Array.isArray(accountConfig.network)
+        ? {
+            ...(baseConfig.network as Record<string, unknown>),
+            ...(accountConfig.network as Record<string, unknown>),
+          }
+        : (accountConfig.network ?? baseConfig.network),
   };
   return {
     accountId,
@@ -54,6 +72,12 @@ export function resolveBlueBubblesAccountFromConfig(params: {
 export function createBlueBubblesAccountsMockModule() {
   return {
     resolveBlueBubblesAccount: vi.fn(resolveBlueBubblesAccountFromConfig),
+    resolveBlueBubblesEffectiveAllowPrivateNetwork: vi.fn(
+      resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+    ),
+    resolveBlueBubblesPrivateNetworkConfigValue: vi.fn(
+      resolveBlueBubblesPrivateNetworkConfigValueFromConfig,
+    ),
   };
 }
 

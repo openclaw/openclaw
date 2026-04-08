@@ -3,6 +3,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
@@ -226,7 +227,7 @@ async function createGooglePromptCache(params: {
     return null;
   }
   const json = (await response.json()) as { name?: string; expireTime?: string };
-  const cachedContent = typeof json.name === "string" ? json.name.trim() : "";
+  const cachedContent = normalizeOptionalString(json.name) ?? "";
   return cachedContent ? { cachedContent, expireTime: json.expireTime } : null;
 }
 

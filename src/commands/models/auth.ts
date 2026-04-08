@@ -31,6 +31,10 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../../shared/string-coerce.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
@@ -372,12 +376,13 @@ export async function modelsAuthPasteTokenCommand(
   runtime: RuntimeEnv,
 ) {
   const { agentDir } = await resolveModelsAuthContext();
-  const rawProvider = opts.provider?.trim();
+  const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
-  const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
+  const profileId =
+    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -397,12 +402,14 @@ export async function modelsAuthPasteTokenCommand(
       ? String(tokenInput ?? "")
           .replaceAll(/\s+/g, "")
           .trim()
-      : String(tokenInput ?? "").trim();
+      : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires =
-    opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
-      : undefined;
+  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
+    ? Date.now() +
+      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
+        defaultUnit: "d",
+      })
+    : undefined;
 
   upsertAuthProfile({
     profileId,
@@ -420,10 +427,9 @@ export async function modelsAuthPasteTokenCommand(
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
-    runtime.log("Anthropic setup-token auth is a legacy/manual path in OpenClaw.");
-    runtime.log(
-      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
-    );
+    runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
+    runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
+    runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
   }
 }
 

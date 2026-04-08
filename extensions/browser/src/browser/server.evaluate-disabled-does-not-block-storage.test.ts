@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
 
@@ -65,15 +65,10 @@ vi.mock("./server-context.js", async () => {
   };
 });
 
-let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
-let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("../server.js");
 
 describe("browser control evaluate gating", () => {
-  beforeAll(async () => {
-    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
-  });
-
   beforeEach(async () => {
     testPort = await getFreePort();
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;

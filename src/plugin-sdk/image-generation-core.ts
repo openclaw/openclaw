@@ -6,6 +6,7 @@ export type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 export type {
   GeneratedImageAsset,
   ImageGenerationProvider,
+  ImageGenerationProviderConfiguredContext,
   ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,
@@ -14,6 +15,11 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 
 export { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
+export {
+  buildNoCapabilityModelConfiguredMessage,
+  resolveCapabilityModelCandidates,
+  throwCapabilityGenerationFailure,
+} from "../media-generation/runtime-shared.js";
 export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,

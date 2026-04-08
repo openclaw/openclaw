@@ -6,10 +6,18 @@ import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-const { createOllamaEmbeddingProviderMock } = vi.hoisted(() => ({
+const {
+  bedrockSendMock,
+  createOllamaEmbeddingProviderMock,
+  defaultProviderMock,
+  resolveCredentialsMock,
+} = vi.hoisted(() => ({
+  bedrockSendMock: vi.fn(),
   createOllamaEmbeddingProviderMock: vi.fn(async () => {
     throw new Error("Unexpected ollama provider in embeddings.test.ts");
   }),
+  defaultProviderMock: vi.fn(),
+  resolveCredentialsMock: vi.fn(),
 }));
 
 vi.mock("../../infra/net/fetch-guard.js", () => ({
@@ -33,6 +41,23 @@ vi.mock("../../infra/net/fetch-guard.js", () => ({
 
 vi.mock("./embeddings-ollama.js", () => ({
   createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
+}));
+
+vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+  class MockClient {
+    send = bedrockSendMock;
+  }
+  class MockCommand {
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  }
+  return { BedrockRuntimeClient: MockClient, InvokeModelCommand: MockCommand };
+});
+
+vi.mock("@aws-sdk/credential-provider-node", () => ({
+  defaultProvider: defaultProviderMock.mockImplementation(() => resolveCredentialsMock),
 }));
 
 const createFetchMock = () =>
@@ -63,6 +88,7 @@ type ResolvedProviderAuth = Awaited<ReturnType<typeof authModule.resolveApiKeyFo
 beforeEach(() => {
   vi.spyOn(authModule, "resolveApiKeyForProvider");
   vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
+  defaultProviderMock.mockImplementation(() => resolveCredentialsMock);
 });
 
 beforeEach(() => {
@@ -108,7 +134,7 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 
 function expectAutoSelectedProvider(
   result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
-  expectedId: "openai" | "gemini" | "mistral",
+  expectedId: "openai" | "gemini" | "mistral" | "bedrock",
 ) {
   expect(result.requestedProvider).toBe("auto");
   const provider = requireProvider(result);
@@ -433,6 +459,39 @@ describe("embedding provider auto selection", () => {
       const [url] = fetchMock.mock.calls[0] ?? [];
       expect(url, testCase.name).toBe(testCase.expectedUrl);
     }
+  });
+
+  it("selects Bedrock in auto mode when the AWS credential chain resolves", async () => {
+    bedrockSendMock.mockResolvedValue({
+      body: new TextEncoder().encode(JSON.stringify({ embedding: [1, 2, 3] })),
+    });
+    resolveCredentialsMock.mockResolvedValue({ accessKeyId: "AKIAEXAMPLE" });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    const result = await createAutoProvider();
+    const provider = expectAutoSelectedProvider(result, "bedrock");
+    await provider.embedQuery("hello");
+
+    expect(bedrockSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows non-auth Bedrock setup errors in auto mode", async () => {
+    resolveCredentialsMock.mockResolvedValue({ accessKeyId: "AKIAEXAMPLE" });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    await expect(
+      createEmbeddingProvider({
+        config: {} as never,
+        provider: "auto",
+        model: "",
+        fallback: "none",
+        outputDimensionality: 768,
+      }),
+    ).rejects.toThrow("Invalid dimensions 768");
   });
 });
 

@@ -101,7 +101,7 @@ surfaces before runtime loads.
 | `selectionDocsOmitLabel`               | `boolean`  | Show the docs path directly instead of a labeled docs link in selection copy. |
 | `selectionExtras`                      | `string[]` | Extra short strings appended in selection copy.                               |
 | `markdownCapable`                      | `boolean`  | Marks the channel as markdown-capable for outbound formatting decisions.      |
-| `showConfigured`                       | `boolean`  | Controls whether configured-channel listing surfaces show this channel.       |
+| `exposure`                             | `object`   | Channel visibility controls for setup, configured lists, and docs surfaces.   |
 | `quickstartAllowFrom`                  | `boolean`  | Opt this channel into the standard quickstart `allowFrom` setup flow.         |
 | `forceAccountBinding`                  | `boolean`  | Require explicit account binding even when only one account exists.           |
 | `preferSessionLookupForAnnounceTarget` | `boolean`  | Prefer session lookup when resolving announce targets for this channel.       |
@@ -125,11 +125,25 @@ Example:
       "selectionDocsPrefix": "Guide:",
       "selectionExtras": ["Markdown"],
       "markdownCapable": true,
+      "exposure": {
+        "configured": true,
+        "setup": true,
+        "docs": true
+      },
       "quickstartAllowFrom": true
     }
   }
 }
 ```
+
+`exposure` supports:
+
+- `configured`: include the channel in configured/status-style listing surfaces
+- `setup`: include the channel in interactive setup/configure pickers
+- `docs`: mark the channel as public-facing in docs/navigation surfaces
+
+`showConfigured` and `showInSetup` remain supported as legacy aliases. Prefer
+`exposure`.
 
 ### `openclaw.install`
 

@@ -1,16 +1,20 @@
 import { describe, it, expect, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
   normalizeProviderId,
   normalizeProviderIdForAuth,
   modelKey,
+  resolvePersistedOverrideModelRef,
   resolvePersistedModelRef,
+  resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveSubagentConfiguredModelSelection,
@@ -127,6 +131,16 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
       expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
+    });
+  });
+
+  describe("isCliProvider", () => {
+    it("returns true for setup-registered cli backends", () => {
+      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
+    });
+
+    it("returns false for provider ids", () => {
+      expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
     });
   });
 
@@ -317,6 +331,65 @@ describe("model-selection", () => {
       ).toEqual({
         provider: "kimi",
         model: "kimi-code",
+      });
+    });
+  });
+
+  describe("resolvePersistedOverrideModelRef", () => {
+    it("splits legacy combined override refs when provider is not stored separately", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideModel: "ollama-beelink2/qwen2.5-coder:7b",
+        }),
+      ).toEqual({
+        provider: "ollama-beelink2",
+        model: "qwen2.5-coder:7b",
+      });
+    });
+
+    it("normalizes explicit override providers without reparsing away wrapper semantics", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "kimi-coding",
+          overrideModel: "kimi-code",
+        }),
+      ).toEqual({
+        provider: "kimi",
+        model: "kimi-code",
+      });
+    });
+  });
+
+  describe("resolvePersistedSelectedModelRef", () => {
+    it("prefers explicit overrides ahead of runtime model fields", () => {
+      expect(
+        resolvePersistedSelectedModelRef({
+          defaultProvider: "anthropic",
+          runtimeProvider: "openai-codex",
+          runtimeModel: "gpt-5.4",
+          overrideProvider: "anthropic",
+          overrideModel: "claude-opus-4-6",
+        }),
+      ).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+    });
+
+    it("preserves explicit wrapper providers for vendor-prefixed override models", () => {
+      expect(
+        resolvePersistedSelectedModelRef({
+          defaultProvider: "anthropic",
+          runtimeProvider: "openrouter",
+          runtimeModel: "openrouter/free",
+          overrideProvider: "openrouter",
+          overrideModel: "anthropic/claude-haiku-4.5",
+        }),
+      ).toEqual({
+        provider: "openrouter",
+        model: "anthropic/claude-haiku-4.5",
       });
     });
   });
@@ -754,14 +827,14 @@ describe("model-selection", () => {
           expect.stringContaining('Falling back to "google/claude-3-5-sonnet"'),
         );
       } finally {
+        warnSpy.mockRestore();
         setLoggerOverride(null);
         resetLogger();
       }
     });
 
     it("sanitizes control characters in providerless-model warnings", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -781,14 +854,12 @@ describe("model-selection", () => {
           provider: "google",
           model: "\u001B[31mclaude-3-5-sonnet\nspoof",
         });
-        const warning = warnSpy.mock.calls[0]?.[0] as string;
+        const warning = warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).toContain('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 
@@ -882,7 +953,7 @@ describe("model-selection", () => {
 
       expect(result).toEqual({
         provider: "google-vertex",
-        model: "gemini-3.1-flash-lite",
+        model: "gemini-3.1-flash-lite-preview",
       });
     });
 

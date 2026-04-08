@@ -1,4 +1,8 @@
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 
 type ParsedQmdSessionScope = {
@@ -15,7 +19,7 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
   const channel = parsed.channel;
   const chatType = parsed.chatType;
   const normalizedKey = parsed.normalizedKey ?? "";
-  const rawKey = sessionKey?.trim().toLowerCase() ?? "";
+  const rawKey = normalizeLowercaseStringOrEmpty(sessionKey);
   for (const rule of scope.rules ?? []) {
     if (!rule) {
       continue;
@@ -27,8 +31,8 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
     if (match.chatType && match.chatType !== chatType) {
       continue;
     }
-    const normalizedPrefix = match.keyPrefix?.trim().toLowerCase() || undefined;
-    const rawPrefix = match.rawKeyPrefix?.trim().toLowerCase() || undefined;
+    const normalizedPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+    const rawPrefix = normalizeOptionalLowercaseString(match.rawKeyPrefix);
 
     if (rawPrefix && !rawKey.startsWith(rawPrefix)) {
       continue;
@@ -76,7 +80,7 @@ function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
     }
     return {
       normalizedKey: normalized,
-      channel: parts[0]?.toLowerCase(),
+      channel: normalizeOptionalLowercaseString(parts[0]),
       chatType: chatType ?? "direct",
     };
   }
@@ -98,7 +102,7 @@ function normalizeQmdSessionKey(key?: string): string | undefined {
     return undefined;
   }
   const parsed = parseAgentSessionKey(trimmed);
-  const normalized = (parsed?.rest ?? trimmed).toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? trimmed);
   if (normalized.startsWith("subagent:")) {
     return undefined;
   }
