@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
+import type { BundledPluginInstallPathOptions } from "./bundled-plugin-install-paths.js";
+import {
+  collectBundledPluginInstallPathWarnings,
+  scanBundledPluginInstallPathRepairs,
+} from "./bundled-plugin-install-paths.js";
 import {
   collectBundledPluginLoadPathWarnings,
   scanBundledPluginLoadPathMigrations,
 } from "./bundled-plugin-load-paths.js";
-import {
-  type BundledPluginInstallPathOptions,
-  collectBundledPluginInstallPathWarnings,
-  scanBundledPluginInstallPathRepairs,
-} from "./bundled-plugin-install-paths.js";
 import {
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorPreviewWarnings,

@@ -1,18 +1,14 @@
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
+import type { BundledPluginInstallPathOptions } from "./shared/bundled-plugin-install-paths.js";
+import { maybeRepairBundledPluginInstallPaths } from "./shared/bundled-plugin-install-paths.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
-import {
-  type BundledPluginInstallPathOptions,
-  maybeRepairBundledPluginInstallPaths,
-} from "./shared/bundled-plugin-install-paths.js";
 import {
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorRepairMutations,
 } from "./shared/channel-doctor.js";
-import {
-  applyDoctorConfigMutation,
-  type DoctorConfigMutationState,
-} from "./shared/config-mutation-state.js";
+import type { DoctorConfigMutationState } from "./shared/config-mutation-state.js";
+import { applyDoctorConfigMutation } from "./shared/config-mutation-state.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
