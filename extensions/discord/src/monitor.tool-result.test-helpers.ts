@@ -12,8 +12,10 @@ import {
   updateLastRouteMock,
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
-import { __resetDiscordInboundDedupeForTest } from "./monitor/message-handler.js";
-import { createDiscordMessageHandler } from "./monitor/message-handler.js";
+import {
+  __resetDiscordInboundDedupeForTest,
+  createDiscordMessageHandler,
+} from "./monitor/message-handler.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 

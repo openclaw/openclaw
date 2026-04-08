@@ -1,4 +1,5 @@
 import { createRunStateMachine } from "openclaw/plugin-sdk/channel-lifecycle";
+import type { DedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger, formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -15,11 +16,12 @@ type DiscordInboundWorkerParams = {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   runTimeoutMs?: number;
+  inboundDedupeCache?: DedupeCache;
   __testing?: DiscordInboundWorkerTestingHooks;
 };
 
 export type DiscordInboundWorker = {
-  enqueue: (job: DiscordInboundJob) => void;
+  enqueue: (job: DiscordInboundJob, options?: { dedupeKey?: string | null }) => void;
   deactivate: () => void;
 };
 
@@ -165,7 +167,7 @@ export function createDiscordInboundWorker(
   });
 
   return {
-    enqueue(job) {
+    enqueue(job, options) {
       void runQueue
         .enqueue(job.queueKey, async () => {
           if (!runState.isActive()) {
@@ -174,6 +176,9 @@ export function createDiscordInboundWorker(
           runState.onRunStart();
           try {
             if (!runState.isActive()) {
+              return;
+            }
+            if (options?.dedupeKey && params.inboundDedupeCache?.check(options.dedupeKey)) {
               return;
             }
             await processDiscordInboundJob({

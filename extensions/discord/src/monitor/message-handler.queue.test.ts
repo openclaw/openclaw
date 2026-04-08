@@ -266,7 +266,25 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await vi.waitFor(() => {
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
     });
-    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets an active handler process the duplicate when another handler is already deactivated", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const handlerA = createHandlerWithDefaultPreflight();
+    const handlerB = createHandlerWithDefaultPreflight();
+    const duplicate = createMessageData("m-deactivated");
+
+    handlerA.deactivate();
+
+    await expect(handlerA(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await expect(handlerB(duplicate as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("applies explicit inbound worker timeout to queued runs so stalled runs do not block the queue", async () => {
