@@ -10,7 +10,6 @@ import {
 export function runExtensionOxlint(params) {
   const repoRoot = process.cwd();
   const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
-  const prepareBoundaryArtifactsArgs = ["scripts/prepare-extension-package-boundary-artifacts.mjs"];
   const releaseLock = acquireLocalHeavyCheckLockSync({
     cwd: repoRoot,
     env: process.env,
@@ -33,17 +32,6 @@ export function runExtensionOxlint(params) {
     }
 
     writeTempOxlintConfig(repoRoot, tempConfigPath);
-
-    const prepareResult = spawnSync(process.execPath, prepareBoundaryArtifactsArgs, {
-      stdio: "inherit",
-      env: process.env,
-    });
-    if (prepareResult.error) {
-      throw prepareResult.error;
-    }
-    if ((prepareResult.status ?? 1) !== 0) {
-      process.exit(prepareResult.status ?? 1);
-    }
 
     const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
     const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
