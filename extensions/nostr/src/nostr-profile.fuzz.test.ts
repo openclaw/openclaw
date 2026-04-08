@@ -52,6 +52,10 @@ describe("profile unicode attacks", () => {
       };
       const result = validateProfile(profile);
       expect(result.valid).toBe(true);
+      expect(result.profile).toBeDefined();
+      if (!result.profile) {
+        throw new Error("expected validated profile");
+      }
 
       // UI should escape or handle this
       const sanitized = sanitizeProfileForDisplay(result.profile);
