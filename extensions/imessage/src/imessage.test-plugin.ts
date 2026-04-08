@@ -5,20 +5,32 @@ import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-hel
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 function normalizeIMessageTestHandle(raw: string): string {
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
   if (!trimmed) {
     return "";
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lowered.startsWith("imessage:")) {
-    return normalizeIMessageTestHandle(trimmed.slice("imessage:".length));
+
+  while (trimmed) {
+    const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+    if (lowered.startsWith("imessage:")) {
+      trimmed = trimmed.slice("imessage:".length).trim();
+      continue;
+    }
+    if (lowered.startsWith("sms:")) {
+      trimmed = trimmed.slice("sms:".length).trim();
+      continue;
+    }
+    if (lowered.startsWith("auto:")) {
+      trimmed = trimmed.slice("auto:".length).trim();
+      continue;
+    }
+    break;
   }
-  if (lowered.startsWith("sms:")) {
-    return normalizeIMessageTestHandle(trimmed.slice("sms:".length));
+
+  if (!trimmed) {
+    return "";
   }
-  if (lowered.startsWith("auto:")) {
-    return normalizeIMessageTestHandle(trimmed.slice("auto:".length));
-  }
+
   if (/^(chat_id:|chat_guid:|chat_identifier:)/i.test(trimmed)) {
     return trimmed.replace(/^(chat_id:|chat_guid:|chat_identifier:)/i, (match) =>
       normalizeLowercaseStringOrEmpty(match),

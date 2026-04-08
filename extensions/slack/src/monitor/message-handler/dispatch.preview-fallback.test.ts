@@ -2,10 +2,15 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
+const SAME_TEXT = "same reply";
 
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
+let mockedDispatchSequence: Array<{
+  kind: "tool" | "block" | "final";
+  payload: { text: string };
+}> = [];
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -216,7 +221,9 @@ vi.mock("../replies.js", () => ({
 }));
 
 vi.mock("../reply.runtime.js", () => ({
-  createReplyDispatcherWithTyping: (params: { deliver: (payload: unknown) => Promise<void> }) => ({
+  createReplyDispatcherWithTyping: (params: {
+    deliver: (payload: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
+  }) => ({
     dispatcher: {
       deliver: params.deliver,
     },
@@ -224,13 +231,20 @@ vi.mock("../reply.runtime.js", () => ({
     markDispatchIdle: () => {},
   }),
   dispatchInboundMessage: async (params: {
-    dispatcher: { deliver: (payload: { text: string }) => Promise<void> };
+    dispatcher: {
+      deliver: (
+        payload: { text: string },
+        info: { kind: "tool" | "block" | "final" },
+      ) => Promise<void>;
+    };
   }) => {
-    await params.dispatcher.deliver({ text: FINAL_REPLY_TEXT });
+    for (const entry of mockedDispatchSequence) {
+      await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
+    }
     return {
       queuedFinal: false,
       counts: {
-        final: 1,
+        final: mockedDispatchSequence.filter((entry) => entry.kind === "final").length,
       },
     };
   },
@@ -251,6 +265,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
@@ -265,6 +280,32 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       expect.objectContaining({
         replyThreadTs: THREAD_TS,
         replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
+      }),
+    );
+  });
+
+  it("keeps same-content tool and final payloads distinct after preview fallback", async () => {
+    mockedDispatchSequence = [
+      { kind: "tool", payload: { text: SAME_TEXT } },
+      { kind: "final", payload: { text: SAME_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(2);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: SAME_TEXT })],
+      }),
+    );
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: SAME_TEXT })],
       }),
     );
   });
