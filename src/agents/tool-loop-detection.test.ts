@@ -374,6 +374,23 @@ describe("tool-loop-detection", () => {
       expect(detectRepeatedUnknownToolCall(state, "read", params)).toEqual({ stuck: false });
     });
 
+    it("recognizes dotted unknown tool names", () => {
+      const state = createState();
+      const toolName = "matrix.send";
+      const params = { roomId: "!abc:matrix.org" };
+      const error = new Error("Tool matrix.send not found");
+
+      recordFailedCall(state, toolName, params, error, 0);
+      recordFailedCall(state, toolName, params, error, 1);
+
+      const loopResult = detectRepeatedUnknownToolCall(state, toolName, params);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("unknown_tool_repeat");
+        expect(loopResult.message).toContain("matrix.send");
+      }
+    });
+
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
       const { params, result } = createNoProgressPollFixture("sess-custom");

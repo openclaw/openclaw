@@ -136,38 +136,12 @@ export async function runBeforeToolCallHook(args: {
   const params = args.params;
 
   if (args.ctx?.sessionKey) {
-    const {
-      getDiagnosticSessionState,
-      logToolLoopAction,
-      detectRepeatedUnknownToolCall,
-      detectToolCallLoop,
-      recordToolCall,
-    } = await loadBeforeToolCallRuntime();
+    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
+      await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
     });
-
-    const repeatedUnknownToolResult = detectRepeatedUnknownToolCall(sessionState, toolName, params);
-    if (repeatedUnknownToolResult.stuck) {
-      log.error(
-        `Blocking ${toolName} due to repeated unknown-tool failures: ${repeatedUnknownToolResult.message}`,
-      );
-      logToolLoopAction({
-        sessionKey: args.ctx.sessionKey,
-        sessionId: args.ctx?.agentId,
-        toolName,
-        level: "critical",
-        action: "block",
-        detector: repeatedUnknownToolResult.detector,
-        count: repeatedUnknownToolResult.count,
-        message: repeatedUnknownToolResult.message,
-      });
-      return {
-        blocked: true,
-        reason: repeatedUnknownToolResult.message,
-      };
-    }
 
     const loopResult = detectToolCallLoop(sessionState, toolName, params, args.ctx.loopDetection);
 

@@ -188,15 +188,24 @@ function normalizeUnknownToolName(value: string | undefined): string | undefined
   return trimmed ? trimmed : undefined;
 }
 
+const UNKNOWN_TOOL_NAME_FRAGMENT = String.raw`[a-z0-9_./-]+`;
+
 function extractUnknownToolName(error: unknown): string | undefined {
   if (error === undefined || error === null) {
     return undefined;
   }
   const raw = formatErrorForHash(error);
   const match =
-    raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i) ??
-    raw.match(/missing tool definition[:\s]+["']?([a-z0-9_-]+)["']?/i);
+    raw.match(new RegExp(`unknown tool[:\\s]+["']?(${UNKNOWN_TOOL_NAME_FRAGMENT})["']?`, "i")) ??
+    raw.match(
+      new RegExp(
+        `tool\\s+["']?(${UNKNOWN_TOOL_NAME_FRAGMENT})["']?\\s+(?:not found|is not available)`,
+        "i",
+      ),
+    ) ??
+    raw.match(
+      new RegExp(`missing tool definition[:\\s]+["']?(${UNKNOWN_TOOL_NAME_FRAGMENT})["']?`, "i"),
+    );
   return normalizeUnknownToolName(match?.[1]);
 }
 
