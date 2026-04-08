@@ -7,6 +7,7 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
@@ -32,6 +33,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -59,6 +61,88 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
+}
+
+type ResetPreservedSelectionState = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
+
+function parseProviderModelRef(
+  raw: string | undefined,
+): { provider: string; model: string } | undefined {
+  const normalized = normalizeOptionalString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const slash = normalized.indexOf("/");
+  if (slash <= 0 || slash === normalized.length - 1) {
+    return undefined;
+  }
+  return {
+    provider: normalized.slice(0, slash),
+    model: normalized.slice(slash + 1),
+  };
+}
+
+function sameProviderModelRef(
+  left: { provider: string; model: string } | undefined,
+  right: { provider: string; model: string } | undefined,
+): boolean {
+  return left?.provider === right?.provider && left?.model === right?.model;
+}
+
+function resolveResetPreservedSelection(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  entry?: SessionEntry;
+  agentId: string;
+}): Partial<ResetPreservedSelectionState> {
+  const { entry } = params;
+  if (!entry) {
+    return {};
+  }
+
+  const preserved: Partial<ResetPreservedSelectionState> = {};
+  const defaultRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const currentModel = normalizeOptionalString(entry.modelOverride);
+  const currentSelection = currentModel
+    ? {
+        provider: normalizeOptionalString(entry.providerOverride) ?? defaultRef.provider,
+        model: currentModel,
+      }
+    : undefined;
+  const fallbackSelected = parseProviderModelRef(entry.fallbackNoticeSelectedModel);
+  const fallbackActive = parseProviderModelRef(entry.fallbackNoticeActiveModel);
+  const fallbackPinnedSelection =
+    currentSelection &&
+    fallbackSelected &&
+    fallbackActive &&
+    !sameProviderModelRef(fallbackSelected, fallbackActive) &&
+    sameProviderModelRef(currentSelection, fallbackActive)
+      ? fallbackSelected
+      : undefined;
+  const explicitSelection = fallbackPinnedSelection ?? currentSelection;
+  if (explicitSelection && !sameProviderModelRef(explicitSelection, defaultRef)) {
+    preserved.providerOverride = explicitSelection.provider;
+    preserved.modelOverride = explicitSelection.model;
+  }
+
+  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
+    preserved.authProfileOverride = entry.authProfileOverride;
+    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
+    if (entry.authProfileOverrideCompactionCount !== undefined) {
+      preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    }
+  }
+
+  return preserved;
 }
 
 export function archiveSessionTranscriptsForSession(params: {
@@ -507,9 +591,22 @@ export async function performGatewaySessionReset(params: {
     });
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
-    const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const resetPreservedSelection = resolveResetPreservedSelection({
+      cfg,
+      entry: currentEntry,
+      agentId: sessionAgentId,
+    });
+    const resetEntry = {
+      ...stripRuntimeModelState(currentEntry),
+      providerOverride: undefined,
+      modelOverride: undefined,
+      authProfileOverride: undefined,
+      authProfileOverrideSource: undefined,
+      authProfileOverrideCompactionCount: undefined,
+      ...resetPreservedSelection,
+    };
     const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
     oldSessionId = currentEntry?.sessionId;
     oldSessionFile = currentEntry?.sessionFile;
@@ -540,19 +637,9 @@ export async function performGatewaySessionReset(params: {
       execAsk: currentEntry?.execAsk,
       execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
-      // Only preserve model/provider/auth overrides across reset when they were
-      // explicitly chosen by the user (e.g. /model command). System-driven
-      // overrides (fallback rotation, auto-selection) should not survive reset
-      // so the session returns to the configured default model.
-      ...(currentEntry?.authProfileOverrideSource === "user"
-        ? {
-            providerOverride: currentEntry?.providerOverride,
-            modelOverride: currentEntry?.modelOverride,
-            authProfileOverride: currentEntry?.authProfileOverride,
-            authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
-            authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
-          }
-        : {}),
+      // Resets should keep the user's explicit selection, but clear any
+      // temporary fallback model that was pinned during the previous run.
+      ...resetPreservedSelection,
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,
