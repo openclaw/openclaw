@@ -20,6 +20,7 @@ export {
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
+import { stripToolCallXmlTags } from "../../shared/text/assistant-visible-text.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -825,7 +826,9 @@ function stripFinalTagsFromText(text: unknown): string {
   if (!normalized) {
     return normalized;
   }
-  return normalized.replace(FINAL_TAG_RE, "");
+  let result = normalized.replace(FINAL_TAG_RE, "");
+  result = stripToolCallXmlTags(result);
+  return result;
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
