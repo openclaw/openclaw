@@ -140,7 +140,7 @@ export function buildStatusMemoryValue(params: {
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return params.muted(`enabled (${slot}) · unavailable`);
+    return params.muted(`enabled (${slot}) · not checked`);
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";
