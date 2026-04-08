@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
@@ -68,14 +69,68 @@ function collectAuthProfileServiceEnvVars(params: {
   return entries;
 }
 
+function mergeServicePath(
+  nextPath: string | undefined,
+  existingPath: string | undefined,
+): string | undefined {
+  const segments: string[] = [];
+  const seen = new Set<string>();
+  const addPath = (value: string | undefined) => {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return;
+    }
+    for (const segment of value.split(path.delimiter)) {
+      const trimmed = segment.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      segments.push(trimmed);
+    }
+  };
+  addPath(nextPath);
+  addPath(existingPath);
+  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
+}
+
+function collectPreservedExistingServiceEnvVars(
+  existingEnvironment: Record<string, string | undefined> | undefined,
+): Record<string, string | undefined> {
+  if (!existingEnvironment) {
+    return {};
+  }
+  const preserved: Record<string, string | undefined> = {};
+  for (const [rawKey, rawValue] of Object.entries(existingEnvironment)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key) {
+      continue;
+    }
+    const upper = key.toUpperCase();
+    if (upper === "HOME" || upper === "PATH" || upper === "TMPDIR" || upper.startsWith("OPENCLAW_")) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      continue;
+    }
+    const value = rawValue?.trim();
+    if (!value) {
+      continue;
+    }
+    preserved[key] = value;
+  }
+  return preserved;
+}
+
 function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
   warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
 }): Record<string, string | undefined> {
   const environment: Record<string, string | undefined> = {
+    ...collectPreservedExistingServiceEnvVars(params.existingEnvironment),
     ...collectDurableServiceEnvVars({
       env: params.env,
       config: params.config,
@@ -87,6 +142,13 @@ function buildGatewayInstallEnvironment(params: {
     }),
   };
   Object.assign(environment, params.serviceEnvironment);
+  const mergedPath = mergeServicePath(
+    params.serviceEnvironment.PATH,
+    params.existingEnvironment?.PATH,
+  );
+  if (mergedPath) {
+    environment.PATH = mergedPath;
+  }
   return environment;
 }
 
@@ -94,6 +156,7 @@ export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
   runtime: GatewayDaemonRuntime;
+  existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
@@ -146,6 +209,7 @@ export async function buildGatewayInstallPlan(params: {
       authStore: params.authStore,
       warn: params.warn,
       serviceEnvironment,
+      existingEnvironment: params.existingEnvironment,
     }),
   };
 }

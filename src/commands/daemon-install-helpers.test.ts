@@ -483,6 +483,37 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.HOME).toBe("/from-service");
   });
 
+  it("preserves safe custom vars from an existing service env and merges PATH", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        PATH: "/custom/go/bin:/usr/bin",
+        GOBIN: "/Users/test/.local/gopath/bin",
+        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
+        NODE_OPTIONS: "--require /tmp/evil.js",
+        GOPATH: "/Users/test/.local/gopath",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    expect(plan.environment.GOBIN).toBe("/Users/test/.local/gopath/bin");
+    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+    expect(plan.environment.GOPATH).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+  });
+
   it("works when .env file does not exist", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
 
