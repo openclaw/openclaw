@@ -9,6 +9,18 @@ import {
   type VoiceId,
 } from "@aws-sdk/client-polly";
 
+/** Lazy-initialized client cache keyed by region. */
+const clients = new Map<string, PollyClient>();
+
+function getClient(region: string): PollyClient {
+  let client = clients.get(region);
+  if (!client) {
+    client = new PollyClient({ region });
+    clients.set(region, client);
+  }
+  return client;
+}
+
 export type PollySynthesizeParams = {
   text: string;
   voiceId: string;
@@ -27,7 +39,7 @@ export async function pollySynthesize(params: PollySynthesizeParams): Promise<Bu
   const { text, voiceId, engine, outputFormat, sampleRate, languageCode, region, timeoutMs } =
     params;
 
-  const client = new PollyClient({ region });
+  const client = getClient(region);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -65,6 +77,5 @@ export async function pollySynthesize(params: PollySynthesizeParams): Promise<Bu
     return audioBuffer;
   } finally {
     clearTimeout(timeout);
-    client.destroy();
   }
 }
