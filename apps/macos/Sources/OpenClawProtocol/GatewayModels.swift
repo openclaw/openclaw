@@ -5486,7 +5486,7 @@ public struct AgentsWorkspaceStatResult: Codable, Sendable {
     public let agentid: String
     public let workspace: String
     public let path: String
-    public let type: WorkspaceEntryType
+    public let type: AnyCodable
     public let size: Int?
     public let updatedatms: Int?
     public let createdatms: Int?
@@ -5496,7 +5496,7 @@ public struct AgentsWorkspaceStatResult: Codable, Sendable {
         agentid: String,
         workspace: String,
         path: String,
-        type: WorkspaceEntryType,
+        type: AnyCodable,
         size: Int?,
         updatedatms: Int?,
         createdatms: Int?,
@@ -5527,7 +5527,7 @@ public struct AgentsWorkspaceStatResult: Codable, Sendable {
 public struct WorkspaceEntry: Codable, Sendable {
     public let name: String
     public let path: String
-    public let type: WorkspaceEntryType
+    public let type: AnyCodable
     public let size: Int?
     public let updatedatms: Int?
     public let createdatms: Int?
@@ -5535,7 +5535,7 @@ public struct WorkspaceEntry: Codable, Sendable {
     public init(
         name: String,
         path: String,
-        type: WorkspaceEntryType,
+        type: AnyCodable,
         size: Int?,
         updatedatms: Int?,
         createdatms: Int?)

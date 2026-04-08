@@ -105,7 +105,6 @@ export type WebLoginWaitParams = SchemaType<"WebLoginWaitParams">;
 export type AgentSummary = SchemaType<"AgentSummary">;
 export type AgentsFileEntry = SchemaType<"AgentsFileEntry">;
 export type WorkspaceEntry = SchemaType<"WorkspaceEntry">;
-export type WorkspaceEntryType = SchemaType<"WorkspaceEntryType">;
 export type AgentsCreateParams = SchemaType<"AgentsCreateParams">;
 export type AgentsCreateResult = SchemaType<"AgentsCreateResult">;
 export type AgentsUpdateParams = SchemaType<"AgentsUpdateParams">;
