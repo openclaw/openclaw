@@ -70,7 +70,14 @@ function isAwsCredentialsAvailable(): boolean {
     process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
     process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
     process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
-    process.env.ECS_CONTAINER_METADATA_URI,
+    process.env.ECS_CONTAINER_METADATA_URI ||
+    // EC2 instance profiles / IMDS: no env vars are set, but the SDK
+    // resolves credentials via the metadata endpoint. Trust the SDK
+    // credential chain — if none of the explicit signals above are
+    // present, assume an instance profile may be available and let
+    // the SDK attempt resolution at synthesis time.
+    process.env.AWS_EC2_METADATA_SERVICE_ENDPOINT ||
+    process.env.AWS_EC2_METADATA_DISABLED !== "true",
   );
 }
 
@@ -164,12 +171,18 @@ export function buildPollySpeechProvider(): SpeechProviderPlugin {
       const isVoiceNote = req.target === "voice-note";
       const outputFormat = isVoiceNote ? "ogg_vorbis" : "mp3";
 
+      // Polly generative/long-form engines support 24000 Hz;
+      // standard/neural only accept 8000, 16000, or 22050 Hz.
+      const effectiveSampleRate =
+        config.sampleRate ??
+        (engine === "generative" || engine === "long-form" ? "24000" : "22050");
+
       const audioBuffer = await pollySynthesize({
         text: req.text,
         voiceId: voice,
         engine,
         outputFormat,
-        sampleRate: config.sampleRate,
+        sampleRate: effectiveSampleRate,
         languageCode: config.languageCode,
         region: config.region,
         timeoutMs: req.timeoutMs,
@@ -180,7 +193,7 @@ export function buildPollySpeechProvider(): SpeechProviderPlugin {
         const opusBuffer = await transcodeToOpus(audioBuffer);
         return {
           audioBuffer: opusBuffer,
-          outputFormat: "ogg_vorbis",
+          outputFormat: "ogg_opus",
           fileExtension: ".ogg",
           voiceCompatible: true,
         };
