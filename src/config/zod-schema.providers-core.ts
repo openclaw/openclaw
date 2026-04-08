@@ -1540,6 +1540,7 @@ export const MSTeamsConfigSchema = z
     tenantId: z.string().optional(),
     webhook: z
       .object({
+        host: z.string().optional(),
         port: z.number().int().positive().optional(),
         path: z.string().optional(),
       })

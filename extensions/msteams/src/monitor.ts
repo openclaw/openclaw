@@ -211,6 +211,7 @@ export async function monitorMSTeamsProvider(
   };
 
   const port = msteamsCfg.webhook?.port ?? 3978;
+  const host = msteamsCfg.webhook?.host;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
   const MB = 1024 * 1024;
   const agentDefaults = cfg.agents?.defaults;
@@ -221,7 +222,7 @@ export async function monitorMSTeamsProvider(
   const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreFs();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreFs();
 
-  log.info(`starting provider (port ${port})`);
+  log.info(`starting provider (${host ?? "0.0.0.0"}:${port})`);
 
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
@@ -318,11 +319,11 @@ export async function monitorMSTeamsProvider(
   });
 
   // Start listening and fail fast if bind/listen fails.
-  const httpServer = expressApp.listen(port);
+  const httpServer = host ? expressApp.listen(port, host) : expressApp.listen(port);
   await new Promise<void>((resolve, reject) => {
     const onListening = () => {
       httpServer.off("error", onError);
-      log.info(`msteams provider started on port ${port}`);
+      log.info(`msteams provider started on ${host ?? "0.0.0.0"}:${port}`);
       resolve();
     };
     const onError = (err: unknown) => {

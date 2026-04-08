@@ -56,7 +56,7 @@ vi.mock("express", () => {
   const factory = () => ({
     use: vi.fn(),
     post: vi.fn(),
-    listen: vi.fn((_port: number) => {
+    listen: vi.fn((_port: number, _host?: string) => {
       const server = new EventEmitter() as FakeServer;
       server.setTimeout = vi.fn((_msecs: number) => server);
       server.requestTimeout = 0;
@@ -170,6 +170,24 @@ function createConfig(port: number): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createConfigWithHost(port: number, host: string): OpenClawConfig {
+  return {
+    channels: {
+      msteams: {
+        enabled: true,
+        appId: "app-id",
+        appPassword: "app-password", // pragma: allowlist secret
+        tenantId: "tenant-id",
+        webhook: {
+          host,
+          port,
+          path: "/api/messages",
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -215,6 +233,29 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     abort.abort();
     const result = await task;
     expect(result.app).not.toBeNull();
+    const app = expressControl.apps.at(-1);
+    expect(app?.listen).toHaveBeenCalledWith(0);
+    await expect(result.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("forwards webhook host to listen when configured", async () => {
+    const abort = new AbortController();
+    const stores = createStores();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfigWithHost(0, "127.0.0.1"),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: stores.conversationStore,
+      pollStore: stores.pollStore,
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const app = expressControl.apps.at(-1);
+    expect(app?.listen).toHaveBeenCalledWith(0, "127.0.0.1");
+
+    abort.abort();
+    const result = await task;
     await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
