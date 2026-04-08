@@ -71,7 +71,6 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -102,7 +101,6 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
-import kotlinx.coroutines.delay
 
 private enum class OnboardingStep(val index: Int, val label: String) {
   Welcome(1, "Welcome"),
@@ -133,8 +131,6 @@ private enum class PermissionToggle {
 private enum class SpecialAccessToggle {
   NotificationListener,
 }
-
-private const val PAIRING_AUTO_RETRY_MS = 6_000L
 
 private val onboardingBackgroundGradient: Brush
   @Composable get() = mobileBackgroundGradient
@@ -894,6 +890,12 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   }
                   val token = persistedGatewayToken.trim()
                   val password = gatewayPassword.trim()
+                  val bootstrapToken =
+                    if (gatewayInputMode == GatewayInputMode.SetupCode) {
+                      decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
+                    } else {
+                      null
+                    }
                   attemptedConnect = true
                   viewModel.setManualEnabled(true)
                   viewModel.setManualHost(parsed.config.host)
@@ -903,6 +905,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     viewModel.setGatewayBootstrapToken("")
                   } else {
                     viewModel.resetGatewaySetupAuth()
+                    viewModel.setGatewayBootstrapToken(bootstrapToken.orEmpty())
                   }
                   if (token.isNotEmpty()) {
                     viewModel.setGatewayToken(token)
@@ -913,12 +916,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   viewModel.connect(
                     GatewayEndpoint.manual(host = parsed.config.host, port = parsed.config.port),
                     token = token.ifEmpty { null },
-                    bootstrapToken =
-                      if (gatewayInputMode == GatewayInputMode.SetupCode) {
-                        decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
-                      } else {
-                        null
-                      },
+                    bootstrapToken = bootstrapToken,
                     password = password.ifEmpty { null },
                   )
                 },
@@ -1591,14 +1589,8 @@ private fun FinalStep(
   val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
   val pairingRequired = gatewayStatusLooksLikePairing(statusText)
 
-  LaunchedEffect(pairingRequired, attemptedConnect) {
-    if (!pairingRequired || !attemptedConnect) {
-      return@LaunchedEffect
-    }
-    while (true) {
-      delay(PAIRING_AUTO_RETRY_MS)
-      viewModel.refreshGatewayConnection()
-    }
+  PairingAutoRetryEffect(enabled = pairingRequired && attemptedConnect) {
+    viewModel.refreshGatewayConnection()
   }
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

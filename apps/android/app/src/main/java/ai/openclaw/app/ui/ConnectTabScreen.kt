@@ -56,14 +56,11 @@ import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.mobileCardSurface
-import kotlinx.coroutines.delay
 
 private enum class ConnectInputMode {
   SetupCode,
   Manual,
 }
-
-private const val PAIRING_AUTO_RETRY_MS = 6_000L
 
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
@@ -147,14 +144,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val pairingRequired = !isConnected && gatewayStatusLooksLikePairing(statusText)
   val statusLabel = gatewayStatusForDisplay(statusText)
 
-  LaunchedEffect(pairingRequired) {
-    if (!pairingRequired) {
-      return@LaunchedEffect
-    }
-    while (true) {
-      delay(PAIRING_AUTO_RETRY_MS)
-      viewModel.refreshGatewayConnection()
-    }
+  PairingAutoRetryEffect(enabled = pairingRequired) {
+    viewModel.refreshGatewayConnection()
   }
 
   Column(
