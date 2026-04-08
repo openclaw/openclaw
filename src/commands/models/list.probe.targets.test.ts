@@ -323,3 +323,102 @@ describe("buildProbeTargets reason codes", () => {
     });
   });
 });
+
+describe("buildProbeTargets probeAll flag", () => {
+  beforeEach(() => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+          expires: Number.MAX_SAFE_INTEGER,
+        },
+      },
+      order: {
+        anthropic: ["anthropic:default"],
+      },
+    };
+    mockAllowedProfiles = ["anthropic:default"];
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue([]);
+    resolveAuthProfileOrderMock.mockClear();
+    resolveAuthProfileEligibilityMock.mockClear();
+    resolveSecretRefStringMock.mockReset();
+    resolveSecretRefStringMock.mockResolvedValue("resolved-secret");
+    resolveAuthProfileEligibilityMock.mockReturnValue({
+      eligible: true,
+    } as unknown as { eligible: boolean; reasonCode: "invalid_expires" });
+  });
+
+  it("defaults to the first configured candidate when probeAll is omitted (backward compat)", async () => {
+    const plan = await buildProbeTargets({
+      cfg: {
+        auth: { order: { anthropic: ["anthropic:default"] } },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-haiku-4-5",
+      ],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    const anthropicTargets = plan.targets.filter((t) => t.provider === "anthropic");
+    expect(anthropicTargets.map((t) => t.model?.model)).toEqual(["claude-sonnet-4-6"]);
+  });
+
+  it("expands to every configured candidate when probeAll is true", async () => {
+    const plan = await buildProbeTargets({
+      cfg: {
+        auth: { order: { anthropic: ["anthropic:default"] } },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-haiku-4-5",
+      ],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+        probeAll: true,
+      },
+    });
+
+    const anthropicTargets = plan.targets.filter((t) => t.provider === "anthropic");
+    const anthropicModels = anthropicTargets
+      .map((t) => t.model?.model)
+      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
+    expect(anthropicModels).toEqual(["claude-haiku-4-5", "claude-opus-4-7", "claude-sonnet-4-6"]);
+  });
+
+  it("falls back to selectProbeModel when probeAll is true but no candidates are configured", async () => {
+    loadModelCatalogMock.mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ]);
+    const plan = await buildProbeTargets({
+      cfg: {
+        auth: { order: { anthropic: ["anthropic:default"] } },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+        probeAll: true,
+      },
+    });
+
+    const anthropicTargets = plan.targets.filter((t) => t.provider === "anthropic");
+    expect(anthropicTargets.map((t) => t.model?.model)).toEqual(["claude-sonnet-4-6"]);
+  });
+});
