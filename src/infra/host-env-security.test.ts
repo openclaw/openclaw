@@ -223,6 +223,40 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
   });
+
+  it("blocks newly added startup, orchestration, and resolver env keys", () => {
+    const keys = [
+      "VIMINIT",
+      "EXINIT",
+      "MYVIMRC",
+      "GVIMINIT",
+      "LUA_INIT",
+      "LUA_INIT_5_4",
+      "HOSTALIASES",
+      "CONFIG_SITE",
+      "CONFIG_SHELL",
+      "CMAKE_TOOLCHAIN_FILE",
+      "ANSIBLE_CONFIG",
+      "ANSIBLE_LIBRARY",
+      "ERL_AFLAGS",
+      "ERL_FLAGS",
+      "ERL_ZFLAGS",
+      "R_ENVIRON",
+      "R_PROFILE_USER",
+      "TF_CLI_CONFIG_FILE",
+      "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+      "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    ] as const;
+
+    for (const key of keys) {
+      expect(isDangerousHostEnvVarName(key)).toBe(true);
+      expect(isDangerousHostEnvVarName(key.toLowerCase())).toBe(true);
+    }
+
+    expect(isDangerousHostEnvVarName("ANSIBLE_REMOTE_TEMP")).toBe(true);
+    expect(isDangerousHostEnvVarName("R_LIBS_USER")).toBe(true);
+    expect(isDangerousHostEnvVarName("TF_PLUGIN_CACHE_DIR")).toBe(true);
+  });
 });
 
 describe("sanitizeHostExecEnv", () => {
@@ -470,6 +504,66 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
   });
 
+  it("drops newly blocked inherited startup and resolver vars", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        VIMINIT: ":!touch /tmp/pwned",
+        EXINIT: "silent !touch /tmp/pwned",
+        LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
+        HOSTALIASES: "/tmp/evil-hostaliases",
+        CONFIG_SITE: "/tmp/evil-config-site",
+        ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        R_PROFILE_USER: "/tmp/evil-Rprofile",
+        ERL_AFLAGS: "-eval 'os:cmd(\"id\")'",
+        TF_CLI_CONFIG_FILE: "/tmp/evil-terraformrc",
+        SAFE: "1",
+      },
+    });
+
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(env.VIMINIT).toBeUndefined();
+    expect(env.EXINIT).toBeUndefined();
+    expect(env.LUA_INIT_5_4).toBeUndefined();
+    expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.CONFIG_SITE).toBeUndefined();
+    expect(env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(env.R_PROFILE_USER).toBeUndefined();
+    expect(env.ERL_AFLAGS).toBeUndefined();
+    expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
+    expect(env.SAFE).toBe("1");
+  });
+
+  it("drops newly blocked override credential and startup vars", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        VIMINIT: ":!touch /tmp/pwned",
+        HOSTALIASES: "/tmp/evil-hostaliases",
+        GITHUB_TOKEN: "ghp-test",
+        DATABASE_URL: "postgres://attacker",
+        NPM_TOKEN: "npm-test",
+        SSH_AUTH_SOCK: "/tmp/evil-agent.sock",
+        CFLAGS: "-include /tmp/pwn.h",
+        SAFE: "ok",
+      },
+    });
+
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(env.VIMINIT).toBeUndefined();
+    expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.NPM_TOKEN).toBeUndefined();
+    expect(env.SSH_AUTH_SOCK).toBeUndefined();
+    expect(env.CFLAGS).toBeUndefined();
+    expect(env.SAFE).toBe("ok");
+  });
+
   it("keeps trusted inherited proxy and TLS env while blocking overrides", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
@@ -667,6 +761,36 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("yarn_rc_filename")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
+  });
+
+  it("blocks newly added credential and build influence keys", () => {
+    const keys = [
+      "GITHUB_TOKEN",
+      "GH_TOKEN",
+      "GITLAB_TOKEN",
+      "NPM_TOKEN",
+      "NODE_AUTH_TOKEN",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AZURE_CLIENT_SECRET",
+      "DATABASE_URL",
+      "REDIS_URL",
+      "MONGODB_URI",
+      "AMQP_URL",
+      "SSH_AUTH_SOCK",
+      "CFLAGS",
+      "CXXFLAGS",
+      "CPPFLAGS",
+      "LDFLAGS",
+      "YARN_ENABLE_SCRIPTS",
+      "DOCKER_CONFIG",
+      "COMPOSE_FILE",
+    ] as const;
+
+    for (const key of keys) {
+      expect(isDangerousHostEnvOverrideVarName(key)).toBe(true);
+      expect(isDangerousHostEnvOverrideVarName(key.toLowerCase())).toBe(true);
+    }
   });
 });
 
@@ -884,6 +1008,46 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.RUSTFLAGS).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
     expect(result.env.YARN_RC_FILENAME).toBeUndefined();
+  });
+
+  it("reports newly blocked keys from everywhere, override, and prefix buckets", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        VIMINIT: ":!touch /tmp/pwned",
+        LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
+        HOSTALIASES: "/tmp/evil-hostaliases",
+        ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        GITHUB_TOKEN: "ghp-test",
+        DATABASE_URL: "postgres://attacker",
+        R_PROFILE_USER: "/tmp/evil-Rprofile",
+        TF_LOG: "TRACE",
+        SAFE_KEY: "ok",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "ANSIBLE_CONFIG",
+      "DATABASE_URL",
+      "GITHUB_TOKEN",
+      "HOSTALIASES",
+      "LUA_INIT_5_4",
+      "R_PROFILE_USER",
+      "TF_LOG",
+      "VIMINIT",
+    ]);
+    expect(result.rejectedOverrideInvalidKeys).toEqual([]);
+    expect(result.env.SAFE_KEY).toBe("ok");
+    expect(result.env.VIMINIT).toBeUndefined();
+    expect(result.env.LUA_INIT_5_4).toBeUndefined();
+    expect(result.env.HOSTALIASES).toBeUndefined();
+    expect(result.env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(result.env.GITHUB_TOKEN).toBeUndefined();
+    expect(result.env.DATABASE_URL).toBeUndefined();
+    expect(result.env.R_PROFILE_USER).toBeUndefined();
+    expect(result.env.TF_LOG).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
