@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export DBUS_SESSION_BUS_ADDRESS=/dev/null
 
 export DBUS_SESSION_BUS_ADDRESS=/dev/null
 
@@ -67,7 +68,6 @@ CHROME_ARGS+=(
   # Restored: prevents Chromium from forking a zygote subprocess which hangs in restricted namespaces
   "--no-zygote"
   "--metrics-recording-only"
-  # Fix: Bypass system keyring to prevent silent deadlocks in headless docker
   "--password-store=basic"
   "--use-mock-keychain"
 )
