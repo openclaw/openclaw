@@ -14832,6 +14832,12 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             type: "string",
           },
         },
+        denyFrom: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
         defaultTo: {
           type: "string",
         },
@@ -15080,6 +15086,12 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "boolean",
               },
               allowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              denyFrom: {
                 type: "array",
                 items: {
                   type: "string",
