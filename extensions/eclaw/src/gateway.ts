@@ -284,9 +284,11 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
     throw err;
   }
 
-  return waitUntilAbort(abortSignal, () => {
+  return waitUntilAbort(abortSignal, async () => {
     log?.info?.(`Stopping E-Claw account ${accountId}`);
-    void client.unregisterCallback();
+    await client.unregisterCallback().catch(() => {
+      /* best-effort — don't block stop on network failure */
+    });
     unregisterEclawWebhookToken(callbackToken);
     releaseRoute();
     clearEclawClient(accountId);

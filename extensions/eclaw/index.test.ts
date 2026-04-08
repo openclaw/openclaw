@@ -41,6 +41,9 @@
  *   - `eclaw state cleanup on shared-route failure` — no leak of
  *     webhook-token / client registry when acquireSharedEclawHttpRoute
  *     throws (round 7, codex gateway.ts P2)
+ *   - `eclaw account stop awaits unregisterCallback` — onAbort callback
+ *     is async so the remote deregister completes before stop resolves
+ *     (round 10, codex gateway.ts P1)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1091,7 +1094,6 @@ describe("eclaw webhook handler uses live config snapshot (round 9)", () => {
       setHeader: () => {},
       end: (body: unknown) => { chunks.push(body); },
     };
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     await capturedHandler!(mockReq, mockRes);
 
     // The handler must have forwarded the LIVE snapshot config, not the startup snapshot
@@ -1152,7 +1154,6 @@ describe("eclaw webhook handler uses live config snapshot (round 9)", () => {
 
     const mockReq = { method: "POST", headers: { authorization: "Bearer token" } };
     const mockRes = { statusCode: 0, setHeader: () => {}, end: () => {} };
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     await capturedHandler!(mockReq, mockRes);
 
     // When snapshot is null, must fall back to startup cfg
@@ -1161,5 +1162,82 @@ describe("eclaw webhook handler uses live config snapshot (round 9)", () => {
 
     abortCtrl.abort();
     await startPromise.catch(() => { /* aborted */ });
+  });
+});
+
+describe("eclaw account stop awaits unregisterCallback (round 10)", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    const mod = await import("./src/gateway.js");
+    mod.__resetEclawSharedRouteForTests();
+    vi.doUnmock("openclaw/plugin-sdk/channel-lifecycle");
+    vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
+    vi.restoreAllMocks();
+  });
+
+  it("awaits unregisterCallback during graceful account stop so the remote callback is fully torn down", async () => {
+    // Track whether unregisterCallback resolved before we observed it.
+    // Must use doMock on client.js so the mock is in effect for the
+    // re-imported gateway module after vi.resetModules().
+    let unregisterResolved = false;
+    vi.doMock("./src/client.js", () => ({
+      EclawClient: class MockEclawClient {
+        async registerCallback() {
+          return { success: true, deviceId: "dev-stop", entities: [] };
+        }
+        async bindEntity() {
+          return { entityId: 1, publicCode: "PC1" };
+        }
+        async unregisterCallback() {
+          unregisterResolved = true;
+        }
+      },
+    }));
+
+    // Capture onAbort so we can trigger it manually
+    let capturedOnAbort: (() => void | Promise<void>) | undefined;
+    vi.doMock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+      waitUntilAbort: (
+        _signal: AbortSignal,
+        onAbort?: () => void | Promise<void>,
+      ) => {
+        capturedOnAbort = onAbort;
+        // Never resolves on its own — we call onAbort manually
+        return new Promise<void>(() => {});
+      },
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/webhook-ingress", () => ({
+      readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+      registerPluginHttpRoute: () => () => {},
+    }));
+
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "env-key-stop-test";
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+
+    const abortCtrl = new AbortController();
+    // Start without awaiting — account stays alive until onAbort fires
+    void startEclawAccount({
+      cfg: {} as never,
+      accountId: "default",
+      abortSignal: abortCtrl.signal,
+    });
+
+    // Poll until waitUntilAbort has been called and onAbort captured
+    for (let i = 0; i < 50 && capturedOnAbort === undefined; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(capturedOnAbort).toBeDefined();
+
+    // Invoke the cleanup and await it — must not resolve until unregisterCallback finishes
+    await capturedOnAbort!();
+
+    // The critical assertion: unregisterCallback must have been awaited
+    // (resolved) before onAbort's returned Promise settled.
+    expect(unregisterResolved).toBe(true);
   });
 });
