@@ -307,6 +307,20 @@ describe("loadGatewayPlugins", () => {
     expect(runtimeRegistryModule.getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 
+  test("pins the initial startup hook registry against later active-registry churn", async () => {
+    const startupRegistry = createRegistry([]);
+    loadOpenClawPlugins.mockReturnValue(startupRegistry);
+
+    loadGatewayStartupPluginsForTest({
+      pluginIds: ["slack"],
+    });
+
+    const replacementRegistry = createRegistry([]);
+    runtimeRegistryModule.setActivePluginRegistry(replacementRegistry);
+
+    expect(runtimeRegistryModule.getActivePluginHookRegistry()).toBe(startupRegistry);
+  });
+
   test("keeps the raw activation source when a precomputed startup scope is reused", async () => {
     const rawConfig = { channels: { slack: { botToken: "x" } } };
     const resolvedConfig = {

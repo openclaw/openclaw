@@ -57,7 +57,6 @@ import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRuntimeSubagentMode,
-  pinActivePluginHookRegistry,
   recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -1051,15 +1050,10 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
-  if (runtimeSubagentMode === "gateway-bindable") {
-    // Gateway-bindable loads own the hook runner surface that live gateway traffic
-    // depends on, so pin that surface before later default-mode loads can refresh
-    // the broader active registry for unrelated runtime helpers.
-    pinActivePluginHookRegistry(registry);
-  }
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
   // The global hook runner follows the dedicated hook registry surface so gateway
-  // startup can pin it across later default-mode plugin loads.
+  // startup can pin it across later default-mode plugin loads without making every
+  // gateway-bindable activation sticky for unrelated runtime helpers.
   const hookRegistry = getActivePluginHookRegistry() ?? registry;
   initializeGlobalHookRunner(hookRegistry);
 }
