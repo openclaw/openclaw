@@ -204,10 +204,57 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       // Track bus handle for metrics callback
       let busHandle: NostrBusHandle | null = null;
 
+      // Security fix (GHSA-65h8-27jh-q8wv): Check sender policy BEFORE expensive crypto
+      // This prevents unauthenticated crypto work attacks from non-allowed senders
+      const shouldAllowSender = async (senderPubkey: string): Promise<boolean> => {
+        const dmPolicy = account.config.dmPolicy ?? "pairing";
+        const allowFrom = account.config.allowFrom ?? [];
+
+        // "open" policy allows all senders
+        if (dmPolicy === "open") {
+          return true;
+        }
+
+        // "disabled" policy blocks all senders
+        if (dmPolicy === "disabled") {
+          ctx.log?.debug?.(`[${account.accountId}] DM policy is disabled, rejecting message from ${senderPubkey}`);
+          return false;
+        }
+
+        // "pairing" policy: treat as allowlist (pairing adds entries to allowFrom)
+        // "allowlist" policy: only allowlisted senders
+        if (dmPolicy === "pairing" || dmPolicy === "allowlist") {
+          // Normalize allowFrom entries to hex pubkeys
+          const normalizedAllowFrom = allowFrom.map((entry) => {
+            try {
+              return normalizePubkey(String(entry).replace(/^nostr:/i, "").trim());
+            } catch {
+              return String(entry).toLowerCase();
+            }
+          });
+
+          const normalizedSender = normalizePubkey(senderPubkey);
+
+          // Allow if sender is in allowFrom list or allowFrom contains "*"
+          if (normalizedAllowFrom.includes("*") || normalizedAllowFrom.includes(normalizedSender)) {
+            return true;
+          }
+
+          ctx.log?.debug?.(
+            `[${account.accountId}] Sender ${senderPubkey} not in allowlist (policy: ${dmPolicy})`,
+          );
+          return false;
+        }
+
+        // Default: allow (for backward compatibility with undefined policy)
+        return true;
+      };
+
       const bus = await startNostrBus({
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
+        shouldAllowSender,
         onMessage: async (senderPubkey, text, reply) => {
           ctx.log?.debug?.(
             `[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`,

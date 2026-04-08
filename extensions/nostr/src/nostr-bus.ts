@@ -73,6 +73,8 @@ export interface NostrBusOptions {
   maxSeenEntries?: number;
   /** Seen tracker TTL in ms (default: 1 hour) */
   seenTtlMs?: number;
+  /** Called before decryption to verify sender is authorized (security: GHSA-65h8-27jh-q8wv) */
+  shouldAllowSender?: (senderPubkey: string) => Promise<boolean> | boolean;
 }
 
 export interface NostrBusHandle {
@@ -328,6 +330,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     onMetric,
     maxSeenEntries = 100_000,
     seenTtlMs = 60 * 60 * 1000,
+    shouldAllowSender,
   } = options;
 
   const sk = validatePrivateKey(privateKey);
@@ -440,6 +443,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         metrics.emit("event.rejected.invalid_signature");
         onError?.(new Error("Invalid signature"), `event ${event.id}`);
         return;
+      }
+
+      // Security fix (GHSA-65h8-27jh-q8wv): Check sender policy BEFORE expensive crypto
+      // This prevents unauthenticated crypto work attacks from non-allowed senders
+      if (shouldAllowSender) {
+        const isAllowed = await shouldAllowSender(event.pubkey);
+        if (!isAllowed) {
+          metrics.emit("event.rejected.sender_not_allowed");
+          return;
+        }
       }
 
       // Mark seen AFTER verify (don't cache invalid IDs)
