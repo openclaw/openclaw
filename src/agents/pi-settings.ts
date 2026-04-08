@@ -34,8 +34,12 @@ export function ensurePiCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
+export function resolveCompactionReserveTokensFloor(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): number {
+  const compaction = resolveEffectiveCompaction(cfg, agentId);
+  const raw = compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
   }
@@ -78,7 +82,7 @@ export function applyPiCompactionSettingsFromConfig(params: {
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg, params.agentId);
 
   const targetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,
