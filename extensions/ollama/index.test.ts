@@ -18,14 +18,10 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
   })),
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
-<<<<<<< HEAD
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
-const innerStreamFnMock = vi.hoisted(() => vi.fn(() => ({}) as never));
-=======
 const innerStreamFnMock = vi.hoisted(() =>
   vi.fn((_m: unknown, _ctx: unknown, _opts?: { apiKey?: string }) => ({}) as never),
 );
->>>>>>> dd707789e (fix: skip unresolved env-var markers in createStreamFn key injection)
 const resolveEnvApiKeyMock = vi.hoisted(() => vi.fn(() => null as { apiKey: string } | null));
 
 vi.mock("./api.js", () => ({
@@ -549,11 +545,9 @@ describe("ollama plugin", () => {
   });
 
   describe("resolveSyntheticAuth", () => {
-    it("returns synthetic auth for HTTP endpoints", () => {
+    it("returns synthetic auth for local/private HTTP endpoints", () => {
       const provider = registerProvider();
       for (const baseUrl of [
-        "http://localhost:11434",
-        "http://127.0.0.1:11434",
         "http://192.168.4.50:11434",
         "http://10.0.0.5:11434",
         "http://gpu-node-server:11434",
@@ -561,6 +555,18 @@ describe("ollama plugin", () => {
       ]) {
         const result = provider.resolveSyntheticAuth?.({
           providerConfig: { baseUrl, api: "ollama", models: [] },
+        });
+        expect(result).toEqual(
+          expect.objectContaining({ apiKey: "ollama-local", mode: "api-key" }),
+        );
+      }
+    });
+
+    it("returns synthetic auth for localhost HTTP endpoints when explicitly configured", () => {
+      const provider = registerProvider();
+      for (const baseUrl of ["http://localhost:11434", "http://127.0.0.1:11434"]) {
+        const result = provider.resolveSyntheticAuth?.({
+          providerConfig: { baseUrl, api: "ollama", models: [{ id: "test" }] },
         });
         expect(result).toEqual(
           expect.objectContaining({ apiKey: "ollama-local", mode: "api-key" }),
