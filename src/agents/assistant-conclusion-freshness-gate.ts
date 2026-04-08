@@ -98,9 +98,39 @@ function getMessageTimestamp(message: AgentMessage): number | undefined {
 type AssistantToolCallBlock = {
   type?: unknown;
   id?: unknown;
+  toolCallId?: unknown;
+  toolUseId?: unknown;
+  call_id?: unknown;
   name?: unknown;
+  toolName?: unknown;
+  functionName?: unknown;
   arguments?: unknown;
+  input?: unknown;
 };
+
+function extractHistoricalToolCallData(
+  block: AssistantToolCallBlock,
+): { id?: string; name?: string; args: unknown } | null {
+  const type = trimToDefinedString(block?.type);
+  if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") {
+    return null;
+  }
+  const id =
+    trimToDefinedString(block.id) ??
+    trimToDefinedString(block.toolCallId) ??
+    trimToDefinedString(block.toolUseId) ??
+    trimToDefinedString(block.call_id);
+  const name =
+    trimToDefinedString(block.name) ??
+    trimToDefinedString(block.toolName) ??
+    trimToDefinedString(block.functionName);
+  const args = block.arguments ?? block.input;
+  return { id, name, args };
+}
+
+function isErroredToolResult(message: AgentMessage): boolean {
+  return (message as { isError?: unknown }).isError === true;
+}
 
 function inferDiagnosticTypeFromHistoricalToolCall(params: {
   messages: AgentMessage[];
@@ -109,9 +139,11 @@ function inferDiagnosticTypeFromHistoricalToolCall(params: {
 }): string | undefined {
   const toolResult = params.toolResult as {
     toolCallId?: unknown;
+    toolUseId?: unknown;
     toolName?: unknown;
   };
-  const toolCallId = trimToDefinedString(toolResult.toolCallId);
+  const toolCallId =
+    trimToDefinedString(toolResult.toolCallId) ?? trimToDefinedString(toolResult.toolUseId);
   const toolName = trimToDefinedString(toolResult.toolName)?.toLowerCase() ?? "unknown";
   if (!toolCallId) {
     return undefined;
@@ -126,15 +158,16 @@ function inferDiagnosticTypeFromHistoricalToolCall(params: {
       continue;
     }
     for (const block of message.content as AssistantToolCallBlock[]) {
-      if (block?.type !== "toolCall") {
+      const normalized = extractHistoricalToolCallData(block);
+      if (!normalized) {
         continue;
       }
-      if (trimToDefinedString(block.id) !== toolCallId) {
+      if (normalized.id !== toolCallId) {
         continue;
       }
       const inferred = detectToolResultReplayPolicyMeta({
-        toolName: trimToDefinedString(block.name) ?? toolName,
-        args: block.arguments,
+        toolName: normalized.name ?? toolName,
+        args: normalized.args,
         taggedAt: getMessageTimestamp(params.toolResult) ?? Date.now(),
       });
       return inferred?.diagnosticType;
@@ -189,6 +222,9 @@ export function resolveAssistantConclusionFreshnessGate(params: {
     }
     sawMatchingEvidence = true;
     if (isReplayOmitted(message)) {
+      continue;
+    }
+    if (isErroredToolResult(message)) {
       continue;
     }
     const replayMeta = getToolResultReplayMetadata(message);

@@ -439,6 +439,113 @@ describe("resolveAssistantConclusionFreshnessGate", () => {
     });
   });
 
+  it("does not treat errored tool results as fresh evidence", () => {
+    const now = 6_100_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What plugins are installed right now?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_error_plugins",
+          toolName: "exec",
+          isError: true,
+          content: "command failed",
+          timestamp: now - 2_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.plugins_list",
+            taggedAt: now - 2_000,
+            sourceTool: "exec",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "stale",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("recognizes toolUse blocks with input in historical fallback inference", () => {
+    const now = 6_200_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot is enabled in plugins.entries, right?",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolUse",
+              id: "call_tool_use_1",
+              name: "gateway",
+              input: {
+                action: "config.get",
+                path: "plugins.entries",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolUseId: "call_tool_use_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
+  it("recognizes functionCall blocks in historical fallback inference", () => {
+    const now = 6_300_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "Does the config currently contain this key?",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "functionCall",
+              id: "call_function_1",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "plugins.installs",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_function_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
   it("treats tagged gateway config.get evidence as fresh for config questions", () => {
     const now = 4_000_000;
     const result = resolveAssistantConclusionFreshnessGate({
