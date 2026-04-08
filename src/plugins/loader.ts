@@ -42,6 +42,7 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
@@ -148,13 +149,9 @@ export class PluginLoadReentryError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
-  memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
-  memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
-  memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
-  memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
-  memoryRuntime: ReturnType<typeof getMemoryRuntime>;
+  memoryState: Parameters<typeof restoreMemoryPluginState>[0];
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -295,6 +292,17 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
     }
     registryCache.delete(oldestKey);
   }
+}
+
+function snapshotMemoryPluginState(): Parameters<typeof restoreMemoryPluginState>[0] {
+  return {
+    capability: getMemoryCapabilityRegistration(),
+    corpusSupplements: listMemoryCorpusSupplements(),
+    promptBuilder: getMemoryPromptSectionBuilder(),
+    promptSupplements: listMemoryPromptSupplements(),
+    flushPlanResolver: getMemoryFlushPlanResolver(),
+    runtime: getMemoryRuntime(),
+  };
 }
 
 function buildCacheKey(params: {
@@ -1084,13 +1092,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       restoreRegisteredCompactionProviders(cached.compactionProviders);
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
-      restoreMemoryPluginState({
-        corpusSupplements: cached.memoryCorpusSupplements,
-        promptBuilder: cached.memoryPromptBuilder,
-        promptSupplements: cached.memoryPromptSupplements,
-        flushPlanResolver: cached.memoryFlushPlanResolver,
-        runtime: cached.memoryRuntime,
-      });
+      restoreMemoryPluginState(cached.memoryState);
       if (shouldActivate) {
         activatePluginRegistry(
           cached.registry,
@@ -1678,11 +1680,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
-      const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
-      const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
-      const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
-      const previousMemoryPromptSupplements = listMemoryPromptSupplements();
-      const previousMemoryRuntime = getMemoryRuntime();
+      const previousMemoryState = snapshotMemoryPluginState();
 
       try {
         const result = register(api);
@@ -1698,26 +1696,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         if (!shouldActivate) {
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
-          restoreMemoryPluginState({
-            corpusSupplements: previousMemoryCorpusSupplements,
-            promptBuilder: previousMemoryPromptBuilder,
-            promptSupplements: previousMemoryPromptSupplements,
-            flushPlanResolver: previousMemoryFlushPlanResolver,
-            runtime: previousMemoryRuntime,
-          });
+          restoreMemoryPluginState(previousMemoryState);
         }
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
       } catch (err) {
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
-        restoreMemoryPluginState({
-          corpusSupplements: previousMemoryCorpusSupplements,
-          promptBuilder: previousMemoryPromptBuilder,
-          promptSupplements: previousMemoryPromptSupplements,
-          flushPlanResolver: previousMemoryFlushPlanResolver,
-          runtime: previousMemoryRuntime,
-        });
+        restoreMemoryPluginState(previousMemoryState);
         recordPluginError({
           logger,
           registry,
@@ -1766,14 +1752,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (cacheEnabled) {
       setCachedPluginRegistry(cacheKey, {
-        memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,
         compactionProviders: listRegisteredCompactionProviders(),
         memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
-        memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
-        memoryPromptBuilder: getMemoryPromptSectionBuilder(),
-        memoryPromptSupplements: listMemoryPromptSupplements(),
-        memoryRuntime: getMemoryRuntime(),
+        memoryState: snapshotMemoryPluginState(),
       });
     }
     if (shouldActivate) {
