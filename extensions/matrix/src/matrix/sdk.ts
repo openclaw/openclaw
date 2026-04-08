@@ -44,6 +44,11 @@ import type {
   MessageEventContent,
 } from "./sdk/types.js";
 import type { MatrixVerificationSummary } from "./sdk/verification-manager.js";
+import {
+  isMatrixReadySyncState,
+  isMatrixTerminalSyncState,
+  type MatrixSyncState,
+} from "./sync-state.js";
 
 export { ConsoleLogger, LogService };
 export type {
@@ -221,6 +226,7 @@ export class MatrixClient {
   private readonly autoBootstrapCrypto: boolean;
   private stopPersistPromise: Promise<void> | null = null;
   private verificationSummaryListenerBound = false;
+  private currentSyncState: MatrixSyncState | null = null;
 
   readonly dms = {
     update: async (): Promise<boolean> => {
@@ -371,6 +377,76 @@ export class MatrixClient {
     await this.startSyncSession({ bootstrapCrypto: true });
   }
 
+  private async waitForInitialSyncReady(timeoutMs = 30_000): Promise<void> {
+    if (isMatrixReadySyncState(this.currentSyncState)) {
+      return;
+    }
+    if (isMatrixTerminalSyncState(this.currentSyncState)) {
+      throw new Error(`Matrix sync entered ${this.currentSyncState} during startup`);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        this.off("sync.state", onSyncState);
+        this.off("sync.unexpected_error", onUnexpectedError);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+      };
+
+      const settleResolve = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const settleReject = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
+        if (isMatrixReadySyncState(state)) {
+          settleResolve();
+          return;
+        }
+        if (isMatrixTerminalSyncState(state)) {
+          settleReject(
+            new Error(
+              error instanceof Error && error.message
+                ? error.message
+                : `Matrix sync entered ${state} during startup`,
+            ),
+          );
+        }
+      };
+
+      const onUnexpectedError = (error: Error) => {
+        settleReject(error);
+      };
+
+      this.on("sync.state", onSyncState);
+      this.on("sync.unexpected_error", onUnexpectedError);
+      timeoutId = setTimeout(() => {
+        settleReject(
+          new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`),
+        );
+      }, timeoutMs);
+      timeoutId.unref?.();
+    });
+  }
+
   private async startSyncSession(opts: { bootstrapCrypto: boolean }): Promise<void> {
     if (this.started) {
       return;
@@ -383,6 +459,7 @@ export class MatrixClient {
     await this.client.startClient({
       initialSyncLimit: this.initialSyncLimit,
     });
+    await this.waitForInitialSyncReady();
     if (opts.bootstrapCrypto && this.autoBootstrapCrypto) {
       await this.bootstrapCryptoIfNeeded();
     }
@@ -1586,6 +1663,20 @@ export class MatrixClient {
     // Some SDK invite transitions are surfaced as room lifecycle events instead of raw timeline events.
     this.client.on(ClientEvent.Room, (room) => {
       this.emitMembershipForRoom(room);
+    });
+    this.client.on(
+      ClientEvent.Sync,
+      (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
+        this.currentSyncState = state;
+        const error =
+          data && typeof data === "object" && "error" in data
+            ? (data as { error?: unknown }).error
+            : undefined;
+        this.emitter.emit("sync.state", state, prevState, error);
+      },
+    );
+    this.client.on(ClientEvent.SyncUnexpectedError, (error: Error) => {
+      this.emitter.emit("sync.unexpected_error", error);
     });
   }
 

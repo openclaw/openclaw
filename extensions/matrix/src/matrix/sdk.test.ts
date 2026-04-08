@@ -114,7 +114,11 @@ type MatrixJsClientStub = EventEmitter & {
 
 function createMatrixJsClientStub(): MatrixJsClientStub {
   const client = new EventEmitter() as MatrixJsClientStub;
-  client.startClient = vi.fn(async () => {});
+  client.startClient = vi.fn(async () => {
+    queueMicrotask(() => {
+      client.emit("sync", "PREPARED", null, undefined);
+    });
+  });
   client.stopClient = vi.fn();
   client.initRustCrypto = vi.fn(async () => {});
   client.getUserId = vi.fn(() => "@bot:example.org");
@@ -182,7 +186,12 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
   );
   return {
     ...actual,
-    ClientEvent: { Event: "event", Room: "Room" },
+    ClientEvent: {
+      Event: "event",
+      Room: "Room",
+      Sync: "sync",
+      SyncUnexpectedError: "sync.unexpectedError",
+    },
     MatrixEventEvent: { Decrypted: "decrypted" },
     createClient: vi.fn((opts: Record<string, unknown>) => {
       lastCreateClientOpts = opts;
@@ -945,6 +954,62 @@ describe("MatrixClient event bridge", () => {
     });
 
     expect(invites).toEqual(["!invite:example.org"]);
+  });
+
+  it("waits for a ready sync state before resolving startup", async () => {
+    let releaseSyncReady: (() => void) | undefined;
+    matrixJsClient.startClient = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        releaseSyncReady = () => {
+          matrixJsClient.emit("sync", "PREPARED", null, undefined);
+          resolve();
+        };
+      });
+    });
+
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    let resolved = false;
+    const startPromise = client.start().then(() => {
+      resolved = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(releaseSyncReady).toEqual(expect.any(Function));
+    });
+    expect(resolved).toBe(false);
+
+    releaseSyncReady?.();
+    await startPromise;
+
+    expect(resolved).toBe(true);
+  });
+
+  it("rejects startup when sync reports an unexpected error before ready", async () => {
+    matrixJsClient.startClient = vi.fn(async () => {
+      const timer = setTimeout(() => {
+        matrixJsClient.emit("sync.unexpectedError", new Error("sync exploded"));
+      }, 0);
+      timer.unref?.();
+    });
+
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await expect(client.start()).rejects.toThrow("sync exploded");
+  });
+
+  it("times out startup when no ready sync state arrives", async () => {
+    vi.useFakeTimers();
+    matrixJsClient.startClient = vi.fn(async () => {});
+
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    const startPromise = client.start();
+    const startExpectation = expect(startPromise).rejects.toThrow(
+      "Matrix client did not reach a ready sync state within 30000ms",
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await startExpectation;
   });
 
   it("replays outstanding invite rooms at startup", async () => {

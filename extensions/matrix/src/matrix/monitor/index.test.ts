@@ -12,6 +12,34 @@ type DirectRoomTrackerOptions = {
 };
 
 const hoisted = vi.hoisted(() => {
+  const createEmitter = () => {
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    return {
+      on(event: string, listener: (...args: unknown[]) => void) {
+        let bucket = listeners.get(event);
+        if (!bucket) {
+          bucket = new Set();
+          listeners.set(event, bucket);
+        }
+        bucket.add(listener);
+        return this;
+      },
+      off(event: string, listener: (...args: unknown[]) => void) {
+        listeners.get(event)?.delete(listener);
+        return this;
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const listener of listeners.get(event) ?? []) {
+          listener(...args);
+        }
+        return true;
+      },
+      removeAllListeners() {
+        listeners.clear();
+        return this;
+      },
+    };
+  };
   const callOrder: string[] = [];
   const state = {
     startClientError: null as Error | null,
@@ -26,12 +54,12 @@ const hoisted = vi.hoisted(() => {
     flush: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
   };
-  const client = {
+  const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
     stopSyncWithoutPersist: vi.fn(),
     drainPendingDecryptions: vi.fn(async () => undefined),
-  };
+  });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
   const createDirectRoomTracker = vi.fn((_client: unknown, _opts?: DirectRoomTrackerOptions) => ({
     isDirectMessage: vi.fn(async () => false),
@@ -58,6 +86,7 @@ const hoisted = vi.hoisted(() => {
   const setActiveMatrixClient = vi.fn();
   const setMatrixRuntime = vi.fn();
   const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
+  const setStatus = vi.fn();
   return {
     backfillMatrixAuthDeviceIdAfterStartup,
     callOrder,
@@ -74,6 +103,7 @@ const hoisted = vi.hoisted(() => {
     resolveTextChunkLimit,
     setActiveMatrixClient,
     setMatrixRuntime,
+    setStatus,
     state,
     stopThreadBindingManager,
   };
@@ -300,9 +330,17 @@ vi.mock("./direct.js", () => ({
 
 vi.mock("./events.js", () => ({
   registerMatrixMonitorEvents: vi.fn(
-    (params: { onRoomMessage: (roomId: string, event: unknown) => Promise<void> }) => {
+    (params: {
+      onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
+      runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
+    }) => {
       hoisted.callOrder.push("register-events");
-      hoisted.registeredOnRoomMessage = params.onRoomMessage;
+      hoisted.registeredOnRoomMessage = (roomId: string, event: unknown) =>
+        params.runDetachedTask
+          ? params.runDetachedTask("test room message", async () => {
+              await params.onRoomMessage(roomId, event);
+            })
+          : params.onRoomMessage(roomId, event);
     },
   ),
 }));
@@ -365,6 +403,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.registeredOnRoomMessage = null;
     hoisted.setActiveMatrixClient.mockReset();
     hoisted.stopThreadBindingManager.mockReset();
+    hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
@@ -375,6 +414,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
+    hoisted.setStatus.mockReset();
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
 
@@ -388,6 +428,112 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
     expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
     expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();
+  });
+
+  it("publishes disconnected startup status and connected sync status without failing the monitor", async () => {
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({
+      abortSignal: abortController.signal,
+      setStatus: hoisted.setStatus,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+    });
+
+    expect(hoisted.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        baseUrl: "https://matrix.example.org",
+        connected: false,
+        healthState: "starting",
+      }),
+    );
+
+    hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
+
+    await vi.waitFor(() => {
+      expect(hoisted.setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: "default",
+          connected: true,
+          healthState: "healthy",
+          lastError: null,
+        }),
+      );
+    });
+
+    abortController.abort();
+    await expect(monitorPromise).resolves.toBeUndefined();
+  });
+
+  it("contains room-message handler rejections inside monitor task tracking", async () => {
+    const abortController = new AbortController();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+
+    hoisted.createMatrixRoomMessageHandler.mockReturnValue(
+      vi.fn(async () => {
+        throw new Error("room handler exploded");
+      }),
+    );
+
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+      await vi.waitFor(() => {
+        expect(hoisted.callOrder).toContain("start-client");
+      });
+
+      const onRoomMessage = hoisted.registeredOnRoomMessage;
+      if (!onRoomMessage) {
+        throw new Error("expected room message handler to be registered");
+      }
+
+      await onRoomMessage("!room:example.org", { event_id: "$event" });
+      await Promise.resolve();
+
+      expect(unhandled).toHaveLength(0);
+      expect(hoisted.logger.warn).toHaveBeenCalledWith(
+        "matrix background task failed",
+        expect.objectContaining({
+          task: "test room message",
+          error: "Error: room handler exploded",
+        }),
+      );
+
+      abortController.abort();
+      await monitorPromise;
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("fails the channel task when Matrix sync emits an unexpected fatal error", async () => {
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({
+      abortSignal: abortController.signal,
+      setStatus: hoisted.setStatus,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+    });
+
+    hoisted.client.emit("sync.unexpected_error", new Error("sync exploded"));
+
+    await expect(monitorPromise).rejects.toThrow("sync exploded");
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "persist");
+    expect(hoisted.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        connected: false,
+        healthState: "error",
+        lastError: "sync exploded",
+      }),
+    );
   });
 
   it("registers Matrix thread bindings before starting the client", async () => {
