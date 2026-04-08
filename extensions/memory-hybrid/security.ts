@@ -4,7 +4,7 @@
  * Centralized validation and sanitization for Memory Hybrid.
  */
 
-import { looksLikePromptInjection } from "./capture.js";
+import { looksLikePromptInjection } from "./src/core/capture.js";
 
 export interface ValidationResult {
   isValid: boolean;

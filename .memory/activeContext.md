@@ -1,5 +1,9 @@
-# Active Context (Memory Logic Audit & Hardening)
+# Active Context (Memory Hybrid Architectural Refactor)
 
-- **Current Goal:** Full deep architectural audit complete. Found 35 bugs (7 P1, 12 P2, 16 P3). Awaiting user approval to start fixing.
-- **Immediate Next Step:** Wait for user approval on implementation_plan.md. Then execute fixes in priority order.
-- **Completed Steps:** Deep code scanned all 18 source files. Cross-referenced with OpenClaw Plugin SDK types.ts. Identified 35 issues across P1/P2/P3 severity. Created comprehensive audit artifact with fix instructions.
+- **Current Goal:** Finalize the "Clean Architecture" refactor of the `memory-hybrid` plugin (modularizing into `core/`, `infra/`, and `api/`).
+- **Immediate Next Step:** Rerun `lint:fix` and `format` which were interrupted by the system restart, then verify types with `tsgo`.
+- **Completed Steps:**
+  - Migrated source files to `src/core`, `src/infra`, and `src/api`.
+  - Updated all internal module imports to match the new structure.
+  - Updated `package.json` entry point to `src/index.ts`.
+- **Next Phase:** Run the 157+ test suite to ensure architectural integrity.

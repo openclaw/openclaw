@@ -19,6 +19,11 @@
       "help": "LLM for graph extraction and smart capture. Auto-detected from embedding provider if not set.",
       "advanced": true
     },
+    "chatProvider": {
+      "label": "Chat Provider",
+      "help": "LLM Provider: google or openai",
+      "advanced": true
+    },
     "dbPath": {
       "label": "Database Path",
       "placeholder": "~/.openclaw/memory/lancedb",
@@ -70,6 +75,10 @@
       },
       "chatModel": {
         "type": "string"
+      },
+      "chatProvider": {
+        "type": "string",
+        "enum": ["openai", "google"]
       },
       "chatApiKey": {
         "type": "string"

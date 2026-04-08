@@ -1,4 +1,4 @@
-import type { Logger } from "./tracer.js";
+import type { Logger } from "./src/infra/tracer.js";
 
 export interface QueueOptions {
   delayMs?: number;
@@ -71,6 +71,19 @@ export class MemoryQueue {
     }
 
     return this.processNext();
+  }
+
+  /**
+   * Gracefully shuts down the queue by draining all pending tasks.
+   */
+  async stop(): Promise<void> {
+    if (this.queue.length === 0 && !this.processing) {
+      return;
+    }
+    // Wait for the current processing loop to finish (which finishes when queue is empty)
+    while (this.processing || this.queue.length > 0) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
   }
 
   /** Returns current queue size (number of pending tasks) */
