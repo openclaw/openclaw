@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   removeBackfillDiaryEntries,
+  previewGroundedRemMarkdown,
   writeBackfillDiaryEntries,
-} from "../../../extensions/memory-core/src/dreaming-narrative.js";
-import { previewGroundedRemMarkdown } from "../../../extensions/memory-core/src/rem-evidence.js";
+} from "../../../extensions/memory-core/api.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
