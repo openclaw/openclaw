@@ -17,6 +17,7 @@ let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClaw
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
     planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+    planOpenClawModelsJsonWithDeps: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
   }));
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
 });

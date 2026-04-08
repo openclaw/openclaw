@@ -624,10 +624,12 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
     (Number.isFinite(parallelShardCount) && parallelShardCount > 1);
+  const skipExtensionShard = process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1";
   return fullSuiteVitestShards.flatMap((shard) => {
     if (
-      process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
-      shard.config === FULL_EXTENSIONS_VITEST_CONFIG
+      skipExtensionShard &&
+      (shard.config === FULL_EXTENSIONS_VITEST_CONFIG ||
+        shard.config.startsWith("vitest.full-extension-"))
     ) {
       return [];
     }
