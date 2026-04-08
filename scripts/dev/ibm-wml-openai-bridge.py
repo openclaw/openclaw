@@ -375,7 +375,11 @@ def chat_completions():
                 400,
             )
 
-        temperature = float(data.get("temperature", 0.7))
+        temp_raw = data.get("temperature", 0.7)
+        try:
+            temperature = float(temp_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "temperature must be a number"}), 400
         temperature = max(0.0, min(temperature, 2.0))
 
         requested_tokens = data.get("max_completion_tokens") or data.get("max_tokens")
