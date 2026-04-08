@@ -240,6 +240,7 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
     plain: hasFlag(argv, "--plain"),
     check: hasFlag(argv, "--check"),
     probe: hasFlag(argv, "--probe"),
+    probeAll: hasFlag(argv, "--all"),
   };
 }
 

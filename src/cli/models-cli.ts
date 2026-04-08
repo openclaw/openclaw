@@ -50,7 +50,11 @@ export function registerModelsCli(program: Command) {
       false,
     )
     .option("--probe", "Probe configured provider auth (live)", false)
-    .option("--all", "Probe every configured model, not just one per provider", false)
+    .option(
+      "--all",
+      "Probe every configured model, not just one per provider (requires --probe)",
+      false,
+    )
     .option("--probe-provider <name>", "Only probe a single provider")
     .option(
       "--probe-profile <id>",
