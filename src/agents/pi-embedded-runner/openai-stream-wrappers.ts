@@ -196,7 +196,7 @@ export function createOpenAIResponsesContextManagementWrapper(
       !policy.useServerCompaction &&
       !policy.shouldStripStore &&
       !policy.shouldStripPromptCache &&
-      !policy.shouldStripDisabledReasoningPayload
+      !policy.disabledReasoningEffortMode
     ) {
       return underlying(model, context, options);
     }

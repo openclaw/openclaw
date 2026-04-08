@@ -58,7 +58,7 @@ describe("openai responses payload policy", () => {
     expect(payload).not.toHaveProperty("prompt_cache_retention");
   });
 
-  it("keeps disabled reasoning payloads on native OpenAI responses routes", () => {
+  it("rewrites disabled reasoning payloads on native OpenAI responses routes", () => {
     const payload = {
       reasoning: {
         effort: "none",
@@ -79,7 +79,7 @@ describe("openai responses payload policy", () => {
 
     expect(payload).toEqual({
       reasoning: {
-        effort: "none",
+        effort: "minimal",
       },
       store: false,
     });

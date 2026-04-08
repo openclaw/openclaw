@@ -458,8 +458,9 @@ returns the session to the configured default.
 OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently
 from generic OpenAI-compatible `/v1` proxies:
 
-- native `openai/*`, `openai-codex/*`, and Azure OpenAI routes keep
-  `reasoning: { effort: "none" }` intact when you explicitly disable reasoning
+- native `openai/*`, `openai-codex/*`, and Azure OpenAI routes treat legacy
+  `reasoning: { effort: "none" }` (and `reasoning: "none"`) as disabled reasoning and
+  rewrite it to the lowest supported effort (currently `minimal`) to avoid API 400s
 - native OpenAI-family routes default tool schemas to strict mode
 - hidden OpenClaw attribution headers (`originator`, `version`, and
   `User-Agent`) are only attached on verified native OpenAI hosts

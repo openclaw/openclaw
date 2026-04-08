@@ -20,7 +20,11 @@ export type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number;
   explicitStore: boolean | undefined;
-  shouldStripDisabledReasoningPayload: boolean;
+  /**
+   * How to handle disabled reasoning payloads that use legacy `reasoning: "none"` or
+   * `reasoning.effort: "none"` values.
+   */
+  disabledReasoningEffortMode?: "strip" | "rewrite-minimal";
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
@@ -71,22 +75,35 @@ function shouldEnableOpenAIResponsesServerCompaction(
   return provider === "openai";
 }
 
-function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
+function normalizeDisabledOpenAIReasoningPayload(
+  payloadObj: Record<string, unknown>,
+  mode: NonNullable<OpenAIResponsesPayloadPolicy["disabledReasoningEffortMode"]>,
+): void {
   const reasoning = payloadObj.reasoning;
-  if (reasoning === "none") {
-    delete payloadObj.reasoning;
-    return;
-  }
-  if (!reasoning || typeof reasoning !== "object" || Array.isArray(reasoning)) {
+
+  const isDisabledReasoningString = reasoning === "none";
+  const isDisabledReasoningObject =
+    !!reasoning &&
+    typeof reasoning === "object" &&
+    !Array.isArray(reasoning) &&
+    (reasoning as Record<string, unknown>).effort === "none";
+
+  if (!isDisabledReasoningString && !isDisabledReasoningObject) {
     return;
   }
 
-  // Proxy/OpenAI-compat routes can reject `reasoning.effort: "none"`. Treat the
-  // disabled effort as "reasoning omitted" instead of forwarding an unsupported value.
-  const reasoningObj = reasoning as Record<string, unknown>;
-  if (reasoningObj.effort === "none") {
-    delete payloadObj.reasoning;
+  if (mode === "rewrite-minimal") {
+    const nextReasoning =
+      reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)
+        ? { ...(reasoning as Record<string, unknown>) }
+        : {};
+    nextReasoning.effort = "minimal";
+    payloadObj.reasoning = nextReasoning;
+    return;
   }
+
+  // Default: strip.
+  delete payloadObj.reasoning;
 }
 
 export function resolveOpenAIResponsesPayloadPolicy(
@@ -120,7 +137,11 @@ export function resolveOpenAIResponsesPayloadPolicy(
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload: isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute,
+    disabledReasoningEffortMode: isResponsesApi
+      ? capabilities.usesKnownNativeOpenAIRoute
+        ? "rewrite-minimal"
+        : "strip"
+      : undefined,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
@@ -157,7 +178,7 @@ export function applyOpenAIResponsesPayloadPolicy(
       },
     ];
   }
-  if (policy.shouldStripDisabledReasoningPayload) {
-    stripDisabledOpenAIReasoningPayload(payloadObj);
+  if (policy.disabledReasoningEffortMode) {
+    normalizeDisabledOpenAIReasoningPayload(payloadObj, policy.disabledReasoningEffortMode);
   }
 }
