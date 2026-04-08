@@ -27,6 +27,11 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
 export type SecurityAuditFinding = {
@@ -160,7 +165,11 @@ function hasConfiguredDockerConfig(
 }
 
 function normalizeNodeCommand(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
+}
+
+function isWildcardEntry(value: unknown): boolean {
+  return normalizeStringifiedOptionalString(value) === "*";
 }
 
 function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
@@ -349,12 +358,12 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     }
 
     const allowFrom = Array.isArray(section.allowFrom) ? section.allowFrom : [];
-    if (allowFrom.some((entry) => String(entry).trim() === "*")) {
+    if (allowFrom.some((entry) => isWildcardEntry(entry))) {
       out.add(`${basePath}.allowFrom includes "*"`);
     }
 
     const groupAllowFrom = Array.isArray(section.groupAllowFrom) ? section.groupAllowFrom : [];
-    if (groupAllowFrom.some((entry) => String(entry).trim() === "*")) {
+    if (groupAllowFrom.some((entry) => isWildcardEntry(entry))) {
       out.add(`${basePath}.groupAllowFrom includes "*"`);
     }
 
@@ -366,7 +375,7 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
         out.add(`${basePath}.dm.policy="open"`);
       }
       const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
-      if (dmAllowFrom.some((entry) => String(entry).trim() === "*")) {
+      if (dmAllowFrom.some((entry) => isWildcardEntry(entry))) {
         out.add(`${basePath}.dm.allowFrom includes "*"`);
       }
     }
@@ -474,8 +483,7 @@ export function collectSyncedFolderFindings(params: {
 
 export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const password =
-    typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
+  const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
   if (password && !looksLikeEnvRef(password)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
@@ -488,7 +496,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
     });
   }
 
-  const hooksToken = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
+  const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
   if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
@@ -511,7 +519,7 @@ export function collectHooksHardeningFindings(
     return findings;
   }
 
-  const token = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
+  const token = normalizeOptionalString(cfg.hooks?.token) ?? "";
   if (token && token.length < 24) {
     findings.push({
       checkId: "hooks.token_too_short",
@@ -549,7 +557,7 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  const rawPath = typeof cfg.hooks?.path === "string" ? cfg.hooks.path.trim() : "";
+  const rawPath = normalizeOptionalString(cfg.hooks?.path) ?? "";
   if (rawPath === "/") {
     findings.push({
       checkId: "hooks.path_root",
@@ -561,8 +569,7 @@ export function collectHooksHardeningFindings(
   }
 
   const allowRequestSessionKey = cfg.hooks?.allowRequestSessionKey === true;
-  const defaultSessionKey =
-    typeof cfg.hooks?.defaultSessionKey === "string" ? cfg.hooks.defaultSessionKey.trim() : "";
+  const defaultSessionKey = normalizeOptionalString(cfg.hooks?.defaultSessionKey) ?? "";
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const allowedPrefixes = Array.isArray(cfg.hooks?.allowedSessionKeyPrefixes)
     ? cfg.hooks.allowedSessionKeyPrefixes
@@ -815,7 +822,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
     const seccompProfile =
       typeof docker.seccompProfile === "string" ? docker.seccompProfile : undefined;
-    if (seccompProfile && seccompProfile.trim().toLowerCase() === "unconfined") {
+    if (normalizeOptionalLowercaseString(seccompProfile) === "unconfined") {
       findings.push({
         checkId: "sandbox.dangerous_seccomp_profile",
         severity: "critical",
@@ -827,7 +834,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
     const apparmorProfile =
       typeof docker.apparmorProfile === "string" ? docker.apparmorProfile : undefined;
-    if (apparmorProfile && apparmorProfile.trim().toLowerCase() === "unconfined") {
+    if (normalizeOptionalLowercaseString(apparmorProfile) === "unconfined") {
       findings.push({
         checkId: "sandbox.dangerous_apparmor_profile",
         severity: "critical",
@@ -842,7 +849,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
   const defaultBrowser = resolveSandboxConfigForAgent(cfg).browser;
   if (
     defaultBrowser.enabled &&
-    defaultBrowser.network.trim().toLowerCase() === "bridge" &&
+    normalizeOptionalLowercaseString(defaultBrowser.network) === "bridge" &&
     !defaultBrowser.cdpSourceRange?.trim()
   ) {
     browserExposurePaths.push("agents.defaults.sandbox.browser");
@@ -855,7 +862,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     if (!browser.enabled) {
       continue;
     }
-    if (browser.network.trim().toLowerCase() !== "bridge") {
+    if (normalizeOptionalLowercaseString(browser.network) !== "bridge") {
       continue;
     }
     if (browser.cdpSourceRange?.trim()) {

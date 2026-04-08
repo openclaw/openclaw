@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   hasDispatchEnvManipulation,
@@ -159,7 +160,7 @@ function extractPosixShellInlineCommand(argv: string[]): string | null {
 
 function extractCmdInlineCommand(argv: string[]): string | null {
   const idx = argv.findIndex((item) => {
-    const token = item.trim().toLowerCase();
+    const token = normalizeLowercaseStringOrEmpty(item);
     return token === "/c" || token === "/k";
   });
   if (idx === -1) {

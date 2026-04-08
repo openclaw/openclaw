@@ -105,7 +105,7 @@ describe("ollama setup", () => {
     });
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
-    expect(modelIds?.[0]).toBe("glm-4.7-flash");
+    expect(modelIds?.[0]).toBe("gemma4");
   });
 
   it("puts suggested cloud model first in remote mode", async () => {
@@ -128,7 +128,7 @@ describe("ollama setup", () => {
   it("mode selection affects model ordering (local)", async () => {
     const prompter = createModePrompter("local");
 
-    const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b", "glm-4.7-flash"] });
+    const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b", "gemma4"] });
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await promptAndConfigureOllama({
@@ -139,7 +139,7 @@ describe("ollama setup", () => {
     });
 
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
-    expect(modelIds?.[0]).toBe("glm-4.7-flash");
+    expect(modelIds?.[0]).toBe("gemma4");
     expect(modelIds).toContain("llama3:8b");
   });
 
@@ -194,7 +194,7 @@ describe("ollama setup", () => {
     } as unknown as WizardPrompter;
 
     const fetchMock = createOllamaFetchMock({
-      tags: ["llama3:8b", "glm-4.7-flash", "deepseek-r1:14b"],
+      tags: ["llama3:8b", "gemma4", "deepseek-r1:14b"],
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -209,10 +209,10 @@ describe("ollama setup", () => {
 
     expect(modelIds).toEqual([
       "kimi-k2.5:cloud",
-      "minimax-m2.5:cloud",
-      "glm-5:cloud",
+      "minimax-m2.7:cloud",
+      "glm-5.1:cloud",
       "llama3:8b",
-      "glm-4.7-flash",
+      "gemma4",
       "deepseek-r1:14b",
     ]);
     expect(models?.find((model) => model.id === "kimi-k2.5:cloud")?.input).toEqual([
@@ -261,8 +261,8 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
-        model: "ollama/glm-4.7-flash",
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
         prompter,
       });
 
@@ -273,12 +273,12 @@ describe("ollama setup", () => {
     it("skips pull when model is already available", async () => {
       const prompter = {} as unknown as WizardPrompter;
 
-      const fetchMock = createOllamaFetchMock({ tags: ["glm-4.7-flash"] });
+      const fetchMock = createOllamaFetchMock({ tags: ["gemma4"] });
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
-        model: "ollama/glm-4.7-flash",
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
         prompter,
       });
 

@@ -21,6 +21,7 @@ import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -226,7 +227,7 @@ async function resolveCliMediaPath(params: {
     return params.mediaPath;
   }
 
-  const ext = path.extname(params.mediaPath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.mediaPath));
   if (ext === ".wav") {
     return params.mediaPath;
   }

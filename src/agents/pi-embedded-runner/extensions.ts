@@ -59,14 +59,22 @@ function buildContextPruningFactory(params: {
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
     dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks,
-    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
+    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager, {
+      provider: params.provider,
+      modelId: params.modelId,
+    }),
   });
 
   return contextPruningExtension;
 }
 
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+  const compaction = cfg?.agents?.defaults?.compaction;
+  // A registered compaction provider requires the safeguard extension path
+  if (compaction?.provider) {
+    return "safeguard";
+  }
+  return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
 export function buildEmbeddedExtensionFactories(params: {
@@ -98,6 +106,7 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
+      provider: compactionCfg?.provider,
     });
     factories.push(compactionSafeguardExtension);
   }

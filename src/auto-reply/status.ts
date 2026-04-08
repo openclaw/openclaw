@@ -31,7 +31,11 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -454,21 +458,22 @@ export function buildStatusMessage(args: StatusArgs): string {
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
-  const runtimeModelRaw = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const runtimeProviderRaw =
-    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
+  const runtimeProviderRaw = normalizeOptionalString(entry?.modelProvider) ?? "";
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
-    const embeddedProvider = runtimeModelRaw.slice(0, slashIndex).trim().toLowerCase();
+    const embeddedProvider =
+      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
-      runtimeModelRaw.toLowerCase() ===
-        String(entry?.fallbackNoticeActiveModel ?? "")
-          .trim()
-          .toLowerCase();
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+        normalizeLowercaseStringOrEmpty(
+          normalizeOptionalString(String(entry?.fallbackNoticeActiveModel ?? "")) ?? "",
+        );
     const runtimeMatchesSelectedModel =
-      runtimeModelRaw.toLowerCase() === (modelRefs.selected.label || "unknown").toLowerCase();
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
     // Legacy fallback sessions can persist provider-qualified runtime ids
     // without a separate modelProvider field. Preserve provider-aware lookup
     // when the stored slash id is the selected model or the active fallback
@@ -476,7 +481,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     // slash ids.
     if (
       (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
-      embeddedProvider === activeProvider.toLowerCase()
+      embeddedProvider === normalizeLowercaseStringOrEmpty(activeProvider)
     ) {
       contextLookupProvider = activeProvider;
       contextLookupModel = activeModel;
@@ -745,7 +750,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     if (!args.config || !entry) {
       return undefined;
     }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+    if (
+      normalizeOptionalString(entry.modelOverride) ||
+      normalizeOptionalString(entry.providerOverride)
+    ) {
       return undefined;
     }
     const channelOverride = resolveChannelModelOverride({
@@ -992,14 +1000,17 @@ export function buildToolsMessage(
 function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
     ? `/${command.nativeName}`
-    : command.textAliases[0]?.trim() || `/${command.key}`;
+    : normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
   const seen = new Set<string>();
   const aliases = command.textAliases
     .map((alias) => alias.trim())
     .filter(Boolean)
-    .filter((alias) => alias.toLowerCase() !== primary.toLowerCase())
+    .filter(
+      (alias) =>
+        normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
+    )
     .filter((alias) => {
-      const key = alias.toLowerCase();
+      const key = normalizeLowercaseStringOrEmpty(alias);
       if (seen.has(key)) {
         return false;
       }
@@ -1078,7 +1089,7 @@ export function buildCommandsMessagePaginated(
   options?: CommandsMessageOptions,
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
-  const surface = options?.surface?.toLowerCase();
+  const surface = normalizeOptionalLowercaseString(options?.surface);
   const prefersPaginatedList =
     options?.forcePaginatedList === true ||
     Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);

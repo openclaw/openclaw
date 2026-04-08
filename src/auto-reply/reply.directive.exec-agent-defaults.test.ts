@@ -159,4 +159,55 @@ describe("directive behavior exec agent defaults", () => {
       });
     });
   });
+
+  it("replaces a prior deny override with newer exec settings on later turns", async () => {
+    await withTempHome(async (home) => {
+      runEmbeddedPiAgentMock.mockResolvedValue(makeEmbeddedTextResult("done"));
+
+      await getReplyFromConfig(
+        {
+          Body: "/exec host=gateway security=deny ask=off",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        makeAgentExecConfig(home),
+      );
+
+      await getReplyFromConfig(
+        {
+          Body: "/exec host=gateway security=full ask=always",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        makeAgentExecConfig(home),
+      );
+
+      runEmbeddedPiAgentMock.mockClear();
+
+      await getReplyFromConfig(
+        {
+          Body: "run a command",
+          From: "+1004",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1004",
+        },
+        {},
+        makeAgentExecConfig(home),
+      );
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.execOverrides).toEqual({
+        host: "gateway",
+        security: "full",
+        ask: "always",
+        node: "worker-alpha",
+      });
+    });
+  });
 });

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
@@ -46,9 +47,9 @@ function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: 
   const callSid = params.get("CallSid") ?? "";
   const callStatus = params.get("CallStatus") ?? "";
   const direction = params.get("Direction") ?? "";
-  const callId = typeof ctx.query?.callId === "string" ? ctx.query.callId.trim() : "";
-  const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
-  const turnToken = typeof ctx.query?.turnToken === "string" ? ctx.query.turnToken.trim() : "";
+  const callId = normalizeOptionalString(ctx.query?.callId) ?? "";
+  const flow = normalizeOptionalString(ctx.query?.flow) ?? "";
+  const turnToken = normalizeOptionalString(ctx.query?.turnToken) ?? "";
   return `twilio:fallback:${crypto
     .createHash("sha256")
     .update(
@@ -265,14 +266,8 @@ export class TwilioProvider implements VoiceCallProvider {
   ): ProviderWebhookParseResult {
     try {
       const params = new URLSearchParams(ctx.rawBody);
-      const callIdFromQuery =
-        typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
-          ? ctx.query.callId.trim()
-          : undefined;
-      const turnTokenFromQuery =
-        typeof ctx.query?.turnToken === "string" && ctx.query.turnToken.trim()
-          ? ctx.query.turnToken.trim()
-          : undefined;
+      const callIdFromQuery = normalizeOptionalString(ctx.query?.callId);
+      const turnTokenFromQuery = normalizeOptionalString(ctx.query?.turnToken);
       const dedupeKey = createTwilioRequestDedupeKey(ctx, options?.verifiedRequestKey);
       const event = this.normalizeEvent(params, {
         callIdOverride: callIdFromQuery,

@@ -26,7 +26,7 @@ export type ResolvedMatrixAccount = {
 };
 
 function clean(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveMatrixAccountAuthView(params: {

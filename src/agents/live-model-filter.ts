@@ -10,7 +10,7 @@ export type ModelRef = {
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-6",
   "google/gemini-3.1-pro-preview",
-  "google/gemini-2.5-flash",
+  "google/gemini-3-flash-preview",
   "minimax/minimax-m2.7",
   "openai/gpt-5.2",
   "openai-codex/gpt-5.2",
@@ -52,6 +52,16 @@ function isHighSignalClaudeModelId(id: string): boolean {
   return minor >= 6;
 }
 
+function isPreGemini3ModelId(id: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(id);
+  const match = normalized.match(/(?:^|\/)gemini-(\d+)(?:[.-]|$)/);
+  if (!match) {
+    return false;
+  }
+  const major = Number.parseInt(match[1] ?? "0", 10);
+  return Number.isFinite(major) && major < 3;
+}
+
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -75,6 +85,9 @@ export function isModernModelRef(ref: ModelRef): boolean {
 export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   const id = normalizeLowercaseStringOrEmpty(ref.id);
   if (!isModernModelRef(ref) || !id) {
+    return false;
+  }
+  if (isPreGemini3ModelId(id)) {
     return false;
   }
   return isHighSignalClaudeModelId(id);

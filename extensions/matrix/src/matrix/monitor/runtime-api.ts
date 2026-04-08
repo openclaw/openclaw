@@ -2,11 +2,12 @@
 // Keep monitor internals off the broad package runtime-api barrel so monitor
 // tests and shared workers do not pull unrelated Matrix helper surfaces.
 
-export type { NormalizedLocation, PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/core";
+export { ensureConfiguredAcpBindingReady } from "openclaw/plugin-sdk/acp-binding-runtime";
+export type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 export type { BlockReplyContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export { ensureConfiguredAcpBindingReady } from "openclaw/plugin-sdk/core";
 export {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,

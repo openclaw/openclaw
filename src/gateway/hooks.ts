@@ -44,11 +44,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (cfg.hooks?.enabled !== true) {
     return null;
   }
-  const token = cfg.hooks?.token?.trim();
+  const token = normalizeOptionalString(cfg.hooks?.token);
   if (!token) {
     throw new Error("hooks.enabled requires hooks.token");
   }
-  const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
+  const rawPath = normalizeOptionalString(cfg.hooks?.path) || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
   const trimmed = withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
   if (trimmed === "/") {
@@ -107,8 +107,7 @@ function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<
 }
 
 function resolveSessionKey(raw: string | undefined): string | undefined {
-  const value = raw?.trim();
-  return value ? value : undefined;
+  return normalizeOptionalString(raw);
 }
 
 function normalizeSessionKeyPrefix(raw: string): string | undefined {
@@ -140,18 +139,14 @@ export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string
 }
 
 export function extractHookToken(req: IncomingMessage): string | undefined {
-  const auth =
-    typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
+  const auth = normalizeOptionalString(req.headers.authorization) ?? "";
   if (normalizeLowercaseStringOrEmpty(auth).startsWith("bearer ")) {
     const token = auth.slice(7).trim();
     if (token) {
       return token;
     }
   }
-  const headerToken =
-    typeof req.headers["x-openclaw-token"] === "string"
-      ? req.headers["x-openclaw-token"].trim()
-      : "";
+  const headerToken = normalizeOptionalString(req.headers["x-openclaw-token"]) ?? "";
   if (headerToken) {
     return headerToken;
   }
@@ -196,12 +191,12 @@ export function normalizeWakePayload(
 ):
   | { ok: true; value: { text: string; mode: "now" | "next-heartbeat" } }
   | { ok: false; error: string } {
-  const text = typeof payload.text === "string" ? payload.text.trim() : "";
-  if (!text) {
+  const normalizedText = normalizeOptionalString(payload.text) ?? "";
+  if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  return { ok: true, value: { text, mode } };
+  return { ok: true, value: { text: normalizedText, mode } };
 }
 
 export type HookAgentPayload = {
@@ -276,7 +271,7 @@ export function resolveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
 ): string | undefined {
-  const raw = agentId?.trim();
+  const raw = normalizeOptionalString(agentId);
   if (!raw) {
     return undefined;
   }
@@ -292,7 +287,7 @@ export function isHookAgentAllowed(
   agentId: string | undefined,
 ): boolean {
   // Keep backwards compatibility for callers that omit agentId.
-  const raw = agentId?.trim();
+  const raw = normalizeOptionalString(agentId);
   if (!raw) {
     return true;
   }
@@ -345,7 +340,7 @@ export function normalizeHookDispatchSessionKey(params: {
   sessionKey: string;
   targetAgentId: string | undefined;
 }): string {
-  const trimmed = params.sessionKey.trim();
+  const trimmed = normalizeOptionalString(params.sessionKey) ?? "";
   if (!trimmed || !params.targetAgentId) {
     return trimmed;
   }
@@ -363,7 +358,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       value: HookAgentPayload;
     }
   | { ok: false; error: string } {
-  const message = typeof payload.message === "string" ? payload.message.trim() : "";
+  const message = normalizeOptionalString(payload.message) ?? "";
   if (!message) {
     return { ok: false, error: "message required" };
   }

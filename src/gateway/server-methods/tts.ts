@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -78,7 +79,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
   },
   "tts.convert": async ({ params, respond }) => {
-    const text = typeof params.text === "string" ? params.text.trim() : "";
+    const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
       respond(
         false,
@@ -89,10 +90,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
-      const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const providerRaw = typeof params.provider === "string" ? params.provider.trim() : undefined;
-      const modelId = typeof params.modelId === "string" ? params.modelId.trim() : undefined;
-      const voiceId = typeof params.voiceId === "string" ? params.voiceId.trim() : undefined;
+      const channel = normalizeOptionalString(params.channel);
+      const providerRaw = normalizeOptionalString(params.provider);
+      const modelId = normalizeOptionalString(params.modelId);
+      const voiceId = normalizeOptionalString(params.voiceId);
       let overrides;
       try {
         overrides = resolveExplicitTtsOverrides({
@@ -133,7 +134,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   "tts.setProvider": async ({ params, respond }) => {
     const cfg = loadConfig();
     const provider = canonicalizeSpeechProviderId(
-      typeof params.provider === "string" ? params.provider.trim() : "",
+      normalizeOptionalString(params.provider) ?? "",
       cfg,
     );
     if (!provider || !getSpeechProvider(provider, cfg)) {

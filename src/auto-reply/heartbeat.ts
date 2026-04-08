@@ -1,4 +1,5 @@
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -60,7 +61,7 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
 }
 
 export function resolveHeartbeatPrompt(raw?: string): string {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   return trimmed || HEARTBEAT_PROMPT;
 }
 

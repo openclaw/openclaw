@@ -3,7 +3,10 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -393,7 +396,7 @@ export function createPdfTool(options?: {
 
         if (media.kind !== "document") {
           // Check MIME type more specifically
-          const ct = (media.contentType ?? "").toLowerCase();
+          const ct = normalizeLowercaseStringOrEmpty(media.contentType);
           if (!ct.includes("pdf") && !ct.includes("application/pdf")) {
             throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
           }
