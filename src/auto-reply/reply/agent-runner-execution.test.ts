@@ -1500,6 +1500,7 @@ describe("runAgentTurnWithFallback", () => {
     });
     expect(sessionEntry.providerOverride).toBe("openai-codex");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+    expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
@@ -1533,6 +1534,7 @@ describe("runAgentTurnWithFallback", () => {
       updatedAt: 123,
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet",
+      modelOverrideSource: "auto",
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
     });
