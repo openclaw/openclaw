@@ -223,6 +223,58 @@ function parseKimiSimpleTaggedToolCallsInText(text: string): KimiParsedTextBlock
   return { content, changed };
 }
 
+function parseKimiFunctionStyleToolCallsInText(text: string): KimiParsedTextBlock | null {
+  const lineRe = /^([A-Za-z_][A-Za-z0-9_.-]*)\((\{.*\})\)\s*$/gm;
+  const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
+  let lastIndex = 0;
+  let changed = false;
+  let toolCallCount = 0;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = lineRe.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before) {
+      content.push({ type: "text", text: before });
+    }
+
+    const name = match[1]?.trim() ?? "";
+    if (!name) {
+      return null;
+    }
+
+    let parsedArgs: unknown;
+    try {
+      parsedArgs = JSON.parse(match[2] ?? "");
+    } catch {
+      return null;
+    }
+    if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+      return null;
+    }
+
+    content.push({
+      type: "toolCall",
+      id: `${name}:${toolCallCount}`,
+      name,
+      arguments: parsedArgs as Record<string, unknown>,
+    });
+    toolCallCount += 1;
+    changed = true;
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (!changed) {
+    return null;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after) {
+    content.push({ type: "text", text: after });
+  }
+
+  return { content, changed };
+}
+
 function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   const tagged = parseKimiTaggedToolCalls(text);
   if (tagged) {
@@ -232,7 +284,11 @@ function parseKimiToolCallsInText(text: string): KimiParsedTextBlock | null {
   if (xml) {
     return xml;
   }
-  return parseKimiSimpleTaggedToolCallsInText(text);
+  const simpleTagged = parseKimiSimpleTaggedToolCallsInText(text);
+  if (simpleTagged) {
+    return simpleTagged;
+  }
+  return parseKimiFunctionStyleToolCallsInText(text);
 }
 
 function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
@@ -265,7 +321,7 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
     }
 
     for (const nextBlock of parsed.content) {
-      if (nextBlock.type === "text" && !nextBlock.text) {
+      if (nextBlock.type === "text" && !nextBlock.text.trim()) {
         continue;
       }
       nextContent.push(nextBlock);
