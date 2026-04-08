@@ -258,4 +258,5 @@ export function applyAnthropicEphemeralCacheControlMarkers(
       }
     }
   }
+  applyAnthropicCacheControlToMessages(messages, { type: "ephemeral" });
 }
