@@ -5,6 +5,7 @@
     "detailKeys": [
       "command",
       "path",
+      "file",
       "url",
       "targetUrl",
       "targetId",
