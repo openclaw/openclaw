@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import {
   getScopedCredentialValue,
+  getTopLevelCredentialValue,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   setScopedCredentialValue,
@@ -10,8 +11,8 @@ import {
   type WebSearchProviderToolDefinition,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
+  normalizeFreshness,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeFreshness } from "openclaw/plugin-sdk/provider-web-search";
 import { resolveBochaConfig } from "./bocha-web-search-provider.shared.js";
 
 function createBochaSchema() {
@@ -65,7 +66,8 @@ export function createBochaWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 12,
     credentialPath: "plugins.entries.bocha.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.bocha.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "bocha"),
+    getCredentialValue: (searchConfig) =>
+      getScopedCredentialValue(searchConfig, "bocha") ?? getTopLevelCredentialValue(searchConfig),
     setCredentialValue: (searchConfigTarget, value) =>
       setScopedCredentialValue(searchConfigTarget, "bocha", value),
     getConfiguredCredentialValue: (config) =>

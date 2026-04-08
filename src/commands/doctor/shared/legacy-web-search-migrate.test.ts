@@ -64,6 +64,34 @@ describe("legacy web search config", () => {
     ]);
   });
 
+  it("migrates bocha provider config", () => {
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            bocha: {
+              apiKey: "bocha-key",
+              summary: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.plugins?.entries?.bocha).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "bocha-key",
+          summary: true,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.search.bocha → plugins.entries.bocha.config.webSearch.",
+    ]);
+  });
+
   it("lists legacy paths for metadata-owned provider config", () => {
     expect(
       listLegacyWebSearchConfigPaths({

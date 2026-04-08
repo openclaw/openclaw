@@ -47,10 +47,10 @@ function resolveBochaApiKey(
   bocha?: BochaConfig,
 ): string | undefined {
   return (
-    // 1. Shared top-level slot (preferred for consistency)
-    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
-    // 2. Plugin-specific slot
+    // 1. Plugin-specific slot (preferred so scoped keys win over shared fallbacks)
     readConfiguredSecretString(bocha?.apiKey, "plugins.entries.bocha.config.webSearch.apiKey") ??
+    // 2. Shared top-level slot
+    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
     // 3. Legacy environment variable
     readProviderEnvValue(["BOCHA_API_KEY"])
   );

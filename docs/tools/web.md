@@ -59,11 +59,11 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 ## Choosing a provider
 
 <CardGroup cols={2}>
-  <Card title="Brave Search" icon="shield" href="/tools/brave-search">
-    Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
-  </Card>
   <Card title="Bocha Search" icon="magnifying-glass" href="/tools/bocha-search">
     High quality Web search with structured results. Best for Chinese content.
+  </Card>
+  <Card title="Brave Search" icon="shield" href="/tools/brave-search">
+    Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free fallback. No API key needed. Unofficial HTML-based integration.
@@ -104,8 +104,8 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 | Provider                                  | Result style               | Filters                                          | API key                                                                          |
 | ----------------------------------------- | -------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                  |
 | [Bocha](/tools/bocha-search)              | Structured snippets        | Time range                                       | `BOCHA_API_KEY`                                                                  |
+| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                  |
 | [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                                                                  |
 | [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                    |
 | [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                              |

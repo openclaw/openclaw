@@ -354,5 +354,21 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Bocha Search",
+    "target": "博查搜索"
+  },
+  {
+    "source": "Bocha Web Search",
+    "target": "博查 Web Search"
+  },
+  {
+    "source": "High quality web search · best for Chinese content",
+    "target": "高质量 Web 搜索，最适合中文内容"
+  },
+  {
+    "source": "Whether to return original web contents (summary). Default: true.",
+    "target": "是否返回网页原始正文内容（默认：true）。"
   }
 ]
