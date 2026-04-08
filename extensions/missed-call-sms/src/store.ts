@@ -21,6 +21,17 @@ import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+/**
+ * Resolve the OpenClaw state directory, honoring OPENCLAW_STATE_DIR so
+ * non-default workspaces (e.g. Quinn-Co at ~/.openclaw-quinn-co) land their
+ * store files in the right place. Matches the resolver used by feishu/nostr.
+ */
+function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  if (override) return override;
+  return join(homedir(), ".openclaw");
+}
+
 export type ConversationStatus =
   // Voicemail captured, agent engaged, caller is responsive.
   | "open"
@@ -99,7 +110,7 @@ export class MissedCallSmsStore {
   private loaded = false;
 
   constructor(path?: string) {
-    this.path = path ?? join(homedir(), ".openclaw", "missed-call-sms", "conversations.jsonl");
+    this.path = path ?? join(resolveStateDir(), "missed-call-sms", "conversations.jsonl");
   }
 
   async init(): Promise<void> {

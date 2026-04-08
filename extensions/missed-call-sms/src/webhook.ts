@@ -76,10 +76,7 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
   // downstream don't have to care about the missing fields.
   // Bounded in practice (a few thousand calls/day max for SMB scale);
   // never cleaned up in v1 — acceptable memory profile.
-  const callIndex = new Map<
-    string,
-    { callerPhone: string; businessPhone: string }
-  >();
+  const callIndex = new Map<string, { callerPhone: string; businessPhone: string }>();
 
   // Resolve the static dashboard HTML location relative to this source file.
   // The runtime serves it from extensions/missed-call-sms/dashboard/index.html.
@@ -472,11 +469,31 @@ export async function startWebhookServer(opts: StartWebhookOptions): Promise<Web
     payload: Record<string, unknown>,
   ): Promise<void> {
     if (eventType !== "message.received") {
-      // message.sent / message.finalized / message.failed — log only.
+      // message.sent / message.finalized / message.failed — log delivery.
       if (eventType === "message.failed") {
         logger.warn(
           `[missed-call-sms] outbound SMS failed: ${JSON.stringify(payload).slice(0, 300)}`,
         );
+      } else if (eventType === "message.finalized") {
+        // Per-recipient delivery status lives at payload.to[i].status, NOT
+        // on the top-level event. A carrier-dropped SMS still comes through
+        // as message.finalized (never message.failed), so check the status
+        // on the recipient entries to surface delivery_failed / queued /
+        // sending_failed. Known culprits: missing A2P 10DLC registration.
+        const toList =
+          (payload.to as Array<{ phone_number?: string; status?: string }> | undefined) ?? [];
+        const providerMsgId = String(payload.id ?? "");
+        for (const recipient of toList) {
+          const status = recipient.status ?? "unknown";
+          const phone = recipient.phone_number ?? "?";
+          if (status === "delivered" || status === "sent") {
+            logger.info(`[missed-call-sms] outbound SMS ${status} id=${providerMsgId} to=${phone}`);
+          } else {
+            logger.warn(
+              `[missed-call-sms] outbound SMS ${status} id=${providerMsgId} to=${phone} — likely carrier drop (check 10DLC registration / message profile)`,
+            );
+          }
+        }
       }
       return;
     }
