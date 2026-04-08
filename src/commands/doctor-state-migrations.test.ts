@@ -20,6 +20,38 @@ async function makeTempRoot() {
   return root;
 }
 
+async function makeRootWithEmptyCfg() {
+  const root = await makeTempRoot();
+  const cfg: OpenClawConfig = {};
+  return { root, cfg };
+}
+
+function writeLegacyTelegramAllowFromStore(oauthDir: string) {
+  fs.writeFileSync(
+    path.join(oauthDir, "telegram-allowFrom.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        allowFrom: ["123456"],
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf-8",
+  );
+}
+
+async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenClawConfig }) {
+  const oauthDir = ensureCredentialsDir(params.root);
+  writeLegacyTelegramAllowFromStore(oauthDir);
+  const detected = await detectLegacyStateMigrations({
+    cfg: params.cfg,
+    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+  });
+  const result = await runLegacyStateMigrations({ detected, now: () => 123 });
+  return { oauthDir, detected, result };
+}
+
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
@@ -129,6 +161,26 @@ function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targe
   ]);
 }
 
+function expectUnmigratedWithoutWarnings(result: StateDirMigrationResult) {
+  expect(result.migrated).toBe(false);
+  expect(result.warnings).toEqual([]);
+}
+
+function writeLegacyAgentFiles(root: string, files: Record<string, string>) {
+  const legacyAgentDir = path.join(root, "agent");
+  fs.mkdirSync(legacyAgentDir, { recursive: true });
+  for (const [fileName, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(legacyAgentDir, fileName), content, "utf-8");
+  }
+  return legacyAgentDir;
+}
+
+function ensureCredentialsDir(root: string) {
+  const oauthDir = path.join(root, "credentials");
+  fs.mkdirSync(oauthDir, { recursive: true });
+  return oauthDir;
+}
+
 describe("doctor legacy state migrations", () => {
   it("migrates legacy sessions into agents/<id>/sessions", async () => {
     const root = await makeTempRoot();
@@ -176,24 +228,42 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
 
-  it("migrates legacy agent dir with conflict fallback", async () => {
+  it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
 
-    const legacyAgentDir = path.join(root, "agent");
-    fs.mkdirSync(legacyAgentDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyAgentDir, "foo.txt"), "legacy", "utf-8");
-    fs.writeFileSync(path.join(legacyAgentDir, "baz.txt"), "legacy2", "utf-8");
+    writeLegacySessionsFixture({
+      root,
+      sessions: {
+        "group:123@g.us": { sessionId: "wa", updatedAt: 10 },
+        "group:abc": { sessionId: "generic", updatedAt: 9 },
+      },
+    });
+
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
+
+    expect(store["agent:main:whatsapp:group:123@g.us"]?.sessionId).toBe("wa");
+    expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("generic");
+  });
+
+  it("migrates legacy agent dir with conflict fallback", async () => {
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    writeLegacyAgentFiles(root, {
+      "foo.txt": "legacy",
+      "baz.txt": "legacy2",
+    });
 
     const targetAgentDir = path.join(root, "agents", "main", "agent");
     fs.mkdirSync(targetAgentDir, { recursive: true });
     fs.writeFileSync(path.join(targetAgentDir, "foo.txt"), "new", "utf-8");
 
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
+    await detectAndRunMigrations({ root, cfg, now: () => 123 });
 
     expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe("legacy2");
     const backupDir = path.join(root, "agents", "main", "agent.legacy-123");
@@ -201,12 +271,8 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("auto-migrates legacy agent dir on startup", async () => {
-    const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
-
-    const legacyAgentDir = path.join(root, "agent");
-    fs.mkdirSync(legacyAgentDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyAgentDir, "auth.json"), "{}", "utf-8");
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    writeLegacyAgentFiles(root, { "auth.json": "{}" });
 
     const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
 
@@ -217,8 +283,7 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("auto-migrates legacy sessions on startup", async () => {
-    const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const { root, cfg } = await makeRootWithEmptyCfg();
     const legacySessionsDir = writeLegacySessionsFixture({
       root,
       sessions: {
@@ -245,20 +310,13 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
-    const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
-
-    const oauthDir = path.join(root, "credentials");
-    fs.mkdirSync(oauthDir, { recursive: true });
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const oauthDir = ensureCredentialsDir(root);
     fs.writeFileSync(path.join(oauthDir, "oauth.json"), "{}", "utf-8");
     fs.writeFileSync(path.join(oauthDir, "creds.json"), "{}", "utf-8");
     fs.writeFileSync(path.join(oauthDir, "session-abc.json"), "{}", "utf-8");
 
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
+    await detectAndRunMigrations({ root, cfg, now: () => 123 });
 
     const target = path.join(oauthDir, "whatsapp", "default");
     expect(fs.existsSync(path.join(target, "creds.json"))).toBe(true);
@@ -268,36 +326,85 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
-    const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
-
-    const oauthDir = path.join(root, "credentials");
-    fs.mkdirSync(oauthDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(oauthDir, "telegram-allowFrom.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          allowFrom: ["123456"],
-        },
-        null,
-        2,
-      ) + "\n",
-      "utf-8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-
-    const result = await runLegacyStateMigrations({ detected, now: () => 123 });
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-default-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const target = path.join(oauthDir, "telegram-default-allowFrom.json");
     expect(fs.existsSync(target)).toBe(true);
     expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
+      version: 1,
+      allowFrom: ["123456"],
+    });
+  });
+
+  it("does not fan out legacy Telegram pairing allowFrom store to configured named accounts", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "bot2",
+          accounts: {
+            bot1: {},
+            bot2: {},
+          },
+        },
+      },
+    };
+    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-bot2-allowFrom.json",
+    ]);
+    expect(result.warnings).toEqual([]);
+
+    const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
+    const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
+    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
+    expect(fs.existsSync(bot1Target)).toBe(false);
+    expect(fs.existsSync(bot2Target)).toBe(true);
+    expect(fs.existsSync(defaultTarget)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
+      version: 1,
+      allowFrom: ["123456"],
+    });
+  });
+
+  it("migrates legacy Telegram pairing allowFrom store to the default agent bound account", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "ops", default: true }],
+      },
+      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }],
+      channels: {
+        telegram: {
+          accounts: {
+            alerts: {},
+            backup: {},
+          },
+        },
+      },
+    };
+
+    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-alerts-allowFrom.json",
+    ]);
+    expect(result.warnings).toEqual([]);
+
+    const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
+    const backupTarget = path.join(oauthDir, "telegram-backup-allowFrom.json");
+    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
+    expect(fs.existsSync(alertsTarget)).toBe(true);
+    expect(fs.existsSync(backupTarget)).toBe(false);
+    expect(fs.existsSync(defaultTarget)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(alertsTarget, "utf-8"))).toEqual({
       version: 1,
       allowFrom: ["123456"],
     });
@@ -359,8 +466,7 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("canonicalizes legacy main keys inside the target sessions store", async () => {
-    const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },
@@ -415,8 +521,7 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("auto-migrates when only target sessions contain legacy keys", async () => {
-    const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },
@@ -469,9 +574,7 @@ describe("doctor legacy state migrations", () => {
     fs.symlinkSync(path.join(targetDir, "agent"), path.join(legacyDir, "agent"), DIR_LINK_TYPE);
 
     const result = await runStateDirMigration(root);
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([]);
+    expectUnmigratedWithoutWarnings(result);
   });
 
   it("warns when legacy state dir is empty and target already exists", async () => {
@@ -504,9 +607,7 @@ describe("doctor legacy state migrations", () => {
     );
 
     const result = await runStateDirMigration(root);
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([]);
+    expectUnmigratedWithoutWarnings(result);
   });
 
   it("warns when legacy state dir symlink points outside the target tree", async () => {

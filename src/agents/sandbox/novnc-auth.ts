@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
-export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD";
+export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD"; // pragma: allowlist secret
 const NOVNC_TOKEN_TTL_MS = 60 * 1000;
 const NOVNC_PASSWORD_LENGTH = 8;
 const NOVNC_PASSWORD_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -65,7 +66,7 @@ export function issueNoVncObserverToken(params: {
   const token = crypto.randomBytes(24).toString("hex");
   NO_VNC_OBSERVER_TOKENS.set(token, {
     noVncPort: params.noVncPort,
-    password: params.password?.trim() || undefined,
+    password: normalizeOptionalString(params.password),
     expiresAt: now + Math.max(1, params.ttlMs ?? NOVNC_TOKEN_TTL_MS),
   });
   return token;

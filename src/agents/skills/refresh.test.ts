@@ -1,22 +1,37 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const watchMock = vi.fn(() => ({
   on: vi.fn(),
   close: vi.fn(async () => undefined),
 }));
 
-vi.mock("chokidar", () => {
-  return {
-    default: { watch: watchMock },
-  };
-});
+let refreshModule: typeof import("./refresh.js");
+
+vi.mock("chokidar", () => ({
+  default: { watch: watchMock },
+}));
+
+vi.mock("./plugin-skills.js", () => ({
+  resolvePluginSkillDirs: vi.fn(() => []),
+}));
 
 describe("ensureSkillsWatcher", () => {
+  beforeAll(async () => {
+    refreshModule = await import("./refresh.js");
+  });
+
+  beforeEach(() => {
+    watchMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await refreshModule.resetSkillsRefreshForTest();
+  });
+
   it("ignores node_modules, dist, .git, and Python venvs by default", async () => {
-    const mod = await import("./refresh.js");
-    mod.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
     expect(watchMock).toHaveBeenCalledTimes(1);
     const firstCall = (
@@ -25,7 +40,7 @@ describe("ensureSkillsWatcher", () => {
     const targets = firstCall?.[0] ?? [];
     const opts = firstCall?.[1] ?? {};
 
-    expect(opts.ignored).toBe(mod.DEFAULT_SKILLS_WATCH_IGNORED);
+    expect(opts.ignored).toBe(refreshModule.DEFAULT_SKILLS_WATCH_IGNORED);
     const posix = (p: string) => p.replaceAll("\\", "/");
     expect(targets).toEqual(
       expect.arrayContaining([
@@ -38,7 +53,7 @@ describe("ensureSkillsWatcher", () => {
       ]),
     );
     expect(targets.every((target) => target.includes("SKILL.md"))).toBe(true);
-    const ignored = mod.DEFAULT_SKILLS_WATCH_IGNORED;
+    const ignored = refreshModule.DEFAULT_SKILLS_WATCH_IGNORED;
 
     // Node/JS paths
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/node_modules/pkg/index.js"))).toBe(

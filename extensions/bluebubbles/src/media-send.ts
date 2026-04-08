@@ -2,11 +2,13 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { basenameFromMediaSource, safeFileURLToPath } from "./local-file-access.js";
+import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles } from "./send.js";
 
@@ -30,7 +32,7 @@ function resolveLocalMediaPath(source: string): string {
     return source;
   }
   try {
-    return fileURLToPath(source);
+    return safeFileURLToPath(source);
   } catch {
     throw new Error(`Invalid file:// URL: ${source}`);
   }
@@ -52,16 +54,11 @@ function resolveConfiguredPath(input: string): string {
     throw new Error("Empty mediaLocalRoots entry is not allowed");
   }
   if (trimmed.startsWith("file://")) {
-    let parsed: string;
     try {
-      parsed = fileURLToPath(trimmed);
+      return safeFileURLToPath(trimmed);
     } catch {
       throw new Error(`Invalid file:// URL in mediaLocalRoots: ${input}`);
     }
-    if (!path.isAbsolute(parsed)) {
-      throw new Error(`mediaLocalRoots entries must be absolute paths: ${input}`);
-    }
-    return parsed;
   }
   const resolved = expandHomePath(trimmed);
   if (!path.isAbsolute(resolved)) {
@@ -77,9 +74,9 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
     ? normalizedRoot
     : normalizedRoot + path.sep;
   if (process.platform === "win32") {
-    const candidateLower = normalizedCandidate.toLowerCase();
-    const rootLower = normalizedRoot.toLowerCase();
-    const rootWithSepLower = rootWithSep.toLowerCase();
+    const candidateLower = lowercasePreservingWhitespace(normalizedCandidate);
+    const rootLower = lowercasePreservingWhitespace(normalizedRoot);
+    const rootWithSepLower = lowercasePreservingWhitespace(rootWithSep);
     return candidateLower === rootLower || candidateLower.startsWith(rootWithSepLower);
   }
   return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootWithSep);
@@ -172,25 +169,7 @@ async function assertLocalMediaPathAllowed(params: {
 }
 
 function resolveFilenameFromSource(source?: string): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  if (source.startsWith("file://")) {
-    try {
-      return path.basename(fileURLToPath(source)) || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  if (HTTP_URL_RE.test(source)) {
-    try {
-      return path.basename(new URL(source).pathname) || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  const base = path.basename(source);
-  return base || undefined;
+  return basenameFromMediaSource(source);
 }
 
 export async function sendBlueBubblesMedia(params: {
@@ -223,8 +202,8 @@ export async function sendBlueBubblesMedia(params: {
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.bluebubbles?.accounts?.[accountId]?.mediaMaxMb ??
-      cfg.channels?.bluebubbles?.mediaMaxMb,
+      (cfg.channels?.bluebubbles?.accounts?.[accountId] as { mediaMaxMb?: number } | undefined)
+        ?.mediaMaxMb ?? cfg.channels?.bluebubbles?.mediaMaxMb,
     accountId,
   });
   const mediaLocalRoots = resolveMediaLocalRoots({ cfg, accountId });

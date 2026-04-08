@@ -6,14 +6,14 @@ import OpenClawKit
 import OSLog
 
 actor CameraCaptureService {
-    struct CameraDeviceInfo: Encodable, Sendable {
+    struct CameraDeviceInfo: Encodable {
         let id: String
         let name: String
         let position: String
         let deviceType: String
     }
 
-    enum CameraError: LocalizedError, Sendable {
+    enum CameraError: LocalizedError {
         case cameraUnavailable
         case microphoneUnavailable
         case permissionDenied(kind: String)
@@ -164,7 +164,7 @@ actor CameraCaptureService {
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        if !(await CameraAuthorization.isAuthorized(for: mediaType)) {
+        if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
             throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
         }
     }

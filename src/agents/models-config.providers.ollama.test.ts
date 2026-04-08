@@ -2,98 +2,211 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { resolveImplicitProviders, resolveOllamaApiBase } from "./models-config.providers.js";
+import {
+  normalizePluginDiscoveryResult,
+  resolvePluginDiscoveryProviders,
+  runProviderCatalog,
+} from "../plugins/provider-discovery.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { resolveImplicitProviders } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
-describe("resolveOllamaApiBase", () => {
-  it("returns default localhost base when no configured URL is provided", () => {
-    expect(resolveOllamaApiBase()).toBe("http://127.0.0.1:11434");
-  });
-
-  it("strips /v1 suffix from OpenAI-compatible URLs", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434/v1")).toBe("http://ollama-host:11434");
-    expect(resolveOllamaApiBase("http://ollama-host:11434/V1")).toBe("http://ollama-host:11434");
-  });
-
-  it("keeps URLs without /v1 unchanged", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434")).toBe("http://ollama-host:11434");
-  });
-
-  it("handles trailing slash before canonicalizing", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434/v1/")).toBe("http://ollama-host:11434");
-    expect(resolveOllamaApiBase("http://ollama-host:11434/")).toBe("http://ollama-host:11434");
-  });
-});
-
 describe("Ollama provider", () => {
-  it("should not include ollama when no API key is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProviders({ agentDir });
+  const createAgentDir = () => mkdtempSync(join(tmpdir(), "openclaw-test-"));
 
-    expect(providers?.ollama).toBeUndefined();
+  const enableDiscoveryEnv = () => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+  };
+
+  const fetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>): string[] =>
+    fetchMock.mock.calls.map(([input]) => String(input));
+
+  const expectDiscoveryCallCounts = (
+    fetchMock: ReturnType<typeof vi.fn>,
+    params: { tags: number; show: number },
+  ) => {
+    const urls = fetchCallUrls(fetchMock);
+    expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(params.tags);
+    expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(params.show);
+  };
+
+  async function withOllamaApiKey<T>(run: () => Promise<T>): Promise<T> {
+    process.env.OLLAMA_API_KEY = "test-key"; // pragma: allowlist secret
+    try {
+      return await run();
+    } finally {
+      delete process.env.OLLAMA_API_KEY;
+    }
+  }
+
+  async function resolveProvidersWithOllamaKey(agentDir: string) {
+    return withOllamaApiKey(() =>
+      resolveProvidersWithOllamaOnly({
+        agentDir,
+        env: { VITEST: "", NODE_ENV: "development" },
+      }),
+    );
+  }
+
+  async function resolveProvidersWithOllamaOnly(params: {
+    agentDir: string;
+    explicitProviders?: Record<string, ProviderConfig>;
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const env = {
+      ...process.env,
+      OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "ollama",
+      VITEST: "1",
+      NODE_ENV: "test",
+      ...params.env,
+    } satisfies NodeJS.ProcessEnv;
+
+    return resolveImplicitProviders({
+      agentDir: params.agentDir,
+      explicitProviders: params.explicitProviders,
+      env,
+    });
+  }
+
+  let ollamaCatalogProviderPromise: Promise<ProviderPlugin | undefined> | undefined;
+
+  async function loadOllamaCatalogProvider(): Promise<ProviderPlugin | undefined> {
+    ollamaCatalogProviderPromise ??= resolvePluginDiscoveryProviders({
+      env: { ...process.env, OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "ollama", VITEST: "1" },
+      onlyPluginIds: ["ollama"],
+    }).then((providers) => providers.find((provider) => provider.id === "ollama"));
+    return ollamaCatalogProviderPromise;
+  }
+
+  async function runOllamaCatalog(params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  }): Promise<ProviderConfig | undefined> {
+    const provider = await loadOllamaCatalogProvider();
+    if (!provider) {
+      return undefined;
+    }
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      VITEST: "1",
+      NODE_ENV: "test",
+      ...params.env,
+    };
+    const result = await runProviderCatalog({
+      provider,
+      config: params.config ?? {},
+      agentDir: createAgentDir(),
+      env,
+      resolveProviderApiKey: () => ({
+        apiKey: env.OLLAMA_API_KEY?.trim() ? env.OLLAMA_API_KEY : undefined,
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: env.OLLAMA_API_KEY?.trim() ? env.OLLAMA_API_KEY : undefined,
+        mode: env.OLLAMA_API_KEY?.trim() ? "api_key" : "none",
+        source: env.OLLAMA_API_KEY?.trim() ? "env" : "none",
+      }),
+    });
+    return normalizePluginDiscoveryResult({ provider, result }).ollama as
+      | ProviderConfig
+      | undefined;
+  }
+
+  async function withoutAmbientOllamaEnv<T>(run: () => Promise<T>): Promise<T> {
+    const previous = process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_API_KEY;
+    try {
+      return await run();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  }
+
+  const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });
+
+  const tagsResponse = (names: string[]) => ({
+    ok: true,
+    json: async () => ({ models: names.map((name) => createTagModel(name)) }),
+  });
+
+  const notFoundJsonResponse = () => ({
+    ok: false,
+    status: 404,
+    json: async () => ({}),
+  });
+
+  it("should not include ollama when no API key is configured", async () => {
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: undefined },
+    });
+
+    expect(provider).toBeUndefined();
   });
 
   it("should use native ollama api type", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
-
-    try {
-      const providers = await resolveImplicitProviders({ agentDir });
+    const agentDir = createAgentDir();
+    await withOllamaApiKey(async () => {
+      const providers = await resolveProvidersWithOllamaOnly({ agentDir });
 
       expect(providers?.ollama).toBeDefined();
       expect(providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
       expect(providers?.ollama?.api).toBe("ollama");
       expect(providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+    });
   });
 
   it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return tagsResponse([]);
+      }
+      return notFoundJsonResponse();
+    });
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    try {
-      const providers = await resolveImplicitProviders({
-        agentDir,
-        explicitProviders: {
-          ollama: {
-            baseUrl: "http://192.168.20.14:11434/v1",
-            api: "openai-completions",
-            models: [],
+    await withOllamaApiKey(async () => {
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://192.168.20.14:11434/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
           },
         },
+        env: { OLLAMA_API_KEY: "test-key" },
       });
 
+      expect(fetchCallUrls(fetchMock).filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
+
       // Native API strips /v1 suffix via resolveOllamaApiBase()
-      expect(providers?.ollama?.baseUrl).toBe("http://192.168.20.14:11434");
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+      expect(provider?.baseUrl).toBe("http://192.168.20.14:11434");
+    });
   });
 
   it("discovers per-model context windows from /api/show", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
+    const agentDir = createAgentDir();
+    enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/tags")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [
-              { name: "qwen3:32b", modified_at: "", size: 1, digest: "" },
-              { name: "llama3.3:70b", modified_at: "", size: 1, digest: "" },
-            ],
-          }),
-        };
+        return tagsResponse(["qwen3:32b", "llama3.3:70b"]);
       }
       if (url.endsWith("/api/show")) {
         const rawBody = init?.body;
@@ -112,43 +225,26 @@ describe("Ollama provider", () => {
           };
         }
       }
-      return {
-        ok: false,
-        status: 404,
-        json: async () => ({}),
-      };
+      return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    try {
-      const providers = await resolveImplicitProviders({ agentDir });
-      const models = providers?.ollama?.models ?? [];
-      const qwen = models.find((model) => model.id === "qwen3:32b");
-      const llama = models.find((model) => model.id === "llama3.3:70b");
-      expect(qwen?.contextWindow).toBe(131072);
-      expect(llama?.contextWindow).toBe(65536);
-      const urls = fetchMock.mock.calls.map(([input]) => String(input));
-      expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
-      expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(2);
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+    const providers = await resolveProvidersWithOllamaKey(agentDir);
+    const models = providers?.ollama?.models ?? [];
+    const qwen = models.find((model) => model.id === "qwen3:32b");
+    const llama = models.find((model) => model.id === "llama3.3:70b");
+    expect(qwen?.contextWindow).toBe(131072);
+    expect(llama?.contextWindow).toBe(65536);
+    expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 2 });
   });
 
   it("falls back to default context window when /api/show fails", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
+    const agentDir = createAgentDir();
+    enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
       if (url.endsWith("/api/tags")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [{ name: "qwen3:32b", modified_at: "", size: 1, digest: "" }],
-          }),
-        };
+        return tagsResponse(["qwen3:32b"]);
       }
       if (url.endsWith("/api/show")) {
         return {
@@ -156,31 +252,19 @@ describe("Ollama provider", () => {
           status: 500,
         };
       }
-      return {
-        ok: false,
-        status: 404,
-        json: async () => ({}),
-      };
+      return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    try {
-      const providers = await resolveImplicitProviders({ agentDir });
-      const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
-      expect(model?.contextWindow).toBe(128000);
-      const urls = fetchMock.mock.calls.map(([input]) => String(input));
-      expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
-      expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(1);
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+    const providers = await resolveProvidersWithOllamaKey(agentDir);
+    const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
+    expect(model?.contextWindow).toBe(128000);
+    expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 1 });
   });
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
+    const agentDir = createAgentDir();
+    enableDiscoveryEnv();
     const manyModels = Array.from({ length: 250 }, (_, idx) => ({
       name: `model-${idx}`,
       modified_at: "",
@@ -200,19 +284,13 @@ describe("Ollama provider", () => {
         json: async () => ({ model_info: { "llama.context_length": 65536 } }),
       };
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    try {
-      const providers = await resolveImplicitProviders({ agentDir });
-      const models = providers?.ollama?.models ?? [];
-      const urls = fetchMock.mock.calls.map(([input]) => String(input));
-      // 1 call for /api/tags + 200 capped /api/show calls.
-      expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
-      expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(200);
-      expect(models).toHaveLength(200);
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+    const providers = await resolveProvidersWithOllamaKey(agentDir);
+    const models = providers?.ollama?.models ?? [];
+    // 1 call for /api/tags + 200 capped /api/show calls.
+    expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 200 });
+    expect(models).toHaveLength(200);
   });
 
   it("should have correct model structure without streaming override", () => {
@@ -231,60 +309,76 @@ describe("Ollama provider", () => {
   });
 
   it("should skip discovery fetch when explicit models are configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "development");
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const explicitModels: ModelDefinitionConfig[] = [
-      {
-        id: "gpt-oss:20b",
-        name: "GPT-OSS 20B",
-        reasoning: false,
-        input: ["text"] as Array<"text" | "image">,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 81920,
-      },
-    ];
-
-    const providers = await resolveImplicitProviders({
-      agentDir,
-      explicitProviders: {
-        ollama: {
-          baseUrl: "http://remote-ollama:11434/v1",
-          models: explicitModels,
-          apiKey: "config-ollama-key",
+    await withoutAmbientOllamaEnv(async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      const explicitModels: ModelDefinitionConfig[] = [
+        {
+          id: "gpt-oss:20b",
+          name: "GPT-OSS 20B",
+          reasoning: false,
+          input: ["text"] as Array<"text" | "image">,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 81920,
         },
-      },
-    });
+      ];
 
-    const ollamaCalls = fetchMock.mock.calls.filter(([input]) => {
-      const url = String(input);
-      return url.endsWith("/api/tags") || url.endsWith("/api/show");
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://remote-ollama:11434/v1",
+                models: explicitModels,
+                apiKey: "config-ollama-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      const ollamaCalls = fetchMock.mock.calls.filter(([input]) => {
+        const url = String(input);
+        return url.endsWith("/api/tags") || url.endsWith("/api/show");
+      });
+      expect(ollamaCalls).toHaveLength(0);
+      expect(provider?.models).toEqual(explicitModels);
+      expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.apiKey).toBe("config-ollama-key");
     });
-    expect(ollamaCalls).toHaveLength(0);
-    expect(providers?.ollama?.models).toEqual(explicitModels);
-    expect(providers?.ollama?.baseUrl).toBe("http://remote-ollama:11434");
-    expect(providers?.ollama?.api).toBe("ollama");
-    expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
 
   it("should preserve explicit apiKey when discovery path has no models and no env key", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await withoutAmbientOllamaEnv(async () => {
+      const fetchMock = vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/api/tags")) {
+          return tagsResponse([]);
+        }
+        return notFoundJsonResponse();
+      });
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveImplicitProviders({
-      agentDir,
-      explicitProviders: {
-        ollama: {
-          baseUrl: "http://remote-ollama:11434/v1",
-          api: "openai-completions",
-          models: [],
-          apiKey: "config-ollama-key",
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://remote-ollama:11434/v1",
+                api: "openai-completions",
+                models: [],
+                apiKey: "config-ollama-key", // pragma: allowlist secret
+              },
+            },
+          },
         },
-      },
-    });
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
 
-    expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
+      expect(provider?.apiKey).toBe("config-ollama-key");
+    });
   });
 });

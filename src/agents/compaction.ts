@@ -1,11 +1,18 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import {
+  estimateTokens,
+  generateSummary as piGenerateSummary,
+} from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
+import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+import { isTimeoutError } from "./failover-error.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -14,9 +21,20 @@ export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
-const MERGE_SUMMARIES_INSTRUCTIONS =
-  "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
-  " TODOs, open questions, and any constraints.";
+const MERGE_SUMMARIES_INSTRUCTIONS = [
+  "Merge these partial summaries into a single cohesive summary.",
+  "",
+  "MUST PRESERVE:",
+  "- Active tasks and their current status (in-progress, blocked, pending)",
+  "- Batch operation progress (e.g., '5/17 items completed')",
+  "- The last thing the user requested and what was being done about it",
+  "- Decisions made and their rationale",
+  "- TODOs, open questions, and constraints",
+  "- Any commitments or follow-ups promised",
+  "",
+  "PRIORITIZE recent context over older history. The agent needs to know",
+  "what it was doing, not just what was discussed.",
+].join("\n");
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
   "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file names.";
@@ -25,6 +43,30 @@ export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
 };
+
+type GenerateSummaryCompat = {
+  (
+    currentMessages: AgentMessage[],
+    model: NonNullable<ExtensionContext["model"]>,
+    reserveTokens: number,
+    apiKey: string,
+    signal?: AbortSignal,
+    customInstructions?: string,
+    previousSummary?: string,
+  ): Promise<string>;
+  (
+    currentMessages: AgentMessage[],
+    model: NonNullable<ExtensionContext["model"]>,
+    reserveTokens: number,
+    apiKey: string,
+    headers: Record<string, string> | undefined,
+    signal?: AbortSignal,
+    customInstructions?: string,
+    previousSummary?: string,
+  ): Promise<string>;
+};
+
+const generateSummaryCompat = piGenerateSummary as unknown as GenerateSummaryCompat;
 
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
@@ -93,9 +135,29 @@ export function splitMessagesByTokenShare(
   let current: AgentMessage[] = [];
   let currentTokens = 0;
 
+  let pendingToolCallIds = new Set<string>();
+  let pendingChunkStartIndex: number | null = null;
+
+  const splitCurrentAtPendingBoundary = (): boolean => {
+    if (
+      pendingChunkStartIndex === null ||
+      pendingChunkStartIndex <= 0 ||
+      chunks.length >= normalizedParts - 1
+    ) {
+      return false;
+    }
+    chunks.push(current.slice(0, pendingChunkStartIndex));
+    current = current.slice(pendingChunkStartIndex);
+    currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
+    pendingChunkStartIndex = 0;
+    return true;
+  };
+
   for (const message of messages) {
     const messageTokens = estimateCompactionMessageTokens(message);
+
     if (
+      pendingToolCallIds.size === 0 &&
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
       currentTokens + messageTokens > targetTokens
@@ -103,10 +165,40 @@ export function splitMessagesByTokenShare(
       chunks.push(current);
       current = [];
       currentTokens = 0;
+      pendingChunkStartIndex = null;
     }
 
     current.push(message);
     currentTokens += messageTokens;
+
+    if (message.role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(message);
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      const keepsPending =
+        stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
+      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
+    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      const resultId = extractToolResultId(message);
+      if (!resultId) {
+        pendingToolCallIds = new Set();
+        pendingChunkStartIndex = null;
+      } else {
+        pendingToolCallIds.delete(resultId);
+      }
+      if (
+        pendingToolCallIds.size === 0 &&
+        chunks.length < normalizedParts - 1 &&
+        currentTokens > targetTokens
+      ) {
+        splitCurrentAtPendingBoundary();
+        pendingChunkStartIndex = null;
+      }
+    }
+  }
+
+  if (pendingToolCallIds.size > 0 && currentTokens > targetTokens) {
+    splitCurrentAtPendingBoundary();
   }
 
   if (current.length > 0) {
@@ -201,6 +293,7 @@ async function summarizeChunks(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -228,6 +321,7 @@ async function summarizeChunks(params: {
           params.model,
           params.reserveTokens,
           params.apiKey,
+          params.headers,
           params.signal,
           effectiveInstructions,
           summary,
@@ -238,12 +332,45 @@ async function summarizeChunks(params: {
         maxDelayMs: 5000,
         jitter: 0.2,
         label: "compaction/generateSummary",
-        shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
+        shouldRetry: (err) => !isAbortError(err) && !isTimeoutError(err),
       },
     );
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
+}
+
+function generateSummary(
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+): Promise<string> {
+  if (piGenerateSummary.length >= 8) {
+    return generateSummaryCompat(
+      currentMessages,
+      model,
+      reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      customInstructions,
+      previousSummary,
+    );
+  }
+  return generateSummaryCompat(
+    currentMessages,
+    model,
+    reserveTokens,
+    apiKey,
+    signal,
+    customInstructions,
+    previousSummary,
+  );
 }
 
 /**
@@ -254,6 +381,7 @@ export async function summarizeWithFallback(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -272,11 +400,7 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
-    log.warn(
-      `Full summarization failed, trying partial: ${
-        fullError instanceof Error ? fullError.message : String(fullError)
-      }`,
-    );
+    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
   }
 
   // Fallback 1: Summarize only small messages, note oversized ones
@@ -295,7 +419,9 @@ export async function summarizeWithFallback(params: {
     }
   }
 
-  if (smallMessages.length > 0) {
+  // When nothing was oversized, `smallMessages` is the same transcript as the full attempt.
+  // Re-summarizing it would duplicate the same failing API work (and duplicate warn logs).
+  if (smallMessages.length > 0 && smallMessages.length !== messages.length) {
     try {
       const partialSummary = await summarizeChunks({
         ...params,
@@ -304,11 +430,7 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
-      log.warn(
-        `Partial summarization also failed: ${
-          partialError instanceof Error ? partialError.message : String(partialError)
-        }`,
-      );
+      log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
     }
   }
 
@@ -323,6 +445,7 @@ export async function summarizeInStages(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -449,5 +572,7 @@ export function pruneHistoryForContextShare(params: {
 }
 
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
-  return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
+  const effective =
+    (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
+  return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
 }

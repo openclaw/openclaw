@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { isRecord } from "../utils.js";
 
 export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -25,6 +22,17 @@ export function normalizePositiveInt(value: unknown, fallback: number): number {
     return Math.max(1, Math.floor(value));
   }
   return Math.max(1, Math.floor(fallback));
+}
+
+export function parseDotPath(pathname: string): string[] {
+  return pathname
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+export function toDotPath(segments: string[]): string {
+  return segments.join(".");
 }
 
 export function ensureDirForFile(filePath: string): void {

@@ -16,6 +16,10 @@ MUTED='\033[38;2;90;100;128m'       # text-muted    #5a6480
 NC='\033[0m' # No Color
 
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
+NODE_DEFAULT_MAJOR=24
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=14
+NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -936,28 +940,6 @@ append_holiday_taglines() {
     esac
 }
 
-map_legacy_env() {
-    local key="$1"
-    local legacy="$2"
-    if [[ -z "${!key:-}" && -n "${!legacy:-}" ]]; then
-        printf -v "$key" '%s' "${!legacy}"
-    fi
-}
-
-map_legacy_env "OPENCLAW_TAGLINE_INDEX" "CLAWDBOT_TAGLINE_INDEX"
-map_legacy_env "OPENCLAW_NO_ONBOARD" "CLAWDBOT_NO_ONBOARD"
-map_legacy_env "OPENCLAW_NO_PROMPT" "CLAWDBOT_NO_PROMPT"
-map_legacy_env "OPENCLAW_DRY_RUN" "CLAWDBOT_DRY_RUN"
-map_legacy_env "OPENCLAW_INSTALL_METHOD" "CLAWDBOT_INSTALL_METHOD"
-map_legacy_env "OPENCLAW_VERSION" "CLAWDBOT_VERSION"
-map_legacy_env "OPENCLAW_BETA" "CLAWDBOT_BETA"
-map_legacy_env "OPENCLAW_GIT_DIR" "CLAWDBOT_GIT_DIR"
-map_legacy_env "OPENCLAW_GIT_UPDATE" "CLAWDBOT_GIT_UPDATE"
-map_legacy_env "OPENCLAW_NPM_LOGLEVEL" "CLAWDBOT_NPM_LOGLEVEL"
-map_legacy_env "OPENCLAW_VERBOSE" "CLAWDBOT_VERBOSE"
-map_legacy_env "OPENCLAW_PROFILE" "CLAWDBOT_PROFILE"
-map_legacy_env "OPENCLAW_INSTALL_SH_NO_RUN" "CLAWDBOT_INSTALL_SH_NO_RUN"
-
 pick_tagline() {
     append_holiday_taglines
     local count=${#TAGLINES[@]}
@@ -991,6 +973,7 @@ SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
+VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
 HELP=0
@@ -1006,23 +989,25 @@ Options:
   --install-method, --method npm|git   Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
-  --version <version|dist-tag>         npm install: version (default: latest)
+  --version <version|dist-tag|spec>    npm install target (default: latest; use "main" for GitHub main)
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
   --no-git-update                      Skip git pull for existing checkout
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
+  --verify                              Run a post-install smoke verify
   --dry-run                             Print what would happen (no changes)
   --verbose                             Print debug output (set -x, npm verbose)
   --help, -h                            Show this help
 
 Environment variables:
   OPENCLAW_INSTALL_METHOD=git|npm
-  OPENCLAW_VERSION=latest|next|<semver>
+  OPENCLAW_VERSION=latest|next|main|<semver>|<spec>
   OPENCLAW_BETA=0|1
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
   OPENCLAW_NO_PROMPT=1
+  OPENCLAW_VERIFY_INSTALL=1
   OPENCLAW_DRY_RUN=1
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
@@ -1032,6 +1017,8 @@ Environment variables:
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard --verify
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --version main
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
 EOF
 }
@@ -1053,6 +1040,10 @@ parse_args() {
                 ;;
             --verbose)
                 VERBOSE=1
+                shift
+                ;;
+            --verify)
+                VERIFY_INSTALL=1
                 shift
                 ;;
             --no-prompt)
@@ -1247,16 +1238,50 @@ install_homebrew() {
 }
 
 # Check Node.js version
-node_major_version() {
+parse_node_version_components() {
     if ! command -v node &> /dev/null; then
         return 1
     fi
-    local version major
+    local version major minor
     version="$(node -v 2>/dev/null || true)"
     major="${version#v}"
     major="${major%%.*}"
-    if [[ "$major" =~ ^[0-9]+$ ]]; then
+    minor="${version#v}"
+    minor="${minor#*.}"
+    minor="${minor%%.*}"
+
+    if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ ! "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    echo "${major} ${minor}"
+    return 0
+}
+
+node_major_version() {
+    local version_components major minor
+    version_components="$(parse_node_version_components || true)"
+    read -r major minor <<< "$version_components"
+    if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
         echo "$major"
+        return 0
+    fi
+    return 1
+}
+
+node_is_at_least_required() {
+    local version_components major minor
+    version_components="$(parse_node_version_components || true)"
+    read -r major minor <<< "$version_components"
+    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
         return 0
     fi
     return 1
@@ -1279,14 +1304,14 @@ print_active_node_paths() {
     return 0
 }
 
-ensure_macos_node22_active() {
+ensure_macos_default_node_active() {
     if [[ "$OS" != "macos" ]]; then
         return 0
     fi
 
     local brew_node_prefix=""
     if command -v brew &> /dev/null; then
-        brew_node_prefix="$(brew --prefix node@22 2>/dev/null || true)"
+        brew_node_prefix="$(brew --prefix "node@${NODE_DEFAULT_MAJOR}" 2>/dev/null || true)"
         if [[ -n "$brew_node_prefix" && -x "${brew_node_prefix}/bin/node" ]]; then
             export PATH="${brew_node_prefix}/bin:$PATH"
             refresh_shell_command_cache
@@ -1303,28 +1328,63 @@ ensure_macos_node22_active() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Node.js v22 was installed but this shell is using ${active_version} (${active_path})"
+    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
     if [[ -n "$brew_node_prefix" ]]; then
         echo "Add this to your shell profile and restart shell:"
         echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
     else
-        echo "Ensure Homebrew node@22 is first on PATH, then rerun installer."
+        echo "Ensure Homebrew node@${NODE_DEFAULT_MAJOR} is first on PATH, then rerun installer."
     fi
+    return 1
+}
+
+ensure_default_node_active_shell() {
+    if node_is_at_least_required; then
+        return 0
+    fi
+
+    local active_path active_version
+    active_path="$(command -v node 2>/dev/null || echo "not found")"
+    active_version="$(node -v 2>/dev/null || echo "missing")"
+
+    ui_error "Active Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+    print_active_node_paths || true
+
+    local nvm_detected=0
+    if [[ -n "${NVM_DIR:-}" || "$active_path" == *"/.nvm/"* ]]; then
+        nvm_detected=1
+    fi
+    if command -v nvm >/dev/null 2>&1; then
+        nvm_detected=1
+    fi
+
+    if [[ "$nvm_detected" -eq 1 ]]; then
+        echo "nvm appears to be managing Node for this shell."
+        echo "Run:"
+        echo "  nvm install ${NODE_DEFAULT_MAJOR}"
+        echo "  nvm use ${NODE_DEFAULT_MAJOR}"
+        echo "  nvm alias default ${NODE_DEFAULT_MAJOR}"
+        echo "Then open a new shell and rerun:"
+        echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
+    else
+        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} (or Node ${NODE_MIN_VERSION}+ minimum) and ensure it is first on PATH, then rerun installer."
+    fi
+
     return 1
 }
 
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if [[ -n "$NODE_VERSION" && "$NODE_VERSION" -ge 22 ]]; then
+        if node_is_at_least_required; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
         else
             if [[ -n "$NODE_VERSION" ]]; then
-                ui_info "Node.js $(node -v) found, upgrading to v22+"
+                ui_info "Node.js $(node -v) found, upgrading to v${NODE_MIN_VERSION}+"
             else
-                ui_info "Node.js found but version could not be parsed; reinstalling v22+"
+                ui_info "Node.js found but version could not be parsed; reinstalling v${NODE_MIN_VERSION}+"
             fi
             return 1
         fi
@@ -1338,9 +1398,9 @@ check_node() {
 install_node() {
     if [[ "$OS" == "macos" ]]; then
         ui_info "Installing Node.js via Homebrew"
-        run_quiet_step "Installing node@22" brew install node@22
-        brew link node@22 --overwrite --force 2>/dev/null || true
-        if ! ensure_macos_node22_active; then
+        run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"
+        brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force 2>/dev/null || true
+        if ! ensure_macos_default_node_active; then
             exit 1
         fi
         ui_success "Node.js installed"
@@ -1363,7 +1423,7 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
-            ui_success "Node.js v22 installed"
+            ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
             print_active_node_paths || true
             return 0
         fi
@@ -1372,7 +1432,7 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://deb.nodesource.com/setup_22.x" "$tmp"
+            download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
@@ -1383,7 +1443,7 @@ install_node() {
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_22.x" "$tmp"
+            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" dnf install -y -q nodejs
@@ -1394,7 +1454,7 @@ install_node() {
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_22.x" "$tmp"
+            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" yum install -y -q nodejs
@@ -1404,11 +1464,11 @@ install_node() {
             fi
         else
             ui_error "Could not detect package manager"
-            echo "Please install Node.js 22+ manually: https://nodejs.org"
+            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually (or Node ${NODE_MIN_VERSION}+ minimum): https://nodejs.org"
             exit 1
         fi
 
-        ui_success "Node.js v22 installed"
+        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
         print_active_node_paths || true
     fi
 }
@@ -1882,6 +1942,43 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+is_explicit_package_install_spec() {
+    local value="${1:-}"
+    [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
+}
+
+can_resolve_registry_package_version() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    if [[ "${value,,}" == "main" ]]; then
+        return 1
+    fi
+    if is_explicit_package_install_spec "$value"; then
+        return 1
+    fi
+    return 0
+}
+
+resolve_package_install_spec() {
+    local package_name="$1"
+    local value="$2"
+    if [[ "${value,,}" == "main" ]]; then
+        echo "github:openclaw/openclaw#main"
+        return 0
+    fi
+    if is_explicit_package_install_spec "$value"; then
+        echo "$value"
+        return 0
+    fi
+    if [[ "$value" == "latest" ]]; then
+        echo "${package_name}@latest"
+        return 0
+    fi
+    echo "${package_name}@${value}"
+}
+
 install_openclaw() {
     local package_name="openclaw"
     if [[ "$USE_BETA" == "1" ]]; then
@@ -1902,18 +1999,16 @@ install_openclaw() {
     fi
 
     local resolved_version=""
-    resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    if can_resolve_registry_package_version "${OPENCLAW_VERSION}"; then
+        resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    fi
     if [[ -n "$resolved_version" ]]; then
         ui_info "Installing OpenClaw v${resolved_version}"
     else
         ui_info "Installing OpenClaw (${OPENCLAW_VERSION})"
     fi
     local install_spec=""
-    if [[ "${OPENCLAW_VERSION}" == "latest" ]]; then
-        install_spec="${package_name}@latest"
-    else
-        install_spec="${package_name}@${OPENCLAW_VERSION}"
-    fi
+    install_spec="$(resolve_package_install_spec "${package_name}" "${OPENCLAW_VERSION}")"
 
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
@@ -1979,7 +2074,7 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
         return
     fi
 
@@ -2013,14 +2108,52 @@ run_bootstrap_onboarding_if_needed() {
     }
 }
 
+load_install_version_helpers() {
+    local source_path="${BASH_SOURCE[0]-}"
+    local script_dir=""
+    local helper_path=""
+    if [[ -z "$source_path" || ! -f "$source_path" ]]; then
+        return 0
+    fi
+    script_dir="$(cd "$(dirname "$source_path")" && pwd 2>/dev/null || true)"
+    helper_path="${script_dir}/docker/install-sh-common/version-parse.sh"
+    if [[ -n "$script_dir" && -r "$helper_path" ]]; then
+        # shellcheck source=docker/install-sh-common/version-parse.sh
+        source "$helper_path"
+    fi
+}
+
+load_install_version_helpers
+
+if ! declare -F extract_openclaw_semver >/dev/null 2>&1; then
+# Inline fallback when version-parse.sh could not be sourced (for example, stdin install).
+extract_openclaw_semver() {
+    local raw="${1:-}"
+    local parsed=""
+    parsed="$(
+        printf '%s\n' "$raw" \
+            | tr -d '\r' \
+            | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
+            | head -n 1 \
+            || true
+    )"
+    printf '%s' "${parsed#v}"
+}
+fi
+
 resolve_openclaw_version() {
     local version=""
+    local raw_version_output=""
     local claw="${OPENCLAW_BIN:-}"
     if [[ -z "$claw" ]] && command -v openclaw &> /dev/null; then
         claw="$(command -v openclaw)"
     fi
     if [[ -n "$claw" ]]; then
-        version=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        raw_version_output=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        version="$(extract_openclaw_semver "$raw_version_output")"
+        if [[ -z "$version" ]]; then
+            version="$raw_version_output"
+        fi
     fi
     if [[ -z "$version" ]]; then
         local npm_root=""
@@ -2085,7 +2218,38 @@ refresh_gateway_service_if_loaded() {
         return 0
     fi
 
-    run_quiet_step "Probing gateway service" "$claw" gateway status --probe --deep || true
+    run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
+}
+
+verify_installation() {
+    if [[ "${VERIFY_INSTALL}" != "1" ]]; then
+        return 0
+    fi
+
+    ui_stage "Verifying installation"
+    local claw="${OPENCLAW_BIN:-}"
+    if [[ -z "$claw" ]]; then
+        claw="$(resolve_openclaw_bin || true)"
+    fi
+    if [[ -z "$claw" ]]; then
+        ui_error "Install verify failed: openclaw not on PATH yet"
+        warn_openclaw_not_found
+        return 1
+    fi
+
+    run_quiet_step "Checking OpenClaw version" "$claw" --version || return 1
+
+    if is_gateway_daemon_loaded "$claw"; then
+        run_quiet_step "Checking gateway service" "$claw" gateway status --deep || {
+            ui_error "Install verify failed: gateway service unhealthy"
+            ui_info "Run: openclaw gateway status --deep"
+            return 1
+        }
+    else
+        ui_info "Gateway service not loaded; skipping gateway deep probe"
+    fi
+
+    ui_success "Install verify complete"
 }
 
 # Main installation flow
@@ -2156,6 +2320,9 @@ main() {
     # Step 2: Node.js
     if ! check_node; then
         install_node
+    fi
+    if ! ensure_default_node_active_shell; then
+        exit 1
     fi
 
     ui_stage "Installing OpenClaw"
@@ -2325,7 +2492,7 @@ main() {
             ui_info "Skipping onboard (requested); run openclaw onboard later"
         else
             local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true
@@ -2369,6 +2536,10 @@ main() {
                 fi
             fi
         fi
+    fi
+
+    if ! verify_installation; then
+        exit 1
     fi
 
     if [[ "$should_open_dashboard" == "true" ]]; then

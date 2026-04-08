@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { saveAuthProfileStore } from "./auth-profiles.js";
-import { discoverAuthStorage } from "./pi-model-discovery.js";
+import {
+  addEnvBackedPiCredentials,
+  scrubLegacyStaticAuthJsonEntriesForDiscovery,
+} from "./pi-model-discovery.js";
+import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -18,18 +21,23 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
   }
 }
 
-async function pathExists(pathname: string): Promise<boolean> {
-  try {
-    await fs.stat(pathname);
-    return true;
-  } catch {
-    return false;
-  }
+async function writeLegacyAuthJson(
+  agentDir: string,
+  authEntries: Record<string, unknown>,
+): Promise<void> {
+  await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
 }
 
-function writeRuntimeOpenRouterProfile(agentDir: string): void {
-  saveAuthProfileStore(
-    {
+async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
+}
+
+describe("discoverAuthStorage", () => {
+  it("converts runtime auth profiles into pi discovery credentials", () => {
+    const credentials = resolvePiCredentialMapFromStore({
       version: 1,
       profiles: {
         "openrouter:default": {
@@ -37,82 +45,51 @@ function writeRuntimeOpenRouterProfile(agentDir: string): void {
           provider: "openrouter",
           key: "sk-or-v1-runtime",
         },
-      },
-    },
-    agentDir,
-  );
-}
-
-describe("discoverAuthStorage", () => {
-  it("loads runtime credentials from auth-profiles without writing auth.json", async () => {
-    await withAgentDir(async (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-v1-runtime",
-            },
-            "anthropic:default": {
-              type: "token",
-              provider: "anthropic",
-              token: "sk-ant-runtime",
-            },
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "oauth-access",
-              refresh: "oauth-refresh",
-              expires: Date.now() + 60_000,
-            },
-          },
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-runtime",
         },
-        agentDir,
-      );
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
 
-      const authStorage = discoverAuthStorage(agentDir);
-
-      expect(authStorage.hasAuth("openrouter")).toBe(true);
-      expect(authStorage.hasAuth("anthropic")).toBe(true);
-      expect(authStorage.hasAuth("openai-codex")).toBe(true);
-      await expect(authStorage.getApiKey("openrouter")).resolves.toBe("sk-or-v1-runtime");
-      await expect(authStorage.getApiKey("anthropic")).resolves.toBe("sk-ant-runtime");
-      expect(authStorage.get("openai-codex")).toMatchObject({
-        type: "oauth",
-        access: "oauth-access",
-      });
-
-      expect(await pathExists(path.join(agentDir, "auth.json"))).toBe(false);
+    expect(credentials.openrouter).toEqual({
+      type: "api_key",
+      key: "sk-or-v1-runtime",
+    });
+    expect(credentials.anthropic).toEqual({
+      type: "api_key",
+      key: "sk-ant-runtime",
+    });
+    expect(credentials["openai-codex"]).toMatchObject({
+      type: "oauth",
+      access: "oauth-access",
+      refresh: "oauth-refresh",
     });
   });
 
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
     await withAgentDir(async (agentDir) => {
-      writeRuntimeOpenRouterProfile(agentDir);
-      await fs.writeFile(
-        path.join(agentDir, "auth.json"),
-        JSON.stringify(
-          {
-            openrouter: { type: "api_key", key: "legacy-static-key" },
-            "openai-codex": {
-              type: "oauth",
-              access: "oauth-access",
-              refresh: "oauth-refresh",
-              expires: Date.now() + 60_000,
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await writeLegacyAuthJson(agentDir, {
+        openrouter: { type: "api_key", key: "legacy-static-key" },
+        "openai-codex": {
+          type: "oauth",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
 
-      discoverAuthStorage(agentDir);
+      scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
-      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
-        [key: string]: unknown;
-      };
+      const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
       expect(parsed["openai-codex"]).toMatchObject({
         type: "oauth",
@@ -126,23 +103,13 @@ describe("discoverAuthStorage", () => {
       const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
       process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
       try {
-        writeRuntimeOpenRouterProfile(agentDir);
-        await fs.writeFile(
-          path.join(agentDir, "auth.json"),
-          JSON.stringify(
-            {
-              openrouter: { type: "api_key", key: "legacy-static-key" },
-            },
-            null,
-            2,
-          ),
-        );
+        await writeLegacyAuthJson(agentDir, {
+          openrouter: { type: "api_key", key: "legacy-static-key" },
+        });
 
-        discoverAuthStorage(agentDir);
+        scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
-        const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
-          [key: string]: unknown;
-        };
+        const parsed = await readLegacyAuthJson(agentDir);
         expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
       } finally {
         if (previous === undefined) {
@@ -153,4 +120,24 @@ describe("discoverAuthStorage", () => {
       }
     });
   });
+
+  it("includes env-backed provider auth when no auth profile exists", async () => {
+    const previous = process.env.MISTRAL_API_KEY;
+    process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+    try {
+      const credentials = addEnvBackedPiCredentials({}, process.env);
+
+      expect(credentials.mistral).toEqual({
+        type: "api_key",
+        key: "mistral-env-test-key",
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MISTRAL_API_KEY;
+      } else {
+        process.env.MISTRAL_API_KEY = previous;
+      }
+    }
+  });
+
 });

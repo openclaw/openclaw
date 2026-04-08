@@ -80,4 +80,19 @@ describe("typing persistence bug fix", () => {
     controller.markDispatchIdle();
     expect(onCleanupSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("returns an inert controller when typing callbacks are absent", async () => {
+    const inert = createTypingController({});
+
+    await inert.onReplyStart();
+    await inert.startTypingLoop();
+    await inert.startTypingOnText("hello");
+    inert.refreshTypingTtl();
+    inert.markRunComplete();
+    inert.markDispatchIdle();
+    inert.cleanup();
+
+    expect(inert.isActive()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

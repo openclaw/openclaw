@@ -1,12 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
-type HostEnvSecurityPolicy = {
-  blockedKeys: string[];
-  blockedOverrideKeys?: string[];
-  blockedPrefixes: string[];
-};
+import { loadHostEnvSecurityPolicy } from "./host-env-security-policy.js";
 
 function parseSwiftStringArray(source: string, marker: string): string[] {
   const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -16,6 +11,10 @@ function parseSwiftStringArray(source: string, marker: string): string[] {
     throw new Error(`Failed to parse Swift array for marker: ${marker}`);
   }
   return Array.from(match[1].matchAll(/"([^"]+)"/g), (m) => m[1]);
+}
+
+function sortUnique(values: string[]): string[] {
+  return Array.from(new Set(values)).toSorted((a, b) => a.localeCompare(b));
 }
 
 describe("host env security policy parity", () => {
@@ -31,7 +30,8 @@ describe("host env security policy parity", () => {
       "apps/macos/Sources/OpenClaw/HostEnvSanitizer.swift",
     );
 
-    const policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as HostEnvSecurityPolicy;
+    const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const policy = loadHostEnvSecurityPolicy(rawPolicy);
     const generatedSource = fs.readFileSync(generatedSwiftPath, "utf8");
     const sanitizerSource = fs.readFileSync(sanitizerSwiftPath, "utf8");
 
@@ -40,6 +40,10 @@ describe("host env security policy parity", () => {
       generatedSource,
       "static let blockedOverrideKeys",
     );
+    const swiftBlockedOverridePrefixes = parseSwiftStringArray(
+      generatedSource,
+      "static let blockedOverridePrefixes",
+    );
     const swiftBlockedPrefixes = parseSwiftStringArray(
       generatedSource,
       "static let blockedPrefixes",
@@ -47,6 +51,7 @@ describe("host env security policy parity", () => {
 
     expect(swiftBlockedKeys).toEqual(policy.blockedKeys);
     expect(swiftBlockedOverrideKeys).toEqual(policy.blockedOverrideKeys ?? []);
+    expect(swiftBlockedOverridePrefixes).toEqual(policy.blockedOverridePrefixes ?? []);
     expect(swiftBlockedPrefixes).toEqual(policy.blockedPrefixes);
 
     expect(sanitizerSource).toContain(
@@ -56,7 +61,20 @@ describe("host env security policy parity", () => {
       "private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys",
     );
     expect(sanitizerSource).toContain(
+      "private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes",
+    );
+    expect(sanitizerSource).toContain(
       "private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes",
     );
+  });
+
+  it("derives inherited and override lists from explicit policy buckets", () => {
+    const repoRoot = process.cwd();
+    const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
+    const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    const policy = loadHostEnvSecurityPolicy(rawPolicy);
+
+    expect(policy.blockedKeys).toEqual(sortUnique([...policy.blockedEverywhereKeys]));
+    expect(policy.blockedOverrideKeys).toEqual(sortUnique([...policy.blockedOverrideOnlyKeys]));
   });
 });

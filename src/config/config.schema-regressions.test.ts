@@ -51,6 +51,59 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts memorySearch provider "bedrock"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "bedrock",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
@@ -68,6 +121,23 @@ describe("config schema regressions", () => {
       channels: {
         whatsapp: {
           enabled: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts BlueBubbles enrichGroupParticipantsFromContacts at channel and account scope", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          enrichGroupParticipantsFromContacts: true,
+          accounts: {
+            work: {
+              enrichGroupParticipantsFromContacts: false,
+            },
+          },
         },
       },
     });
@@ -122,7 +192,7 @@ describe("config schema regressions", () => {
         defaults: {
           pdfModel: {
             primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5-mini"],
+            fallbacks: ["openai/gpt-5.4-mini"],
           },
           pdfMaxBytesMb: 12,
           pdfMaxPages: 25,
@@ -137,7 +207,7 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          pdfModel: { primary: "openai/gpt-5-mini" },
+          pdfModel: { primary: "openai/gpt-5.4-mini" },
           pdfMaxBytesMb: 0,
           pdfMaxPages: 0,
         },
@@ -183,5 +253,45 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(false);
+  });
+
+  it("accepts signal accountUuid for loop protection", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts telegram actions editMessage and createForumTopic", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          actions: {
+            editMessage: true,
+            createForumTopic: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
+    const res = validateConfigObject({
+      discovery: {
+        wideArea: {
+          enabled: true,
+          domain: "openclaw.internal",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
   });
 });

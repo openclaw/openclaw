@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type LogsState = {
   client: GatewayBrowserClient | null;
@@ -41,7 +46,7 @@ function normalizeLevel(value: unknown): LogLevel | null {
   if (typeof value !== "string") {
     return null;
   }
-  const lowered = value.toLowerCase() as LogLevel;
+  const lowered = normalizeLowercaseStringOrEmpty(value) as LogLevel;
   return LEVELS.has(lowered) ? lowered : null;
 }
 
@@ -77,6 +82,8 @@ export function parseLogLine(line: string): LogEntry {
     let message: string | null = null;
     if (typeof obj["1"] === "string") {
       message = obj["1"];
+    } else if (typeof obj["2"] === "string") {
+      message = obj["2"];
     } else if (!contextObj && typeof obj["0"] === "string") {
       message = obj["0"];
     } else if (typeof obj.message === "string") {
@@ -138,7 +145,12 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
     state.logsTruncated = Boolean(payload.truncated);
     state.logsLastFetchAt = Date.now();
   } catch (err) {
-    state.logsError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.logsEntries = [];
+      state.logsError = formatMissingOperatorReadScopeMessage("logs");
+    } else {
+      state.logsError = String(err);
+    }
   } finally {
     if (!opts?.quiet) {
       state.logsLoading = false;

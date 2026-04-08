@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { CallMode } from "./config.js";
 
 // -----------------------------------------------------------------------------
@@ -246,6 +246,23 @@ export type StartListeningInput = {
 export type StopListeningInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
+};
+
+// -----------------------------------------------------------------------------
+// Call Status Verification (used on restart to verify persisted calls)
+// -----------------------------------------------------------------------------
+
+export type GetCallStatusInput = {
+  providerCallId: ProviderCallId;
+};
+
+export type GetCallStatusResult = {
+  /** Provider-specific status string (e.g. "completed", "in-progress") */
+  status: string;
+  /** True when the provider confirms the call has ended */
+  isTerminal: boolean;
+  /** True when the status could not be determined (transient error) */
+  isUnknown?: boolean;
 };
 
 // -----------------------------------------------------------------------------
