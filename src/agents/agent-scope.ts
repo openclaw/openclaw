@@ -198,6 +198,27 @@ export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): 
   return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
 
+function hasDedicatedAgentPrimaryWithoutFallbackOverride(
+  cfg: OpenClawConfig,
+  agentId: string,
+): boolean {
+  const explicitPrimary = resolveAgentExplicitModelPrimary(cfg, agentId);
+  if (!explicitPrimary) {
+    return false;
+  }
+  if (resolveAgentModelFallbacksOverride(cfg, agentId) !== undefined) {
+    return false;
+  }
+  const defaultPrimary = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
+  if (!defaultPrimary) {
+    return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model).length > 0;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(explicitPrimary) !==
+    normalizeLowercaseStringOrEmpty(defaultPrimary)
+  );
+}
+
 export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
@@ -254,6 +275,9 @@ export function resolveEffectiveModelFallbacks(params: {
   hasSessionModelOverride: boolean;
 }): string[] | undefined {
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  if (hasDedicatedAgentPrimaryWithoutFallbackOverride(params.cfg, params.agentId)) {
+    return agentFallbacksOverride ?? [];
+  }
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }

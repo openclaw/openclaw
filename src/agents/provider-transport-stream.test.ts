@@ -143,6 +143,7 @@ describe("provider transport stream contracts", () => {
       baseUrl: "http://localhost:11434",
     });
 
+    expect(createBoundaryAwareStreamFnForModel(model)).toBeTypeOf("function");
     expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
     expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
     expect(prepareTransportAwareSimpleModel(model)).toBe(model);

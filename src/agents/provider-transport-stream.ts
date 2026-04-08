@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { createBoundaryAwareOllamaStreamFn } from "../plugin-sdk/ollama-runtime.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { createGoogleGenerativeAiTransportStreamFn } from "./google-transport-stream.js";
 import {
@@ -71,6 +72,9 @@ export function createTransportAwareStreamFnForModel(model: Model<Api>): StreamF
 }
 
 export function createBoundaryAwareStreamFnForModel(model: Model<Api>): StreamFn | undefined {
+  if (model.api === "ollama") {
+    return hasTransportOverrides(model) ? undefined : createBoundaryAwareOllamaStreamFn();
+  }
   if (!isTransportAwareApiSupported(model.api)) {
     return undefined;
   }

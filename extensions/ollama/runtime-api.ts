@@ -1,6 +1,7 @@
 export {
   buildAssistantMessage,
   buildOllamaChatRequest,
+  createBoundaryAwareOllamaStreamFn,
   createConfiguredOllamaCompatStreamWrapper,
   convertToOllamaMessages,
   createConfiguredOllamaCompatNumCtxWrapper,

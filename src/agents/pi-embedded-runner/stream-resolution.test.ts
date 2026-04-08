@@ -50,6 +50,20 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     ).toBe("boundary-aware:openai-codex-responses");
   });
 
+  it("describes default Ollama fallback shaping", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: undefined,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "ollama",
+          provider: "ollama-5090",
+          id: "qwen3.5:27b",
+        } as never,
+      }),
+    ).toBe("boundary-aware:ollama");
+  });
+
   it("keeps custom session streams labeled as custom", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
@@ -105,6 +119,22 @@ describe("resolveEmbeddedAgentStreamFn", () => {
         api: "openai-codex-responses",
         provider: "openai-codex",
         id: "codex-mini-latest",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes Ollama fallbacks through the boundary-aware transport", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "ollama",
+        provider: "ollama-5090",
+        id: "qwen3.5:27b",
+        baseUrl: "http://127.0.0.1:11435",
       } as never,
     });
 

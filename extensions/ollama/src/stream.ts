@@ -754,6 +754,16 @@ export function createOllamaStreamFn(
   };
 }
 
+export function createBoundaryAwareOllamaStreamFn(): StreamFn {
+  return (model, context, options) =>
+    createOllamaStreamFn(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: readStringValue(model.baseUrl),
+      }),
+      resolveOllamaModelHeaders(model),
+    )(model, context, options);
+}
+
 export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
   providerBaseUrl?: string;

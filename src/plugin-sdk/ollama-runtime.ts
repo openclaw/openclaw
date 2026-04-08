@@ -26,6 +26,11 @@ export const createConfiguredOllamaCompatStreamWrapper: FacadeModule["createConf
     loadFacadeModule().createConfiguredOllamaCompatStreamWrapper(
       ...args,
     )) as FacadeModule["createConfiguredOllamaCompatStreamWrapper"];
+export const createBoundaryAwareOllamaStreamFn: FacadeModule["createBoundaryAwareOllamaStreamFn"] =
+  ((...args) =>
+    loadFacadeModule().createBoundaryAwareOllamaStreamFn(
+      ...args,
+    )) as FacadeModule["createBoundaryAwareOllamaStreamFn"];
 export const createConfiguredOllamaStreamFn: FacadeModule["createConfiguredOllamaStreamFn"] = ((
   ...args
 ) =>

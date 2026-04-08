@@ -210,6 +210,37 @@ If Ollama is running on a different host or port (explicit config disables auto-
 Do not add `/v1` to the URL. The `/v1` path uses OpenAI-compatible mode, where tool calling is not reliable. Use the base Ollama URL without a path suffix.
 </Warning>
 
+### Multiple Ollama instances
+
+You can configure multiple Ollama providers that all use `api: "ollama"` as long as each provider id and `baseUrl` are distinct. OpenClaw routes each run by the resolved model's active `baseUrl`, so subagents can target different Ollama hosts or GPUs without sharing a single `/api/chat` endpoint.
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        api: "ollama",
+        apiKey: "ollama-local",
+        baseUrl: "http://127.0.0.1:11434",
+        models: [{ id: "qwen3.5:27b", name: "Qwen3.5 27B" }]
+      },
+      "ollama-5090": {
+        api: "ollama",
+        apiKey: "ollama-5090",
+        baseUrl: "http://127.0.0.1:11435",
+        models: [{ id: "qwen3.5:27b", name: "Qwen3.5 27B" }]
+      }
+    }
+  },
+  agents: {
+    list: [
+      { id: "main", model: { primary: "ollama/qwen3.5:27b" } },
+      { id: "nexus", model: { primary: "ollama-5090/qwen3.5:27b" } }
+    ]
+  }
+}
+```
+
 ### Model selection
 
 Once configured, all your Ollama models are available:

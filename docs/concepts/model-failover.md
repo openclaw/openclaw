@@ -222,6 +222,11 @@ bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`,
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
 
+If an agent has its own explicit `agents.list[].model.primary` and that primary
+differs from the global default, OpenClaw treats that agent as a dedicated lane.
+In that case, global fallbacks are not appended unless the agent explicitly sets
+`agents.list[].model.fallbacks` (use `[]` to keep the lane pinned).
+
 ### Candidate chain rules
 
 OpenClaw builds the candidate list from the currently requested `provider/model`
@@ -240,6 +245,8 @@ Rules:
 - When the run started from an override, the configured primary is appended at
   the end so the chain can settle back onto the normal default once earlier
   candidates are exhausted.
+- Dedicated agents with their own explicit primary skip that implicit settle-back
+  step unless they also declare agent-local fallbacks.
 
 ### Which errors advance fallback
 
