@@ -13,6 +13,7 @@ import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+import { stripAnsi } from "../terminal/ansi.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
@@ -586,7 +587,8 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      const warning = warnLogs.findText('Model "openai/gpt-6spoof" not found');
+      const rawWarning = warnLogs.findText('Model "openai/gpt-6spoof" not found');
+      const warning = stripAnsi(rawWarning ?? "");
       expect(warning).toContain('Model "openai/gpt-6spoof" not found');
       expect(warning).not.toContain("\u001B");
       expect(warning).not.toContain("\n");
