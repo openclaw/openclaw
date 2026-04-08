@@ -28,6 +28,7 @@ Most days:
 - Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
 - Prefer targeted runs first when you are iterating on a single failure.
 - Docker-backed QA site: `pnpm qa:lab:up`
+- Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
 When you touch tests or want extra confidence:
 
@@ -40,6 +41,21 @@ When debugging real providers/models (requires real creds):
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
+
+## QA-specific runners
+
+These commands sit beside the main test suites when you need QA-lab realism:
+
+- `pnpm openclaw qa suite`
+  - Runs repo-backed QA scenarios directly on the host.
+- `pnpm openclaw qa suite --runner multipass`
+  - Runs the same QA suite inside a disposable Multipass Linux VM.
+  - Keeps the same scenario-selection behavior as `qa suite` on the host.
+  - Reuses the same provider/model selection flags as `qa suite`; the runner only changes where the suite executes.
+  - Writes the normal QA report + summary plus Multipass logs under
+    `.artifacts/qa-e2e/...`.
+- `pnpm qa:lab:up`
+  - Starts the Docker-backed QA site for operator-style QA work.
 
 ## Test suites (what runs where)
 

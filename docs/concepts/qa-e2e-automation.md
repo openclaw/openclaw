@@ -52,6 +52,18 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
+For a disposable Linux VM lane without bringing Docker into the QA path, run:
+
+```bash
+pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline
+```
+
+This boots a fresh Multipass guest, installs dependencies, builds OpenClaw
+inside the guest, runs `qa suite` on the mock-openai lane, then copies the
+normal QA report and summary back into `.artifacts/qa-e2e/...` on the host.
+It reuses the same scenario-selection behavior as `qa suite` on the host and
+only changes where that suite runs.
+
 ## Repo-backed seeds
 
 Seed assets live in `qa/`:
