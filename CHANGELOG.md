@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- QQBot/media-tags: support HTML entity-encoded angle brackets (`&lt;`/`&gt;`) in media-tag regexes so entity-escaped `<qqimg>` tags from upstream are correctly parsed and normalized. (#60493) Thanks @ylc0919.
 - Slack/media: preserve bearer auth across same-origin `files.slack.com` redirects while still stripping it on cross-origin Slack CDN hops, so `url_private_download` image attachments load again. (#62960) Thanks @vincentkoc.
 - Control UI: guard stale session-history reloads during fast session switches so the selected session and rendered transcript stay in sync. (#62975) Thanks @scoootscooob.
 
