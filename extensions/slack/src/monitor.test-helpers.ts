@@ -166,9 +166,11 @@ export const defaultSlackTestConfig = () => ({
     responsePrefix: "PFX",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
+    tts: { mode: "off" },
   },
   channels: {
     slack: {
+      streaming: { mode: "off" },
       dm: { enabled: true, policy: "open", allowFrom: ["*"] },
       groupPolicy: "open",
     },
@@ -235,6 +237,10 @@ vi.mock("./monitor/send.runtime.js", () => {
     sendMessageSlack: (...args: unknown[]) => slackTestState.sendMock(...args),
   };
 });
+
+vi.mock("../../../src/tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: async (params: { payload: unknown }) => params.payload,
+}));
 
 vi.mock("./monitor/conversation.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./monitor/conversation.runtime.js")>(
