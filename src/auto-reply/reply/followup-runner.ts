@@ -21,7 +21,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
-import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { resolveQueuedReplyRuntimeConfig, resolveRunAuthProfile } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -70,6 +70,7 @@ export function createFollowupRunner(params: {
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
+    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
@@ -98,7 +99,7 @@ export function createFollowupRunner(params: {
           sessionKey: queued.run.sessionKey,
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
@@ -127,8 +128,14 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     const replySessionKey = queued.run.sessionKey ?? sessionKey;
+    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
+    const effectiveQueued =
+      runtimeConfig === queued.run.config
+        ? queued
+        : { ...queued, run: { ...queued.run, config: runtimeConfig } };
+    const run = effectiveQueued.run;
     const replyOperation = createReplyOperation({
-      sessionId: queued.run.sessionId,
+      sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
       resetTriggered: false,
       upstreamAbortSignal: opts?.abortSignal,
@@ -138,25 +145,25 @@ export function createFollowupRunner(params: {
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
+          provider: run.messageProvider,
         }),
       );
-      if (queued.run.sessionKey) {
+      if (run.sessionKey) {
         registerAgentRunContext(runId, {
-          sessionKey: queued.run.sessionKey,
-          verboseLevel: queued.run.verboseLevel,
+          sessionKey: run.sessionKey,
+          verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
       let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
-      let fallbackProvider = queued.run.provider;
-      let fallbackModel = queued.run.model;
+      let fallbackProvider = run.provider;
+      let fallbackModel = run.model;
       let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
-        cfg: queued.run.config,
-        followupRun: queued,
+        cfg: runtimeConfig,
+        followupRun: effectiveQueued,
         promptForEstimate: queued.prompt,
         defaultModel,
         agentCfgContextTokens,
@@ -173,30 +180,30 @@ export function createFollowupRunner(params: {
       replyOperation.setPhase("running");
       try {
         const fallbackResult = await runWithModelFallback({
-          cfg: queued.run.config,
-          provider: queued.run.provider,
-          model: queued.run.model,
+          cfg: runtimeConfig,
+          provider: run.provider,
+          model: run.model,
           runId,
-          agentDir: queued.run.agentDir,
+          agentDir: run.agentDir,
           fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: queued.run.config,
-            agentId: queued.run.agentId,
-            sessionKey: queued.run.sessionKey,
+            cfg: runtimeConfig,
+            agentId: run.agentId,
+            sessionKey: run.sessionKey,
           }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(queued.run, provider);
+            const authProfile = resolveRunAuthProfile(run, provider);
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
-                sessionId: queued.run.sessionId,
-                sessionKey: queued.run.sessionKey,
-                agentId: queued.run.agentId,
+                sessionId: run.sessionId,
+                sessionKey: run.sessionKey,
+                agentId: run.agentId,
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
-                messageProvider: queued.run.messageProvider,
-                agentAccountId: queued.run.agentAccountId,
+                messageProvider: run.messageProvider,
+                agentAccountId: run.agentAccountId,
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
                 currentChannelId: queued.originatingTo,
@@ -204,36 +211,36 @@ export function createFollowupRunner(params: {
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
                     : undefined,
-                groupId: queued.run.groupId,
-                groupChannel: queued.run.groupChannel,
-                groupSpace: queued.run.groupSpace,
-                senderId: queued.run.senderId,
-                senderName: queued.run.senderName,
-                senderUsername: queued.run.senderUsername,
-                senderE164: queued.run.senderE164,
-                senderIsOwner: queued.run.senderIsOwner,
-                sessionFile: queued.run.sessionFile,
-                agentDir: queued.run.agentDir,
-                workspaceDir: queued.run.workspaceDir,
-                config: queued.run.config,
-                skillsSnapshot: queued.run.skillsSnapshot,
+                groupId: run.groupId,
+                groupChannel: run.groupChannel,
+                groupSpace: run.groupSpace,
+                senderId: run.senderId,
+                senderName: run.senderName,
+                senderUsername: run.senderUsername,
+                senderE164: run.senderE164,
+                senderIsOwner: run.senderIsOwner,
+                sessionFile: run.sessionFile,
+                agentDir: run.agentDir,
+                workspaceDir: run.workspaceDir,
+                config: runtimeConfig,
+                skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
-                extraSystemPrompt: queued.run.extraSystemPrompt,
-                ownerNumbers: queued.run.ownerNumbers,
-                enforceFinalTag: queued.run.enforceFinalTag,
+                extraSystemPrompt: run.extraSystemPrompt,
+                ownerNumbers: run.ownerNumbers,
+                enforceFinalTag: run.enforceFinalTag,
                 provider,
                 model,
                 ...authProfile,
-                thinkLevel: queued.run.thinkLevel,
-                verboseLevel: queued.run.verboseLevel,
-                reasoningLevel: queued.run.reasoningLevel,
+                thinkLevel: run.thinkLevel,
+                verboseLevel: run.verboseLevel,
+                reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
-                execOverrides: queued.run.execOverrides,
-                bashElevated: queued.run.bashElevated,
-                timeoutMs: queued.run.timeoutMs,
+                execOverrides: run.execOverrides,
+                bashElevated: run.bashElevated,
+                timeoutMs: run.timeoutMs,
                 runId,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-                blockReplyBreak: queued.run.blockReplyBreak,
+                blockReplyBreak: run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:
                   bootstrapPromptWarningSignaturesSeen[
@@ -287,7 +294,7 @@ export function createFollowupRunner(params: {
         await persistRunSessionUsage({
           storePath,
           sessionKey,
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
@@ -296,10 +303,7 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(
-            fallbackProvider ?? queued.run.provider,
-            queued.run.config,
-          ),
+          usageIsContextSnapshot: isCliProvider(fallbackProvider ?? run.provider, runtimeConfig),
           logLabel: "followup",
         });
       }
@@ -321,10 +325,10 @@ export function createFollowupRunner(params: {
         return [{ ...payload, text: stripped.text }];
       });
       const finalPayloads = resolveFollowupDeliveryPayloads({
-        cfg: queued.run.config,
+        cfg: runtimeConfig,
         payloads: sanitizedPayloads,
-        messageProvider: queued.run.messageProvider,
-        originatingAccountId: queued.originatingAccountId ?? queued.run.agentAccountId,
+        messageProvider: run.messageProvider,
+        originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
         originatingChatType: queued.originatingChatType,
         originatingTo: queued.originatingTo,
@@ -338,9 +342,9 @@ export function createFollowupRunner(params: {
       }
 
       if (autoCompactionCount > 0) {
-        const previousSessionId = queued.run.sessionId;
+        const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
           sessionEntry,
           sessionStore,
           sessionKey,
@@ -353,7 +357,7 @@ export function createFollowupRunner(params: {
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
         if (refreshedSessionEntry) {
-          const queueKey = queued.run.sessionKey ?? sessionKey;
+          const queueKey = run.sessionKey ?? sessionKey;
           if (queueKey) {
             refreshQueuedFollowupSession({
               key: queueKey,
@@ -363,7 +367,7 @@ export function createFollowupRunner(params: {
             });
           }
         }
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
+        if (run.verboseLevel && run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,
@@ -371,7 +375,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, effectiveQueued);
     } finally {
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.

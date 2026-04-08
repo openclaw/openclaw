@@ -1,4 +1,4 @@
-import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/core";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 

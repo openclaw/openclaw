@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -95,6 +95,8 @@ export function buildQaRuntimeEnv(params: {
   xdgConfigHome: string;
   xdgDataHome: string;
   xdgCacheHome: string;
+  bundledPluginsDir?: string;
+  compatibilityHostVersion?: string;
   providerMode?: "mock-openai" | "live-frontier";
   baseEnv?: NodeJS.ProcessEnv;
 }) {
@@ -118,6 +120,10 @@ export function buildQaRuntimeEnv(params: {
     XDG_CONFIG_HOME: params.xdgConfigHome,
     XDG_DATA_HOME: params.xdgDataHome,
     XDG_CACHE_HOME: params.xdgCacheHome,
+    ...(params.bundledPluginsDir ? { OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir } : {}),
+    ...(params.compatibilityHostVersion
+      ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion }
+      : {}),
   };
   return normalizeQaProviderModeEnv(env, params.providerMode);
 }
@@ -136,7 +142,145 @@ function isRetryableGatewayCallError(details: string): boolean {
 export const __testing = {
   buildQaRuntimeEnv,
   isRetryableGatewayCallError,
+  resolveQaBundledPluginsSourceRoot,
+  resolveQaRuntimeHostVersion,
+  createQaBundledPluginsDir,
 };
+
+function resolveQaBundledPluginsSourceRoot(repoRoot: string) {
+  const candidates = [
+    path.join(repoRoot, "dist", "extensions"),
+    path.join(repoRoot, "dist-runtime", "extensions"),
+    path.join(repoRoot, "extensions"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error("failed to resolve qa bundled plugins source root");
+}
+
+function parseStableSemverFloor(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+  const match = value.trim().match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return null;
+  }
+  return {
+    major: Number.parseInt(match[1] ?? "", 10),
+    minor: Number.parseInt(match[2] ?? "", 10),
+    patch: Number.parseInt(match[3] ?? "", 10),
+    label: `${match[1]}.${match[2]}.${match[3]}`,
+  };
+}
+
+function compareSemverFloors(
+  left: ReturnType<typeof parseStableSemverFloor>,
+  right: ReturnType<typeof parseStableSemverFloor>,
+) {
+  if (!left && !right) {
+    return 0;
+  }
+  if (!left) {
+    return -1;
+  }
+  if (!right) {
+    return 1;
+  }
+  if (left.major !== right.major) {
+    return left.major - right.major;
+  }
+  if (left.minor !== right.minor) {
+    return left.minor - right.minor;
+  }
+  return left.patch - right.patch;
+}
+
+async function resolveQaRuntimeHostVersion(params: {
+  repoRoot: string;
+  bundledPluginsSourceRoot: string;
+  allowedPluginIds: readonly string[];
+}) {
+  const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
+  const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
+  let selected = parseStableSemverFloor(rootPackage.version);
+
+  for (const pluginId of params.allowedPluginIds) {
+    const packagePath = path.join(params.bundledPluginsSourceRoot, pluginId, "package.json");
+    if (!existsSync(packagePath)) {
+      continue;
+    }
+    const packageRaw = await fs.readFile(packagePath, "utf8");
+    const packageJson = JSON.parse(packageRaw) as {
+      openclaw?: {
+        install?: {
+          minHostVersion?: string;
+        };
+      };
+    };
+    const candidate = parseStableSemverFloor(packageJson.openclaw?.install?.minHostVersion);
+    if (compareSemverFloors(candidate, selected) > 0) {
+      selected = candidate;
+    }
+  }
+
+  return selected?.label;
+}
+
+async function createQaBundledPluginsDir(params: {
+  repoRoot: string;
+  tempRoot: string;
+  allowedPluginIds: readonly string[];
+}) {
+  const sourceRoot = resolveQaBundledPluginsSourceRoot(params.repoRoot);
+  const sourceTreeRoot = path.dirname(sourceRoot);
+  if (
+    sourceTreeRoot === path.join(params.repoRoot, "dist") ||
+    sourceTreeRoot === path.join(params.repoRoot, "dist-runtime")
+  ) {
+    const stagedRoot = path.join(
+      params.repoRoot,
+      ".artifacts",
+      "qa-runtime",
+      path.basename(params.tempRoot),
+    );
+    await fs.rm(stagedRoot, { recursive: true, force: true });
+    await fs.mkdir(stagedRoot, { recursive: true });
+    const stagedTreeRoot = path.join(stagedRoot, path.basename(sourceTreeRoot));
+    await fs.cp(sourceTreeRoot, stagedTreeRoot, { recursive: true });
+    const stagedExtensionsDir = path.join(stagedTreeRoot, "extensions");
+    for (const entry of await fs.readdir(stagedExtensionsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || params.allowedPluginIds.includes(entry.name)) {
+        continue;
+      }
+      await fs.rm(path.join(stagedExtensionsDir, entry.name), { recursive: true, force: true });
+    }
+    return {
+      bundledPluginsDir: stagedExtensionsDir,
+      stagedRoot,
+    };
+  }
+
+  const bundledPluginsDir = path.join(params.tempRoot, "bundled-plugins");
+  await fs.mkdir(bundledPluginsDir, { recursive: true });
+  for (const pluginId of params.allowedPluginIds) {
+    const sourceDir = path.join(sourceRoot, pluginId);
+    if (!existsSync(sourceDir)) {
+      throw new Error(`qa bundled plugin not found: ${pluginId} (${sourceDir})`);
+    }
+    // Plugin discovery walks real directories; copying avoids symlink-only
+    // trees being skipped by Dirent-based scans in the child runtime.
+    await fs.cp(sourceDir, path.join(bundledPluginsDir, pluginId), { recursive: true });
+  }
+  return {
+    bundledPluginsDir,
+    stagedRoot: null,
+  };
+}
+
 async function waitForGatewayReady(params: {
   baseUrl: string;
   logs: () => string;
@@ -242,9 +386,28 @@ export async function startQaGatewayChild(params: {
     controlUiEnabled: params.controlUiEnabled,
   });
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  const allowedPluginIds = (cfg.plugins?.allow ?? []).filter(
+    (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+  );
+  const bundledPluginsSourceRoot = resolveQaBundledPluginsSourceRoot(params.repoRoot);
+  const { bundledPluginsDir, stagedRoot: stagedBundledPluginsRoot } =
+    await createQaBundledPluginsDir({
+      repoRoot: params.repoRoot,
+      tempRoot,
+      allowedPluginIds,
+    });
+  const runtimeHostVersion = await resolveQaRuntimeHostVersion({
+    repoRoot: params.repoRoot,
+    bundledPluginsSourceRoot,
+    allowedPluginIds,
+  });
 
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
+  const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
+  const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
+  const stdoutLog = createWriteStream(stdoutLogPath, { flags: "a" });
+  const stderrLog = createWriteStream(stderrLogPath, { flags: "a" });
   const env = buildQaRuntimeEnv({
     configPath,
     gatewayToken,
@@ -253,6 +416,8 @@ export async function startQaGatewayChild(params: {
     xdgConfigHome,
     xdgDataHome,
     xdgCacheHome,
+    bundledPluginsDir,
+    compatibilityHostVersion: runtimeHostVersion,
     providerMode: params.providerMode,
   });
 
@@ -274,8 +439,16 @@ export async function startQaGatewayChild(params: {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  child.stdout.on("data", (chunk) => {
+    const buffer = Buffer.from(chunk);
+    stdout.push(buffer);
+    stdoutLog.write(buffer);
+  });
+  child.stderr.on("data", (chunk) => {
+    const buffer = Buffer.from(chunk);
+    stderr.push(buffer);
+    stderrLog.write(buffer);
+  });
 
   const baseUrl = `http://127.0.0.1:${gatewayPort}`;
   const wsUrl = `ws://127.0.0.1:${gatewayPort}`;
@@ -318,7 +491,12 @@ export async function startQaGatewayChild(params: {
       throw lastRpcError ?? new Error("qa gateway rpc client failed to start");
     }
   } catch (error) {
+    stdoutLog.end();
+    stderrLog.end();
     child.kill("SIGTERM");
+    if (!keepTemp && stagedBundledPluginsRoot) {
+      await fs.rm(stagedBundledPluginsRoot, { recursive: true, force: true }).catch(() => {});
+    }
     throw error;
   }
 
@@ -370,6 +548,8 @@ export async function startQaGatewayChild(params: {
     },
     async stop(opts?: { keepTemp?: boolean }) {
       await rpcClient.stop().catch(() => {});
+      stdoutLog.end();
+      stderrLog.end();
       if (!child.killed) {
         child.kill("SIGTERM");
         await Promise.race([
@@ -383,6 +563,9 @@ export async function startQaGatewayChild(params: {
       }
       if (!(opts?.keepTemp ?? keepTemp)) {
         await fs.rm(tempRoot, { recursive: true, force: true });
+        if (stagedBundledPluginsRoot) {
+          await fs.rm(stagedBundledPluginsRoot, { recursive: true, force: true });
+        }
       }
     },
   };

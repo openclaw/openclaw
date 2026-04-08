@@ -18,4 +18,9 @@ execution:
   kind: custom
   handler: reaction-edit-delete
   summary: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
+  config:
+    target: "channel:qa-room"
+    seedText: "seed message"
+    editedText: "seed message (edited)"
+    reactionEmoji: "white_check_mark"
 ```

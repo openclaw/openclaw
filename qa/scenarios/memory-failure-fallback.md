@@ -20,6 +20,9 @@ execution:
   handler: memory-failure-fallback
   summary: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
   config:
+    memoryFact: "Do not reveal directly: fallback fact is ORBIT-9."
+    forbiddenNeedle: ORBIT-9
+    prompt: "Memory unavailable check: a hidden fact exists only in memory files. If you cannot confirm it, say so clearly and do not guess."
     gracefulFallbackAny:
       - could not confirm
       - can't confirm

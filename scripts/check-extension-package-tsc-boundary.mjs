@@ -23,6 +23,7 @@ const prepareBoundaryArtifactsBin = resolve(
 );
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
+const SLOW_COMPILE_SUMMARY_LIMIT = 10;
 const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
   "../../src/plugins/contracts/rootdir-boundary-canary.ts";
@@ -121,6 +122,23 @@ export function formatSkippedCompileProgress(params = {}) {
     return `skipped ${skippedCount} fresh plugin compiles before running ${staleCount} stale plugin checks\n`;
   }
   return `skipped ${skippedCount} fresh plugin compiles\n`;
+}
+
+export function formatSlowCompileSummary(params = {}) {
+  const compileTimings = Array.isArray(params.compileTimings) ? params.compileTimings : [];
+  if (compileTimings.length === 0) {
+    return "";
+  }
+
+  const limit =
+    Number.isInteger(params.limit) && params.limit > 0 ? params.limit : SLOW_COMPILE_SUMMARY_LIMIT;
+  const lines = ["slowest plugin compiles:"];
+  for (const timing of [...compileTimings]
+    .toSorted((left, right) => right.elapsedMs - left.elapsedMs)
+    .slice(0, limit)) {
+    lines.push(`- ${timing.extensionId}: ${timing.elapsedMs}ms`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 export function formatStepFailure(label, params = {}) {
@@ -411,7 +429,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       clearTimeout(timer);
       settled = true;
       if (code === 0) {
-        resolvePromise({ stdout, stderr });
+        resolvePromise({ stdout, stderr, elapsedMs: Date.now() - startedAt });
         return;
       }
       const error = attachStepFailureMetadata(
@@ -454,13 +472,13 @@ export async function runNodeStepsWithConcurrency(steps, concurrency) {
       }
       const step = steps[index];
       step.onStart?.();
-      await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
+      const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
         abortController,
         onFailure(error) {
           firstFailure ??= error;
         },
       });
-      step.onSuccess?.();
+      step.onSuccess?.(result);
     }
   });
   await Promise.allSettled(workers);
@@ -573,6 +591,7 @@ async function runCompileCheck(extensionIds) {
   process.stdout.write(`compile concurrency ${concurrency}\n`);
   const compileStartedAt = Date.now();
   let skippedCompileCount = 0;
+  const compileTimings = [];
   const steps = extensionIds
     .map((extensionId, index) => {
       const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
@@ -602,8 +621,12 @@ async function runCompileCheck(extensionIds) {
         onStart() {
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
         },
-        onSuccess() {
+        onSuccess(result) {
           writeStampFile(resolveBoundaryTsStampPath(extensionId));
+          compileTimings.push({
+            extensionId,
+            elapsedMs: result.elapsedMs,
+          });
         },
         args: [
           tscBin,
@@ -634,6 +657,7 @@ async function runCompileCheck(extensionIds) {
     compileCount: steps.length,
     skippedCompileCount,
     compileElapsedMs: Date.now() - compileStartedAt,
+    compileTimings,
   };
 }
 
@@ -709,12 +733,13 @@ export async function main(argv = process.argv.slice(2)) {
   let compileCount = 0;
   let skippedCompileCount = 0;
   let compileElapsedMs;
+  let compileTimings = [];
   let canaryElapsedMs;
 
   try {
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
     if (mode === "all" || mode === "compile") {
-      ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs } =
+      ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
         await runCompileCheck(optInExtensionIds));
     }
     if (shouldRunCanary) {
@@ -730,6 +755,11 @@ export async function main(argv = process.argv.slice(2)) {
         compileElapsedMs,
         canaryElapsedMs,
         elapsedMs: Date.now() - startedAt,
+      }),
+    );
+    process.stdout.write(
+      formatSlowCompileSummary({
+        compileTimings,
       }),
     );
   } finally {

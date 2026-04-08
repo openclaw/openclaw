@@ -20,4 +20,14 @@ execution:
   kind: custom
   handler: runtime-inventory-drift-check
   summary: Verify tools.effective and skills.status stay aligned with runtime behavior after config changes.
+  config:
+    skillName: qa-drift-skill
+    successMarker: DRIFT-SKILL-OK
+    skillBody: |-
+      ---
+      name: qa-drift-skill
+      description: Drift skill marker
+      ---
+      When the user asks for the drift skill marker exactly, reply with exactly: DRIFT-SKILL-OK
+    deniedTool: image_generate
 ```
