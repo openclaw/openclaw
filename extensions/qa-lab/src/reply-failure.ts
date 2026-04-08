@@ -10,6 +10,7 @@ const FAILURE_REPLY_PREFIXES = [
   "⚠️ model login failed on the gateway",
   "⚠️ agent failed before reply:",
   "⚠️ no api key found for provider ",
+  "⚠️ missing api key for ",
 ];
 
 export function extractQaFailureReplyText(text: string): string | undefined {
