@@ -713,13 +713,13 @@ export async function handleFeishuMessage(params: {
         });
         if (quotedMessageInfo) {
           // If the quoted message contains media, download and attach it
-          const quotedMediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+          const quotedMediaTypes = ["image", "file", "audio", "video", "sticker"];
           if (quotedMediaTypes.includes(quotedMessageInfo.contentType)) {
             const quotedMediaList = await resolveFeishuMediaList({
               cfg,
               messageId: quotedMessageInfo.messageId,
               messageType: quotedMessageInfo.contentType,
-              content: quotedMessageInfo.content,
+              content: quotedMessageInfo.rawContent ?? quotedMessageInfo.content,
               maxBytes: mediaMaxBytes,
               log,
               accountId: account.accountId,
@@ -743,7 +743,10 @@ export async function handleFeishuMessage(params: {
                 `feishu[${account.accountId}]: resolved ${quotedMediaList.length} media from quoted message`,
               );
             }
-            quotedContent = `<media:${quotedMessageInfo.contentType}>`;
+            quotedContent =
+              quotedMediaList.length > 0
+                ? `<media:${quotedMessageInfo.contentType}>`
+                : quotedMessageInfo.content;
           } else {
             quotedContent = quotedMessageInfo.content;
           }

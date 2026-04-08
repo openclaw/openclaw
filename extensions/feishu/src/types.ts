@@ -70,6 +70,8 @@ export type FeishuMessageInfo = {
   senderOpenId?: string;
   senderType?: string;
   content: string;
+  /** Raw body.content JSON from the Feishu API (before normalization). */
+  rawContent?: string;
   contentType: string;
   createTime?: number;
   /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
