@@ -1566,7 +1566,7 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
-  test("sessions.reset preserves explicit model overrides without auth profile source", async () => {
+  test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = {
       model: {
@@ -1581,7 +1581,6 @@ describe("gateway server sessions", () => {
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
-          modelOverrideSource: "user",
           modelProvider: "openai",
           model: "gpt-test-a",
         },
@@ -1595,6 +1594,7 @@ describe("gateway server sessions", () => {
       entry: {
         providerOverride?: string;
         modelOverride?: string;
+        modelOverrideSource?: string;
         modelProvider?: string;
         model?: string;
       };
@@ -1603,6 +1603,7 @@ describe("gateway server sessions", () => {
     expect(reset.ok).toBe(true);
     expect(reset.payload?.entry.providerOverride).toBe("anthropic");
     expect(reset.payload?.entry.modelOverride).toBe("claude-opus-4-1");
+    expect(reset.payload?.entry.modelOverrideSource).toBe("user");
     expect(reset.payload?.entry.modelProvider).toBe("anthropic");
     expect(reset.payload?.entry.model).toBe("claude-opus-4-1");
 
@@ -1611,12 +1612,14 @@ describe("gateway server sessions", () => {
       {
         providerOverride?: string;
         modelOverride?: string;
+        modelOverrideSource?: string;
         modelProvider?: string;
         model?: string;
       }
     >;
     expect(store["agent:main:main"]?.providerOverride).toBe("anthropic");
     expect(store["agent:main:main"]?.modelOverride).toBe("claude-opus-4-1");
+    expect(store["agent:main:main"]?.modelOverrideSource).toBe("user");
     expect(store["agent:main:main"]?.modelProvider).toBe("anthropic");
     expect(store["agent:main:main"]?.model).toBe("claude-opus-4-1");
 

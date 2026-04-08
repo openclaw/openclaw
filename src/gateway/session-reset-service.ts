@@ -80,10 +80,16 @@ function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
-  if (entry.modelOverrideSource === "user" && entry.modelOverride) {
+  // `modelOverrideSource` is new. Older persisted sessions can still carry
+  // user-selected overrides without the source field, so treat an absent
+  // source as legacy user state during reset and backfill it forward.
+  const preserveLegacyUserModelOverride =
+    entry.modelOverrideSource === "user" ||
+    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
+  if (preserveLegacyUserModelOverride && entry.modelOverride) {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
-    preserved.modelOverrideSource = entry.modelOverrideSource;
+    preserved.modelOverrideSource = "user";
   }
 
   if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
