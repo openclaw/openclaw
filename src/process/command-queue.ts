@@ -141,7 +141,7 @@ function resolveActiveTaskWaiter(waiter: ActiveTaskWaiter, result: { drained: bo
 
 function notifyActiveTaskWaiters(): void {
   const queueState = getQueueState();
-  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
+  for (const waiter of Array.from(queueState.activeTaskWaiters || [])) {
     if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
       resolveActiveTaskWaiter(waiter, { drained: true });
     }
