@@ -77,6 +77,56 @@ describe("google music generation provider", () => {
     );
   });
 
+  it("strips /v1beta from configured Google baseUrl before passing to GoogleGenAI SDK", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateContentMock.mockResolvedValue({
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                inlineData: {
+                  data: Buffer.from("mp3-bytes").toString("base64"),
+                  mimeType: "audio/mpeg",
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const provider = buildGoogleMusicGenerationProvider();
+    await provider.generateMusic({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      prompt: "chill lofi beats",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            },
+          },
+        },
+      },
+    });
+
+    // The SDK appends its own /v1beta — if we pass /v1beta in baseUrl the path becomes
+    // /v1beta/v1beta/... and the request 404s. The provider must strip it before calling SDK.
+    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          baseUrl: "https://generativelanguage.googleapis.com",
+        }),
+      }),
+    );
+  });
+
   it("rejects unsupported wav output on clip model", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

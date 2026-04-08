@@ -8,7 +8,7 @@ import type {
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeGoogleApiBaseUrl } from "./api.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 
 const DEFAULT_GOOGLE_MUSIC_MODEL = "lyria-3-clip-preview";
 const GOOGLE_PRO_MUSIC_MODEL = "lyria-3-pro-preview";
@@ -35,7 +35,10 @@ type GoogleGenerateMusicResponse = {
 
 function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-  return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
+  // resolveGoogleGenerativeAiApiOrigin normalizes and strips /v1beta because the GoogleGenAI
+  // SDK appends its own API version segment — passing /v1beta produces a double
+  // /v1beta/v1beta path that returns 404.
+  return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
 }
 
 function buildMusicPrompt(req: MusicGenerationRequest): string {
