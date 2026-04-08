@@ -56,8 +56,10 @@ function normalizeMode(value?: string): RedactSensitiveMode {
 
 function parsePattern(raw: RedactPattern): RegExp | null {
   if (raw instanceof RegExp) {
-    const flags = raw.flags.includes("g") ? raw.flags : `${raw.flags}g`;
-    return new RegExp(raw.source, flags);
+    if (raw.flags.includes("g")) {
+      return raw;
+    }
+    return new RegExp(raw.source, `${raw.flags}g`);
   }
   if (!raw.trim()) {
     return null;

@@ -145,4 +145,15 @@ describe("redactSensitiveText", () => {
       "OPENAI_API_KEY=sk-1234567890abcdef",
     );
   });
+
+  it("reuses compiled global regex patterns", () => {
+    const pattern = /token=([A-Za-z0-9]+)/g;
+    const resolved = resolveRedactOptions({
+      mode: "tools",
+      patterns: [pattern],
+    });
+
+    expect(resolved.patterns).toHaveLength(1);
+    expect(resolved.patterns[0]).toBe(pattern);
+  });
 });
