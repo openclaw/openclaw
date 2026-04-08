@@ -123,6 +123,10 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
   return false;
 }
 
+function isTelegramNotFoundError(err: unknown): boolean {
+  return /404:\s*Not Found/i.test(String(err));
+}
+
 function formatTelegramCommandRetrySuccessLog(params: {
   initialCount: number;
   acceptedCount: number;
@@ -282,10 +286,21 @@ export function syncTelegramMenuCommands(params: {
       deleteSucceeded = await withTelegramApiErrorLogging({
         operation: "deleteMyCommands",
         runtime,
+        shouldLog: (err) => !isTelegramNotFoundError(err),
         fn: () => bot.api.deleteMyCommands(),
       })
         .then(() => true)
-        .catch(() => false);
+        .catch((err) => {
+          if (isTelegramNotFoundError(err)) {
+            if (process.env.OPENCLAW_DEBUG_TELEGRAM_ROUTE === "1") {
+              runtime.log?.(
+                "telegram: deleteMyCommands returned 404; assuming command menu is already empty",
+              );
+            }
+            return true;
+          }
+          return false;
+        });
     }
 
     if (commandsToRegister.length === 0) {

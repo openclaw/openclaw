@@ -215,6 +215,26 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("preserves configured proxy baseUrl for GPT-5.4 forward-compat models", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      providerConfig: {
+        baseUrl: "https://apiqd.com/v1",
+      },
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://apiqd.com/v1",
+    });
+  });
+
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();

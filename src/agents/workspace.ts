@@ -204,6 +204,22 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+function formatLocalDateStamp(value: Date): string {
+  const year = String(value.getFullYear());
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+async function ensureDailyMemoryNotes(dir: string, now = new Date()): Promise<void> {
+  const memoryDir = path.join(dir, "memory");
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  await fs.mkdir(memoryDir, { recursive: true });
+  await writeFileIfMissing(path.join(memoryDir, `${formatLocalDateStamp(now)}.md`), "");
+  await writeFileIfMissing(path.join(memoryDir, `${formatLocalDateStamp(yesterday)}.md`), "");
+}
+
 function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
@@ -448,6 +464,7 @@ export async function ensureAgentWorkspace(params?: {
   if (stateDirty) {
     await writeWorkspaceSetupState(statePath, state);
   }
+  await ensureDailyMemoryNotes(dir);
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
   return {

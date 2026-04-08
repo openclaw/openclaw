@@ -255,6 +255,48 @@ describe("TelegramPollingSession", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
 
+  it("treats deleteWebhook 404 as idempotent during polling startup", async () => {
+    const abort = new AbortController();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => {
+          throw new Error("404: Not Found");
+        }),
+        getUpdates: vi.fn(async () => []),
+        config: { use: vi.fn() },
+      },
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+    runMock.mockReturnValue({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: undefined,
+    });
+
+    await session.runUntilAbort();
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
   it("forces a restart when polling stalls without getUpdates activity", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);

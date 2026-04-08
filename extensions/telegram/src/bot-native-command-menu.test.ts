@@ -284,6 +284,38 @@ describe("bot-native-command-menu", () => {
     await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
   });
 
+  it("treats deleteMyCommands 404 as idempotent success for empty menus", async () => {
+    const deleteMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("404: Not Found"))
+      .mockResolvedValue(undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-delete-404-${Date.now()}`;
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(1));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+
+    expect(deleteMyCommands).toHaveBeenCalledTimes(1);
+    expect(setMyCommands).not.toHaveBeenCalled();
+  });
+
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi

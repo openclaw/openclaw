@@ -1,5 +1,9 @@
 import type { TelegramTransport } from "./fetch.js";
 
+function isTelegramDiagEnabled(): boolean {
+  return process.env.OPENCLAW_DEBUG_TELEGRAM_ROUTE === "1";
+}
+
 type TelegramPollingTransportStateOpts = {
   log: (line: string) => void;
   initialTransport?: TelegramTransport;
@@ -23,7 +27,7 @@ export class TelegramPollingTransportState {
     const nextTransport = shouldCreateTransport
       ? (this.opts.createTelegramTransport?.() ?? this.#telegramTransport)
       : this.#telegramTransport;
-    if (this.#transportDirty && nextTransport) {
+    if (this.#transportDirty && nextTransport && isTelegramDiagEnabled()) {
       this.opts.log("[telegram][diag] rebuilding transport for next polling cycle");
     }
     this.#telegramTransport = nextTransport;

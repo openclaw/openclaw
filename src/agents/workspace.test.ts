@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -171,6 +171,21 @@ describe("ensureAgentWorkspace", () => {
       "utf-8",
     );
     expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
+  });
+
+  it("pre-creates today and yesterday daily memory notes", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T22:52:00Z"));
+
+    try {
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await expect(fs.access(path.join(tempDir, "memory", "2026-04-07.md"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, "memory", "2026-04-06.md"))).resolves.toBeUndefined();
   });
 });
 

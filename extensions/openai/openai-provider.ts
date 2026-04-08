@@ -70,6 +70,7 @@ const OPENAI_MODERN_MODEL_IDS = [
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
@@ -103,6 +104,11 @@ function normalizeOpenAITransport(model: ProviderRuntimeModel): ProviderRuntimeM
   };
 }
 
+function resolveForwardCompatBaseUrl(ctx: ProviderResolveDynamicModelContext): string {
+  const configuredBaseUrl = ctx.providerConfig?.baseUrl?.trim();
+  return configuredBaseUrl || OPENAI_DEFAULT_BASE_URL;
+}
+
 function resolveOpenAIGpt54ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -115,7 +121,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveForwardCompatBaseUrl(ctx),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_COST,
@@ -127,7 +133,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveForwardCompatBaseUrl(ctx),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_PRO_COST,
@@ -139,7 +145,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveForwardCompatBaseUrl(ctx),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_MINI_COST,
@@ -151,7 +157,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveForwardCompatBaseUrl(ctx),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_NANO_COST,
