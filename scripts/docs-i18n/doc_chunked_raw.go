@@ -18,6 +18,14 @@ var (
 	docsComponentTagRE = regexp.MustCompile(`<(/?)([A-Z][A-Za-z0-9]*)\b[^>]*?/?>`)
 )
 
+var docsProtocolTokens = []string{
+	frontmatterTagStart,
+	frontmatterTagEnd,
+	bodyTagStart,
+	bodyTagEnd,
+	"[[[FM_",
+}
+
 type docChunkStructure struct {
 	fenceCount int
 	tagCounts  map[string]int
@@ -158,6 +166,14 @@ func groupDocBlocks(blocks []string, maxBytes int) [][]string {
 }
 
 func validateDocChunkTranslation(source, translated string) error {
+	for _, token := range docsProtocolTokens {
+		if strings.Contains(source, token) {
+			continue
+		}
+		if strings.Contains(translated, token) {
+			return fmt.Errorf("protocol token leaked: %s", token)
+		}
+	}
 	sourceStructure := summarizeDocChunkStructure(source)
 	translatedStructure := summarizeDocChunkStructure(translated)
 	if sourceStructure.fenceCount != translatedStructure.fenceCount {

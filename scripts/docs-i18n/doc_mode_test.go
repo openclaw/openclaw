@@ -99,6 +99,37 @@ func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _,
 
 func (docFrontmatterFallbackTranslator) Close() {}
 
+type docProtocolLeakTranslator struct{}
+
+func (docProtocolLeakTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (docProtocolLeakTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	switch {
+	case strings.Contains(text, "First chunk") && strings.Contains(text, "Second chunk"):
+		return strings.Join([]string{
+			"<frontmatter>",
+			"title: leaked",
+			"</frontmatter>",
+			"",
+			"<body>",
+			"First translated",
+			"",
+			"Second translated",
+			"</body>",
+		}, "\n"), nil
+	default:
+		replacer := strings.NewReplacer(
+			"First chunk", "First translated",
+			"Second chunk", "Second translated",
+		)
+		return replacer.Replace(text), nil
+	}
+}
+
+func (docProtocolLeakTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +252,42 @@ func TestTranslateDocBodyChunkedFallsBackToMaskedTranslateForLeafValidationFailu
 	}
 	if !strings.Contains(translated, "Gateway 只有在 `local` 时才会启动。") {
 		t.Fatalf("expected fallback translation to be applied:\n%s", translated)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsProtocolTokenLeakage(t *testing.T) {
+	t.Parallel()
+
+	source := "Regular paragraph.\n\n"
+	translated := "<frontmatter>\ntitle: leaked\n</frontmatter>\n<body>\nRegular paragraph.\n</body>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected protocol token leakage to be rejected")
+	}
+	if !strings.Contains(err.Error(), "protocol token leaked") {
+		t.Fatalf("expected protocol token leakage error, got %v", err)
+	}
+}
+
+func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
+	body := strings.Join([]string{
+		"First chunk",
+		"",
+		"Second chunk",
+		"",
+	}, "\n")
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	translated, err := translateDocBodyChunked(context.Background(), docProtocolLeakTranslator{}, "gateway/configuration-reference.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if strings.Contains(translated, "<frontmatter>") || strings.Contains(translated, "<body>") || strings.Contains(translated, "[[[FM_") {
+		t.Fatalf("expected protocol wrapper leakage to be removed after split:\n%s", translated)
+	}
+	if !strings.Contains(translated, "First translated") || !strings.Contains(translated, "Second translated") {
+		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
 	}
 }
 
