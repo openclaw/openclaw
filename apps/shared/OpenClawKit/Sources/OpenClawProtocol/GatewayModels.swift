@@ -5148,6 +5148,416 @@ public struct ShutdownEvent: Codable, Sendable {
     }
 }
 
+public struct AgentsWorkspaceDeleteParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+    public let recursive: Bool?
+
+    public init(
+        agentid: String,
+        path: String,
+        recursive: Bool?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.recursive = recursive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case recursive
+    }
+}
+
+public struct AgentsWorkspaceDeleteResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let path: String
+    public let deleted: Bool
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        path: String,
+        deleted: Bool)
+    {
+        self.ok = ok
+        self.agentid = agentid
+        self.path = path
+        self.deleted = deleted
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case path
+        case deleted
+    }
+}
+
+public struct AgentsWorkspaceGetParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+    public let encoding: AnyCodable?
+
+    public init(
+        agentid: String,
+        path: String,
+        encoding: AnyCodable?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.encoding = encoding
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case encoding
+    }
+}
+
+public struct AgentsWorkspaceGetResult: Codable, Sendable {
+    public let agentid: String
+    public let workspace: String
+    public let path: String
+    public let content: String
+    public let encoding: AnyCodable
+    public let size: Int
+    public let updatedatms: Int?
+
+    public init(
+        agentid: String,
+        workspace: String,
+        path: String,
+        content: String,
+        encoding: AnyCodable,
+        size: Int,
+        updatedatms: Int?)
+    {
+        self.agentid = agentid
+        self.workspace = workspace
+        self.path = path
+        self.content = content
+        self.encoding = encoding
+        self.size = size
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case workspace
+        case path
+        case content
+        case encoding
+        case size
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct AgentsWorkspaceListParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String?
+    public let recursive: Bool?
+
+    public init(
+        agentid: String,
+        path: String?,
+        recursive: Bool?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.recursive = recursive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case recursive
+    }
+}
+
+public struct AgentsWorkspaceListResult: Codable, Sendable {
+    public let agentid: String
+    public let workspace: String
+    public let path: String
+    public let entries: [WorkspaceEntry]
+
+    public init(
+        agentid: String,
+        workspace: String,
+        path: String,
+        entries: [WorkspaceEntry])
+    {
+        self.agentid = agentid
+        self.workspace = workspace
+        self.path = path
+        self.entries = entries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case workspace
+        case path
+        case entries
+    }
+}
+
+public struct AgentsWorkspaceMkdirParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+    public let parents: Bool?
+
+    public init(
+        agentid: String,
+        path: String,
+        parents: Bool?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.parents = parents
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case parents
+    }
+}
+
+public struct AgentsWorkspaceMkdirResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let path: String
+    public let created: Bool
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        path: String,
+        created: Bool)
+    {
+        self.ok = ok
+        self.agentid = agentid
+        self.path = path
+        self.created = created
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case path
+        case created
+    }
+}
+
+public struct AgentsWorkspaceMoveParams: Codable, Sendable {
+    public let agentid: String
+    public let from: String
+    public let to: String
+    public let overwrite: Bool?
+
+    public init(
+        agentid: String,
+        from: String,
+        to: String,
+        overwrite: Bool?)
+    {
+        self.agentid = agentid
+        self.from = from
+        self.to = to
+        self.overwrite = overwrite
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case from
+        case to
+        case overwrite
+    }
+}
+
+public struct AgentsWorkspaceMoveResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let from: String
+    public let to: String
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        from: String,
+        to: String)
+    {
+        self.ok = ok
+        self.agentid = agentid
+        self.from = from
+        self.to = to
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case from
+        case to
+    }
+}
+
+public struct AgentsWorkspaceSetParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+    public let content: String
+    public let encoding: AnyCodable?
+    public let createdirs: Bool?
+
+    public init(
+        agentid: String,
+        path: String,
+        content: String,
+        encoding: AnyCodable?,
+        createdirs: Bool?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.content = content
+        self.encoding = encoding
+        self.createdirs = createdirs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case content
+        case encoding
+        case createdirs = "createDirs"
+    }
+}
+
+public struct AgentsWorkspaceSetResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let path: String
+    public let size: Int
+    public let updatedatms: Int
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        path: String,
+        size: Int,
+        updatedatms: Int)
+    {
+        self.ok = ok
+        self.agentid = agentid
+        self.path = path
+        self.size = size
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case path
+        case size
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct AgentsWorkspaceStatParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+
+    public init(
+        agentid: String,
+        path: String)
+    {
+        self.agentid = agentid
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+    }
+}
+
+public struct AgentsWorkspaceStatResult: Codable, Sendable {
+    public let agentid: String
+    public let workspace: String
+    public let path: String
+    public let type: WorkspaceEntryType
+    public let size: Int?
+    public let updatedatms: Int?
+    public let createdatms: Int?
+    public let iswritable: Bool
+
+    public init(
+        agentid: String,
+        workspace: String,
+        path: String,
+        type: WorkspaceEntryType,
+        size: Int?,
+        updatedatms: Int?,
+        createdatms: Int?,
+        iswritable: Bool)
+    {
+        self.agentid = agentid
+        self.workspace = workspace
+        self.path = path
+        self.type = type
+        self.size = size
+        self.updatedatms = updatedatms
+        self.createdatms = createdatms
+        self.iswritable = iswritable
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case workspace
+        case path
+        case type
+        case size
+        case updatedatms = "updatedAtMs"
+        case createdatms = "createdAtMs"
+        case iswritable = "isWritable"
+    }
+}
+
+public struct WorkspaceEntry: Codable, Sendable {
+    public let name: String
+    public let path: String
+    public let type: WorkspaceEntryType
+    public let size: Int?
+    public let updatedatms: Int?
+    public let createdatms: Int?
+
+    public init(
+        name: String,
+        path: String,
+        type: WorkspaceEntryType,
+        size: Int?,
+        updatedatms: Int?,
+        createdatms: Int?)
+    {
+        self.name = name
+        self.path = path
+        self.type = type
+        self.size = size
+        self.updatedatms = updatedatms
+        self.createdatms = createdatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case path
+        case type
+        case size
+        case updatedatms = "updatedAtMs"
+        case createdatms = "createdAtMs"
+    }
+}
+
 public enum GatewayFrame: Codable, Sendable {
     case req(RequestFrame)
     case res(ResponseFrame)
