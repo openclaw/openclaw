@@ -69,7 +69,7 @@ function expectResolvedBundledDir(params: {
   bundledDirOverride?: string;
   disableBundledPlugins?: string;
   vitest?: string;
-  execArgv?: string[];
+  execArgv?: readonly string[];
 }) {
   vi.spyOn(process, "cwd").mockReturnValue(params.cwd);
   process.argv[1] = params.argv1 ?? "/usr/bin/env";
@@ -103,7 +103,7 @@ function expectResolvedBundledDirFromRoot(params: {
   bundledDirOverride?: string;
   vitest?: string;
   cwd?: string;
-  execArgv?: string[];
+  execArgv?: readonly string[];
 }) {
   expectResolvedBundledDir({
     cwd: params.cwd ?? params.repoRoot,
