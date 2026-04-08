@@ -541,7 +541,6 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               doubleClick,
-              ssrfPolicy,
             };
             if (ref) {
               clickRequest.ref = ref;
@@ -1112,7 +1111,6 @@ export function registerBrowserAgentActRoutes(
               actions,
               stopOnError,
               evaluateEnabled,
-              ssrfPolicy,
             });
             return res.json({ ok: true, targetId: tab.targetId, results: result.results });
           }

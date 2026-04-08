@@ -1158,7 +1158,6 @@ async function executeSingleAction(
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
-        ssrfPolicy,
         depth: depth + 1,
       });
       break;
