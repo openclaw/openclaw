@@ -53,9 +53,11 @@ import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import {
+  getActivePluginHookRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRuntimeSubagentMode,
+  pinActivePluginHookRegistry,
   recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -1049,14 +1051,17 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
-  const previousRuntimeSubagentMode = getActivePluginRuntimeSubagentMode();
-  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  // Keep live gateway hooks wired to the gateway-bindable registry even if a later
-  // default-mode plugin load refreshes other global plugin surfaces.
-  if (previousRuntimeSubagentMode === "gateway-bindable" && runtimeSubagentMode === "default") {
-    return;
+  if (runtimeSubagentMode === "gateway-bindable") {
+    // Gateway-bindable loads own the hook runner surface that live gateway traffic
+    // depends on, so pin that surface before later default-mode loads can refresh
+    // the broader active registry for unrelated runtime helpers.
+    pinActivePluginHookRegistry(registry);
   }
-  initializeGlobalHookRunner(registry);
+  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+  // The global hook runner follows the dedicated hook registry surface so gateway
+  // startup can pin it across later default-mode plugin loads.
+  const hookRegistry = getActivePluginHookRegistry() ?? registry;
+  initializeGlobalHookRunner(hookRegistry);
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {

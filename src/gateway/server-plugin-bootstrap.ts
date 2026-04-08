@@ -2,7 +2,7 @@ import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-regi
 import type { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
+import { pinActivePluginChannelRegistry, pinActivePluginHookRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
@@ -30,6 +30,11 @@ type GatewayPluginBootstrapParams = {
   logDiagnostics?: boolean;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
+
+function pinGatewayPrimaryRegistries(pluginRegistry: PluginRegistry) {
+  pinActivePluginChannelRegistry(pluginRegistry);
+  pinActivePluginHookRegistry(pluginRegistry);
+}
 
 function installGatewayPluginRuntimeEnvironment(cfg: ReturnType<typeof loadConfig>) {
   setPluginSubagentOverridePolicies(cfg);
@@ -93,7 +98,7 @@ export function loadGatewayStartupPlugins(
 ) {
   return prepareGatewayPluginLoad({
     ...params,
-    beforePrimeRegistry: pinActivePluginChannelRegistry,
+    beforePrimeRegistry: pinGatewayPrimaryRegistries,
   });
 }
 
@@ -105,6 +110,6 @@ export function reloadDeferredGatewayPlugins(
 ) {
   return prepareGatewayPluginLoad({
     ...params,
-    beforePrimeRegistry: pinActivePluginChannelRegistry,
+    beforePrimeRegistry: pinGatewayPrimaryRegistries,
   });
 }

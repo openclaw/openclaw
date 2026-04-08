@@ -13,6 +13,7 @@ export type RegistryState = {
   activeVersion: number;
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
+  hook: RegistrySurfaceState;
   key: string | null;
   workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
@@ -30,6 +31,11 @@ export function getPluginRegistryState(): RegistryState | undefined {
 export function getActivePluginChannelRegistryFromState(): PluginRegistry | null {
   const state = getPluginRegistryState();
   return state?.channel.registry ?? state?.activeRegistry ?? null;
+}
+
+export function getActivePluginHookRegistryFromState(): PluginRegistry | null {
+  const state = getPluginRegistryState();
+  return state?.hook.registry ?? state?.activeRegistry ?? null;
 }
 
 export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {

@@ -25,6 +25,11 @@ const state: RegistryState = (() => {
         pinned: false,
         version: 0,
       },
+      hook: {
+        registry: null,
+        pinned: false,
+        version: 0,
+      },
       key: null,
       workspaceDir: null,
       runtimeSubagentMode: "default",
@@ -79,6 +84,7 @@ export function setActivePluginRegistry(
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
+  syncTrackedSurface(state.hook, registry, true);
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
@@ -98,6 +104,7 @@ export function requireActivePluginRegistry(): PluginRegistry {
     state.activeVersion += 1;
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
+    syncTrackedSurface(state.hook, state.activeRegistry);
   }
   return state.activeRegistry;
 }
@@ -180,6 +187,39 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
   return created;
 }
 
+/** Pin the hook registry so later `setActivePluginRegistry` calls do not replace
+ *  the gateway-facing hook snapshot used by the global hook runner. */
+export function pinActivePluginHookRegistry(registry: PluginRegistry) {
+  installSurfaceRegistry(state.hook, registry, true);
+}
+
+export function releasePinnedPluginHookRegistry(registry?: PluginRegistry) {
+  if (registry && state.hook.registry !== registry) {
+    return;
+  }
+  installSurfaceRegistry(state.hook, state.activeRegistry, false);
+}
+
+/** Return the registry that should back the process-global hook runner.
+ *  When pinned, this stays on the gateway startup registry across later loads. */
+export function getActivePluginHookRegistry(): PluginRegistry | null {
+  return state.hook.registry ?? state.activeRegistry;
+}
+
+export function getActivePluginHookRegistryVersion(): number {
+  return state.hook.registry ? state.hook.version : state.activeVersion;
+}
+
+export function requireActivePluginHookRegistry(): PluginRegistry {
+  const existing = getActivePluginHookRegistry();
+  if (existing) {
+    return existing;
+  }
+  const created = requireActivePluginRegistry();
+  installSurfaceRegistry(state.hook, created, false);
+  return created;
+}
+
 export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
@@ -221,6 +261,7 @@ export function listImportedRuntimePluginIds(): string[] {
   const imported = new Set(state.importedPluginIds);
   collectLoadedPluginIds(state.activeRegistry, imported);
   collectLoadedPluginIds(state.channel.registry, imported);
+  collectLoadedPluginIds(state.hook.registry, imported);
   collectLoadedPluginIds(state.httpRoute.registry, imported);
   return [...imported].toSorted((left, right) => left.localeCompare(right));
 }
@@ -230,6 +271,7 @@ export function resetPluginRuntimeStateForTest(): void {
   state.activeVersion += 1;
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
+  installSurfaceRegistry(state.hook, null, false);
   state.key = null;
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";

@@ -1998,6 +1998,23 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(getGlobalHookRunner()).toBe(gatewayHookRunner);
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+
+    // Repeated default-mode loads may hit the loader cache, but they still must not
+    // replace the hook runner pinned from the earlier gateway-bindable startup load.
+    loadOpenClawPlugins({
+      workspaceDir: defaultPlugin.dir,
+      config: {
+        plugins: {
+          allow: ["default-hooks"],
+          load: {
+            paths: [defaultPlugin.file],
+          },
+        },
+      },
+    });
+
+    expect(getGlobalHookRunner()).toBe(gatewayHookRunner);
+    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {

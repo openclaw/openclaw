@@ -32,6 +32,9 @@ const getLog = () => createSubsystemLogger("plugins");
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
   const state = getState();
   const log = getLog();
+  if (state.registry === registry && state.hookRunner) {
+    return;
+  }
   state.registry = registry;
   state.hookRunner = createHookRunner(registry, {
     logger: {
