@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  asObjectRecord,
   hasLegacyAccountStreamingAliases,
   hasLegacyStreamingAliases,
   normalizeLegacyDmAliases,
@@ -11,18 +12,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasLegacySlackStreamingAliases(value: unknown): boolean {
   return hasLegacyStreamingAliases(value, { includeNativeTransport: true });
-}
-
-function hasLegacySlackAccountStreamingAliases(value: unknown): boolean {
-  return hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases);
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
@@ -36,7 +27,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "slack", "accounts"],
     message:
       "channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
-    match: hasLegacySlackAccountStreamingAliases,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases),
   },
 ];
 

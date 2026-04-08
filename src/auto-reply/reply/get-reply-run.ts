@@ -558,13 +558,15 @@ export async function runPreparedReply(
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
-      fastMode: resolveFastModeState({
-        cfg,
-        provider,
-        model,
-        agentId,
-        sessionEntry: preparedSessionState.sessionEntry,
-      }).enabled,
+      fastMode: useFastReplyRuntime
+        ? false
+        : resolveFastModeState({
+            cfg,
+            provider,
+            model,
+            agentId,
+            sessionEntry: preparedSessionState.sessionEntry,
+          }).enabled,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
@@ -579,7 +581,9 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-      ...(isReasoningTagProvider(provider, {
+      skipProviderRuntimeHints: useFastReplyRuntime,
+      ...(!useFastReplyRuntime &&
+      isReasoningTagProvider(provider, {
         config: cfg,
         workspaceDir,
         modelId: model,

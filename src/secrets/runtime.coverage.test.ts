@@ -51,15 +51,13 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
+const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
+  buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
-let clearBootstrapChannelPluginCache: typeof import("../channels/plugins/bootstrap-registry.js").clearBootstrapChannelPluginCache;
-let clearBundledPluginMetadataCache: typeof import("../plugins/bundled-plugin-metadata.js").clearBundledPluginMetadataCache;
-let clearPluginManifestRegistryCache: typeof import("../plugins/manifest-registry.js").clearPluginManifestRegistryCache;
 let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
 let collectConfigAssignments: typeof import("./runtime-config-collectors.js").collectConfigAssignments;
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
-let resetFacadeRuntimeStateForTest: typeof import("../plugin-sdk/facade-runtime.js").resetFacadeRuntimeStateForTest;
 let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 
@@ -190,6 +188,15 @@ function logCoverageBatch(label: string, batch: readonly SecretRegistryEntry[]):
   }
   process.stderr.write(
     `[runtime.coverage] ${label} batch (${batch.length}): ${batch.map((entry) => entry.id).join(", ")}\n`,
+  );
+}
+
+function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boolean {
+  return batch.some(
+    (entry) =>
+      entry.id.startsWith("tools.web.") ||
+      (entry.id.startsWith("plugins.entries.") &&
+        (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
   );
 }
 
@@ -373,6 +380,7 @@ async function prepareCoverageSnapshot(params: {
   agentDirs: string[];
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  includeRuntimeWebTools?: boolean;
 }) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
@@ -412,11 +420,13 @@ async function prepareCoverageSnapshot(params: {
     });
   }
 
-  await resolveRuntimeWebTools({
-    sourceConfig,
-    resolvedConfig,
-    context,
-  });
+  if (params.includeRuntimeWebTools) {
+    await resolveRuntimeWebTools({
+      sourceConfig,
+      resolvedConfig,
+      context,
+    });
+  }
 
   return {
     config: resolvedConfig,
@@ -427,31 +437,15 @@ async function prepareCoverageSnapshot(params: {
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [
-      bootstrapRegistry,
-      facadeRuntime,
-      bundledPluginMetadata,
-      manifestRegistry,
-      sharedRuntime,
-      authCollectors,
-      configCollectors,
-      resolver,
-      webTools,
-    ] = await Promise.all([
-      import("../channels/plugins/bootstrap-registry.js"),
-      import("../plugin-sdk/facade-runtime.js"),
-      import("../plugins/bundled-plugin-metadata.js"),
-      import("../plugins/manifest-registry.js"),
-      import("./runtime-shared.js"),
-      import("./runtime-auth-collectors.js"),
-      import("./runtime-config-collectors.js"),
-      import("./resolve.js"),
-      import("./runtime-web-tools.js"),
-    ]);
-    ({ clearBootstrapChannelPluginCache } = bootstrapRegistry);
-    ({ resetFacadeRuntimeStateForTest } = facadeRuntime);
-    ({ clearBundledPluginMetadataCache } = bundledPluginMetadata);
-    ({ clearPluginManifestRegistryCache } = manifestRegistry);
+    const [sharedRuntime, authCollectors, configCollectors, resolver, webTools] = await Promise.all(
+      [
+        import("./runtime-shared.js"),
+        import("./runtime-auth-collectors.js"),
+        import("./runtime-config-collectors.js"),
+        import("./resolve.js"),
+        import("./runtime-web-tools.js"),
+      ],
+    );
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
     ({ collectAuthStoreAssignments } = authCollectors);
     ({ collectConfigAssignments } = configCollectors);
@@ -464,10 +458,6 @@ describe("secrets runtime target coverage", () => {
       (entry) => entry.configFile === "openclaw.json",
     );
     for (const batch of buildCoverageBatches(entries)) {
-      clearBootstrapChannelPluginCache();
-      clearBundledPluginMetadataCache();
-      clearPluginManifestRegistryCache();
-      resetFacadeRuntimeStateForTest();
       logCoverageBatch("openclaw.json", batch);
       const config = {} as OpenClawConfig;
       const env: Record<string, string> = {};
@@ -484,7 +474,8 @@ describe("secrets runtime target coverage", () => {
         env,
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
-        loadablePluginOrigins: buildCoverageLoadablePluginOrigins(batch),
+        loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
+        includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
       });
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(
