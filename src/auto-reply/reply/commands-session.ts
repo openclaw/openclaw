@@ -7,9 +7,15 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import {
+  formatDoctorNonInteractiveHint,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
@@ -609,6 +615,32 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     },
   };
 };
+async function writeSlashCommandRestartSentinel(params: Parameters<CommandHandler>[0]) {
+  const deliveryContext = params.sessionEntry?.deliveryContext
+    ? {
+        channel: params.sessionEntry.deliveryContext.channel,
+        to: params.sessionEntry.deliveryContext.to,
+        accountId: params.sessionEntry.deliveryContext.accountId,
+      }
+    : undefined;
+  const { threadId } = parseSessionThreadInfo(params.sessionKey);
+  const payload: RestartSentinelPayload = {
+    kind: "restart",
+    status: "ok",
+    ts: Date.now(),
+    sessionKey: params.sessionKey,
+    deliveryContext,
+    threadId,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: { mode: "slash-command" },
+  };
+  try {
+    await writeRestartSentinel(payload);
+  } catch {
+    // Best-effort only. Restart should still proceed if the sentinel cannot be written.
+  }
+}
+
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -632,6 +664,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
+    await writeSlashCommandRestartSentinel(params);
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
@@ -650,6 +683,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  await writeSlashCommandRestartSentinel(params);
   return {
     shouldContinue: false,
     reply: {
