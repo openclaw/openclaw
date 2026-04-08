@@ -159,6 +159,7 @@ export function resolveHumanResetBoundaryMs(
   const [year, month, day] = cycleKey.split("-").map(Number);
   const wallClockMs = Date.UTC(year, month - 1, day, atHour, 0, 0, 0);
   let guessMs = wallClockMs;
+  let latestCandidateMs = guessMs;
 
   // Re-run once or twice in case the target local time lands on a DST boundary.
   for (let index = 0; index < 3; index += 1) {
@@ -167,11 +168,15 @@ export function resolveHumanResetBoundaryMs(
       return undefined;
     }
     const candidateMs = wallClockMs - offsetMinutes * 60_000;
+    latestCandidateMs = Math.max(latestCandidateMs, candidateMs);
     if (candidateMs === guessMs) {
       return candidateMs;
     }
     guessMs = candidateMs;
   }
 
-  return undefined;
+  // Spring-forward gaps have no fixed-point wall clock. When the correction
+  // oscillates, choose the later candidate so the reset fires at the first
+  // real instant after the skipped local time.
+  return latestCandidateMs;
 }

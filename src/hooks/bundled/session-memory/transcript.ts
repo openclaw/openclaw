@@ -45,6 +45,7 @@ export async function getRecentSessionExcerpt(
             role?: unknown;
             content?: unknown;
             provenance?: unknown;
+            timestamp?: unknown;
           };
           const role = msg.role;
           if ((role === "user" || role === "assistant") && "content" in msg && msg.content) {

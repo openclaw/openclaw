@@ -7,7 +7,12 @@ import {
   formatDurationSeconds,
 } from "./format-duration.js";
 import { formatTimeAgo, formatRelativeTimestamp } from "./format-relative.js";
-import { formatHumanDayKey, formatHumanTime, resolveHumanResetCycleKey } from "./human-day.js";
+import {
+  formatHumanDayKey,
+  formatHumanTime,
+  resolveHumanResetBoundaryMs,
+  resolveHumanResetCycleKey,
+} from "./human-day.js";
 
 const invalidDurationInputs = [null, undefined, -100] as const;
 
@@ -223,6 +228,18 @@ describe("human-day", () => {
     const afterReset = Date.UTC(2026, 2, 18, 21, 0, 0); // 05:00 on Mar 19 in Asia/Shanghai
     expect(resolveHumanResetCycleKey(beforeReset, 4, shanghaiCfg)).toBe("2026-03-18");
     expect(resolveHumanResetCycleKey(afterReset, 4, shanghaiCfg)).toBe("2026-03-19");
+  });
+
+  it("returns the first real boundary after a DST-skipped reset hour", () => {
+    const newYorkCfg = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+      },
+    };
+    const now = Date.UTC(2026, 2, 8, 8, 0, 0); // 04:00 local after the DST spring-forward gap
+    expect(resolveHumanResetBoundaryMs(now, 2, newYorkCfg)).toBe(Date.UTC(2026, 2, 8, 7, 0, 0));
   });
 });
 
