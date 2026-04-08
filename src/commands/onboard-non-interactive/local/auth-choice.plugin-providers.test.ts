@@ -6,6 +6,10 @@ const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () =>
 vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
+const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+vi.mock("../../../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
@@ -21,6 +25,7 @@ vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+  resolveManifestProviderAuthChoice.mockReturnValue(undefined);
   resolveOwningPluginIdsForProvider.mockReturnValue(undefined as never);
   resolveProviderPluginChoice.mockReturnValue(undefined);
   resolvePluginProviders.mockReturnValue([] as never);
@@ -99,17 +104,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
     const runtime = createRuntime();
     resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
-    resolvePluginProviders
-      .mockReturnValueOnce([] as never)
-      .mockReturnValueOnce([{ id: "workspace-provider", pluginId: "workspace-provider" }] as never);
-    resolveProviderPluginChoice.mockReturnValueOnce(undefined).mockReturnValueOnce({
-      provider: {
-        id: "workspace-provider",
+    resolveManifestProviderAuthChoice
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce({
         pluginId: "workspace-provider",
-        label: "Workspace Provider",
-      },
-      method: { id: "api-key" },
-    });
+        providerId: "workspace-provider",
+      } as never);
 
     const result = await applyNonInteractivePluginProviderChoice({
       nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
@@ -133,8 +133,18 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     );
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
+      "workspace-provider-api-key",
       expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
+      "workspace-provider-api-key",
+      expect.objectContaining({
+        config: expect.objectContaining({ agents: { defaults: {} } }),
+        workspaceDir: expect.any(String),
         includeUntrustedWorkspacePlugins: true,
       }),
     );

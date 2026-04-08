@@ -8,6 +8,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
+import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type {
   ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
@@ -88,17 +89,19 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       params.runtime.exit(1);
       return null;
     }
-    const unfilteredProviderChoice = resolveProviderPluginChoice({
-      providers: resolvePluginProviders({
+    const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
+      config: params.nextConfig,
+      workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    const untrustedOnlyManifestMatch =
+      !trustedManifestMatch &&
+      resolveManifestProviderAuthChoice(params.authChoice, {
         config: params.nextConfig,
         workspaceDir,
-        onlyPluginIds: owningPluginIds,
-        mode: "setup",
         includeUntrustedWorkspacePlugins: true,
-      }),
-      choice: params.authChoice,
-    });
-    if (unfilteredProviderChoice) {
+      });
+    if (untrustedOnlyManifestMatch) {
       params.runtime.error(
         [
           `Auth choice "${params.authChoice}" matched a provider plugin that is not trusted or enabled for setup.`,
