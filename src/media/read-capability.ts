@@ -111,6 +111,8 @@ function createRootScopedReadFile(roots: FsRoot[], workspaceDir?: string): Outbo
             ? resolvedPath.toLowerCase() === rootPath.toLowerCase()
             : resolvedPath === rootPath;
         if (match) {
+          // Use readPathWithinRoot with the parent dir as root to reject hardlinks
+          // and validate the canonical path, same as dir roots.
           const parentDir = path.dirname(rootPath);
           try {
             const result = await readPathWithinRoot({ rootDir: parentDir, filePath: resolvedPath });
