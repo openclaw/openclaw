@@ -121,6 +121,37 @@ describe("SkillEvolver", () => {
     expect(addObservation).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts a single-object JSON response from the evolver model", async () => {
+    const addObservation = vi.fn(async () => "stored");
+    const evolver = new SkillEvolver(
+      { addObservation } as unknown as GraphitiClient,
+      vi.fn(
+        async () =>
+          '{"section":"Instructions","action":"append","content":"Prefer rg over grep for workspace searches.","target":"description","source_signal":"user_correction","context_summary":"The user corrected the search command."}',
+      ),
+      2,
+    );
+
+    const entries = await evolver.generateExperiences(
+      "search-skill",
+      makeContext([
+        {
+          type: "user_correction",
+          section: "Instructions",
+          excerpt: "Use rg instead of grep.",
+        },
+      ]),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.change).toMatchObject({
+      section: "Instructions",
+      action: "append",
+      target: "description",
+      content: "Prefer rg over grep for workspace searches.",
+    });
+  });
+
   it("falls back to a deterministic body entry for direct skill corrections", async () => {
     const addObservation = vi.fn(async () => "stored");
     const evolver = new SkillEvolver(

@@ -86,7 +86,7 @@ const CORRECTION_PATTERNS = [
   /\bwrong\s+(?:way|approach|method)\b/i,
   /\btry\s+(?:again|this|a\s+different)\b/i,
   /\bnot\s+what\s+I\b/i,
-  /\bI\s+(?:said|meant|wanted|asked)\b/i,
+  /\bI\s+(?:said|meant)\b/i,
   /\bstop\s+(?:doing|using|adding)\b/i,
   /\bprefer\s+(?:to|if|that)\b/i,
   /\bplease\s+use\b/i,
@@ -128,10 +128,14 @@ export class SignalDetector {
     const signals: EvolutionSignal[] = [];
 
     for (const raw of messages) {
-      if (!raw || typeof raw !== "object") continue;
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
       const msg = raw as Message;
       const text = extractText(msg);
-      if (!text) continue;
+      if (!text) {
+        continue;
+      }
 
       // Detect execution failures in tool results and assistant messages
       if (SignalDetector.EXECUTION_FAILURE_ROLES.has(msg.role)) {

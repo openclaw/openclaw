@@ -166,7 +166,8 @@ RULES:
     const entries: EvolutionEntry[] = [];
 
     // Extract JSON from response (may be wrapped in markdown code fences)
-    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/) ?? raw.match(/(\[[\s\S]*\])/);
+    const jsonMatch =
+      raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/) ?? raw.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     if (!jsonMatch) {
       return entries;
     }
@@ -181,11 +182,15 @@ RULES:
     const items = Array.isArray(parsed) ? parsed : [parsed];
 
     for (const item of items) {
-      if (!item || typeof item !== "object") continue;
+      if (!item || typeof item !== "object") {
+        continue;
+      }
       const obj = item as Record<string, unknown>;
 
       // Skip entries with skip action
-      if (obj.action === "skip") continue;
+      if (obj.action === "skip") {
+        continue;
+      }
 
       const section = this.parseSection(obj.section);
       const action = this.parseAction(obj.action);
@@ -197,7 +202,7 @@ RULES:
       const change: EvolutionChange = {
         section,
         action,
-        content: String(obj.content ?? ""),
+        content: this.toPlainText(obj.content),
         target,
         skipReason: obj.skip_reason as EvolutionChange["skipReason"],
         mergeTarget:
@@ -206,11 +211,13 @@ RULES:
             : (obj.merge_target as string | undefined),
       };
 
-      if (!change.content.trim()) continue;
+      if (!change.content.trim()) {
+        continue;
+      }
 
       const entry = createEvolutionEntry(
         (obj.source_signal as EvolutionSignal["type"]) ?? "execution_failure",
-        String(obj.context_summary ?? ""),
+        this.toPlainText(obj.context_summary),
         change,
       );
 
@@ -361,5 +368,15 @@ RULES:
     return typeof value === "string" && EVOLUTION_TARGETS.has(value as EvolutionChange["target"])
       ? (value as EvolutionChange["target"])
       : null;
+  }
+
+  private toPlainText(value: unknown): string {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    return "";
   }
 }

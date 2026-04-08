@@ -142,6 +142,32 @@ describe("SignalDetector", () => {
     });
   });
 
+  it("does not treat ordinary wanted or asked statements as corrections", () => {
+    const detector = new SignalDetector();
+
+    const signals = detector.detect([
+      {
+        role: "user",
+        content: "I wanted to ask about the Graphiti setup.",
+      },
+      {
+        role: "user",
+        content: "I asked yesterday whether this endpoint was stable.",
+      },
+      {
+        role: "user",
+        content: "I said to use rg, not grep.",
+      },
+    ]);
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toMatchObject({
+      type: "user_correction",
+      section: "Instructions",
+      excerpt: "I said to use rg, not grep.",
+    });
+  });
+
   it("does not treat positive confirmations as corrections", () => {
     const detector = new SignalDetector();
 
