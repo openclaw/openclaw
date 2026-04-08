@@ -1,5 +1,55 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 
+// Tool names that fetch external network content. Their text results are wrapped
+// in <tool_result trusted="false"> delimiters so the model treats them as data,
+// not as instructions. Lowercase, matching normalizeToolName output.
+const OPEN_WORLD_TOOL_NAMES = new Set(["web_fetch", "web_search", "x_search"]);
+
+function isOpenWorldToolResult(msg: {
+  toolName: string;
+  details?: unknown;
+  isError: boolean;
+}): boolean {
+  // Error payloads are framework-generated text, not external content.
+  if (msg.isError) {
+    return false;
+  }
+  if (OPEN_WORLD_TOOL_NAMES.has(msg.toolName.trim().toLowerCase())) {
+    return true;
+  }
+  // External MCP tools carry mcpServer or mcpTool in their details object.
+  const details = msg.details;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    const d = details as Record<string, unknown>;
+    if (typeof d.mcpServer === "string" || typeof d.mcpTool === "string") {
+      return true;
+    }
+  }
+  return false;
+}
+
+type ToolResultContent = Extract<Context["messages"][number], { role: "toolResult" }>["content"];
+
+function wrapToolResultContentForTrust(
+  toolName: string,
+  content: ToolResultContent,
+): ToolResultContent {
+  const source = toolName.trim().toLowerCase();
+  return content.map((block) => {
+    if (block.type !== "text") {
+      return block;
+    }
+    const text = block.text.trim();
+    if (!text) {
+      return block;
+    }
+    return {
+      ...block,
+      text: `<tool_result source="${source}" trusted="false">\n${block.text}\n</tool_result>`,
+    };
+  });
+}
+
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model<Api>,
@@ -16,9 +66,17 @@ export function transformTransportMessages(
     }
     if (msg.role === "toolResult") {
       const normalizedId = toolCallIdMap.get(msg.toolCallId);
-      return normalizedId && normalizedId !== msg.toolCallId
-        ? { ...msg, toolCallId: normalizedId }
-        : msg;
+      const idNormalized =
+        normalizedId && normalizedId !== msg.toolCallId
+          ? { ...msg, toolCallId: normalizedId }
+          : msg;
+      if (isOpenWorldToolResult(idNormalized)) {
+        return {
+          ...idNormalized,
+          content: wrapToolResultContentForTrust(idNormalized.toolName, idNormalized.content),
+        };
+      }
+      return idNormalized;
     }
     if (msg.role !== "assistant") {
       return msg;

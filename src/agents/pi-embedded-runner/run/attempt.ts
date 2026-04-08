@@ -1535,8 +1535,17 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
+        //
+        // Prompt injection defense: wrap non-owner user messages in a trust delimiter so
+        // the model treats the content as data, not as instructions. Only applies to
+        // explicit user-triggered messages from non-owners; internal triggers (heartbeat,
+        // cron, memory, overflow) are system-generated and inherently trusted.
+        const basePrompt =
+          params.senderIsOwner !== true && params.trigger === "user"
+            ? `<user_message owner="false">\n${params.prompt}\n</user_message>`
+            : params.prompt;
         let effectivePrompt = prependBootstrapPromptWarning(
-          params.prompt,
+          basePrompt,
           bootstrapPromptWarning.lines,
           {
             preserveExactPrompt: heartbeatPrompt,
