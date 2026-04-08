@@ -67,6 +67,17 @@ describe("hook registry pinning", () => {
     expect(getActivePluginHookRegistry()).toBe(replacement);
   });
 
+  it("unqualified release clears a re-pinned hook registry", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup);
+    pinActivePluginHookRegistry(startup);
+    pinActivePluginHookRegistry(replacement);
+
+    releasePinnedPluginHookRegistry();
+
+    expect(getActivePluginHookRegistry()).toBe(startup);
+  });
+
   it("release is a no-op when the pinned registry does not match", () => {
     const { startup, replacement, unrelated } = createRegistrySet();
     setActivePluginRegistry(startup);

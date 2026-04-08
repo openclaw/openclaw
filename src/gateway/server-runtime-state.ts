@@ -9,6 +9,7 @@ import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginChannelRegistry,
+  releasePinnedPluginHookRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
@@ -246,13 +247,14 @@ export async function createGatewayRuntimeState(params: {
     return {
       canvasHost,
       releasePluginRouteRegistry: () => {
-        // Releases both pinned HTTP-route and channel registries set at startup.
+        // Releases the pinned gateway-facing registries set at startup.
         releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
         // Release unconditionally (no registry arg): the channel pin may have
         // been re-pinned to a deferred-reload registry that differs from the
         // original params.pluginRegistry, so an identity-guarded release would
         // be a no-op and leak the pin across in-process restarts.
         releasePinnedPluginChannelRegistry();
+        releasePinnedPluginHookRegistry();
       },
       httpServer,
       httpServers,
@@ -276,6 +278,7 @@ export async function createGatewayRuntimeState(params: {
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
     releasePinnedPluginChannelRegistry();
+    releasePinnedPluginHookRegistry();
     throw err;
   }
 }
