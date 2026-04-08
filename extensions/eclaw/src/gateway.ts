@@ -72,20 +72,8 @@ export type EclawGatewayContext = {
   };
 };
 
-function formatCallbackUrl(
-  publicUrl: string | undefined,
-  log?: EclawGatewayContext["log"],
-  accountId?: string,
-): string {
-  const trimmed = (publicUrl ?? "").replace(/\/+$/, "");
-  if (!trimmed) {
-    log?.warn?.(
-      `E-Claw account ${accountId ?? ""} has no webhookUrl — falling back to http://localhost${WEBHOOK_ROUTE_PATH}. ` +
-        "Set channels.eclaw.webhookUrl or ECLAW_WEBHOOK_URL to the public base URL so the E-Claw backend can reach the webhook.",
-    );
-    return `http://localhost${WEBHOOK_ROUTE_PATH}`;
-  }
-  return `${trimmed}${WEBHOOK_ROUTE_PATH}`;
+function formatCallbackUrl(publicUrl: string): string {
+  return `${publicUrl.replace(/\/+$/, "")}${WEBHOOK_ROUTE_PATH}`;
 }
 
 /**
@@ -219,12 +207,17 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
     );
     return waitUntilAbort(abortSignal);
   }
+  if (!account.webhookUrl) {
+    throw new Error(
+      `E-Claw account ${accountId} missing webhookUrl — set channels.eclaw.webhookUrl or ECLAW_WEBHOOK_URL to the public base URL so the E-Claw backend can reach the webhook`,
+    );
+  }
 
   const client = new EclawClient(account);
   setEclawClient(accountId, client);
 
   const callbackToken = randomBytes(32).toString("hex");
-  const callbackUrl = formatCallbackUrl(account.webhookUrl, log, accountId);
+  const callbackUrl = formatCallbackUrl(account.webhookUrl);
 
   registerEclawWebhookToken(callbackToken, accountId);
 

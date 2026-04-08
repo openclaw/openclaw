@@ -44,6 +44,9 @@
  *   - `eclaw account stop awaits unregisterCallback` — onAbort callback
  *     is async so the remote deregister completes before stop resolves
  *     (round 10, codex gateway.ts P1)
+ *   - `eclaw missing webhookUrl fails fast` — throw before touching any
+ *     shared state when no webhookUrl is configured
+ *     (round 11, codex gateway.ts P1)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -176,6 +179,7 @@ describe("eclaw gateway bind-failure cleanup", () => {
 
   it("unregisters the remote callback when bindEntity fails after registerCallback succeeded", async () => {
     process.env.ECLAW_API_KEY = "env-key";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const registerCallback = vi
       .spyOn(EclawClient.prototype, "registerCallback")
@@ -813,6 +817,7 @@ describe("eclaw shared HTTP route conflict detection", () => {
     // Force fresh module graph so the new mock takes effect
     vi.resetModules();
     process.env.ECLAW_API_KEY = "env-key";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const { startEclawAccount } = await import("./src/gateway.js");
 
@@ -859,6 +864,7 @@ describe("eclaw shared HTTP route conflict detection", () => {
 
     vi.resetModules();
     process.env.ECLAW_API_KEY = "env-key";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const { startEclawAccount } = await import("./src/gateway.js");
     const abortCtrl = new AbortController();
@@ -899,6 +905,7 @@ describe("eclaw state cleanup on shared-route failure (round 7)", () => {
 
     vi.resetModules();
     process.env.ECLAW_API_KEY = "env-key";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const { startEclawAccount } = await import("./src/gateway.js");
     const { eclawWebhookRegistrySize } = await import("./src/webhook-registry.js");
@@ -1069,6 +1076,7 @@ describe("eclaw webhook handler uses live config snapshot (round 9)", () => {
 
     vi.resetModules();
     process.env.ECLAW_API_KEY = "env-key";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const { startEclawAccount } = await import("./src/gateway.js");
 
@@ -1137,6 +1145,7 @@ describe("eclaw webhook handler uses live config snapshot (round 9)", () => {
 
     vi.resetModules();
     process.env.ECLAW_API_KEY = "env-key";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const { startEclawAccount } = await import("./src/gateway.js");
 
@@ -1216,6 +1225,7 @@ describe("eclaw account stop awaits unregisterCallback (round 10)", () => {
 
     vi.resetModules();
     process.env.ECLAW_API_KEY = "env-key-stop-test";
+    process.env.ECLAW_WEBHOOK_URL = "https://test.example.com";
 
     const { startEclawAccount } = await import("./src/gateway.js");
 
@@ -1239,5 +1249,41 @@ describe("eclaw account stop awaits unregisterCallback (round 10)", () => {
     // The critical assertion: unregisterCallback must have been awaited
     // (resolved) before onAbort's returned Promise settled.
     expect(unregisterResolved).toBe(true);
+  });
+});
+
+describe("eclaw missing webhookUrl fails fast (round 11)", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    const mod = await import("./src/gateway.js");
+    mod.__resetEclawSharedRouteForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("throws before touching any shared state when webhookUrl is not set", async () => {
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "key-without-webhook";
+    // Intentionally NOT setting ECLAW_WEBHOOK_URL
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+    const { eclawWebhookRegistrySize } = await import("./src/webhook-registry.js");
+    const { getEclawClient } = await import("./src/client-registry.js");
+
+    const sizeBefore = eclawWebhookRegistrySize();
+
+    const abortCtrl = new AbortController();
+    await expect(
+      startEclawAccount({
+        cfg: {} as never,
+        accountId: "default",
+        abortSignal: abortCtrl.signal,
+      }),
+    ).rejects.toThrow(/missing.*webhookUrl|webhookUrl.*missing/i);
+
+    // Must not have leaked any state — the guard fires before client/token setup
+    expect(eclawWebhookRegistrySize()).toBe(sizeBefore);
+    expect(getEclawClient("default")).toBeUndefined();
   });
 });
