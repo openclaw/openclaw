@@ -23,6 +23,13 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "personality": {
+        "type": "string",
+        "enum": ["friendly", "off"],
+        "default": "friendly",
+        "description": "Controls the GPT-5 personality overlay for models served through OpenCode. `friendly` and `on` enable the overlay; `off` disables it."
+      }
+    }
   }
 }
