@@ -8,7 +8,7 @@
 
   "postCreateCommand": "bash .devcontainer/on-create.sh",
 
-  "remoteEnv": {
+  "containerEnv": {
     "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
     "GH_TOKEN": "${localEnv:GH_TOKEN}"
   },

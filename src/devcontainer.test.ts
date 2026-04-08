@@ -44,20 +44,24 @@ describe(".devcontainer", () => {
       expect(config.mounts).toBeUndefined();
     });
 
-    it("passes ANTHROPIC_API_KEY from host environment", async () => {
+    it("passes auth credentials via containerEnv for lifecycle hooks", async () => {
       const config = JSON.parse(
         await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
       );
-      const env = config.remoteEnv ?? {};
+      // containerEnv is container-wide and available to postCreateCommand;
+      // remoteEnv is only scoped to VS Code server subprocesses.
+      const env = config.containerEnv ?? {};
+      expect(env.GH_TOKEN).toBe("${localEnv:GH_TOKEN}");
       expect(env.ANTHROPIC_API_KEY).toBe("${localEnv:ANTHROPIC_API_KEY}");
     });
 
-    it("passes GH_TOKEN from host environment", async () => {
+    it("does not use remoteEnv for auth credentials needed by lifecycle hooks", async () => {
       const config = JSON.parse(
         await readFile(join(devcontainerDir, "devcontainer.json"), "utf8"),
       );
-      const env = config.remoteEnv ?? {};
-      expect(env.GH_TOKEN).toBe("${localEnv:GH_TOKEN}");
+      const remoteEnv = config.remoteEnv ?? {};
+      expect(remoteEnv.GH_TOKEN).toBeUndefined();
+      expect(remoteEnv.ANTHROPIC_API_KEY).toBeUndefined();
     });
 
     it("sets the workspace folder to the repo mount", async () => {
