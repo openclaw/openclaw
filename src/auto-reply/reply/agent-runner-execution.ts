@@ -331,13 +331,27 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
+function buildMissingApiKeyFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
+  const provider = providerMatch?.[1]?.trim().toLowerCase();
+  if (!provider) {
+    return null;
+  }
+  if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.";
+  }
+  return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+}
+
 function buildExternalRunFailureText(message: string): string {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   if (isToolResultTurnMismatchError(normalizedMessage)) {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
   }
-  if (normalizedMessage.includes('No API key found for provider "')) {
-    return `⚠️ ${normalizedMessage}`;
+  const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
+  if (missingApiKeyFailure) {
+    return missingApiKeyFailure;
   }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
