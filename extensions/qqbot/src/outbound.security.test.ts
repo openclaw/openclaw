@@ -3,28 +3,39 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedQQBotAccount } from "./types.js";
+import { getQQBotMediaDir } from "./utils/platform.js";
 
 const apiMocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(async () => "token"),
-  sendC2CFileMessage: vi.fn(),
-  sendC2CImageMessage: vi.fn(),
-  sendC2CMessage: vi.fn(),
-  sendC2CVideoMessage: vi.fn(),
-  sendC2CVoiceMessage: vi.fn(),
-  sendChannelMessage: vi.fn(),
-  sendDmMessage: vi.fn(),
-  sendGroupFileMessage: vi.fn(),
-  sendGroupImageMessage: vi.fn(),
-  sendGroupMessage: vi.fn(),
-  sendGroupVideoMessage: vi.fn(),
-  sendGroupVoiceMessage: vi.fn(),
-  sendProactiveC2CMessage: vi.fn(),
-  sendProactiveGroupMessage: vi.fn(),
+  sendC2CFileMessage: vi.fn(async () => ({ id: "msg-c2c-file", timestamp: "ts" })),
+  sendC2CImageMessage: vi.fn(async () => ({ id: "msg-c2c-image", timestamp: "ts" })),
+  sendC2CMessage: vi.fn(async () => ({ id: "msg-c2c-text", timestamp: "ts" })),
+  sendC2CVideoMessage: vi.fn(async () => ({ id: "msg-c2c-video", timestamp: "ts" })),
+  sendC2CVoiceMessage: vi.fn(async () => ({ id: "msg-c2c-voice", timestamp: "ts" })),
+  sendChannelMessage: vi.fn(async () => ({ id: "msg-channel", timestamp: "ts" })),
+  sendDmMessage: vi.fn(async () => ({ id: "msg-dm", timestamp: "ts" })),
+  sendGroupFileMessage: vi.fn(async () => ({ id: "msg-group-file", timestamp: "ts" })),
+  sendGroupImageMessage: vi.fn(async () => ({ id: "msg-group-image", timestamp: "ts" })),
+  sendGroupMessage: vi.fn(async () => ({ id: "msg-group-text", timestamp: "ts" })),
+  sendGroupVideoMessage: vi.fn(async () => ({ id: "msg-group-video", timestamp: "ts" })),
+  sendGroupVoiceMessage: vi.fn(async () => ({ id: "msg-group-voice", timestamp: "ts" })),
+  sendProactiveC2CMessage: vi.fn(async () => ({ id: "msg-proactive-c2c", timestamp: "ts" })),
+  sendProactiveGroupMessage: vi.fn(async () => ({ id: "msg-proactive-group", timestamp: "ts" })),
 }));
 
 const audioConvertMocks = vi.hoisted(() => ({
   audioFileToSilkBase64: vi.fn(async () => "c2lsaw=="),
-  isAudioFile: vi.fn(() => false),
+  isAudioFile: vi.fn((filePath: string, mimeType?: string) => {
+    if (mimeType === "voice" || mimeType?.startsWith("audio/")) {
+      return true;
+    }
+    return (
+      filePath.endsWith(".mp3") ||
+      filePath.endsWith(".wav") ||
+      filePath.endsWith(".amr") ||
+      filePath.endsWith(".ogg")
+    );
+  }),
   shouldTranscodeVoice: vi.fn(() => false),
   waitForFile: vi.fn(async () => 1024),
 }));
@@ -111,6 +122,19 @@ function createOutsideFile(ext: string): string {
   return filePath;
 }
 
+function createAllowedMediaPath(
+  ext: string,
+  options: { createFile?: boolean; content?: string } = {},
+): string {
+  const root = fs.mkdtempSync(path.join(getQQBotMediaDir(), "outbound-security-"));
+  createdRoots.push(root);
+  const filePath = path.join(root, `allowed${ext}`);
+  if (options.createFile !== false) {
+    fs.writeFileSync(filePath, options.content ?? "payload", "utf8");
+  }
+  return filePath;
+}
+
 function expectBlocked(result: OutboundResult, expectedError: string): void {
   expect(result.channel).toBe("qqbot");
   expect(result.error).toBe(expectedError);
@@ -127,6 +151,15 @@ afterEach(() => {
 });
 
 describe("qqbot outbound local media path security", () => {
+  it("allows local image paths inside QQ Bot media storage", async () => {
+    const allowedPath = createAllowedMediaPath(".png");
+    const result = await sendPhoto(buildTarget(), allowedPath);
+
+    expect(result.error).toBeUndefined();
+    expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
+    expect(apiMocks.sendC2CImageMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks local image paths outside QQ Bot media storage", async () => {
     const outsidePath = createOutsideFile(".png");
     const result = await sendPhoto(buildTarget(), outsidePath);
@@ -139,6 +172,15 @@ describe("qqbot outbound local media path security", () => {
     const result = await sendVoice(buildTarget(), outsidePath, undefined, false);
 
     expectBlocked(result, "Voice path must be inside QQ Bot media storage");
+  });
+
+  it("allows delayed local voice paths inside QQ Bot media storage", async () => {
+    const delayedVoicePath = createAllowedMediaPath(".mp3", { createFile: false });
+    const result = await sendVoice(buildTarget(), delayedVoicePath, undefined, true);
+
+    expect(result.error).toBeUndefined();
+    expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
+    expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks local video paths outside QQ Bot media storage", async () => {
@@ -166,6 +208,15 @@ describe("qqbot outbound local media path security", () => {
     const result = await sendMedia(buildMediaContext(outsidePath));
 
     expectBlocked(result, "Media path must be inside QQ Bot media storage");
+  });
+
+  it("allows delayed local audio paths in sendMedia inside QQ Bot media storage", async () => {
+    const delayedVoicePath = createAllowedMediaPath(".mp3", { createFile: false });
+    const result = await sendMedia(buildMediaContext(delayedVoicePath));
+
+    expect(result.error).toBeUndefined();
+    expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
+    expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks non-dot relative traversal paths in sendMedia", async () => {

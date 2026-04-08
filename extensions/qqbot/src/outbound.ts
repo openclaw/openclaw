@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -284,6 +285,9 @@ const qqBotMediaKindLabel: Record<QQBotMediaKind, string> = {
 };
 
 type ResolvedOutboundMediaPath = { ok: true; mediaPath: string } | { ok: false; error: string };
+type ResolveOutboundMediaPathOptions = {
+  allowMissingLocalPath?: boolean;
+};
 
 function isHttpOrDataSource(pathValue: string): boolean {
   return (
@@ -293,10 +297,16 @@ function isHttpOrDataSource(pathValue: string): boolean {
   );
 }
 
+function isPathWithinRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function resolveOutboundMediaPath(
   rawPath: string,
   prefix: string,
   mediaKind: QQBotMediaKind,
+  options: ResolveOutboundMediaPathOptions = {},
 ): ResolvedOutboundMediaPath {
   const normalizedPath = normalizePath(rawPath);
   if (isHttpOrDataSource(normalizedPath)) {
@@ -306,6 +316,16 @@ function resolveOutboundMediaPath(
   const allowedPath = resolveQQBotPayloadLocalFilePath(normalizedPath);
   if (allowedPath) {
     return { ok: true, mediaPath: allowedPath };
+  }
+
+  if (options.allowMissingLocalPath) {
+    const resolvedCandidate = path.resolve(normalizedPath);
+    if (!fs.existsSync(resolvedCandidate)) {
+      const allowedRoot = path.resolve(getQQBotMediaDir());
+      if (isPathWithinRoot(resolvedCandidate, allowedRoot)) {
+        return { ok: true, mediaPath: resolvedCandidate };
+      }
+    }
   }
 
   debugWarn(`${prefix} blocked local ${mediaKind} path outside QQ Bot media storage`);
@@ -458,7 +478,9 @@ export async function sendVoice(
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, prefix, "voice");
+  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, prefix, "voice", {
+    allowMissingLocalPath: true,
+  });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
@@ -1347,7 +1369,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
-  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "[qqbot:sendMedia]", "media");
+  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "[qqbot:sendMedia]", "media", {
+    allowMissingLocalPath: true,
+  });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
