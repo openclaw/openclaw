@@ -20,6 +20,29 @@ export type SubagentRunResult = {
   runId: string;
 };
 
+export type SubagentSpawnDetachedRequesterOrigin = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
+};
+
+export type SubagentSpawnDetachedParams = {
+  requesterSessionKey: string;
+  task: string;
+  label?: string;
+  agentId?: string;
+  model?: string;
+  thinking?: string;
+  runTimeoutSeconds?: number;
+  requesterOrigin?: SubagentSpawnDetachedRequesterOrigin;
+};
+
+export type SubagentSpawnDetachedResult = {
+  runId: string;
+  childSessionKey: string;
+};
+
 export type SubagentWaitParams = {
   runId: string;
   timeoutMs?: number;
@@ -54,6 +77,10 @@ export type SubagentDeleteSessionParams = {
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
+    // Optional on the public type for backward compatibility with external
+    // PluginRuntime implementors. Gateway-bound runtimes expose it when the
+    // native detached subagent path is actually available.
+    spawnDetached?: (params: SubagentSpawnDetachedParams) => Promise<SubagentSpawnDetachedResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,

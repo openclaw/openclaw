@@ -29,7 +29,7 @@ import {
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginRuntime, SubagentSpawnDetachedParams } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   isPluginHookName,
@@ -1027,6 +1027,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         const subagent = Reflect.get(target, prop, receiver);
         return {
           run: (params) => withPluginRuntimePluginIdScope(pluginId, () => subagent.run(params)),
+          get spawnDetached() {
+            if (typeof subagent.spawnDetached !== "function") {
+              return undefined;
+            }
+            return (params: SubagentSpawnDetachedParams) =>
+              withPluginRuntimePluginIdScope(pluginId, () => {
+                const invoke = subagent.spawnDetached;
+                if (typeof invoke !== "function") {
+                  throw new Error(
+                    "Plugin runtime subagent methods are only available during a gateway request.",
+                  );
+                }
+                return invoke(params);
+              });
+          },
           waitForRun: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
           getSessionMessages: (params) =>

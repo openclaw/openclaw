@@ -85,13 +85,11 @@ const provider = api.runtime.agent.defaults.provider; // e.g. "anthropic"
 Launch and manage background subagent runs.
 
 ```typescript
-// Start a subagent run
-const { runId } = await api.runtime.subagent.run({
-  sessionKey: "agent:main:subagent:search-helper",
-  message: "Expand this query into focused follow-up searches.",
-  provider: "openai", // optional override
-  model: "gpt-4.1-mini", // optional override
-  deliver: false,
+// Start a native detached subagent worker (uses the core subagent registry lifecycle)
+const { runId, childSessionKey } = await api.runtime.subagent.spawnDetached({
+  requesterSessionKey: "agent:main:main",
+  task: "Expand this query into focused follow-up searches.",
+  model: "openai/gpt-4.1-mini", // optional canonical provider/model override
 });
 
 // Wait for completion
@@ -99,21 +97,33 @@ const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs: 30000 }
 
 // Read session messages
 const { messages } = await api.runtime.subagent.getSessionMessages({
-  sessionKey: "agent:main:subagent:search-helper",
+  sessionKey: childSessionKey,
   limit: 10,
+});
+
+// Directly run an existing child session when you already manage the session key
+const { runId: directRunId } = await api.runtime.subagent.run({
+  sessionKey: childSessionKey,
+  message: "Continue from the latest saved state.",
+  deliver: false,
 });
 
 // Delete a session
 await api.runtime.subagent.deleteSession({
-  sessionKey: "agent:main:subagent:search-helper",
+  sessionKey: childSessionKey,
 });
 ```
 
 <Warning>
-  Model overrides (`provider`/`model`) require operator opt-in via
+  Model overrides on `spawnDetached()` and `run()` require operator opt-in via
   `plugins.entries.<id>.subagent.allowModelOverride: true` in config.
-  Untrusted plugins can still run subagents, but override requests are rejected.
+  Untrusted plugins can still launch subagents, but override requests are rejected.
 </Warning>
+
+`spawnDetached()` creates a fresh child session through the native subagent spawn path and returns
+both `runId` and `childSessionKey`. `run()` keeps the existing direct gateway `agent` dispatch behavior
+for callers that already manage their own child session key. Pass `requesterOrigin` when you want a
+native detached worker to inherit the current delivery routing metadata.
 
 ### `api.runtime.taskFlow`
 

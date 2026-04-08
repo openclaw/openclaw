@@ -27,6 +27,7 @@ function createCommandResult() {
 function createGatewaySubagentRuntime() {
   return {
     run: vi.fn(),
+    spawnDetached: vi.fn(),
     waitForRun: vi.fn(),
     getSessionMessages: vi.fn(),
     getSession: vi.fn(),
@@ -64,8 +65,23 @@ function expectRuntimeSubagentRun(
   return runtime.subagent.run(params);
 }
 
+function expectRuntimeSubagentSpawnDetached(
+  runtime: ReturnType<typeof createPluginRuntime>,
+  params: { requesterSessionKey: string; task: string },
+) {
+  const spawnDetached = runtime.subagent.spawnDetached;
+  if (typeof spawnDetached !== "function") {
+    throw new Error("Expected plugin runtime to expose subagent.spawnDetached");
+  }
+  return spawnDetached(params);
+}
+
 function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?: boolean }) {
   const run = vi.fn().mockResolvedValue({ runId: "run-1" });
+  const spawnDetached = vi.fn().mockResolvedValue({
+    runId: "run-detached-1",
+    childSessionKey: "agent:main:subagent:child-1",
+  });
   const runtime = params?.allowGatewaySubagentBinding
     ? createPluginRuntime({ allowGatewaySubagentBinding: true })
     : createPluginRuntime();
@@ -73,9 +89,10 @@ function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?
   setGatewaySubagentRuntime({
     ...createGatewaySubagentRuntime(),
     run,
+    spawnDetached,
   });
 
-  return { run, runtime };
+  return { run, spawnDetached, runtime };
 }
 
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
@@ -250,6 +267,7 @@ describe("plugin runtime command execution", () => {
   it("keeps subagent unavailable by default even after gateway initialization", async () => {
     const { runtime } = createGatewaySubagentRunFixture();
 
+    expect(runtime.subagent.spawnDetached).toBeUndefined();
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
   });
 
@@ -264,5 +282,25 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("late-binds native detached subagent spawns when explicitly enabled", async () => {
+    const { runtime, spawnDetached } = createGatewaySubagentRunFixture({
+      allowGatewaySubagentBinding: true,
+    });
+
+    await expect(
+      expectRuntimeSubagentSpawnDetached(runtime, {
+        requesterSessionKey: "agent:main:main",
+        task: "do work",
+      }),
+    ).resolves.toEqual({
+      runId: "run-detached-1",
+      childSessionKey: "agent:main:subagent:child-1",
+    });
+    expect(spawnDetached).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:main",
+      task: "do work",
+    });
   });
 });

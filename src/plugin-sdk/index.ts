@@ -57,6 +57,9 @@ export type {
 export type {
   PluginRuntime,
   RuntimeLogger,
+  SubagentSpawnDetachedParams,
+  SubagentSpawnDetachedRequesterOrigin,
+  SubagentSpawnDetachedResult,
   SubagentRunParams,
   SubagentRunResult,
 } from "../plugins/runtime/types.js";

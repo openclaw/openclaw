@@ -992,19 +992,26 @@ Notes:
 Plugins can also launch background subagent runs through `api.runtime.subagent`:
 
 ```ts
-const result = await api.runtime.subagent.run({
-  sessionKey: "agent:main:subagent:search-helper",
-  message: "Expand this query into focused follow-up searches.",
-  provider: "openai",
-  model: "gpt-4.1-mini",
+const worker = await api.runtime.subagent.spawnDetached({
+  requesterSessionKey: "agent:main:main",
+  task: "Expand this query into focused follow-up searches.",
+  model: "openai/gpt-4.1-mini",
+});
+
+const direct = await api.runtime.subagent.run({
+  sessionKey: worker.childSessionKey,
+  message: "Continue from the latest saved state.",
   deliver: false,
 });
 ```
 
 Notes:
 
-- `provider` and `model` are optional per-run overrides, not persistent session changes.
-- OpenClaw only honors those override fields for trusted callers.
+- `spawnDetached()` is the native registry-backed background-worker path. It creates a fresh child session and returns both `runId` and `childSessionKey`.
+- `run()` keeps its existing direct gateway `agent` dispatch behavior for callers that already manage the child session key.
+- `model` on `spawnDetached()` is an optional canonical `provider/model` override, not a persistent session change.
+- `provider` and `model` on `run()` remain optional per-run overrides, not persistent session changes.
+- OpenClaw only honors override fields for trusted callers.
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.

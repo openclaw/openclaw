@@ -19,6 +19,7 @@ type HandleGatewayRequestOptions = GatewayRequestOptions & {
 const handleGatewayRequest = vi.hoisted(() =>
   vi.fn(async (_opts: HandleGatewayRequestOptions) => {}),
 );
+const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
@@ -44,6 +45,10 @@ vi.mock("../channels/plugins/binding-registry.js", async () => {
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+
+vi.mock("../agents/subagent-spawn.js", () => ({
+  spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
 
 vi.mock("../channels/registry.js", () => ({
@@ -155,6 +160,17 @@ async function createSubagentRuntime(
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
+function expectSpawnDetached(
+  runtime: PluginRuntime["subagent"],
+): NonNullable<PluginRuntime["subagent"]["spawnDetached"]> {
+  const spawnDetached = runtime.spawnDetached;
+  expect(typeof spawnDetached).toBe("function");
+  if (typeof spawnDetached !== "function") {
+    throw new Error("Expected gateway subagent runtime to expose spawnDetached");
+  }
+  return spawnDetached;
+}
+
 async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
   vi.resetModules();
   await loadTestModules();
@@ -203,6 +219,11 @@ beforeEach(() => {
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
+  spawnSubagentDirectMock.mockReset().mockResolvedValue({
+    status: "accepted",
+    runId: "spawned-run-1",
+    childSessionKey: "agent:main:subagent:child-1",
+  });
   runtimeModule.clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
@@ -405,7 +426,7 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
-  test("provides subagent runtime with sessions.get method aliases", async () => {
+  test("provides subagent runtime with session aliases and native detached spawn support", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayPluginsForTest();
 
@@ -416,8 +437,148 @@ describe("loadGatewayPlugins", () => {
     const subagent = runtimeModule.createPluginRuntime({
       allowGatewaySubagentBinding: true,
     }).subagent;
-    expect(typeof subagent?.getSessionMessages).toBe("function");
-    expect(typeof subagent?.getSession).toBe("function");
+    expect(typeof subagent.spawnDetached).toBe("function");
+    expect(typeof subagent.getSessionMessages).toBe("function");
+    expect(typeof subagent.getSession).toBe("function");
+  });
+
+  test("uses the native detached spawn path for plugin background workers", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const spawnDetached = expectSpawnDetached(runtime);
+
+    await expect(
+      spawnDetached({
+        requesterSessionKey: "agent:main:main",
+        task: "inspect the queue",
+        label: "queue-helper",
+        agentId: "research",
+        requesterOrigin: {
+          channel: "telegram",
+          accountId: "default",
+          to: "123",
+          threadId: "456",
+        },
+      }),
+    ).resolves.toEqual({
+      runId: "spawned-run-1",
+      childSessionKey: "agent:main:subagent:child-1",
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      {
+        task: "inspect the queue",
+        label: "queue-helper",
+        agentId: "research",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "123",
+        agentThreadId: "456",
+      },
+    );
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test("rejects native detached spawns from request scopes without operator.write", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const spawnDetached = expectSpawnDetached(runtime);
+    const scope = {
+      context: createTestContext("request-scope-read-only-detached-spawn"),
+      client: {
+        connect: {
+          scopes: ["operator.read"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+        spawnDetached({
+          requesterSessionKey: "agent:main:main",
+          task: "inspect the queue",
+        }),
+      ),
+    ).rejects.toThrow("native detached subagent spawn requires operator.write scope");
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  test("forwards trusted native detached spawn model overrides for fallback plugin runtimes", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    const spawnDetached = expectSpawnDetached(runtime);
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        spawnDetached({
+          requesterSessionKey: "agent:main:main",
+          task: "use trusted native override",
+          model: "anthropic/claude-haiku-4-5",
+        }),
+      ),
+    ).resolves.toEqual({
+      runId: "spawned-run-1",
+      childSessionKey: "agent:main:subagent:child-1",
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "use trusted native override",
+        model: "anthropic/claude-haiku-4-5",
+      }),
+      expect.anything(),
+    );
+  });
+
+  test("rejects native detached spawn model overrides for fallback runs without explicit authorization", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const spawnDetached = expectSpawnDetached(runtime);
+
+    await expect(
+      spawnDetached({
+        requesterSessionKey: "agent:main:main",
+        task: "use native override",
+        model: "anthropic/claude-haiku-4-5",
+      }),
+    ).rejects.toThrow(
+      "provider/model override requires plugin identity in fallback subagent runs.",
+    );
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  test("surfaces native detached spawn failures", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const spawnDetached = expectSpawnDetached(runtime);
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "forbidden",
+      error: "too deep",
+    });
+
+    await expect(
+      spawnDetached({
+        requesterSessionKey: "agent:main:main",
+        task: "fail natively",
+      }),
+    ).rejects.toThrow("too deep");
   });
 
   test("forwards provider and model overrides when the request scope is authorized", async () => {
