@@ -389,7 +389,9 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
         ? normalizeDistinctStrings(
-            entry.conceptTags.map((tag) => (typeof tag === "string" ? tag.toLowerCase() : tag)),
+            entry.conceptTags.map((tag) =>
+              typeof tag === "string" ? normalizeLowercaseStringOrEmpty(tag) : tag,
+            ),
             MAX_CONCEPT_TAGS,
           )
         : deriveConceptTags({ path: entryPath, snippet });

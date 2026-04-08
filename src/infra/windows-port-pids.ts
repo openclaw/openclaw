@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -95,13 +96,13 @@ function extractWindowsCommandLine(raw: string): string | null {
     .map((line) => line.trim())
     .filter(Boolean);
   for (const line of lines) {
-    if (!line.toLowerCase().startsWith("commandline=")) {
+    if (!normalizeLowercaseStringOrEmpty(line).startsWith("commandline=")) {
       continue;
     }
     const value = line.slice("commandline=".length).trim();
     return value || null;
   }
-  return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
+  return lines.find((line) => normalizeLowercaseStringOrEmpty(line) !== "commandline") ?? null;
 }
 
 export function readWindowsProcessArgsSync(

@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -66,9 +67,7 @@ const RELATED_BLOCK_PATTERN = new RegExp(
 );
 
 export function slugifyWikiSegment(raw: string): string {
-  const slug = raw
-    .trim()
-    .toLowerCase()
+  const slug = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");

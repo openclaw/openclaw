@@ -442,7 +442,7 @@ describe("plugin-sdk subpath exports", () => {
         resolve(REPO_ROOT, "extensions"),
         resolve(REPO_ROOT, "test"),
       ],
-      pattern: /openclaw\/plugin-sdk\/channel-runtime/u,
+      pattern: /openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
       exclude: ["src/plugins/sdk-alias.test.ts"],
     });
     expect(matches).toEqual([]);

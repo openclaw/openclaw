@@ -5,6 +5,7 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   isJavaScriptModulePath,
   loadChannelPluginModule,
@@ -40,8 +41,8 @@ function resolveChannelPackageStateMetadata(
   if (!metadata || typeof metadata !== "object") {
     return null;
   }
-  const specifier = typeof metadata.specifier === "string" ? metadata.specifier.trim() : "";
-  const exportName = typeof metadata.exportName === "string" ? metadata.exportName.trim() : "";
+  const specifier = normalizeOptionalString(metadata.specifier) ?? "";
+  const exportName = normalizeOptionalString(metadata.exportName) ?? "";
   if (!specifier || !exportName) {
     return null;
   }

@@ -1,5 +1,5 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -114,10 +114,8 @@ let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveU
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
-  clearRuntimeConfigSnapshot();
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
@@ -128,6 +126,10 @@ beforeEach(async () => {
     resolveModelAuthMode,
     resolveUsableCustomProviderApiKey,
   } = await import("./model-auth.js"));
+});
+
+beforeEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 afterEach(() => {

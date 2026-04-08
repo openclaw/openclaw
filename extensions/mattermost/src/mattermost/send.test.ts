@@ -58,6 +58,17 @@ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
     const normalized = value.trim();
     return normalized.length > 0 ? normalized : undefined;
   }),
+  normalizeStringifiedOptionalString: vi.fn((value: unknown) => {
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : undefined;
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      const normalized = String(value).trim();
+      return normalized.length > 0 ? normalized : undefined;
+    }
+    return undefined;
+  }),
 }));
 
 vi.mock("./accounts.js", () => ({

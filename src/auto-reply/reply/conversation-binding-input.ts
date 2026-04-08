@@ -2,6 +2,7 @@ import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -25,7 +26,7 @@ type BindingMsgContext = Pick<
 
 function resolveBindingChannel(ctx: BindingMsgContext, commandChannel?: string | null): string {
   const raw = ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider;
-  return normalizeConversationText(raw).toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalizeConversationText(raw));
 }
 
 function resolveBindingAccountId(params: {

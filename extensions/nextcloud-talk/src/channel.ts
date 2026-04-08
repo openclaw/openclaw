@@ -1,30 +1,20 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-  createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import {
-  createLoggedPairingApprovalNotifier,
-  createPairingPrefixStripper,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import {
-  listNextcloudTalkAccountIds,
-  resolveDefaultNextcloudTalkAccountId,
-  resolveNextcloudTalkAccount,
-  type ResolvedNextcloudTalkAccount,
-} from "./accounts.js";
+import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
+import {
+  nextcloudTalkConfigAdapter,
+  nextcloudTalkPairingTextAdapter,
+  nextcloudTalkSecurityAdapter,
+} from "./channel.adapters.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
@@ -52,37 +42,6 @@ const meta = {
   order: 65,
   quickstartAllowFrom: true,
 };
-
-const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
-  ResolvedNextcloudTalkAccount,
-  ResolvedNextcloudTalkAccount,
-  CoreConfig
->({
-  sectionKey: "nextcloud-talk",
-  listAccountIds: listNextcloudTalkAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
-  defaultAccountId: resolveDefaultNextcloudTalkAccountId,
-  clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
-  resolveAllowFrom: (account) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatAllowFromLowercase({
-      allowFrom,
-      stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
-    }),
-});
-
-const resolveNextcloudTalkDmPolicy = createScopedDmSecurityResolver<ResolvedNextcloudTalkAccount>({
-  channelKey: "nextcloud-talk",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
-  policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) =>
-    raw
-      .trim()
-      .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
-      .trim()
-      .toLowerCase(),
-});
 
 const collectNextcloudTalkSecurityWarnings =
   createAllowlistProviderRouteAllowlistWarningCollector<ResolvedNextcloudTalkAccount>({
@@ -135,7 +94,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
             },
           }),
       },
-      auth: nextcloudTalkApprovalAuth,
+      approvalCapability: nextcloudTalkApprovalAuth,
       doctor: nextcloudTalkDoctor,
       groups: {
         resolveRequireMention: ({ cfg, accountId, groupId }) => {
@@ -194,19 +153,14 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
     },
     pairing: {
       text: {
-        idLabel: "nextcloudUserId",
-        message: "OpenClaw: your access has been approved.",
-        normalizeAllowEntry: createPairingPrefixStripper(
-          /^(nextcloud-talk|nc-talk|nc):/i,
-          (entry) => normalizeLowercaseStringOrEmpty(entry),
-        ),
+        ...nextcloudTalkPairingTextAdapter,
         notify: createLoggedPairingApprovalNotifier(
           ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
         ),
       },
     },
     security: {
-      resolveDmPolicy: resolveNextcloudTalkDmPolicy,
+      ...nextcloudTalkSecurityAdapter,
       collectWarnings: collectNextcloudTalkSecurityWarnings,
     },
     outbound: {

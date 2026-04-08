@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
@@ -8,6 +9,7 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import { openTrackedWs } from "./device-authz.test-helpers.js";
+import { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
 import {
   connectReq,
   connectOk,
@@ -221,6 +223,17 @@ vi.mock("./config-reload.js", () => ({
 }));
 
 installGatewayTestHooks({ scope: "suite" });
+
+async function waitForGatewayAuthChangedClose(ws: WebSocket): Promise<{
+  code: number;
+  reason: string;
+}> {
+  return await new Promise((resolve) => {
+    ws.once("close", (code, reason) => {
+      resolve({ code, reason: reason.toString() });
+    });
+  });
+}
 
 describe("gateway hot reload", () => {
   let prevSkipChannels: string | undefined;
@@ -1048,8 +1061,17 @@ process.stdin.on("end", () => {
       await connectOk(ws, { token: "token-before-reload" });
 
       await fs.writeFile(tokenPath, "token-after-reload\n", "utf8");
-      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
-      expect(reload.ok).toBe(true);
+      const closed = waitForGatewayAuthChangedClose(ws);
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
+        (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+      );
+      await expect(closed).resolves.toEqual({
+        code: 4001,
+        reason: "gateway auth changed",
+      });
+      if (!(reload instanceof Error)) {
+        expect(reload.ok).toBe(true);
+      }
 
       const staleWs = await openTrackedWs(port);
       try {
@@ -1059,6 +1081,9 @@ process.stdin.on("end", () => {
         });
         expect(staleConnect.ok).toBe(false);
         expect(staleConnect.error?.message ?? "").toContain("gateway token mismatch");
+        expect((staleConnect.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        );
       } finally {
         staleWs.close();
       }

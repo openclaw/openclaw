@@ -1,0 +1,30 @@
+type QaLiveTimeoutProfile = {
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  alternateModel: string;
+};
+
+function isAnthropicModel(modelRef: string) {
+  return modelRef.startsWith("anthropic/");
+}
+
+function isClaudeOpusModel(modelRef: string) {
+  return isAnthropicModel(modelRef) && modelRef.includes("claude-opus");
+}
+
+export function resolveQaLiveTurnTimeoutMs(
+  profile: QaLiveTimeoutProfile,
+  fallbackMs: number,
+  modelRef = profile.primaryModel,
+) {
+  if (profile.providerMode === "mock-openai") {
+    return fallbackMs;
+  }
+  if (isClaudeOpusModel(modelRef)) {
+    return Math.max(fallbackMs, 240_000);
+  }
+  if (isAnthropicModel(modelRef)) {
+    return Math.max(fallbackMs, 180_000);
+  }
+  return Math.max(fallbackMs, 120_000);
+}

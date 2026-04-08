@@ -33,6 +33,8 @@ function createRunner(responses: Record<string, CommandResponse>) {
 }
 
 describe("runGatewayUpdate", () => {
+  const preflightPrefixPattern = /(?:openclaw-update-preflight-|ocu-pf-)/;
+
   let tempDir: string;
 
   beforeAll(async () => {
@@ -516,14 +518,16 @@ describe("runGatewayUpdate", () => {
         return { stdout: "added 1 package", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/openclaw-update-preflight-`) &&
-        key.endsWith(` /worktree ${upstreamSha}`)
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
       ) {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/openclaw-update-preflight-") &&
-        key.includes("/worktree checkout --detach ") &&
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -534,7 +538,8 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/openclaw-update-preflight-`)
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
       }
@@ -615,22 +620,22 @@ describe("runGatewayUpdate", () => {
           return { stdout: "10.0.0", stderr: "", code: 0 };
         }
         if (
-          key.startsWith(
-            `git -C ${tempDir} worktree add --detach /tmp/openclaw-update-preflight-`,
-          ) &&
-          key.endsWith(` /worktree ${upstreamSha}`)
+          key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+          key.endsWith(` ${upstreamSha}`) &&
+          preflightPrefixPattern.test(key)
         ) {
           return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
         }
         if (
-          key.startsWith("git -C /tmp/openclaw-update-preflight-") &&
-          key.includes("/worktree checkout --detach ") &&
+          key.startsWith("git -C /tmp/") &&
+          preflightPrefixPattern.test(key) &&
+          key.includes(" checkout --detach ") &&
           key.endsWith(upstreamSha)
         ) {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (key === "pnpm install") {
-          if (options?.cwd?.includes(`${path.sep}openclaw-update-preflight-`)) {
+          if (options?.cwd && /(?:openclaw-update-preflight-|ocu-pf-)/.test(options.cwd)) {
             preflightInstallAttempts += 1;
             return preflightInstallAttempts === 1
               ? { stdout: "", stderr: "sharp: Please add node-gyp to your dependencies", code: 1 }
@@ -650,9 +655,8 @@ describe("runGatewayUpdate", () => {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (
-          key.startsWith(
-            `git -C ${tempDir} worktree remove --force /tmp/openclaw-update-preflight-`,
-          )
+          key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+          preflightPrefixPattern.test(key)
         ) {
           return { stdout: "", stderr: "", code: 0 };
         }
@@ -678,6 +682,105 @@ describe("runGatewayUpdate", () => {
       );
       expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
       expect(calls).toContain("pnpm install --ignore-scripts");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("does not fail a good windows dev preflight only because worktree cleanup hit long paths", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const runCommand = async (
+        argv: string[],
+        _options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+      ) => {
+        const key = argv.join(" ");
+        calls.push(key);
+
+        if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+          return { stdout: tempDir, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse HEAD`) {
+          return { stdout: "abc123", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+          return { stdout: "main", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+          return { stdout: "origin/main", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+          return { stdout: upstreamSha, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+          return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+        }
+        if (key === "pnpm --version") {
+          return { stdout: "10.0.0", stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+          key.endsWith(` ${upstreamSha}`) &&
+          preflightPrefixPattern.test(key)
+        ) {
+          return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith("git -C /tmp/") &&
+          preflightPrefixPattern.test(key) &&
+          key.includes(" checkout --detach ") &&
+          key.endsWith(upstreamSha)
+        ) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === "pnpm install" || key === "pnpm build" || key === "pnpm lint") {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
+          preflightPrefixPattern.test(key)
+        ) {
+          return {
+            stdout: "",
+            stderr: "error: failed to delete worktree: Filename too long",
+            code: 255,
+          };
+        }
+        if (key === `git -C ${tempDir} worktree prune`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rebase ${upstreamSha}`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === doctorCommand) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === "pnpm ui:build") {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
+
+      const result = await runWithCommand(runCommand, { channel: "dev" });
+
+      expect(result.status).toBe("ok");
+      const cleanupStep = result.steps.find((step) => step.name === "preflight cleanup");
+      expect(cleanupStep?.exitCode).toBe(0);
+      expect(cleanupStep?.stderrTail ?? "").toContain(
+        "windows fallback cleanup removed preflight tree",
+      );
     } finally {
       platformSpy.mockRestore();
     }
@@ -740,9 +843,7 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
     expect(calls.some((call) => call === "npm run build")).toBe(false);
     expect(calls.some((call) => call === "npm run lint")).toBe(false);
-    expect(calls.some((call) => call.startsWith("git -C /tmp/openclaw-update-preflight-"))).toBe(
-      false,
-    );
+    expect(calls.some((call) => preflightPrefixPattern.test(call))).toBe(false);
   });
 
   it("skips update when no git root", async () => {

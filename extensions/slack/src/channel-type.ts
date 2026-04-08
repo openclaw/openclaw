@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
@@ -49,7 +52,10 @@ export async function resolveSlackChannelType(params: {
     return "channel";
   }
 
-  const token = account.botToken?.trim() || account.config.userToken?.trim() || "";
+  const token =
+    normalizeOptionalString(account.botToken) ??
+    normalizeOptionalString(account.config.userToken) ??
+    "";
   if (!token) {
     SLACK_CHANNEL_TYPE_CACHE.set(cacheKey, "unknown");
     return "unknown";

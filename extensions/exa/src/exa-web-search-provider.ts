@@ -24,7 +24,10 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
@@ -105,17 +108,18 @@ function resolveExaDescription(result: ExaSearchResult): string {
   const highlights = result.highlights;
   if (Array.isArray(highlights)) {
     const highlightText = highlights
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter(Boolean)
+      .map((entry) => normalizeOptionalString(entry))
+      .filter((entry): entry is string => Boolean(entry))
       .join("\n");
     if (highlightText) {
       return highlightText;
     }
   }
-  if (typeof result.summary === "string" && result.summary.trim()) {
-    return result.summary.trim();
+  const summary = normalizeOptionalString(result.summary);
+  if (summary) {
+    return summary;
   }
-  return typeof result.text === "string" ? result.text.trim() : "";
+  return normalizeOptionalString(result.text) ?? "";
 }
 
 function parsePositiveInteger(value: unknown): number | undefined {
@@ -558,7 +562,7 @@ function createExaToolDefinition(
           const title = typeof entry.title === "string" ? entry.title : "";
           const url = typeof entry.url === "string" ? entry.url : "";
           const description = resolveExaDescription(entry);
-          const summary = typeof entry.summary === "string" ? entry.summary.trim() : "";
+          const summary = normalizeOptionalString(entry.summary) ?? "";
           const highlightScores = Array.isArray(entry.highlightScores)
             ? entry.highlightScores.filter(
                 (score): score is number => typeof score === "number" && Number.isFinite(score),

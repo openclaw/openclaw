@@ -10,7 +10,10 @@ import {
   resolveInputFileLimits,
 } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -285,7 +288,7 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   if (!name) {
     return undefined;
   }
-  const ext = path.extname(name).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(name));
   return TEXT_EXT_MIME.get(ext);
 }
 
