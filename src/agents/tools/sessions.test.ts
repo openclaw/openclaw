@@ -145,7 +145,7 @@ function expectWorkerTranscriptPath(
 ) {
   const session = getFirstListedSession(result);
   expect(session).toMatchObject({ key: "agent:worker:main" });
-  const transcriptPath = String(session?.transcriptPath ?? "");
+  const transcriptPath = session?.transcriptPath ?? "";
   expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
   expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
 }
@@ -334,6 +334,33 @@ describe("resolveAnnounceTarget", () => {
       to: "123@g.us",
       accountId: "work",
       threadId: "271",
+    });
+  });
+
+  it("keeps threadId from sessions.list delivery context for announce delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+      accountId: "work",
+      threadId: "thread-77",
     });
   });
 });
