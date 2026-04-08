@@ -268,9 +268,19 @@ async function workspaceMove(
   if (!realFrom.startsWith(realRoot + path.sep) && realFrom !== realRoot) {
     throw new Error("Source path resolves outside workspace root");
   }
-  const realToParent = await fs.realpath(path.dirname(toFullPath)).catch(() => null);
-  if (realToParent && !realToParent.startsWith(realRoot + path.sep) && realToParent !== realRoot) {
-    throw new Error("Destination path resolves outside workspace root");
+  // Validate destination by walking up to the nearest existing ancestor
+  let checkDir = path.dirname(toFullPath);
+  while (checkDir !== workspaceDir && checkDir !== path.dirname(checkDir)) {
+    try {
+      const realDir = await fs.realpath(checkDir);
+      if (!realDir.startsWith(realRoot + path.sep) && realDir !== realRoot) {
+        throw new Error("Destination path resolves outside workspace root");
+      }
+      break;
+    } catch {
+      // Ancestor doesn't exist yet, check its parent
+      checkDir = path.dirname(checkDir);
+    }
   }
 
   // Check source exists
