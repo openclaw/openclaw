@@ -344,6 +344,46 @@ describe("buildServiceEnvironment", () => {
     expect(env.http_proxy).toBe("http://proxy.local:7890");
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
   });
+    it("forwards cloud provider environment variables for launchd/systemd runtime", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        AWS_PROFILE: " default ",
+        AWS_REGION: "us-west-2",
+        AWS_DEFAULT_REGION: "us-west-2",
+        AWS_WEB_IDENTITY_TOKEN_FILE: "/var/run/secrets/token",
+        AWS_ROLE_ARN: "arn:aws:iam::123456789012:role/my-role",
+        AZURE_OPENAI_API_KEY: "az-key-123",
+        GOOGLE_CLOUD_PROJECT: "my-project",
+      },
+      port: 18789,
+    });
+
+    // AWS vars forwarded and trimmed
+    expect(env.AWS_PROFILE).toBe("default");
+    expect(env.AWS_REGION).toBe("us-west-2");
+    expect(env.AWS_DEFAULT_REGION).toBe("us-west-2");
+    // EKS IRSA vars forwarded
+    expect(env.AWS_WEB_IDENTITY_TOKEN_FILE).toBe("/var/run/secrets/token");
+    expect(env.AWS_ROLE_ARN).toBe("arn:aws:iam::123456789012:role/my-role");
+    // Azure and Google forwarded
+    expect(env.AZURE_OPENAI_API_KEY).toBe("az-key-123");
+    expect(env.GOOGLE_CLOUD_PROJECT).toBe("my-project");
+  });
+
+  it("omits cloud provider vars that are empty or missing", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        AWS_PROFILE: "",
+        AWS_REGION: "  ",
+      },
+      port: 18789,
+    });
+
+    expect(env.AWS_PROFILE).toBeUndefined();
+    expect(env.AWS_REGION).toBeUndefined();
+  });
 
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
     const env = buildServiceEnvironment({
