@@ -23,4 +23,12 @@ describe("extractQaFailureReplyText", () => {
       ),
     ).toContain('No API key found for provider "openai".');
   });
+
+  it("classifies curated missing-key guidance as a failure", () => {
+    expect(
+      extractQaFailureReplyText(
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.",
+      ),
+    ).toContain("Missing API key for OpenAI on the gateway.");
+  });
 });
