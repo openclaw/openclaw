@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 let currentConfig = {
@@ -48,18 +48,23 @@ vi.mock("./subagent-registry.store.js", () => ({
 describe("subagent registry archive behavior", () => {
   let mod: typeof import("./subagent-registry.js");
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    mod = await import("./subagent-registry.js");
+  });
+
+  beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
     };
     loadConfigMock.mockClear();
-    mod = await import("./subagent-registry.js");
+    mod.__testing.setDepsForTest();
+    mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   afterEach(() => {
+    mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
   });

@@ -215,4 +215,49 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("uses a dedicated cron session key for isolated jobs with model overrides", async () => {
+    const cfg = createCronConfig("server-cron-isolated-key");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated-model-override",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "agentTurn",
+          message: "run report",
+          model: "ollama/kimi-k2.5:cloud",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id }),
+          sessionKey: `cron:${job.id}`,
+        }),
+      );
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "main",
+        }),
+      );
+      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+        sessionKeys: [`cron:${job.id}`],
+        onWarn: expect.any(Function),
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
 });

@@ -10,6 +10,7 @@ import {
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -220,7 +221,7 @@ export function handleControlUiAvatarRequest(
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
@@ -462,7 +463,7 @@ export function handleControlUiHttpRequest(
   // against the same set of extensions that contentTypeForExt() recognises so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+  if (STATIC_ASSET_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(fileRel)))) {
     respondControlUiNotFound(res);
     return true;
   }

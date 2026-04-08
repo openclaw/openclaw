@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
@@ -256,7 +257,7 @@ function buildProviderAllowFromResolution(params: {
 
 function describeAllowFromResolutionError(err: unknown): string {
   if (err instanceof Error) {
-    const name = err.name.trim();
+    const name = normalizeOptionalString(err.name) ?? "";
     return name || "Error";
   }
   return "unknown_error";
@@ -275,7 +276,7 @@ function resolveOwnerAllowFromList(params: {
   }
   const filtered: string[] = [];
   for (const entry of raw) {
-    const trimmed = String(entry ?? "").trim();
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -466,7 +467,7 @@ function shouldUseFromAsSenderFallback(params: {
   from?: string | null;
   chatType?: string | null;
 }): boolean {
-  const from = (params.from ?? "").trim();
+  const from = normalizeOptionalString(params.from) ?? "";
   if (!from) {
     return false;
   }
@@ -490,7 +491,7 @@ function resolveSenderCandidates(params: {
   const { plugin, cfg, accountId } = params;
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
-    const trimmed = (value ?? "").trim();
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (!trimmed) {
       return;
     }
@@ -527,7 +528,7 @@ function resolveFallbackAllowFrom(params: {
   providerId?: ChannelId;
   accountId?: string | null;
 }): Array<string | number> {
-  const providerId = params.providerId?.trim();
+  const providerId = normalizeOptionalString(params.providerId);
   if (!providerId) {
     return [];
   }
@@ -629,8 +630,8 @@ export function resolveCommandAuthorization(params: {
     cfg,
   );
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const from = (ctx.From ?? "").trim();
-  const to = (ctx.To ?? "").trim();
+  const from = normalizeOptionalString(ctx.From) ?? "";
+  const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );

@@ -37,6 +37,14 @@ const {
 const { resolveManifestContractPluginIdsByCompatibilityRuntimePathMock } = vi.hoisted(() => ({
   resolveManifestContractPluginIdsByCompatibilityRuntimePathMock: vi.fn(() => ["brave"]),
 }));
+const { resolveManifestContractOwnerPluginIdMock, manifestRegistryActual } = vi.hoisted(() => ({
+  resolveManifestContractOwnerPluginIdMock: vi.fn(),
+  manifestRegistryActual: {
+    resolveManifestContractOwnerPluginId: undefined as
+      | typeof import("../plugins/manifest-registry.js").resolveManifestContractOwnerPluginId
+      | undefined,
+  },
+}));
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
@@ -73,8 +81,14 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
     "../plugins/manifest-registry.js",
   );
+  manifestRegistryActual.resolveManifestContractOwnerPluginId =
+    actual.resolveManifestContractOwnerPluginId;
+  resolveManifestContractOwnerPluginIdMock.mockImplementation(
+    actual.resolveManifestContractOwnerPluginId,
+  );
   return {
     ...actual,
+    resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
     resolveManifestContractPluginIdsByCompatibilityRuntimePath:
       resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
   };
@@ -297,6 +311,11 @@ describe("runtime web tools resolution", () => {
     resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebSearchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
+    resolveManifestContractOwnerPluginIdMock.mockReset();
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(
+      manifestRegistryActual.resolveManifestContractOwnerPluginId!,
+    );
+    resolveManifestContractOwnerPluginIdMock.mockClear();
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
   });
 
@@ -798,6 +817,7 @@ describe("runtime web tools resolution", () => {
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
       onlyPluginIds: ["google"],
     });
+    expect(resolveManifestContractOwnerPluginIdMock).not.toHaveBeenCalled();
     expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });

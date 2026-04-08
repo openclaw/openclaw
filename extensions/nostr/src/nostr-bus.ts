@@ -7,6 +7,7 @@ import {
   type Event,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
@@ -877,7 +878,7 @@ export function normalizePubkey(input: string): string {
   if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
     throw new Error("Pubkey must be 64 hex characters or npub format");
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 /**

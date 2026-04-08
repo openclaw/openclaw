@@ -222,6 +222,7 @@ describe("isBillingErrorMessage", () => {
     const samples = [
       "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
       "Extra usage is required for long context requests.",
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.",
       '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
       '{"type":"error","error":{"type":"invalid_request_error","message":"Extra usage is required for long context requests."}}',
     ];

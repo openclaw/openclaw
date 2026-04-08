@@ -34,7 +34,7 @@ function inspectTokenFile(pathValue: unknown): {
   tokenSource: "tokenFile" | "none";
   tokenStatus: TelegramCredentialStatus;
 } | null {
-  const tokenFile = typeof pathValue === "string" ? pathValue.trim() : "";
+  const tokenFile = normalizeOptionalString(pathValue) ?? "";
   if (!tokenFile) {
     return null;
   }
@@ -85,10 +85,10 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
         tokenStatus: "configured_unavailable",
       };
     }
-    const envValue = process.env[ref.id];
-    if (envValue && envValue.trim()) {
+    const envValue = normalizeOptionalString(process.env[ref.id]);
+    if (envValue) {
       return {
-        token: envValue.trim(),
+        token: envValue,
         tokenSource: "env",
         tokenStatus: "available",
       };
@@ -187,7 +187,11 @@ function inspectTelegramAccountPrimary(params: {
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envToken = allowEnv ? (params.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
+  const envToken = allowEnv
+    ? (normalizeOptionalString(params.envToken) ??
+      normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN) ??
+      "")
+    : "";
   if (envToken) {
     return {
       accountId,

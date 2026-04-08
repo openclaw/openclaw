@@ -1,4 +1,5 @@
 import process from "node:process";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import {
   collectErrorGraphCandidates,
@@ -102,13 +103,16 @@ function hasSqliteSignal(err: unknown): boolean {
     }
   }
 
-  const name = readErrorName(err);
-  if (name.toLowerCase().includes("sqlite")) {
+  const name = normalizeLowercaseStringOrEmpty(readErrorName(err));
+  if (name.includes("sqlite")) {
     return true;
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  if (message.toLowerCase().includes("sqlite")) {
+  const message =
+    "message" in err && typeof err.message === "string"
+      ? normalizeLowercaseStringOrEmpty(err.message)
+      : "";
+  if (message.includes("sqlite")) {
     return true;
   }
 
@@ -238,7 +242,7 @@ export function isTransientNetworkError(err: unknown): boolean {
       continue;
     }
     const rawMessage = (candidate as { message?: unknown }).message;
-    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    const message = normalizeLowercaseStringOrEmpty(rawMessage);
     if (!message) {
       continue;
     }
@@ -297,7 +301,7 @@ export function isTransientSqliteError(err: unknown): boolean {
       (candidate as { errstr?: unknown }).errstr,
     ];
     for (const rawMessage of messageParts) {
-      const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+      const message = normalizeLowercaseStringOrEmpty(rawMessage);
       if (!message) {
         continue;
       }

@@ -415,6 +415,7 @@ describe("GatewayClient close handling", () => {
 
 describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     wsInstances.length = 0;
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();

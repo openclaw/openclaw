@@ -3,6 +3,7 @@ import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import type { CliBundleMcpMode } from "../plugins/types.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
@@ -77,7 +78,9 @@ function pickBackendConfig(
   config: Record<string, CliBackendConfig>,
   normalizedId: string,
 ): CliBackendConfig | undefined {
-  const directKey = Object.keys(config).find((key) => key.trim().toLowerCase() === normalizedId);
+  const directKey = Object.keys(config).find(
+    (key) => normalizeOptionalLowercaseString(key) === normalizedId,
+  );
   if (directKey) {
     return config[directKey];
   }

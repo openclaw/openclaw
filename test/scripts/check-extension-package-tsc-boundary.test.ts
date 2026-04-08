@@ -206,30 +206,26 @@ describe("check-extension-package-tsc-boundary", () => {
     ).toBe("skipped 97 fresh plugin compiles\n");
   });
 
-  it("treats a plugin compile as fresh only when its outputs are newer than plugin and sdk inputs", () => {
+  it("treats a plugin compile as fresh only when its outputs are newer than plugin and shared sdk inputs", () => {
     const { rootDir, extensionRoot } = createTempExtensionRoot();
     const extensionSourcePath = path.join(extensionRoot, "index.ts");
     const extensionTsconfigPath = path.join(extensionRoot, "tsconfig.json");
     const stampPath = path.join(extensionRoot, "dist", ".boundary-tsc.stamp");
-    const rootSdkBuildInfoPath = path.join(rootDir, "dist", "plugin-sdk", ".tsbuildinfo");
-    const packageSdkBuildInfoPath = path.join(
+    const rootSdkTypePath = path.join(rootDir, "dist", "plugin-sdk", "core.d.ts");
+    const packageSdkTypePath = path.join(
       rootDir,
       "packages",
       "plugin-sdk",
       "dist",
-      ".tsbuildinfo",
-    );
-    const entryShimStampPath = path.join(
-      rootDir,
-      "dist",
+      "src",
       "plugin-sdk",
-      ".boundary-entry-shims.stamp",
+      "core.d.ts",
     );
 
     fs.mkdirSync(path.dirname(extensionSourcePath), { recursive: true });
     fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-    fs.mkdirSync(path.dirname(rootSdkBuildInfoPath), { recursive: true });
-    fs.mkdirSync(path.dirname(packageSdkBuildInfoPath), { recursive: true });
+    fs.mkdirSync(path.dirname(rootSdkTypePath), { recursive: true });
+    fs.mkdirSync(path.dirname(packageSdkTypePath), { recursive: true });
 
     fs.writeFileSync(extensionSourcePath, "export const demo = 1;\n", "utf8");
     fs.writeFileSync(
@@ -238,26 +234,23 @@ describe("check-extension-package-tsc-boundary", () => {
       "utf8",
     );
     fs.writeFileSync(stampPath, "ok\n", "utf8");
-    fs.writeFileSync(rootSdkBuildInfoPath, "ok\n", "utf8");
-    fs.writeFileSync(packageSdkBuildInfoPath, "ok\n", "utf8");
-    fs.writeFileSync(entryShimStampPath, "ok\n", "utf8");
+    fs.writeFileSync(rootSdkTypePath, "export {};\n", "utf8");
+    fs.writeFileSync(packageSdkTypePath, "export {};\n", "utf8");
 
     fs.utimesSync(extensionSourcePath, new Date(1_000), new Date(1_000));
     fs.utimesSync(extensionTsconfigPath, new Date(1_000), new Date(1_000));
-    fs.utimesSync(rootSdkBuildInfoPath, new Date(2_000), new Date(2_000));
-    fs.utimesSync(packageSdkBuildInfoPath, new Date(2_000), new Date(2_000));
-    fs.utimesSync(entryShimStampPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(rootSdkTypePath, new Date(500), new Date(500));
+    fs.utimesSync(packageSdkTypePath, new Date(2_000), new Date(2_000));
     fs.utimesSync(stampPath, new Date(3_000), new Date(3_000));
 
     expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(true);
 
-    fs.utimesSync(rootSdkBuildInfoPath, new Date(500), new Date(500));
-    fs.utimesSync(packageSdkBuildInfoPath, new Date(500), new Date(500));
-    fs.utimesSync(entryShimStampPath, new Date(500), new Date(500));
+    fs.utimesSync(rootSdkTypePath, new Date(500), new Date(500));
+    fs.utimesSync(packageSdkTypePath, new Date(500), new Date(500));
 
     expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(true);
 
-    fs.utimesSync(rootSdkBuildInfoPath, new Date(4_000), new Date(4_000));
+    fs.utimesSync(rootSdkTypePath, new Date(4_000), new Date(4_000));
 
     expect(isBoundaryCompileFresh("demo", { rootDir })).toBe(false);
   });

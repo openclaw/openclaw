@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type {
+  ContextEnginePromptCacheInfo,
+  ContextEngineRuntimeContext,
+} from "../../../context-engine/types.js";
+import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
@@ -11,7 +15,6 @@ import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../mus
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
-import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
@@ -179,28 +182,32 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
-}): Partial<CompactEmbeddedPiSessionParams> {
-  return buildEmbeddedCompactionRuntimeContext({
-    sessionKey: params.attempt.sessionKey,
-    messageChannel: params.attempt.messageChannel,
-    messageProvider: params.attempt.messageProvider,
-    agentAccountId: params.attempt.agentAccountId,
-    currentChannelId: params.attempt.currentChannelId,
-    currentThreadTs: params.attempt.currentThreadTs,
-    currentMessageId: params.attempt.currentMessageId,
-    authProfileId: params.attempt.authProfileId,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    config: params.attempt.config,
-    skillsSnapshot: params.attempt.skillsSnapshot,
-    senderIsOwner: params.attempt.senderIsOwner,
-    senderId: params.attempt.senderId,
-    provider: params.attempt.provider,
-    modelId: params.attempt.modelId,
-    thinkLevel: params.attempt.thinkLevel,
-    reasoningLevel: params.attempt.reasoningLevel,
-    bashElevated: params.attempt.bashElevated,
-    extraSystemPrompt: params.attempt.extraSystemPrompt,
-    ownerNumbers: params.attempt.ownerNumbers,
-  });
+  promptCache?: ContextEnginePromptCacheInfo;
+}): ContextEngineRuntimeContext {
+  return {
+    ...buildEmbeddedCompactionRuntimeContext({
+      sessionKey: params.attempt.sessionKey,
+      messageChannel: params.attempt.messageChannel,
+      messageProvider: params.attempt.messageProvider,
+      agentAccountId: params.attempt.agentAccountId,
+      currentChannelId: params.attempt.currentChannelId,
+      currentThreadTs: params.attempt.currentThreadTs,
+      currentMessageId: params.attempt.currentMessageId,
+      authProfileId: params.attempt.authProfileId,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      config: params.attempt.config,
+      skillsSnapshot: params.attempt.skillsSnapshot,
+      senderIsOwner: params.attempt.senderIsOwner,
+      senderId: params.attempt.senderId,
+      provider: params.attempt.provider,
+      modelId: params.attempt.modelId,
+      thinkLevel: params.attempt.thinkLevel,
+      reasoningLevel: params.attempt.reasoningLevel,
+      bashElevated: params.attempt.bashElevated,
+      extraSystemPrompt: params.attempt.extraSystemPrompt,
+      ownerNumbers: params.attempt.ownerNumbers,
+    }),
+    ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+  };
 }

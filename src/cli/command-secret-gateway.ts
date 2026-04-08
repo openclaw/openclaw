@@ -189,8 +189,7 @@ function classifyRuntimeWebTargetPathState(params: {
     return "inactive";
   }
 
-  const configuredProvider =
-    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   if (!configuredProvider) {
     return "active";
   }
@@ -250,8 +249,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
     return "tools.web.search is disabled.";
   }
 
-  const configuredProvider =
-    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   if (configuredProvider && configuredProvider !== match[1]) {
     return `tools.web.search.provider is "${configuredProvider}".`;
   }
@@ -395,7 +393,7 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
 }
 
 function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = formatErrorMessage(err).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
   if (!message.includes("secrets.resolve")) {
     return false;
   }

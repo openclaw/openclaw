@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -129,7 +133,7 @@ function formatOpenClawUserAgent(version: string): string {
 
 function tryParseHostname(value: string): string | undefined {
   try {
-    return new URL(value).hostname.toLowerCase();
+    return normalizeOptionalLowercaseString(new URL(value).hostname);
   } catch {
     return undefined;
   }
@@ -140,11 +144,10 @@ function isSchemelessHostnameCandidate(value: string): boolean {
 }
 
 function resolveUrlHostname(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
     return undefined;
   }
-
-  const trimmed = value.trim();
   const parsedHostname = tryParseHostname(trimmed);
   if (parsedHostname) {
     return parsedHostname;
@@ -156,7 +159,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
 }
 
 function normalizeComparableBaseUrl(value: string): string | undefined {
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -172,7 +175,7 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
     }
     url.hash = "";
     url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
+    return normalizeOptionalLowercaseString(url.toString().replace(/\/+$/, ""));
   } catch {
     return undefined;
   }
@@ -465,7 +468,7 @@ export function resolveProviderRequestPolicy(
   const policy = resolveProviderAttributionPolicy(provider, env);
   const endpointResolution = resolveProviderEndpoint(input.baseUrl);
   const endpointClass = endpointResolution.endpointClass;
-  const api = input.api?.trim().toLowerCase();
+  const api = normalizeOptionalLowercaseString(input.api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
@@ -535,8 +538,8 @@ export function resolveProviderRequestCapabilities(
 ): ProviderRequestCapabilities {
   const policy = resolveProviderRequestPolicy(input, env);
   const provider = policy.provider;
-  const api = input.api?.trim().toLowerCase();
-  const normalizedModelId = input.modelId?.trim().toLowerCase();
+  const api = normalizeOptionalLowercaseString(input.api);
+  const normalizedModelId = normalizeOptionalLowercaseString(input.modelId);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||

@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
   fal: "fal/fal-ai/flux/dev",
@@ -16,8 +17,8 @@ export function parseCaseFilter(raw?: string): Set<string> | null {
   }
   const values = trimmed
     .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
   return values.length > 0 ? new Set(values) : null;
 }
 
@@ -55,7 +56,11 @@ export function parseProviderModelMap(raw?: string): Map<string, string> {
     if (slash <= 0 || slash === trimmed.length - 1) {
       continue;
     }
-    entries.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
+    const providerId = normalizeOptionalLowercaseString(trimmed.slice(0, slash));
+    if (!providerId) {
+      continue;
+    }
+    entries.set(providerId, trimmed);
   }
   return entries;
 }
@@ -72,7 +77,11 @@ export function resolveConfiguredLiveImageModels(cfg: OpenClawConfig): Map<strin
     if (slash <= 0 || slash === trimmed.length - 1) {
       return;
     }
-    resolved.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
+    const providerId = normalizeOptionalLowercaseString(trimmed.slice(0, slash));
+    if (!providerId) {
+      return;
+    }
+    resolved.set(providerId, trimmed);
   };
   if (typeof configured === "string") {
     add(configured);

@@ -10,7 +10,7 @@ export default defineBundledChannelEntry({
     exportName: "slackPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
   runtime: {

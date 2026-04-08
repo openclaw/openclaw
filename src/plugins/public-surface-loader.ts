@@ -8,8 +8,9 @@ import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
+  isBundledPluginExtensionPath,
+  resolvePluginLoaderJitiConfig,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -70,17 +71,16 @@ function resolvePublicSurfaceLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    preferBuiltDist: true,
+  });
   const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
   if (sharedLoader) {
     return sharedLoader;
   }
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-  });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {
     return cached;
@@ -98,18 +98,13 @@ function getSharedBundledPublicSurfaceJiti(
   tryNative: boolean,
 ): ReturnType<typeof createJiti> | null {
   const bundledPluginsDir = resolveBundledPluginsDir();
-  const normalizedModulePath = path.resolve(modulePath);
-  const sharedRoots = [
-    bundledPluginsDir ? path.resolve(bundledPluginsDir) : null,
-    path.join(OPENCLAW_PACKAGE_ROOT, "extensions"),
-    path.join(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
-    path.join(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
-  ].filter((root): root is string => typeof root === "string");
-  const isBundledPublicSurface = sharedRoots.some(
-    (root) =>
-      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
-  );
-  if (!isBundledPublicSurface) {
+  if (
+    !isBundledPluginExtensionPath({
+      modulePath,
+      openClawPackageRoot: OPENCLAW_PACKAGE_ROOT,
+      ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+    })
+  ) {
     return null;
   }
   const cacheKey = tryNative ? "bundled:native" : "bundled:source";
