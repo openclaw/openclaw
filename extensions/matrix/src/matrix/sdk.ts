@@ -44,6 +44,7 @@ import type {
   MessageEventContent,
 } from "./sdk/types.js";
 import type { MatrixVerificationSummary } from "./sdk/verification-manager.js";
+import { createMatrixStartupAbortError, throwIfMatrixStartupAborted } from "./startup-abort.js";
 import {
   isMatrixReadySyncState,
   isMatrixTerminalSyncState,
@@ -145,18 +146,6 @@ const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
   allowSecretStorageRecreateWithoutRecoveryKey: true,
   strict: true,
 } satisfies MatrixCryptoBootstrapOptions;
-
-function createMatrixStartupAbortError(): Error {
-  const error = new Error("Matrix startup aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-function throwIfMatrixStartupAborted(abortSignal?: AbortSignal): void {
-  if (abortSignal?.aborted === true) {
-    throw createMatrixStartupAbortError();
-  }
-}
 
 function createMatrixExplicitBootstrapOptions(params?: {
   forceResetCrossSigning?: boolean;

@@ -24,6 +24,7 @@ import {
   resolveSharedMatrixClient,
 } from "../client.js";
 import { releaseSharedClientInstance } from "../client/shared.js";
+import { isMatrixStartupAbortError } from "../startup-abort.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -395,6 +396,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       writeConfigFile: async (nextCfg) => await core.config.writeConfigFile(nextCfg),
       loadWebMedia: async (url, maxBytes) => await core.media.loadWebMedia(url, maxBytes),
       env: process.env,
+      abortSignal: opts.abortSignal,
     });
 
     await Promise.race([
@@ -411,7 +413,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       syncLifecycle.waitForFatalStop(),
     ]);
   } catch (err) {
-    if (opts.abortSignal?.aborted === true && err instanceof Error && err.name === "AbortError") {
+    if (opts.abortSignal?.aborted === true && isMatrixStartupAbortError(err)) {
       await cleanup("stop");
       return;
     }

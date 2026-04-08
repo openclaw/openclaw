@@ -100,6 +100,9 @@ const hoisted = vi.hoisted(() => {
   const setActiveMatrixClient = vi.fn();
   const setMatrixRuntime = vi.fn();
   const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
+  const runMatrixStartupMaintenance = vi.fn<
+    (params: { abortSignal?: AbortSignal }) => Promise<void>
+  >(async () => undefined);
   const setStatus = vi.fn();
   return {
     backfillMatrixAuthDeviceIdAfterStartup,
@@ -116,6 +119,7 @@ const hoisted = vi.hoisted(() => {
     releaseSharedClientInstance,
     resolveSharedMatrixClient,
     resolveTextChunkLimit,
+    runMatrixStartupMaintenance,
     setActiveMatrixClient,
     setMatrixRuntime,
     setStatus,
@@ -370,6 +374,10 @@ vi.mock("./startup-verification.js", () => ({
   ensureMatrixStartupVerification: vi.fn(),
 }));
 
+vi.mock("./startup.js", () => ({
+  runMatrixStartupMaintenance: hoisted.runMatrixStartupMaintenance,
+}));
+
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
@@ -431,6 +439,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
+    hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
     hoisted.setStatus.mockReset();
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
@@ -581,6 +590,36 @@ describe("monitorMatrixProvider", () => {
 
     await vi.waitFor(() => {
       expect(hoisted.callOrder).toContain("start-client");
+    });
+
+    abortController.abort();
+
+    await expect(monitorPromise).resolves.toBeUndefined();
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "stop");
+    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
+  });
+
+  it("aborts during startup maintenance and releases the shared client without persist", async () => {
+    const abortController = new AbortController();
+    hoisted.runMatrixStartupMaintenance.mockImplementation(
+      async (params: { abortSignal?: AbortSignal }) =>
+        await new Promise<void>((_resolve, reject) => {
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("Matrix startup aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    await vi.waitFor(() => {
+      expect(hoisted.runMatrixStartupMaintenance).toHaveBeenCalledTimes(1);
     });
 
     abortController.abort();
