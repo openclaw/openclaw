@@ -446,7 +446,7 @@ describe("exec approval session target", () => {
     });
   });
 
-  it("returns null when explicit turn source conflicts with the session-bound origin target", () => {
+  it("prefers turn-source routing when session store lastTo disagrees with the approval turn", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = writeStoreFile(storePath, {
@@ -474,7 +474,7 @@ describe("exec approval session target", () => {
         targetsMatch: (a, b) => a.to === b.to,
       });
 
-      expect(target).toBeNull();
+      expect(target).toEqual({ to: "channel:C999" });
     });
   });
 

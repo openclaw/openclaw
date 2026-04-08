@@ -168,17 +168,6 @@ export function resolveApprovalRequestSessionTarget(params: {
   });
 }
 
-function resolveApprovalRequestStoredSessionTarget(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-}): ExecApprovalSessionTarget | null {
-  const execLikeRequest = toExecLikeApprovalRequest(params.request);
-  return resolveExecApprovalSessionTarget({
-    cfg: params.cfg,
-    request: execLikeRequest,
-  });
-}
-
 export function resolveApprovalRequestOriginTarget<TTarget>(
   params: ApprovalRequestOriginTargetResolver<TTarget>,
 ): TTarget | null {
@@ -195,7 +184,9 @@ export function resolveApprovalRequestOriginTarget<TTarget>(
 
   const turnSourceTarget = params.resolveTurnSourceTarget(params.request);
   const expectedChannel = normalizeOptionalChannel(params.channel);
-  const sessionTargetBinding = resolveApprovalRequestStoredSessionTarget({
+  // Use turn-source-aware session resolution so stale lastChannel/lastTo cannot disagree
+  // with the live approval request metadata (same path as exec approval forwarding).
+  const sessionTargetBinding = resolveApprovalRequestSessionTarget({
     cfg: params.cfg,
     request: params.request,
   });

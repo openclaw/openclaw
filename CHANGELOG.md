@@ -99,6 +99,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions_send: pass `threadId` through announce delivery so cross-session notifications land in the correct Telegram forum topic instead of the group's general thread. (#62758) Thanks @jalehman.
 - Daemon/systemd: keep sudo systemctl calls scoped to the invoking user when machine-scoped systemctl fails, while still avoiding machine fallback for permission-denied user bus errors. (#62337) Thanks @Aftabbs.
 - Docs/i18n: relocalize final localized-page links after translation and remove the zh-CN homepage redirect override so localized Mintlify pages resolve to the correct language roots again. (#61796) Thanks @hxy91819.
+- Exec approvals: resolve native approval origin targets using turn-source-aware session delivery metadata so stale session `lastChannel`/`lastTo` cannot disagree with the initiating turn and force fallback delivery (for example Telegram exec approvals fanning out to other approver DMs). (#62718)
 
 ## 2026.4.5
 
