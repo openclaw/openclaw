@@ -78,7 +78,7 @@ async function callTabsAction(params: {
 }
 
 describe("browser tab routes", () => {
-  it("returns a no-op close result when the browser is not reachable", async () => {
+  it("returns browser-not-running for close when the browser is not reachable", async () => {
     const profileCtx = createProfileContext({
       isReachable: vi.fn(async () => false),
     });
@@ -88,8 +88,8 @@ describe("browser tab routes", () => {
       profileCtx,
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true, targetId: null });
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({ error: "browser not running" });
     expect(profileCtx.listTabs).not.toHaveBeenCalled();
     expect(profileCtx.closeTab).not.toHaveBeenCalled();
   });

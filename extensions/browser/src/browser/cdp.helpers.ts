@@ -232,8 +232,11 @@ export async function fetchCdpChecked(
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await withNoProxyForCdpUrl(url, () =>
-      fetch(url, { ...init, headers, signal: ctrl.signal }),
+      fetch(url, { ...init, headers, redirect: "manual", signal: ctrl.signal }),
     );
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error("CDP endpoint redirects are not allowed");
+    }
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)

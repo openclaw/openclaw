@@ -201,9 +201,8 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         }
 
         if (action === "close") {
-          const reachable = await profileCtx.isReachable(300);
-          if (!reachable) {
-            return res.json({ ok: true, targetId: null });
+          if (!(await ensureBrowserRunning(profileCtx, res))) {
+            return;
           }
           const tabs = await profileCtx.listTabs();
           const target = resolveIndexedTab(tabs, index);
