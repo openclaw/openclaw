@@ -1,8 +1,72 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const FINAL_REPLY_TEXT = "final answer";
+const THREAD_TS = "thread-1";
+
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
+
+const noop = () => {};
+const noopAsync = async () => {};
+
+function createDraftStreamStub() {
+  return {
+    update: noop,
+    flush: noopAsync,
+    clear: noopAsync,
+    stop: noop,
+    forceNewMessage: noop,
+    messageId: () => "171234.567",
+    channelId: () => "C123",
+  };
+}
+
+function createPreparedSlackMessage() {
+  return {
+    ctx: {
+      cfg: {},
+      runtime: {},
+      botToken: "xoxb-test",
+      app: { client: {} },
+      teamId: "T1",
+      textLimit: 4000,
+      typingReaction: "",
+      removeAckAfterReply: false,
+      historyLimit: 0,
+      channelHistories: new Map(),
+      allowFrom: [],
+      setSlackThreadStatus: async () => undefined,
+    },
+    account: {
+      accountId: "default",
+      config: {},
+    },
+    message: {
+      channel: "C123",
+      ts: "171234.111",
+      thread_ts: THREAD_TS,
+      user: "U123",
+    },
+    route: {
+      agentId: "agent-1",
+      accountId: "default",
+      mainSessionKey: "main",
+    },
+    channelConfig: null,
+    replyTarget: "channel:C123",
+    ctxPayload: {
+      MessageThreadId: THREAD_TS,
+    },
+    replyToMode: "all",
+    isDirectMessage: false,
+    isRoomish: false,
+    historyKey: "history-key",
+    preview: "",
+    ackReactionValue: "eyes",
+    ackReactionPromise: null,
+  } as never;
+}
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveHumanDelayConfig: () => undefined,
@@ -87,8 +151,7 @@ vi.mock("../../actions.js", () => ({
 }));
 
 vi.mock("../../draft-stream.js", () => ({
-  createSlackDraftStream: (...args: unknown[]) =>
-    createSlackDraftStreamMock(...(args as Parameters<typeof createSlackDraftStreamMock>)),
+  createSlackDraftStream: createSlackDraftStreamMock,
 }));
 
 vi.mock("../../format.js", () => ({
@@ -120,7 +183,7 @@ vi.mock("../../stream-mode.js", () => ({
 vi.mock("../../streaming.js", () => ({
   appendSlackStream: async () => {},
   startSlackStream: async () => ({
-    threadTs: "thread-1",
+    threadTs: THREAD_TS,
     stopped: false,
   }),
   stopSlackStream: async () => {},
@@ -128,7 +191,7 @@ vi.mock("../../streaming.js", () => ({
 
 vi.mock("../../threading.js", () => ({
   resolveSlackThreadTargets: () => ({
-    statusThreadTs: "thread-1",
+    statusThreadTs: THREAD_TS,
     isThreadReply: true,
   }),
 }));
@@ -144,13 +207,12 @@ vi.mock("../config.runtime.js", () => ({
 
 vi.mock("../replies.js", () => ({
   createSlackReplyDeliveryPlan: () => ({
-    nextThreadTs: () => "thread-1",
+    nextThreadTs: () => THREAD_TS,
     markSent: () => {},
   }),
-  deliverReplies: (...args: unknown[]) =>
-    deliverRepliesMock(...(args as Parameters<typeof deliverRepliesMock>)),
+  deliverReplies: deliverRepliesMock,
   readSlackReplyBlocks: () => undefined,
-  resolveSlackThreadTs: () => "thread-1",
+  resolveSlackThreadTs: () => THREAD_TS,
 }));
 
 vi.mock("../reply.runtime.js", () => ({
@@ -164,7 +226,7 @@ vi.mock("../reply.runtime.js", () => ({
   dispatchInboundMessage: async (params: {
     dispatcher: { deliver: (payload: { text: string }) => Promise<void> };
   }) => {
-    await params.dispatcher.deliver({ text: "final answer" });
+    await params.dispatcher.deliver({ text: FINAL_REPLY_TEXT });
     return {
       queuedFinal: false,
       counts: {
@@ -175,8 +237,7 @@ vi.mock("../reply.runtime.js", () => ({
 }));
 
 vi.mock("./preview-finalize.js", () => ({
-  finalizeSlackPreviewEdit: (...args: unknown[]) =>
-    finalizeSlackPreviewEditMock(...(args as Parameters<typeof finalizeSlackPreviewEditMock>)),
+  finalizeSlackPreviewEdit: finalizeSlackPreviewEditMock,
 }));
 
 let dispatchPreparedSlackMessage: typeof import("./dispatch.js").dispatchPreparedSlackMessage;
@@ -191,70 +252,19 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
 
-    createSlackDraftStreamMock.mockReturnValue({
-      update: () => {},
-      flush: async () => {},
-      clear: async () => {},
-      stop: () => {},
-      forceNewMessage: () => {},
-      messageId: () => "171234.567",
-      channelId: () => "C123",
-      lastText: () => "final answer",
-    });
+    createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {
-    await dispatchPreparedSlackMessage({
-      ctx: {
-        cfg: {},
-        runtime: {},
-        botToken: "xoxb-test",
-        app: { client: {} },
-        teamId: "T1",
-        textLimit: 4000,
-        typingReaction: "",
-        removeAckAfterReply: false,
-        historyLimit: 0,
-        channelHistories: new Map(),
-        allowFrom: [],
-        setSlackThreadStatus: async () => undefined,
-      },
-      account: {
-        accountId: "default",
-        config: {},
-      },
-      message: {
-        channel: "C123",
-        ts: "171234.111",
-        thread_ts: "thread-1",
-        user: "U123",
-      },
-      route: {
-        agentId: "agent-1",
-        accountId: "default",
-        mainSessionKey: "main",
-      },
-      channelConfig: null,
-      replyTarget: "channel:C123",
-      ctxPayload: {
-        MessageThreadId: "thread-1",
-      },
-      replyToMode: "all",
-      isDirectMessage: false,
-      isRoomish: false,
-      historyKey: "history-key",
-      preview: "",
-      ackReactionValue: "eyes",
-      ackReactionPromise: null,
-    } as never);
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyThreadTs: "thread-1",
-        replies: [expect.objectContaining({ text: "final answer" })],
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
       }),
     );
   });
