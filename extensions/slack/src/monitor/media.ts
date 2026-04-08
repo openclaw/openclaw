@@ -86,7 +86,7 @@ function createSlackMediaFetch(token: string): FetchLike {
     if ((rest as { signal?: AbortSignal }).signal) {
       safeInit.signal = (rest as { signal: AbortSignal }).signal;
     }
-    return fetch(requestUrl, safeInit);
+    return fetchImpl(requestUrl, safeInit);
   };
 }
 
@@ -482,13 +482,18 @@ export async function resolveSlackThreadStarter(params: {
         bot_id?: string;
         ts?: string;
         files?: SlackFile[];
+        attachments?: SlackAttachment[];
       }>;
     };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
     const files =
       Array.isArray(message?.files) && message.files.length > 0 ? message.files : undefined;
-    if (!message || (!text && !files?.length)) {
+    const attachments =
+      Array.isArray(message?.attachments) && message.attachments.length > 0
+        ? message.attachments
+        : undefined;
+    if (!message || (!text && !files?.length && !attachments?.length)) {
       return null;
     }
     const starter: SlackThreadStarter = {
@@ -497,6 +502,7 @@ export async function resolveSlackThreadStarter(params: {
       botId: message.bot_id,
       ts: message.ts,
       files,
+      attachments,
     };
     if (THREAD_STARTER_CACHE.has(cacheKey)) {
       THREAD_STARTER_CACHE.delete(cacheKey);
