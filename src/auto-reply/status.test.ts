@@ -1352,6 +1352,42 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 49k/200k");
   });
 
+  it("treats empty status-card overrides as unset for context resolution", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [{ id: "gpt-5.4", contextWindow: 1_050_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "sess-empty-status-card-override",
+        updatedAt: 0,
+        providerOverride: "",
+        model: "gpt-5.4",
+        modelProvider: "openai-codex",
+        totalTokens: 111_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+      activeModelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 111k/1.1m");
+    expect(normalized).not.toContain("Context: 111k/200k");
+  });
+
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
       async (dir) => {

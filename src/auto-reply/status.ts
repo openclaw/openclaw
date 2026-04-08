@@ -442,8 +442,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: false,
   });
-  const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  const selectedProvider =
+    normalizeOptionalString(entry?.providerOverride) ?? resolved.provider ?? DEFAULT_PROVIDER;
+  const selectedModel =
+    normalizeOptionalString(entry?.modelOverride) ?? resolved.model ?? DEFAULT_MODEL;
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
