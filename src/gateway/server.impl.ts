@@ -1249,8 +1249,7 @@ export async function startGatewayServer(
             broadcastToConnIds(
               "socket.drain",
               { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
-              connIds,
-              { dropIfSlow: true },
+              connIds
             );
           }
         });
