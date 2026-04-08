@@ -595,6 +595,60 @@ static void test_protocol_parse_event(void) {
     gateway_frame_free(frame);
 }
 
+static void test_protocol_parse_type_non_string_rejected(void) {
+    const gchar *json = "{\"type\":123,\"id\":\"x\"}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_null(frame);
+}
+
+static void test_protocol_parse_optional_strings_invalid_ignored(void) {
+    const gchar *json = "{\"type\":\"req\",\"id\":123,\"method\":456,\"params\":{}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_REQ);
+    g_assert_null(frame->id);
+    g_assert_null(frame->method);
+    g_assert_nonnull(frame->payload);
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_event_name_invalid_ignored(void) {
+    const gchar *json = "{\"type\":\"event\",\"event\":123,\"payload\":{\"nonce\":\"abc123\"}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_EVENT);
+    g_assert_null(frame->event_type);
+
+    gchar *nonce = gateway_protocol_extract_challenge_nonce(frame);
+    g_assert_null(nonce);
+
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_response_error_strings_invalid_ignored(void) {
+    const gchar *json = "{\"type\":\"res\",\"id\":\"req-5\",\"error\":{\"code\":123,\"message\":456}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_cmpstr(frame->id, ==, "req-5");
+    g_assert_null(frame->code);
+    g_assert_null(frame->error);
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_challenge_nonce_non_string_ignored(void) {
+    const gchar *json = "{\"type\":\"event\",\"event\":\"connect.challenge\",\"payload\":{\"nonce\":123}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_EVENT);
+    g_assert_cmpstr(frame->event_type, ==, "connect.challenge");
+
+    gchar *nonce = gateway_protocol_extract_challenge_nonce(frame);
+    g_assert_null(nonce);
+
+    gateway_frame_free(frame);
+}
+
 static void test_protocol_parse_response_ok(void) {
     /* Valid hello-ok response per HelloOkSchema */
     const gchar *json = "{"
@@ -649,6 +703,36 @@ static void test_protocol_parse_response_ok_no_auth(void) {
     gdouble tick_ms = 0;
     gboolean ok = gateway_protocol_parse_hello_ok(frame, &auth_source, &tick_ms);
     
+    g_assert_true(ok);
+    g_assert_null(auth_source);
+    g_assert_cmpfloat_with_epsilon(tick_ms, 25000.0, 0.1);
+
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_response_ok_auth_source_wrong_type(void) {
+    /* Valid hello-ok with malformed auth.source should still parse and return NULL auth_source */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"auth\":{\"source\":123},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+
+    gchar *auth_source = (gchar *)0xdeadbeef; /* Ensure it is overwritten to NULL */
+    gdouble tick_ms = 0;
+    gboolean ok = gateway_protocol_parse_hello_ok(frame, &auth_source, &tick_ms);
+
     g_assert_true(ok);
     g_assert_null(auth_source);
     g_assert_cmpfloat_with_epsilon(tick_ms, 25000.0, 0.1);
@@ -2036,6 +2120,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/protocol/parse_event", test_protocol_parse_event);
     g_test_add_func("/gateway/protocol/parse_response_ok", test_protocol_parse_response_ok);
     g_test_add_func("/gateway/protocol/parse_response_ok_no_auth", test_protocol_parse_response_ok_no_auth);
+    g_test_add_func("/gateway/protocol/parse_response_ok_auth_source_wrong_type", test_protocol_parse_response_ok_auth_source_wrong_type);
     g_test_add_func("/gateway/protocol/parse_response_malformed_policy", test_protocol_parse_response_malformed_policy);
     g_test_add_func("/gateway/protocol/parse_response_malformed_auth", test_protocol_parse_response_malformed_auth);
     g_test_add_func("/gateway/protocol/parse_response_error", test_protocol_parse_response_error);
@@ -2044,6 +2129,11 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/protocol/parse_request", test_protocol_parse_request);
     g_test_add_func("/gateway/protocol/parse_invalid", test_protocol_parse_invalid);
     g_test_add_func("/gateway/protocol/parse_tick_event", test_protocol_parse_tick_event);
+    g_test_add_func("/gateway/protocol/parse_type_non_string_rejected", test_protocol_parse_type_non_string_rejected);
+    g_test_add_func("/gateway/protocol/parse_optional_strings_invalid_ignored", test_protocol_parse_optional_strings_invalid_ignored);
+    g_test_add_func("/gateway/protocol/parse_event_name_invalid_ignored", test_protocol_parse_event_name_invalid_ignored);
+    g_test_add_func("/gateway/protocol/parse_response_error_strings_invalid_ignored", test_protocol_parse_response_error_strings_invalid_ignored);
+    g_test_add_func("/gateway/protocol/parse_challenge_nonce_non_string_ignored", test_protocol_parse_challenge_nonce_non_string_ignored);
     g_test_add_func("/gateway/protocol/build_connect_token_mode", test_protocol_build_connect_token_mode);
     g_test_add_func("/gateway/protocol/build_connect_password_mode", test_protocol_build_connect_password_mode);
     g_test_add_func("/gateway/protocol/build_connect_none_mode", test_protocol_build_connect_none_mode);
