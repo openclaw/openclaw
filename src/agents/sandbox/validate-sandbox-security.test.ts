@@ -53,6 +53,18 @@ describe("getBlockedBindReason", () => {
     }
   });
 
+  it("still flags dangerous Windows home credential binds before non-absolute fallback", () => {
+    vi.stubEnv("HOME", "C:\\Users\\tester");
+    vi.stubEnv("USERPROFILE", "C:\\Users\\tester");
+
+    expect(getBlockedBindReason("C:\\Users\\tester\\.docker\\config.json:/mnt/test:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "C:/Users/tester/.docker",
+      }),
+    );
+  });
+
   it("still blocks OS-home credential paths when OPENCLAW_HOME points elsewhere", () => {
     vi.stubEnv("HOME", "/home/tester");
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
@@ -60,7 +72,7 @@ describe("getBlockedBindReason", () => {
     expect(getBlockedBindReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro")).toEqual(
       expect.objectContaining({
         kind: "targets",
-        blockedPath: "/home/tester/.gnupg",
+        blockedPath: normalizePathForSnapshot("/home/tester/.gnupg"),
       }),
     );
   });

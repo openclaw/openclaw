@@ -116,15 +116,15 @@ export function normalizeHostPath(raw: string): string {
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
-  if (!sourceRaw.startsWith("/")) {
-    return { kind: "non_absolute", sourcePath: sourceRaw };
-  }
-
   const normalized = normalizeHostPath(sourceRaw);
   const blockedHostPaths = getBlockedHostPaths();
   const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
   if (directReason) {
     return directReason;
+  }
+
+  if (!sourceRaw.startsWith("/")) {
+    return { kind: "non_absolute", sourcePath: sourceRaw };
   }
 
   const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
