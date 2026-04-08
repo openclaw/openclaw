@@ -1,11 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import semver from "semver";
 
 export const IOS_VERSION_FILE = "apps/ios/version.json";
 export const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
 export const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
 export const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
+
+const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})$/u;
+const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:beta\.\d+|\d+))?$/u;
 
 export type IosVersionManifest = {
   version: string;
@@ -24,37 +26,74 @@ export type ResolvedIosVersion = {
   releaseNotesPath: string;
 };
 
-function normalizeCanonicalVersion(rawVersion: string): string {
+export type SyncIosVersioningMode = "check" | "write";
+
+function normalizeTrailingNewline(value: string): string {
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+export function normalizePinnedIosVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
     throw new Error(`Missing iOS version in ${IOS_VERSION_FILE}.`);
   }
 
-  const parsed = semver.parse(trimmed);
-  if (!parsed) {
+  const match = PINNED_IOS_VERSION_PATTERN.exec(trimmed);
+  if (!match) {
+    throw new Error(`Invalid iOS version '${rawVersion}'. Expected pinned CalVer like 2026.4.6.`);
+  }
+
+  return match[1] ?? trimmed;
+}
+
+export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {
+  const trimmed = rawVersion.trim().replace(/^v/u, "");
+  if (!trimmed) {
+    throw new Error("Missing root package.json version.");
+  }
+
+  const match = GATEWAY_VERSION_PATTERN.exec(trimmed);
+  if (!match) {
     throw new Error(
-      `Invalid iOS version '${rawVersion}'. Expected semantic versioning like 1.2.3 or 1.2.3-beta.1.`,
+      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.D, YYYY.M.D-beta.N, or YYYY.M.D-N.`,
     );
   }
 
-  if (parsed.build.length > 0) {
-    throw new Error(
-      `Invalid iOS version '${rawVersion}'. Build metadata (+suffix) is not supported for Apple bundle versions.`,
-    );
-  }
+  return match[1] ?? trimmed;
+}
 
-  if (parsed.prerelease.length === 0) {
-    return parsed.format();
+export function readRootPackageVersion(rootDir = path.resolve(".")): string {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
+  const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
+  if (!version) {
+    throw new Error(`Missing package.json version in ${packageJsonPath}.`);
   }
+  return version;
+}
 
-  const [channel, number] = parsed.prerelease;
-  if (channel !== "beta" || typeof number !== "number" || parsed.prerelease.length !== 2) {
-    throw new Error(
-      `Invalid iOS prerelease '${rawVersion}'. Supported prerelease format is x.y.z-beta.N.`,
-    );
-  }
+export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")): {
+  packageVersion: string;
+  pinnedIosVersion: string;
+} {
+  const packageVersion = readRootPackageVersion(rootDir);
+  return {
+    packageVersion,
+    pinnedIosVersion: normalizeGatewayVersionToPinnedIosVersion(packageVersion),
+  };
+}
 
-  return parsed.format();
+export function readIosVersionManifest(rootDir = path.resolve(".")): IosVersionManifest {
+  const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
+  return JSON.parse(readFileSync(versionFilePath, "utf8")) as IosVersionManifest;
+}
+
+export function writeIosVersionManifest(version: string, rootDir = path.resolve(".")): string {
+  const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
+  const normalizedVersion = normalizePinnedIosVersion(version);
+  const nextContent = `${JSON.stringify({ version: normalizedVersion }, null, 2)}\n`;
+  writeFileSync(versionFilePath, nextContent, "utf8");
+  return versionFilePath;
 }
 
 export function resolveIosVersion(rootDir = path.resolve(".")): ResolvedIosVersion {
@@ -62,29 +101,16 @@ export function resolveIosVersion(rootDir = path.resolve(".")): ResolvedIosVersi
   const changelogPath = path.join(rootDir, IOS_CHANGELOG_FILE);
   const versionXcconfigPath = path.join(rootDir, IOS_VERSION_XCCONFIG_FILE);
   const releaseNotesPath = path.join(rootDir, IOS_RELEASE_NOTES_FILE);
-  const manifest = JSON.parse(readFileSync(versionFilePath, "utf8")) as IosVersionManifest;
-  const canonicalVersion = normalizeCanonicalVersion(manifest.version ?? "");
-  const parsed = semver.parse(canonicalVersion);
-  if (!parsed) {
-    throw new Error(`Unable to parse normalized iOS version '${canonicalVersion}'.`);
-  }
-
-  const prereleaseChannel =
-    parsed.prerelease.length > 0 && typeof parsed.prerelease[0] === "string"
-      ? parsed.prerelease[0]
-      : null;
-  const prereleaseNumber =
-    parsed.prerelease.length > 1 && typeof parsed.prerelease[1] === "number"
-      ? parsed.prerelease[1]
-      : null;
+  const manifest = readIosVersionManifest(rootDir);
+  const canonicalVersion = normalizePinnedIosVersion(manifest.version ?? "");
 
   return {
     canonicalVersion,
-    marketingVersion: `${parsed.major}.${parsed.minor}.${parsed.patch}`,
+    marketingVersion: canonicalVersion,
     buildVersion: "1",
-    isPrerelease: parsed.prerelease.length > 0,
-    prereleaseChannel,
-    prereleaseNumber,
+    isPrerelease: false,
+    prereleaseChannel: null,
+    prereleaseNumber: null,
     versionFilePath,
     changelogPath,
     versionXcconfigPath,
@@ -143,4 +169,60 @@ export function renderIosReleaseNotes(
   throw new Error(
     `Unable to find iOS changelog notes for ${version.canonicalVersion}. Add a matching section to ${IOS_CHANGELOG_FILE}.`,
   );
+}
+
+function syncFile(params: {
+  mode: SyncIosVersioningMode;
+  path: string;
+  nextContent: string;
+  label: string;
+}): boolean {
+  const nextContent = normalizeTrailingNewline(params.nextContent);
+  const currentContent = readFileSync(params.path, "utf8");
+  if (currentContent === nextContent) {
+    return false;
+  }
+
+  if (params.mode === "check") {
+    throw new Error(`${params.label} is stale: ${path.relative(process.cwd(), params.path)}`);
+  }
+
+  writeFileSync(params.path, nextContent, "utf8");
+  return true;
+}
+
+export function syncIosVersioning(params?: { mode?: SyncIosVersioningMode; rootDir?: string }): {
+  updatedPaths: string[];
+} {
+  const mode = params?.mode ?? "write";
+  const rootDir = path.resolve(params?.rootDir ?? ".");
+  const version = resolveIosVersion(rootDir);
+  const changelogContent = readFileSync(version.changelogPath, "utf8");
+  const nextVersionXcconfig = renderIosVersionXcconfig(version);
+  const nextReleaseNotes = renderIosReleaseNotes(version, changelogContent);
+  const updatedPaths: string[] = [];
+
+  if (
+    syncFile({
+      mode,
+      path: version.versionXcconfigPath,
+      nextContent: nextVersionXcconfig,
+      label: "iOS version xcconfig",
+    })
+  ) {
+    updatedPaths.push(version.versionXcconfigPath);
+  }
+
+  if (
+    syncFile({
+      mode,
+      path: version.releaseNotesPath,
+      nextContent: nextReleaseNotes,
+      label: "iOS release notes",
+    })
+  ) {
+    updatedPaths.push(version.releaseNotesPath);
+  }
+
+  return { updatedPaths };
 }
