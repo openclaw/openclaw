@@ -117,6 +117,8 @@ function expectBlocked(result: OutboundResult, expectedError: string): void {
   expect(apiMocks.getAccessToken).not.toHaveBeenCalled();
 }
 
+const nonDotRelativeTraversalPath = "src/../../../../etc/passwd";
+
 afterEach(() => {
   vi.clearAllMocks();
   for (const root of createdRoots.splice(0)) {
@@ -153,9 +155,21 @@ describe("qqbot outbound local media path security", () => {
     expectBlocked(result, "File path must be inside QQ Bot media storage");
   });
 
+  it("blocks non-dot relative traversal paths for document sends", async () => {
+    const result = await sendDocument(buildTarget(), nonDotRelativeTraversalPath);
+
+    expectBlocked(result, "File path must be inside QQ Bot media storage");
+  });
+
   it("blocks sendMedia local paths outside QQ Bot media storage", async () => {
     const outsidePath = createOutsideFile(".txt");
     const result = await sendMedia(buildMediaContext(outsidePath));
+
+    expectBlocked(result, "Media path must be inside QQ Bot media storage");
+  });
+
+  it("blocks non-dot relative traversal paths in sendMedia", async () => {
+    const result = await sendMedia(buildMediaContext(nonDotRelativeTraversalPath));
 
     expectBlocked(result, "Media path must be inside QQ Bot media storage");
   });

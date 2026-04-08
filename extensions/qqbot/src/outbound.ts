@@ -285,13 +285,21 @@ const qqBotMediaKindLabel: Record<QQBotMediaKind, string> = {
 
 type ResolvedOutboundMediaPath = { ok: true; mediaPath: string } | { ok: false; error: string };
 
+function isHttpOrDataSource(pathValue: string): boolean {
+  return (
+    pathValue.startsWith("http://") ||
+    pathValue.startsWith("https://") ||
+    pathValue.startsWith("data:")
+  );
+}
+
 function resolveOutboundMediaPath(
   rawPath: string,
   prefix: string,
   mediaKind: QQBotMediaKind,
 ): ResolvedOutboundMediaPath {
   const normalizedPath = normalizePath(rawPath);
-  if (!isLocalFilePath(normalizedPath)) {
+  if (isHttpOrDataSource(normalizedPath)) {
     return { ok: true, mediaPath: normalizedPath };
   }
 
