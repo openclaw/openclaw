@@ -82,9 +82,12 @@ export function resolveActiveErrorContext(params: {
   provider: string;
   model: string;
 }): { provider: string; model: string } {
+  // Always prefer the current attempt's provider/model for error attribution.
+  // lastAssistant may come from session history (a previous provider's error turn)
+  // and must not contaminate the current attempt's error context.
   return {
-    provider: params.lastAssistant?.provider ?? params.provider,
-    model: params.lastAssistant?.model ?? params.model,
+    provider: params.provider,
+    model: params.model,
   };
 }
 
