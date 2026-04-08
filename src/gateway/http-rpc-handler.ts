@@ -4,9 +4,9 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import { ResolvedGatewayAuth } from "./auth.js";
 import { AuthRateLimiter } from "./auth-rate-limit.js";
 import { sendJson } from "./http-common.js";
-import { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } from "./http-utils.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-import { GATEWAY_CLIENT_MODES } from "../utils/message-channel.js";
+import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { getFallbackGatewayContextForHttpRpc } from "./server-plugins.js";
 
@@ -216,13 +216,13 @@ async function handleSingleRequest(
 ): Promise<JsonRpcResponse> {
   // Create a client with appropriate scopes based on the auth
   // For authenticated requests, use default operator scopes; for unauthenticated requests, use no scopes
-  const client = {
+  const client: GatewayClient = {
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       scopes: requestAuth ? ["operator.read", "operator.write"] : [],
       client: {
-        id: "gateway-client", // Using an appropriate client ID for HTTP RPC
+        id: "gateway-client" as const, // Using an appropriate client ID for HTTP RPC
         version: "1.0.0",
         platform: "http",
         mode: GATEWAY_CLIENT_MODES.BACKEND // Using BACKEND mode since there isn't a specific HTTP mode
