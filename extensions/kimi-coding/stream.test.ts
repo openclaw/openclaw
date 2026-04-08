@@ -46,6 +46,8 @@ read({"file_path": "/Users/guoshuyi/.openclaw/workspace/USER.md"})
 read({"file_path": "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md"})
 read({"file_path": "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md"})
 read({"file_path": "/Users/guoshuyi/.openclaw/workspace/MEMORY.md"})`;
+const KIMI_MIXED_FUNCTION_STYLE_TOOL_TEXT = `I'll do my startup sequence now. Reading today's and yesterday's memory, plus confirming my core files. read(memory/2026-04-08.md) read(memory/2026-04-07.md) read(MEMORY.md) read(SOUL.md) read(USER.md)
+Oops, let me do that properly with the tool. read({"file_path": "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md"}) read({"file_path": "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md"}) read({"file_path": "/Users/guoshuyi/.openclaw/workspace/MEMORY.md"}) read({"file_path": "/Users/guoshuyi/.openclaw/workspace/SOUL.md"}) read({"file_path": "/Users/guoshuyi/.openclaw/workspace/USER.md"})`;
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
@@ -366,6 +368,101 @@ cat /Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md 2>/dev/null && echo
           id: "read:4",
           name: "read",
           arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/MEMORY.md" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("extracts inline shorthand and JSON function style tool calls while preserving prose", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: KIMI_MIXED_FUNCTION_STYLE_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn: StreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }) as ReturnType<StreamFn>;
+
+    const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
+    const stream = wrapped(
+      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    ) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "I'll do my startup sequence now. Reading today's and yesterday's memory, plus confirming my core files. ",
+        },
+        {
+          type: "toolCall",
+          id: "read:0",
+          name: "read",
+          arguments: { file_path: "memory/2026-04-08.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:1",
+          name: "read",
+          arguments: { file_path: "memory/2026-04-07.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:2",
+          name: "read",
+          arguments: { file_path: "MEMORY.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:3",
+          name: "read",
+          arguments: { file_path: "SOUL.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:4",
+          name: "read",
+          arguments: { file_path: "USER.md" },
+        },
+        {
+          type: "text",
+          text: "\nOops, let me do that properly with the tool. ",
+        },
+        {
+          type: "toolCall",
+          id: "read:5",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-08.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:6",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/memory/2026-04-07.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:7",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/MEMORY.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:8",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/SOUL.md" },
+        },
+        {
+          type: "toolCall",
+          id: "read:9",
+          name: "read",
+          arguments: { file_path: "/Users/guoshuyi/.openclaw/workspace/USER.md" },
         },
       ],
       stopReason: "toolUse",

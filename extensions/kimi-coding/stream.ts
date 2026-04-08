@@ -223,44 +223,121 @@ function parseKimiSimpleTaggedToolCallsInText(text: string): KimiParsedTextBlock
   return { content, changed };
 }
 
+function parseKimiFunctionStyleArguments(
+  name: string,
+  rawArgs: string,
+): Record<string, unknown> | null {
+  const trimmedArgs = rawArgs.trim();
+  if (!trimmedArgs) {
+    return null;
+  }
+
+  if (trimmedArgs.startsWith("{")) {
+    try {
+      const parsedArgs = JSON.parse(trimmedArgs);
+      if (parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)) {
+        return parsedArgs as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (name === "read") {
+    return { file_path: trimmedArgs };
+  }
+  if (name === "exec") {
+    return { command: trimmedArgs };
+  }
+
+  return null;
+}
+
+function findMatchingFunctionStyleClose(text: string, openParenIndex: number): number {
+  let depth = 1;
+  let quoteChar: '"' | "'" | null = null;
+  let isEscaped = false;
+
+  for (let index = openParenIndex + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoteChar !== null) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        isEscaped = true;
+        continue;
+      }
+      if (char === quoteChar) {
+        quoteChar = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quoteChar = char;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
 function parseKimiFunctionStyleToolCallsInText(text: string): KimiParsedTextBlock | null {
-  const lineRe = /^([A-Za-z_][A-Za-z0-9_.-]*)\((\{.*\})\)\s*$/gm;
+  const callStartRe = /([A-Za-z_][A-Za-z0-9_.-]*)\(/g;
   const content: Array<KimiToolCallBlock | { type: "text"; text: string }> = [];
   let lastIndex = 0;
   let changed = false;
   let toolCallCount = 0;
   let match: RegExpExecArray | null = null;
 
-  while ((match = lineRe.exec(text)) !== null) {
+  while ((match = callStartRe.exec(text)) !== null) {
+    const name = match[1]?.trim() ?? "";
+    if (!name) {
+      continue;
+    }
+    const openParenIndex = (match.index ?? 0) + name.length;
+    const closeParenIndex = findMatchingFunctionStyleClose(text, openParenIndex);
+    if (closeParenIndex < 0) {
+      continue;
+    }
+
+    const parsedArgs = parseKimiFunctionStyleArguments(
+      name,
+      text.slice(openParenIndex + 1, closeParenIndex),
+    );
+    if (!parsedArgs) {
+      callStartRe.lastIndex = openParenIndex + 1;
+      continue;
+    }
+
     const before = text.slice(lastIndex, match.index);
     if (before) {
       content.push({ type: "text", text: before });
-    }
-
-    const name = match[1]?.trim() ?? "";
-    if (!name) {
-      return null;
-    }
-
-    let parsedArgs: unknown;
-    try {
-      parsedArgs = JSON.parse(match[2] ?? "");
-    } catch {
-      return null;
-    }
-    if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
-      return null;
     }
 
     content.push({
       type: "toolCall",
       id: `${name}:${toolCallCount}`,
       name,
-      arguments: parsedArgs as Record<string, unknown>,
+      arguments: parsedArgs,
     });
     toolCallCount += 1;
     changed = true;
-    lastIndex = match.index + match[0].length;
+    lastIndex = closeParenIndex + 1;
+    callStartRe.lastIndex = closeParenIndex + 1;
   }
 
   if (!changed) {
