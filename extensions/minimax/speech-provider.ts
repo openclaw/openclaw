@@ -1,3 +1,4 @@
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -150,9 +151,9 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
+function buildMinimaxSpeechProviderForId(providerId: string): SpeechProviderPlugin {
   return {
-    id: "minimax",
+    id: providerId,
     label: "MiniMax",
     autoSelectOrder: 40,
     models: MINIMAX_TTS_MODELS,
@@ -203,8 +204,9 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
       ...(asFiniteNumber(params.pitch) == null ? {} : { pitch: asFiniteNumber(params.pitch) }),
     }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readMinimaxProviderConfig(providerConfig).apiKey || process.env.MINIMAX_API_KEY),
+    isConfigured: ({ providerConfig, agentDir }) =>
+      Boolean(readMinimaxProviderConfig(providerConfig).apiKey || process.env.MINIMAX_API_KEY) ||
+      isProviderApiKeyConfigured({ provider: providerId, agentDir }),
     synthesize: async (req) => {
       const config = readMinimaxProviderConfig(req.providerConfig);
       const overrides = readMinimaxOverrides(req.providerOverrides);
@@ -231,4 +233,12 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
       };
     },
   };
+}
+
+export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
+  return buildMinimaxSpeechProviderForId("minimax");
+}
+
+export function buildMinimaxPortalSpeechProvider(): SpeechProviderPlugin {
+  return buildMinimaxSpeechProviderForId("minimax-portal");
 }

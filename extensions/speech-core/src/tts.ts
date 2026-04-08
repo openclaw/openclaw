@@ -472,7 +472,11 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   setTtsAutoMode(prefsPath, enabled ? "always" : "off");
 }
 
-export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
+export function getTtsProvider(
+  config: ResolvedTtsConfig,
+  prefsPath: string,
+  agentDir?: string,
+): TtsProvider {
   const prefs = readPrefs(prefsPath);
   const prefsProvider =
     canonicalizeSpeechProviderId(prefs.tts?.provider) ??
@@ -489,6 +493,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
       provider.isConfigured({
         providerConfig: config.providerConfigs[provider.id] ?? {},
         timeoutMs: config.timeoutMs,
+        agentDir,
       })
     ) {
       return provider.id;
@@ -615,6 +620,7 @@ export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
   provider: TtsProvider,
   cfg?: OpenClawConfig,
+  agentDir?: string,
 ): boolean {
   const resolvedProvider = getSpeechProvider(provider, cfg);
   if (!resolvedProvider) {
@@ -625,6 +631,7 @@ export function isTtsProviderConfigured(
       cfg,
       providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
       timeoutMs: config.timeoutMs,
+      agentDir,
     }) ?? false
   );
 }
@@ -677,6 +684,7 @@ function resolveReadySpeechProvider(params: {
   cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
   requireTelephony?: boolean;
+  agentDir?: string;
 }): TtsProviderReadyResolution {
   const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
   if (!resolvedProvider) {
@@ -696,6 +704,7 @@ function resolveReadySpeechProvider(params: {
       cfg: params.cfg,
       providerConfig,
       timeoutMs: params.config.timeoutMs,
+      agentDir: params.agentDir,
     })
   ) {
     return {
@@ -724,6 +733,7 @@ function resolveTtsRequestSetup(params: {
   prefsPath?: string;
   providerOverride?: TtsProvider;
   disableFallback?: boolean;
+  agentDir?: string;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -740,7 +750,7 @@ function resolveTtsRequestSetup(params: {
     };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
+  const userProvider = getTtsProvider(config, prefsPath, params.agentDir);
   const provider =
     canonicalizeSpeechProviderId(params.providerOverride, params.cfg) ?? userProvider;
   return {
@@ -756,6 +766,7 @@ export async function textToSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  agentDir?: string;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -794,6 +805,7 @@ export async function synthesizeSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  agentDir?: string;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -801,6 +813,7 @@ export async function synthesizeSpeech(params: {
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
     disableFallback: params.disableFallback,
+    agentDir: params.agentDir,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -826,6 +839,7 @@ export async function synthesizeSpeech(params: {
         provider,
         cfg: params.cfg,
         config,
+        agentDir: params.agentDir,
       });
       if (resolvedProvider.kind === "skip") {
         errors.push(resolvedProvider.message);
@@ -896,11 +910,13 @@ export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  agentDir?: string;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
+    agentDir: params.agentDir,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -924,6 +940,7 @@ export async function textToSpeechTelephony(params: {
         cfg: params.cfg,
         config,
         requireTelephony: true,
+        agentDir: params.agentDir,
       });
       if (resolvedProvider.kind === "skip") {
         errors.push(resolvedProvider.message);
@@ -1028,6 +1045,7 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  agentDir?: string;
 }): Promise<ReplyPayload> {
   if (params.payload.isCompactionNotice) {
     return params.payload;
@@ -1146,6 +1164,7 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    agentDir: params.agentDir,
   });
 
   if (result.success && result.audioPath) {

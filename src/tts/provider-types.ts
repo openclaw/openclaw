@@ -38,6 +38,7 @@ export type SpeechProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   providerConfig: SpeechProviderConfig;
   timeoutMs: number;
+  agentDir?: string;
 };
 
 export type SpeechSynthesisRequest = {

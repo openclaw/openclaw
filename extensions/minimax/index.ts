@@ -9,7 +9,7 @@ import {
 } from "./media-understanding-provider.js";
 import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider, buildMinimaxPortalSpeechProvider } from "./speech-provider.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 import { buildMinimaxVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -26,6 +26,7 @@ export default definePluginEntry({
     api.registerMusicGenerationProvider(buildMinimaxMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildMinimaxVideoGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProvider());
+    api.registerSpeechProvider(buildMinimaxPortalSpeechProvider());
     api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 });

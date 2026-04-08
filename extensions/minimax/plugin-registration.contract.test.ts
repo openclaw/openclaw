@@ -3,7 +3,7 @@ import { describePluginRegistrationContract } from "../../test/helpers/plugins/p
 describePluginRegistrationContract({
   pluginId: "minimax",
   providerIds: ["minimax", "minimax-portal"],
-  speechProviderIds: ["minimax"],
+  speechProviderIds: ["minimax", "minimax-portal"],
   mediaUnderstandingProviderIds: ["minimax", "minimax-portal"],
   imageGenerationProviderIds: ["minimax", "minimax-portal"],
   videoGenerationProviderIds: ["minimax"],

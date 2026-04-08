@@ -61,7 +61,7 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["minimax"],
+    "speechProviders": ["minimax", "minimax-portal"],
     "mediaUnderstandingProviders": ["minimax", "minimax-portal"],
     "imageGenerationProviders": ["minimax", "minimax-portal"],
     "musicGenerationProviders": ["minimax"],

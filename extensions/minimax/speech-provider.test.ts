@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxPortalSpeechProvider, buildMinimaxSpeechProvider } from "./speech-provider.js";
+
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  isProviderApiKeyConfigured: vi.fn(() => false),
+}));
+
+const { isProviderApiKeyConfigured } = await import("openclaw/plugin-sdk/provider-auth");
 
 describe("buildMinimaxSpeechProvider", () => {
   const provider = buildMinimaxSpeechProvider();
@@ -316,5 +322,59 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(voices.length).toBeGreaterThan(0);
       expect(voices[0].id).toBe("English_expressive_narrator");
     });
+  });
+});
+
+describe("buildMinimaxPortalSpeechProvider", () => {
+  const provider = buildMinimaxPortalSpeechProvider();
+
+  afterEach(() => {
+    vi.mocked(isProviderApiKeyConfigured).mockReset();
+  });
+
+  it("has id minimax-portal", () => {
+    expect(provider.id).toBe("minimax-portal");
+    expect(provider.label).toBe("MiniMax");
+  });
+
+  it("reports configured when OAuth auth profile exists", () => {
+    vi.mocked(isProviderApiKeyConfigured).mockImplementation(
+      ({ provider: id }) => id === "minimax-portal",
+    );
+    expect(
+      provider.isConfigured({
+        providerConfig: {},
+        timeoutMs: 30_000,
+        agentDir: "/fake/agent/dir",
+      }),
+    ).toBe(true);
+  });
+
+  it("reports not configured when no credentials exist", () => {
+    const savedKey = process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    vi.mocked(isProviderApiKeyConfigured).mockReturnValue(false);
+    try {
+      expect(
+        provider.isConfigured({
+          providerConfig: {},
+          timeoutMs: 30_000,
+        }),
+      ).toBe(false);
+    } finally {
+      if (savedKey) {
+        process.env.MINIMAX_API_KEY = savedKey;
+      }
+    }
+  });
+
+  it("reports configured when API key is in provider config", () => {
+    vi.mocked(isProviderApiKeyConfigured).mockReturnValue(false);
+    expect(
+      provider.isConfigured({
+        providerConfig: { apiKey: "sk-test" },
+        timeoutMs: 30_000,
+      }),
+    ).toBe(true);
   });
 });
