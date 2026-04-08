@@ -294,7 +294,7 @@ export function createFollowupRunner(params: {
         await persistRunSessionUsage({
           storePath,
           sessionKey,
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
@@ -303,10 +303,7 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(
-            fallbackProvider ?? run.provider,
-            queued.run.config,
-          ),
+          usageIsContextSnapshot: isCliProvider(fallbackProvider ?? run.provider, runtimeConfig),
           logLabel: "followup",
         });
       }
