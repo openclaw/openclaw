@@ -456,9 +456,12 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
+      // Carry over user-set overrides. Drop auto-selected failover overrides,
+      // including legacy entries (no source field but compactionCount present).
       if (
-        entry.authProfileOverrideSource !== "auto" &&
-        typeof entry.authProfileOverrideCompactionCount !== "number"
+        entry.authProfileOverrideSource === "user" ||
+        (!entry.authProfileOverrideSource &&
+          typeof entry.authProfileOverrideCompactionCount !== "number")
       ) {
         persistedAuthProfileOverride = entry.authProfileOverride;
         persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
