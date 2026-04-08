@@ -143,6 +143,19 @@ export function detectToolResultReplayPolicyMeta(params: {
     };
   }
 
+  if (toolName === "gateway") {
+    const action = trimString(record?.action);
+    if (action !== "config.get") {
+      return null;
+    }
+    return {
+      transient: true,
+      diagnosticType: "openclaw.config_snapshot",
+      taggedAt,
+      sourceTool: toolName,
+    };
+  }
+
   return null;
 }
 
