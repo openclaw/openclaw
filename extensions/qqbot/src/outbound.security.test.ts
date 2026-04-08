@@ -135,6 +135,12 @@ function createAllowedMediaPath(
   return filePath;
 }
 
+function createDelayedMissingMediaPath(ext: string): string {
+  const root = fs.mkdtempSync(path.join(getQQBotMediaDir(), "outbound-delayed-security-"));
+  createdRoots.push(root);
+  return path.join(root, "pending", `delayed${ext}`);
+}
+
 function createMissingSymlinkEscapePath(ext: string): string | null {
   const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-symlink-outside-"));
   createdRoots.push(outsideRoot);
@@ -150,6 +156,12 @@ function createMissingSymlinkEscapePath(ext: string): string | null {
   }
 
   return path.join(linkPath, `delayed${ext}`);
+}
+
+function writeFileWithParents(filePath: string, content: string = "payload"): number {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+  return fs.statSync(filePath).size;
 }
 
 function expectBlocked(result: OutboundResult, expectedError: string): void {
@@ -193,11 +205,39 @@ describe("qqbot outbound local media path security", () => {
 
   it("allows delayed local voice paths inside QQ Bot media storage", async () => {
     const delayedVoicePath = createAllowedMediaPath(".mp3", { createFile: false });
+    audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) =>
+      writeFileWithParents(candidatePath),
+    );
     const result = await sendVoice(buildTarget(), delayedVoicePath, undefined, true);
 
     expect(result.error).toBeUndefined();
     expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
     expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks delayed voice paths when a missing segment is replaced by a symlink after precheck", async () => {
+    const delayedVoicePath = createDelayedMissingMediaPath(".mp3");
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-race-outside-"));
+    createdRoots.push(outsideRoot);
+
+    const symlinkProbe = path.join(path.dirname(path.dirname(delayedVoicePath)), "probe-link");
+    try {
+      fs.symlinkSync(outsideRoot, symlinkProbe, "dir");
+      fs.unlinkSync(symlinkProbe);
+    } catch {
+      return;
+    }
+
+    audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) => {
+      const symlinkParent = path.dirname(candidatePath);
+      fs.symlinkSync(outsideRoot, symlinkParent, "dir");
+      const outsideFile = path.join(outsideRoot, path.basename(candidatePath));
+      return writeFileWithParents(outsideFile);
+    });
+
+    const result = await sendVoice(buildTarget(), delayedVoicePath, undefined, true);
+
+    expectBlocked(result, "Voice path must be inside QQ Bot media storage");
   });
 
   it("returns a blocked result when missing-path canonicalization cannot resolve root", async () => {
@@ -278,11 +318,42 @@ describe("qqbot outbound local media path security", () => {
 
   it("allows delayed local audio paths in sendMedia inside QQ Bot media storage", async () => {
     const delayedVoicePath = createAllowedMediaPath(".mp3", { createFile: false });
+    audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) =>
+      writeFileWithParents(candidatePath),
+    );
     const result = await sendMedia(buildMediaContext(delayedVoicePath));
 
     expect(result.error).toBeUndefined();
     expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
     expect(apiMocks.sendC2CVoiceMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks sendMedia delayed audio paths when a missing segment is replaced by a symlink", async () => {
+    const delayedVoicePath = createDelayedMissingMediaPath(".mp3");
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-race-sendmedia-"));
+    createdRoots.push(outsideRoot);
+
+    const symlinkProbe = path.join(path.dirname(path.dirname(delayedVoicePath)), "probe-link");
+    try {
+      fs.symlinkSync(outsideRoot, symlinkProbe, "dir");
+      fs.unlinkSync(symlinkProbe);
+    } catch {
+      return;
+    }
+
+    audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) => {
+      const symlinkParent = path.dirname(candidatePath);
+      fs.symlinkSync(outsideRoot, symlinkParent, "dir");
+      const outsideFile = path.join(outsideRoot, path.basename(candidatePath));
+      return writeFileWithParents(outsideFile);
+    });
+
+    const result = await sendMedia(buildMediaContext(delayedVoicePath));
+
+    expectBlocked(
+      result,
+      "voice: Voice path must be inside QQ Bot media storage | fallback file: File path must be inside QQ Bot media storage",
+    );
   });
 
   it("blocks sendMedia delayed audio paths that escape via symlinked parents", async () => {

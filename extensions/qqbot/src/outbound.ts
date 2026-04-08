@@ -593,10 +593,17 @@ async function sendVoiceFromLocal(
     return { channel: "qqbot", error: "Voice generate failed" };
   }
 
-  const needsTranscode = shouldTranscodeVoice(mediaPath);
+  // Re-check containment after the file appears to prevent symlink-race escapes.
+  const safeMediaPath = resolveQQBotPayloadLocalFilePath(mediaPath);
+  if (!safeMediaPath) {
+    debugWarn(`${prefix} sendVoice: blocked local voice path outside QQ Bot media storage`);
+    return { channel: "qqbot", error: "Voice path must be inside QQ Bot media storage" };
+  }
+
+  const needsTranscode = shouldTranscodeVoice(safeMediaPath);
 
   if (needsTranscode && !transcodeEnabled) {
-    const ext = normalizeLowercaseStringOrEmpty(path.extname(mediaPath));
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(safeMediaPath));
     debugLog(
       `${prefix} sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
     );
@@ -607,11 +614,11 @@ async function sendVoiceFromLocal(
   }
 
   try {
-    const silkBase64 = await audioFileToSilkBase64(mediaPath, directUploadFormats);
+    const silkBase64 = await audioFileToSilkBase64(safeMediaPath, directUploadFormats);
     let uploadBase64 = silkBase64;
 
     if (!uploadBase64) {
-      const buf = await readFileAsync(mediaPath);
+      const buf = await readFileAsync(safeMediaPath);
       uploadBase64 = buf.toString("base64");
       debugLog(
         `${prefix} sendVoice: SILK conversion failed, uploading raw (${formatFileSize(buf.length)})`,
@@ -631,7 +638,7 @@ async function sendVoiceFromLocal(
         undefined,
         ctx.replyToId,
         undefined,
-        mediaPath,
+        safeMediaPath,
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else if (ctx.targetType === "group") {
