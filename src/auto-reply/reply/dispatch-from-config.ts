@@ -144,10 +144,9 @@ const resolveSessionStoreLookup = (
 } => {
   const preferred = normalizeOptionalString(preferredSessionKey);
   const targetSessionKey =
-    preferred ??
-    (ctx.CommandSource === "native"
+    ctx.CommandSource === "native"
       ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined);
+      : preferred;
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
     return {};

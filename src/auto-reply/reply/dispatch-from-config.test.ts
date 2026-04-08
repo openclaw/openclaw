@@ -2057,6 +2057,81 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps CommandTargetSessionKey authoritative for native commands in bound conversations", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "done" }]);
+    const commandTargetSessionKey = "agent:codex-acp:command-target-1";
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-native-command-1",
+      targetSessionKey: "agent:bound-session:conversation-1",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:CHAN1",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {},
+    } satisfies SessionBindingRecord);
+    acpMocks.readAcpSessionEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { sessionKey?: string } | undefined;
+      if (params?.sessionKey !== commandTargetSessionKey) {
+        return null;
+      }
+      return {
+        sessionKey: commandTargetSessionKey,
+        storeSessionKey: commandTargetSessionKey,
+        cfg: {},
+        storePath: "/tmp/mock-sessions.json",
+        entry: {},
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "runtime:command-target",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:main:discord:channel:CHAN1",
+      CommandSource: "native",
+      CommandTargetSessionKey: commandTargetSessionKey,
+      AccountId: "default",
+      BodyForAgent: "run native command",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:CHAN1",
+      To: "channel:CHAN1",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(runtime.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: commandTargetSessionKey,
+      }),
+    );
+    expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("closes oneshot ACP sessions after the turn completes", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "done" }]);
