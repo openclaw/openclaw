@@ -372,8 +372,6 @@ export async function fetchMinimaxUsage(
   fetchFn: typeof fetch,
   options?: { baseUrl?: string },
 ): Promise<ProviderUsageSnapshot> {
-  // Keep this default aligned with extensions/minimax/model-definitions.ts
-  // (core infra must not import extension internals).
   const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
   const baseUrl = options?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL;
   const origin = (() => {
@@ -385,7 +383,7 @@ export async function fetchMinimaxUsage(
   })();
 
   const res = await fetchJson(
-    `${origin}/v1/api/openplatform/coding_plan/remains`,
+    `${origin}/api/openplatform/coding_plan/remains`,
     {
       method: "GET",
       headers: {
