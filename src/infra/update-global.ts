@@ -171,10 +171,19 @@ export function resolveGlobalInstallSpec(params: {
 
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
-): Promise<Record<string, string>> {
+): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend(env);
+  const sourceEnv = env ?? process.env;
+  const hasCorepackDownloadPromptSetting = Boolean(
+    sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),
+  );
+  const requiresMergedEnv =
+    pathPrepend.length > 0 || process.platform === "win32" || !hasCorepackDownloadPromptSetting;
+  if (!requiresMergedEnv) {
+    return env;
+  }
   const merged = Object.fromEntries(
-    Object.entries(env ?? process.env)
+    Object.entries(sourceEnv)
       .filter(([, value]) => value != null)
       .map(([key, value]) => [key, String(value)]),
   ) as Record<string, string>;
