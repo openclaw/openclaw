@@ -241,6 +241,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
   let fetchBehavior: (url: string) => Promise<Response>;
   let forceGlobalMissing = false;
   let globalDetectCount = 0;
+  let openClawVersionOutput = "2026.3.1\n";
   let healthFailuresBeforeSuccess = 0;
   let healthCallCount = 0;
   let alwaysHealthFail = false;
@@ -257,6 +258,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
     spawnCalls = [];
     forceGlobalMissing = false;
     globalDetectCount = 0;
+    openClawVersionOutput = "2026.3.1\n";
     healthFailuresBeforeSuccess = 0;
     healthCallCount = 0;
     alwaysHealthFail = false;
@@ -302,7 +304,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
       });
 
       if (commandString === "openclaw" && argList[0] === "--version") {
-        return createMockChild({ code: 0, stdout: "2026.3.1\n" }) as never;
+        return createMockChild({ code: 0, stdout: openClawVersionOutput }) as never;
       }
       if (
         commandString === "npm" &&
@@ -825,7 +827,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(updatedConfig.tools.web.search.enabled).toBe(false);
     expect(updatedConfig.tools.deny).toContain("web_search");
     expect(updatedConfig.messages.tts.provider).toBe("elevenlabs");
-    expect(updatedConfig.messages.tts.providers.elevenlabs).toEqual(
+    expect(updatedConfig.messages.tts.elevenlabs).toEqual(
       expect.objectContaining({
         baseUrl: "https://gateway.merseoriginals.com",
         apiKey: "dench_live_key",
@@ -839,6 +841,75 @@ describe("bootstrapCommand always-onboard behavior", () => {
       fallbackProvider: "duckduckgo",
     });
     expect(existsSync(path.join(stateDir, "extensions", "dench-cloud-provider"))).toBe(false);
+    expect(existsSync(path.join(stateDir, "extensions", "shared", "dench-auth.ts"))).toBe(true);
+  });
+
+  it("uses providers-wrapped ElevenLabs config for modern OpenClaw versions", async () => {
+    openClawVersionOutput = "2026.4.5\n";
+    fetchBehavior = async (url: string) => {
+      if (url.includes("gateway.merseoriginals.com/v1/models")) {
+        return createJsonResponse({
+          status: 200,
+          payload: {
+            object: "list",
+            data: [
+              {
+                id: "claude-opus-4.6",
+                stableId: "anthropic.claude-opus-4-6-v1",
+                name: "Claude Opus 4.6",
+                provider: "anthropic",
+                transportProvider: "bedrock",
+                input: ["text", "image"],
+                contextWindow: 200000,
+                maxTokens: 64000,
+                supportsStreaming: true,
+                supportsImages: true,
+                supportsResponses: true,
+                supportsReasoning: false,
+                cost: {
+                  input: 6.75,
+                  output: 33.75,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  marginPercent: 0.35,
+                },
+              },
+            ],
+          },
+        });
+      }
+      if (url.includes("/api/profiles")) {
+        return createWebProfilesResponse();
+      }
+      return createJsonResponse({ status: 404, payload: {} });
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await bootstrapCommand(
+      {
+        nonInteractive: true,
+        noOpen: true,
+        skipUpdate: true,
+        denchCloud: true,
+        denchCloudApiKey: "dench_live_key",
+        denchCloudModel: "anthropic.claude-opus-4-6-v1",
+      },
+      runtime,
+    );
+
+    const updatedConfig = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf-8"));
+    expect(updatedConfig.messages.tts.provider).toBe("elevenlabs");
+    expect(updatedConfig.messages.tts.providers.elevenlabs).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://gateway.merseoriginals.com",
+        apiKey: "dench_live_key",
+      }),
+    );
+    expect(updatedConfig.messages.tts.elevenlabs).toBeUndefined();
   });
 
   it("falls back to DenchClaw's bundled model list when the public gateway catalog is unavailable", async () => {
@@ -930,7 +1001,7 @@ describe("bootstrapCommand always-onboard behavior", () => {
     expect(updatedConfig.tools.web.search.enabled).toBe(true);
     expect(updatedConfig.tools.deny ?? []).not.toContain("web_search");
     expect(updatedConfig.messages?.tts?.provider).toBeUndefined();
-    expect(updatedConfig.messages?.tts?.providers?.elevenlabs).toBeUndefined();
+    expect(updatedConfig.messages?.tts?.elevenlabs).toBeUndefined();
     const integrationsMetadata = JSON.parse(
       readFileSync(path.join(stateDir, ".dench-integrations.json"), "utf-8"),
     );

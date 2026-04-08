@@ -85,6 +85,13 @@ const mocks = vi.hoisted(() => {
           },
         },
       },
+      tools: {
+        alsoAllow: [
+          "composio_search_tools",
+          "composio_resolve_tool",
+          "composio_call_tool",
+        ],
+      },
     })),
     readConfiguredDenchCloudSettings: vi.fn(() => ({
       gatewayUrl: null,
@@ -95,10 +102,6 @@ const mocks = vi.hoisted(() => {
       restarted: true,
       error: null,
       profile: "dench",
-    })),
-    rebuildComposioToolIndexIfReady: vi.fn(async () => ({
-      ok: false as const,
-      reason: "Dench Cloud must be the primary provider.",
     })),
   };
 });
@@ -127,10 +130,6 @@ vi.mock("../../../src/cli/dench-cloud", () => ({
 
 vi.mock("./integrations", () => ({
   refreshIntegrationsRuntime: mocks.refreshIntegrationsRuntime,
-}));
-
-vi.mock("./composio-tool-index", () => ({
-  rebuildComposioToolIndexIfReady: mocks.rebuildComposioToolIndexIfReady,
 }));
 
 import { saveApiKey, saveVoiceId, selectModel } from "./dench-cloud-settings";
@@ -173,16 +172,11 @@ describe("dench cloud settings", () => {
       error: null,
       profile: "dench",
     });
-    mocks.rebuildComposioToolIndexIfReady.mockResolvedValue({
-      ok: false,
-      reason: "Dench Cloud must be the primary provider.",
-    });
   });
 
   it("refreshes integrations when saving the Dench Cloud API key", async () => {
     const result = await saveApiKey("dc-key");
 
-    expect(mocks.rebuildComposioToolIndexIfReady).not.toHaveBeenCalled();
     expect(mocks.refreshIntegrationsRuntime).toHaveBeenCalledTimes(1);
     expect(result).not.toHaveProperty("toolIndexRebuild");
 
@@ -191,6 +185,11 @@ describe("dench cloud settings", () => {
     expect(written.mcp.servers.composio.url).toBe(
       "https://gateway.merseoriginals.com/v1/composio/mcp",
     );
+    expect(written.tools.alsoAllow).toEqual([
+      "composio_call_tool",
+      "composio_resolve_tool",
+      "composio_search_tools",
+    ]);
   });
 
   it("refreshes integrations when switching the primary model to Dench Cloud", async () => {
@@ -203,22 +202,19 @@ describe("dench cloud settings", () => {
         },
       },
     });
-    mocks.rebuildComposioToolIndexIfReady.mockResolvedValue({
-      ok: true,
-      workspaceDir: "/tmp/workspace",
-      generated_at: "2026-04-02T00:00:00.000Z",
-      connected_apps: 2,
-    });
-
     const result = await selectModel("claude-sonnet-4.6");
 
-    expect(mocks.rebuildComposioToolIndexIfReady).not.toHaveBeenCalled();
     expect(mocks.refreshIntegrationsRuntime).toHaveBeenCalledTimes(1);
     expect(result).not.toHaveProperty("toolIndexRebuild");
 
     const written = JSON.parse(mocks.state.configText);
     expect(written.agents.defaults.model.primary).toBe("dench-cloud/claude-sonnet-4.6");
     expect(written.mcp.servers.composio.headers.Authorization).toBe("Bearer dc-key");
+    expect(written.tools.alsoAllow).toEqual([
+      "composio_call_tool",
+      "composio_resolve_tool",
+      "composio_search_tools",
+    ]);
   });
 
   it("preserves a stored voiceId without re-enabling ElevenLabs during model changes", async () => {
@@ -248,6 +244,7 @@ describe("dench cloud settings", () => {
     expect(written.messages.tts.providers.elevenlabs).toEqual({
       voiceId: "voice_123",
     });
+    expect(written.messages.tts.elevenlabs).toBeUndefined();
   });
 
   it("stores the selected ElevenLabs voice without restarting the gateway", async () => {

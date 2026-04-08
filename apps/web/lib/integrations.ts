@@ -558,9 +558,53 @@ function ensureTtsConfig(config: OpenClawConfig): UnknownRecord {
   return ensureRecord(messages, "tts");
 }
 
-function ensureTtsProviders(config: OpenClawConfig): UnknownRecord {
+function readTtsElevenLabsConfig(config: OpenClawConfig): UnknownRecord | undefined {
+  const tts = asRecord(asRecord(config.messages)?.tts);
+  return asRecord(tts?.elevenlabs) ?? asRecord(asRecord(tts?.providers)?.elevenlabs);
+}
+
+type ElevenLabsTtsConfigShape = "providers" | "flat";
+
+function resolveTtsElevenLabsConfigShape(tts: UnknownRecord): ElevenLabsTtsConfigShape {
+  if (asRecord(asRecord(tts.providers)?.elevenlabs)) {
+    return "providers";
+  }
+  if (asRecord(tts.elevenlabs)) {
+    return "flat";
+  }
+  return "providers";
+}
+
+function ensureTtsElevenLabsConfig(
+  config: OpenClawConfig,
+  preferredShape: ElevenLabsTtsConfigShape = resolveTtsElevenLabsConfigShape(ensureTtsConfig(config)),
+): UnknownRecord {
   const tts = ensureTtsConfig(config);
-  return ensureRecord(tts, "providers");
+  const direct = asRecord(tts.elevenlabs);
+  const providers = asRecord(tts.providers);
+  const legacy = asRecord(providers?.elevenlabs);
+  const next = {
+    ...(legacy ?? {}),
+    ...(direct ?? {}),
+  };
+  if (preferredShape === "providers") {
+    const nextProviders = providers ?? {};
+    nextProviders.elevenlabs = next;
+    tts.providers = nextProviders;
+    delete tts.elevenlabs;
+    return next;
+  }
+
+  tts.elevenlabs = next;
+  if (providers) {
+    delete providers.elevenlabs;
+    if (Object.keys(providers).length === 0) {
+      delete tts.providers;
+    } else {
+      tts.providers = providers;
+    }
+  }
+  return next;
 }
 
 function readPluginState(config: OpenClawConfig, pluginId: string): IntegrationPluginState {
@@ -602,12 +646,14 @@ function readBuiltInSearchState(config: OpenClawConfig): BuiltInSearchState {
 
 function disableElevenLabsOverride(config: OpenClawConfig): boolean {
   const tts = ensureTtsConfig(config);
-  const providers = ensureTtsProviders(config);
   const gatewayBaseUrl = resolveGatewayBaseUrl(config) ?? DEFAULT_GATEWAY_URL;
   const denchApiKey = resolveDenchApiKey(config);
   let changed = false;
 
-  const elevenlabs = asRecord(providers.elevenlabs);
+  const shape = resolveTtsElevenLabsConfigShape(tts);
+  const elevenlabs = readTtsElevenLabsConfig(config)
+    ? ensureTtsElevenLabsConfig(config, shape)
+    : undefined;
   if (elevenlabs) {
     const shouldClearApiKey =
       (denchApiKey && elevenlabs.apiKey === denchApiKey) ||
@@ -622,17 +668,23 @@ function disableElevenLabsOverride(config: OpenClawConfig): boolean {
       changed = true;
     }
     if (Object.keys(elevenlabs).length === 0) {
-      delete providers.elevenlabs;
+      if (shape === "providers") {
+        const providers = asRecord(tts.providers);
+        if (providers) {
+          delete providers.elevenlabs;
+          if (Object.keys(providers).length === 0) {
+            delete tts.providers;
+          }
+        }
+      } else {
+        delete tts.elevenlabs;
+      }
       changed = true;
     }
   }
 
   if (tts.provider === "elevenlabs") {
     delete tts.provider;
-    changed = true;
-  }
-  if (Object.keys(providers).length === 0 && tts.providers !== undefined) {
-    delete tts.providers;
     changed = true;
   }
 
@@ -809,8 +861,7 @@ function buildElevenLabsState(
 ): DenchIntegrationState {
   const messages = asRecord(config.messages);
   const tts = asRecord(messages?.tts);
-  const providers = asRecord(tts?.providers);
-  const elevenlabs = asRecord(providers?.elevenlabs);
+  const elevenlabs = readTtsElevenLabsConfig(config);
   const overrideBaseUrl = readString(elevenlabs?.baseUrl) ?? null;
   const overrideApiKey = readString(elevenlabs?.apiKey) ?? null;
   const ttsProvider = readString(tts?.provider);
@@ -1093,7 +1144,6 @@ export function setElevenLabsIntegrationEnabled(enabled: boolean): IntegrationTo
     return blocked;
   }
   const tts = ensureTtsConfig(config);
-  const providers = ensureTtsProviders(config);
   const gatewayBaseUrl = resolveGatewayBaseUrl(config) ?? DEFAULT_GATEWAY_URL;
   const denchApiKey = resolveDenchApiKey(config);
   let changed = false;
@@ -1103,11 +1153,12 @@ export function setElevenLabsIntegrationEnabled(enabled: boolean): IntegrationTo
       tts.provider = "elevenlabs";
       changed = true;
     }
-    const existing = asRecord(providers.elevenlabs);
-    if (!existing) {
-      providers.elevenlabs = {};
+    const hadExistingConfig = Boolean(readTtsElevenLabsConfig(config));
+    const preferredShape = hadExistingConfig ? resolveTtsElevenLabsConfigShape(tts) : "providers";
+    const elevenlabs = ensureTtsElevenLabsConfig(config, preferredShape);
+    if (!hadExistingConfig) {
+      changed = true;
     }
-    const elevenlabs = asRecord(providers.elevenlabs);
     if (elevenlabs && elevenlabs.baseUrl !== gatewayBaseUrl) {
       elevenlabs.baseUrl = gatewayBaseUrl;
       changed = true;

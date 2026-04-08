@@ -28,6 +28,13 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 function openClawConfigPath(): string {
   return join(resolveOpenClawStateDir(), "openclaw.json");
 }
@@ -88,8 +95,69 @@ function ensureRecord(parent: UnknownRecord, key: string): UnknownRecord {
   return fresh;
 }
 
+function syncAllowedTools(config: UnknownRecord, toolNames: string[]): void {
+  if (toolNames.length === 0) {
+    return;
+  }
+  const tools = ensureRecord(config, "tools");
+  const preserved = new Set(
+    [...readStringList(tools.alsoAllow), ...readStringList(tools.allow)].filter((name) =>
+      !toolNames.includes(name)
+    ),
+  );
+  delete tools.allow;
+  for (const toolName of toolNames) {
+    preserved.add(toolName);
+  }
+  tools.alsoAllow = Array.from(preserved).sort((left, right) => left.localeCompare(right));
+}
+
 function readElevenLabsProvider(config: UnknownRecord): UnknownRecord | undefined {
-  return asRecord(asRecord(asRecord(config.messages)?.tts)?.providers)?.elevenlabs as UnknownRecord | undefined;
+  const tts = asRecord(asRecord(config.messages)?.tts);
+  return asRecord(tts?.elevenlabs) ?? asRecord(asRecord(tts?.providers)?.elevenlabs);
+}
+
+type ElevenLabsTtsConfigShape = "providers" | "flat";
+
+function resolveElevenLabsProviderShape(tts: UnknownRecord): ElevenLabsTtsConfigShape {
+  if (asRecord(asRecord(tts.providers)?.elevenlabs)) {
+    return "providers";
+  }
+  if (asRecord(tts.elevenlabs)) {
+    return "flat";
+  }
+  return "providers";
+}
+
+function ensureElevenLabsProvider(
+  tts: UnknownRecord,
+  preferredShape = resolveElevenLabsProviderShape(tts),
+): UnknownRecord {
+  const direct = asRecord(tts.elevenlabs);
+  const providers = asRecord(tts.providers);
+  const legacy = asRecord(providers?.elevenlabs);
+  const next = {
+    ...(legacy ?? {}),
+    ...(direct ?? {}),
+  };
+  if (preferredShape === "providers") {
+    const nextProviders = providers ?? {};
+    nextProviders.elevenlabs = next;
+    tts.providers = nextProviders;
+    delete tts.elevenlabs;
+    return next;
+  }
+
+  tts.elevenlabs = next;
+  if (providers) {
+    delete providers.elevenlabs;
+    if (Object.keys(providers).length === 0) {
+      delete tts.providers;
+    } else {
+      tts.providers = providers;
+    }
+  }
+  return next;
 }
 
 function readSelectedVoiceId(config: UnknownRecord): string | null {
@@ -110,11 +178,15 @@ function syncEnabledElevenLabsCredentials(
 ): void {
   const messages = ensureRecord(config, "messages");
   const tts = ensureRecord(messages, "tts");
+  const hasExistingConfig = Boolean(readElevenLabsProvider(config));
   if (tts.provider !== "elevenlabs") {
+    if (hasExistingConfig) {
+      ensureElevenLabsProvider(tts);
+    }
     return;
   }
-  const providers = ensureRecord(tts, "providers");
-  const elevenlabs = ensureRecord(providers, "elevenlabs");
+  const preferredShape = hasExistingConfig ? resolveElevenLabsProviderShape(tts) : "providers";
+  const elevenlabs = ensureElevenLabsProvider(tts, preferredShape);
   elevenlabs.baseUrl = params.gatewayUrl;
   elevenlabs.apiKey = params.apiKey;
 }
@@ -122,14 +194,24 @@ function syncEnabledElevenLabsCredentials(
 function setSelectedVoiceId(config: UnknownRecord, voiceId: string | null): void {
   const messages = ensureRecord(config, "messages");
   const tts = ensureRecord(messages, "tts");
-  const providers = ensureRecord(tts, "providers");
-  const elevenlabs = ensureRecord(providers, "elevenlabs");
+  const shape = resolveElevenLabsProviderShape(tts);
+  const elevenlabs = ensureElevenLabsProvider(tts, shape);
   if (voiceId) {
     elevenlabs.voiceId = voiceId;
   } else {
     delete elevenlabs.voiceId;
     if (Object.keys(elevenlabs).length === 0) {
-      delete providers.elevenlabs;
+      if (shape === "providers") {
+        const providers = asRecord(tts.providers);
+        if (providers) {
+          delete providers.elevenlabs;
+          if (Object.keys(providers).length === 0) {
+            delete tts.providers;
+          }
+        }
+      } else {
+        delete tts.elevenlabs;
+      }
     }
   }
 }
@@ -324,6 +406,9 @@ export async function saveApiKey(apiKey: string): Promise<CloudSettingsUpdateRes
     }
   }
 
+  const patchTools = asRecord((patch as UnknownRecord).tools);
+  syncAllowedTools(config, readStringList(patchTools?.alsoAllow));
+
   writeConfig(config);
 
   const refresh = await refreshIntegrationsRuntime();
@@ -383,6 +468,9 @@ export async function selectModel(stableId: string): Promise<CloudSettingsUpdate
       Object.assign(servers, patchServers);
     }
   }
+
+  const patchTools = asRecord((patch as UnknownRecord).tools);
+  syncAllowedTools(config, readStringList(patchTools?.alsoAllow));
 
   writeConfig(config);
 

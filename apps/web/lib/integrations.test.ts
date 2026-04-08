@@ -675,6 +675,7 @@ describe("integrations state", () => {
       voiceId: "voice_123",
     });
     expect(writtenConfig.messages.tts.provider).toBeUndefined();
+    expect(writtenConfig.messages.tts.elevenlabs).toBeUndefined();
 
     const enabled = setElevenLabsIntegrationEnabled(true);
     expect(enabled.changed).toBe(true);
@@ -685,6 +686,7 @@ describe("integrations state", () => {
       baseUrl: "https://gateway.merseoriginals.com",
       apiKey: "dench-key",
     });
+    expect(writtenConfig.messages.tts.elevenlabs).toBeUndefined();
   });
 
   it("restarts the OpenClaw gateway for the active profile", async () => {

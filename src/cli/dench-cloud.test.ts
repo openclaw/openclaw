@@ -156,6 +156,11 @@ describe("dench-cloud helpers", () => {
         Authorization: "Bearer dench_live_key",
       },
     });
+    expect(patch.tools.alsoAllow).toEqual([
+      "composio_search_tools",
+      "composio_resolve_tool",
+      "composio_call_tool",
+    ]);
   });
 
   it("keeps the runtime plugin patch in parity with the CLI/web helper", () => {
@@ -244,6 +249,37 @@ describe("dench-cloud helpers", () => {
               baseUrl: "https://gateway.merseoriginals.com",
               apiKey: "dench_cfg_key",
             },
+          },
+        },
+      },
+    });
+
+    expect(result.ttsElevenLabsBaseUrl).toBe("https://gateway.merseoriginals.com");
+  });
+
+  it("reads legacy flat TTS ElevenLabs config from openclaw.json", () => {
+    const result = readConfiguredDenchCloudSettings({
+      models: {
+        providers: {
+          "dench-cloud": {
+            baseUrl: "https://gateway.merseoriginals.com/v1",
+            apiKey: "dench_cfg_key",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "dench-cloud/gpt-5.4",
+          },
+        },
+      },
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            baseUrl: "https://gateway.merseoriginals.com",
+            apiKey: "dench_cfg_key",
           },
         },
       },
