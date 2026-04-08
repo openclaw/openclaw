@@ -6,4 +6,5 @@ export { createSlackActions } from "./src/channel-actions.js";
 export { prepareSlackMessage } from "./src/monitor/message-handler/prepare.js";
 export { createInboundSlackTestContext } from "./src/monitor/message-handler/prepare.test-helpers.js";
 export { slackOutbound } from "./src/outbound-adapter.js";
+export { createSlackOutboundPayloadHarness } from "./src/outbound-payload-harness.js";
 export { sendMessageSlack } from "./src/send.js";
