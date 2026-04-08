@@ -289,10 +289,11 @@ export const emptyConfig = {} as OpenClawConfig;
 
 export function createDispatcher(): ReplyDispatcher {
   const acceptReply = () => true;
+  const acceptBlockReply = () => Promise.resolve(true as const);
   const emptyCounts = () => ({ tool: 0, block: 0, final: 0 });
   return {
     sendToolResult: vi.fn(acceptReply),
-    sendBlockReply: vi.fn(acceptReply),
+    sendBlockReply: vi.fn(acceptBlockReply),
     sendFinalReply: vi.fn(acceptReply),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(emptyCounts),

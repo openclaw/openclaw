@@ -226,7 +226,7 @@ describe("resolveBundledPluginsDir", () => {
       },
       {
         expectedRelativeDir: "extensions",
-        execArgv: ["--import", "tsx"],
+        execArgv: ["--import", "tsx"] as string[],
       },
     ],
     [

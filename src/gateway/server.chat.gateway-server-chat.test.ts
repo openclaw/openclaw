@@ -741,7 +741,7 @@ describe("gateway server chat", () => {
               sendBlockReply: (payload: {
                 text: string;
                 btw: { question: string };
-              }) => false | Promise<void>;
+              }) => false | Promise<true>;
               markComplete: () => void;
               waitForIdle: () => Promise<void>;
               getQueuedCounts: () => { final: number; block: number; tool: number };
