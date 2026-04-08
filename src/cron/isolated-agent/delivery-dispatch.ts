@@ -33,7 +33,7 @@ export function matchesMessagingToolDeliveryTarget(
   target: { provider?: string; to?: string; accountId?: string },
   delivery: { channel?: string; to?: string; accountId?: string },
 ): boolean {
-  if (!delivery.channel || !delivery.to || !target.to) {
+  if (!delivery.channel || !delivery.to) {
     return false;
   }
   const channel = normalizeLowercaseStringOrEmpty(delivery.channel);
@@ -43,6 +43,13 @@ export function matchesMessagingToolDeliveryTarget(
   }
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
+  }
+  // When target.to is empty, the agent sent to the implicit current channel
+  // (e.g. Telegram DM where message() infers the target from currentChannelId).
+  // Treat this as matching the delivery target — the framework routed the
+  // message to the same destination that announce delivery would use.
+  if (!target.to) {
+    return true;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
   // both sides so cron duplicate suppression compares canonical IDs.
