@@ -484,7 +484,10 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    // enable is always called before kickstart to clear any persisted disabled
+    // state from a prior stop (#63128), but bootstrap should not be called when
+    // the failure is not a "not loaded" error.
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
@@ -517,7 +520,10 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    // enable is always called before kickstart to clear any persisted disabled
+    // state from a prior stop (#63128), but bootstrap should not be called when
+    // the failure is not a "not loaded" error.
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 

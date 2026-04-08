@@ -465,13 +465,23 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const serviceTarget = `${domain}/${label}`;
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  const res = await execLaunchctl(["bootout", serviceTarget]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  // Re-bootstrap the plist so the service stays registered with launchd after
+  // bootout.  Without this, the LaunchAgent is fully deregistered and neither
+  // `launchctl kickstart` nor KeepAlive can revive it — `openclaw gateway
+  // restart` would find a dead service.  Disable the service first so that
+  // KeepAlive / RunAtLoad do not immediately relaunch it.  (#63128)
+  await execLaunchctl(["disable", serviceTarget]);
+  await execLaunchctl(["bootstrap", domain, plistPath]);
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 async function writeLaunchAgentPlist({
@@ -620,6 +630,10 @@ export async function restartLaunchAgent({
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
+
+  // Clear any persisted "disabled" state (e.g. from a prior `openclaw gateway
+  // stop`) so that KeepAlive and kickstart work as expected.  (#63128)
+  await execLaunchctl(["enable", serviceTarget]);
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
