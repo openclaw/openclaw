@@ -61,7 +61,10 @@ export function upsertAuthProfile(params: {
         : params.credential;
   const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   store.profiles[params.profileId] = credential;
-  saveAuthProfileStore(store, params.agentDir, { syncExternalCli: false });
+  saveAuthProfileStore(store, params.agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
 export async function upsertAuthProfileWithLock(params: {

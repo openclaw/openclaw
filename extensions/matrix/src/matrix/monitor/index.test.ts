@@ -54,6 +54,7 @@ const hoisted = vi.hoisted(() => {
     flush: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
   };
+  const createMatrixInboundEventDeduper = vi.fn(async () => inboundDeduper);
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
@@ -110,6 +111,7 @@ const hoisted = vi.hoisted(() => {
     accountConfig,
     client,
     createDirectRoomTracker,
+    createMatrixInboundEventDeduper,
     createMatrixRoomMessageHandler,
     getMemberDisplayName,
     getRoomInfo,
@@ -356,7 +358,7 @@ vi.mock("./handler.js", () => ({
 }));
 
 vi.mock("./inbound-dedupe.js", () => ({
-  createMatrixInboundEventDeduper: vi.fn(async () => hoisted.inboundDeduper),
+  createMatrixInboundEventDeduper: hoisted.createMatrixInboundEventDeduper,
 }));
 
 vi.mock("./legacy-crypto-restore.js", () => ({
@@ -438,6 +440,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.inboundDeduper.releaseEvent.mockReset();
     hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
+    hoisted.createMatrixInboundEventDeduper.mockReset().mockResolvedValue(hoisted.inboundDeduper);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
@@ -559,6 +562,55 @@ describe("monitorMatrixProvider", () => {
         connected: false,
         healthState: "error",
         lastError: "sync exploded",
+      }),
+    );
+  });
+
+  it("marks early startup failures as error before the monitor loop starts", async () => {
+    hoisted.resolveSharedMatrixClient.mockImplementation(
+      async (params: { startClient?: boolean }) => {
+        if (params.startClient === false) {
+          throw new Error("prepare failed");
+        }
+        hoisted.callOrder.push("start-client");
+        return hoisted.client;
+      },
+    );
+
+    await expect(
+      monitorMatrixProvider({
+        setStatus: hoisted.setStatus,
+      }),
+    ).rejects.toThrow("prepare failed");
+
+    expect(hoisted.releaseSharedClientInstance).not.toHaveBeenCalled();
+    expect(hoisted.setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        connected: false,
+        healthState: "error",
+        lastError: "prepare failed",
+      }),
+    );
+  });
+
+  it("releases the prepared client when startup fails before later resources exist", async () => {
+    hoisted.createMatrixInboundEventDeduper.mockRejectedValue(new Error("deduper failed"));
+
+    await expect(
+      monitorMatrixProvider({
+        setStatus: hoisted.setStatus,
+      }),
+    ).rejects.toThrow("deduper failed");
+
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "persist");
+    expect(hoisted.inboundDeduper.stop).not.toHaveBeenCalled();
+    expect(hoisted.setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        connected: false,
+        healthState: "error",
+        lastError: "deduper failed",
       }),
     );
   });

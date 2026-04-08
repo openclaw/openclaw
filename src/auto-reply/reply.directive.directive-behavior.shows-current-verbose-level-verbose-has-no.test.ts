@@ -1,5 +1,5 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
@@ -126,8 +126,7 @@ function makeCommandMessage(body: string, from = "+1222") {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ getReplyFromConfig } = await import("./reply.js"));
   });
 
