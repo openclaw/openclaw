@@ -1,63 +1,94 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
-const { GoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoisted(() => {
-  const generateVideosMock = vi.fn();
-  const getVideosOperationMock = vi.fn();
-  const GoogleGenAIMock = vi.fn(function GoogleGenAI() {
-    return {
-      models: {
-        generateVideos: generateVideosMock,
-      },
-      operations: {
-        getVideosOperation: getVideosOperationMock,
-      },
-      files: {
-        download: vi.fn(),
-      },
-    };
-  });
-  return { GoogleGenAIMock, generateVideosMock, getVideosOperationMock };
-});
-
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: GoogleGenAIMock,
+const {
+  resolveApiKeyForProviderMock,
+  postJsonRequestMock,
+  fetchWithTimeoutGuardedMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
+  resolveApiKeyForProviderMock: vi.fn(async () => ({
+    apiKey: "google-key",
+    source: "env",
+    mode: "api-key",
+  })),
+  postJsonRequestMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
+  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+    allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
+    headers: new Headers(params.defaultHeaders),
+    dispatcherPolicy: undefined,
+    requestConfig: {
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
+      headers: Object.fromEntries(new Headers(params.defaultHeaders).entries()),
+      capability: params.capability ?? "other",
+      transport: params.transport ?? "http",
+      provider: params.provider ?? "",
+      api: params.api ?? undefined,
+    },
+  })),
 }));
 
-import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
-import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+  assertOkOrThrowHttpError: vi.fn(async () => {}),
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
+  postJsonRequest: postJsonRequestMock,
+  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+}));
 
 describe("google video generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    generateVideosMock.mockReset();
-    getVideosOperationMock.mockReset();
-    GoogleGenAIMock.mockClear();
+    resolveApiKeyForProviderMock.mockClear();
+    postJsonRequestMock.mockReset();
+    fetchWithTimeoutGuardedMock.mockReset();
+    resolveProviderHttpRequestConfigMock.mockClear();
   });
 
-  it("submits generation and returns inline video bytes", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: false,
-      name: "operations/123",
-    });
-    getVideosOperationMock.mockResolvedValue({
-      done: true,
-      name: "operations/123",
+  it("submits predictLongRunning and downloads the generated video", async () => {
+    postJsonRequestMock.mockResolvedValue({
       response: {
-        generatedVideos: [
-          {
-            video: {
-              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
-              mimeType: "video/mp4",
-            },
-          },
-        ],
+        json: async () => ({
+          name: "operations/123",
+        }),
       },
+      release: vi.fn(async () => {}),
     });
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: {
+          json: async () => ({
+            done: true,
+            response: {
+              generateVideoResponse: {
+                generatedSamples: [
+                  {
+                    video: {
+                      uri: "https://files.example.com/video.mp4",
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        },
+        finalUrl: "https://generativelanguage.googleapis.com/v1beta/operations/123",
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: {
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        },
+        finalUrl: "https://files.example.com/video.mp4",
+        release: vi.fn(async () => {}),
+      });
 
     const provider = buildGoogleVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -71,38 +102,37 @@ describe("google video generation provider", () => {
       audio: true,
     });
 
-    expect(generateVideosMock).toHaveBeenCalledWith(
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "veo-3.1-fast-generate-preview",
-        prompt: "A tiny robot watering a windowsill garden",
-        config: expect.objectContaining({
-          numberOfVideos: 1,
-          durationSeconds: 4,
-          aspectRatio: "16:9",
-          resolution: "720p",
-          generateAudio: true,
+        url: "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        body: expect.objectContaining({
+          instances: [
+            expect.objectContaining({
+              prompt: "A tiny robot watering a windowsill garden",
+            }),
+          ],
+          parameters: expect.objectContaining({
+            numberOfVideos: 1,
+            durationSeconds: "4",
+            aspectRatio: "16:9",
+            resolution: "720p",
+          }),
         }),
       }),
     );
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: "google-key",
-        httpOptions: expect.not.objectContaining({
-          baseUrl: expect.anything(),
-          apiVersion: expect.anything(),
-        }),
-      }),
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      1,
+      "https://generativelanguage.googleapis.com/v1beta/operations/123",
+      expect.objectContaining({ method: "GET" }),
+      180000,
+      fetch,
+      expect.anything(),
     );
   });
 
   it("rejects mixed image and video inputs", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
     const provider = buildGoogleVideoGenerationProvider();
 
     await expect(
@@ -118,24 +148,43 @@ describe("google video generation provider", () => {
   });
 
   it("rounds unsupported durations to the nearest Veo value", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
-      source: "env",
-      mode: "api-key",
-    });
-    generateVideosMock.mockResolvedValue({
-      done: true,
+    postJsonRequestMock.mockResolvedValue({
       response: {
-        generatedVideos: [
-          {
-            video: {
-              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
-              mimeType: "video/mp4",
-            },
-          },
-        ],
+        json: async () => ({
+          name: "operations/123",
+        }),
       },
+      release: vi.fn(async () => {}),
     });
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: {
+          json: async () => ({
+            done: true,
+            response: {
+              generateVideoResponse: {
+                generatedSamples: [
+                  {
+                    video: {
+                      uri: "https://files.example.com/video.mp4",
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        },
+        finalUrl: "https://generativelanguage.googleapis.com/v1beta/operations/123",
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: {
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        },
+        finalUrl: "https://files.example.com/video.mp4",
+        release: vi.fn(async () => {}),
+      });
 
     const provider = buildGoogleVideoGenerationProvider();
     await provider.generateVideo({
@@ -146,10 +195,12 @@ describe("google video generation provider", () => {
       durationSeconds: 5,
     });
 
-    expect(generateVideosMock).toHaveBeenCalledWith(
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: expect.objectContaining({
-          durationSeconds: 6,
+        body: expect.objectContaining({
+          parameters: expect.objectContaining({
+            durationSeconds: "6",
+          }),
         }),
       }),
     );
