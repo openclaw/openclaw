@@ -401,6 +401,44 @@ describe("resolveAssistantConclusionFreshnessGate", () => {
     expect(result.prependSystemContext).toBe(ASSISTANT_FRESHNESS_GATE_TEMPLATE_A);
   });
 
+  it("does not treat timestamp-less historical fallback evidence as fresh", () => {
+    const now = 6_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot is enabled in plugins.entries, right?",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_plugins_entries_no_ts",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "plugins.entries",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_plugins_entries_no_ts",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: { ok: true, result: { path: "plugins.entries" } },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "stale",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
   it("treats tagged gateway config.get evidence as fresh for config questions", () => {
     const now = 4_000_000;
     const result = resolveAssistantConclusionFreshnessGate({

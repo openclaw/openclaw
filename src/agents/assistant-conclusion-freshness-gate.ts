@@ -87,9 +87,12 @@ function isReplayOmitted(message: AgentMessage): boolean {
   );
 }
 
-function getMessageTimestamp(message: AgentMessage, fallback: number): number {
-  const direct = (message as { timestamp?: unknown }).timestamp;
-  return typeof direct === "number" ? direct : fallback;
+function parseFiniteTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getMessageTimestamp(message: AgentMessage): number | undefined {
+  return parseFiniteTimestamp((message as { timestamp?: unknown }).timestamp);
 }
 
 type AssistantToolCallBlock = {
@@ -132,7 +135,7 @@ function inferDiagnosticTypeFromHistoricalToolCall(params: {
       const inferred = detectToolResultReplayPolicyMeta({
         toolName: trimToDefinedString(block.name) ?? toolName,
         args: block.arguments,
-        taggedAt: getMessageTimestamp(params.toolResult, Date.now()),
+        taggedAt: getMessageTimestamp(params.toolResult) ?? Date.now(),
       });
       return inferred?.diagnosticType;
     }
@@ -189,7 +192,11 @@ export function resolveAssistantConclusionFreshnessGate(params: {
       continue;
     }
     const replayMeta = getToolResultReplayMetadata(message);
-    const messageTimestamp = getMessageTimestamp(message, replayMeta?.taggedAt ?? now);
+    const messageTimestamp =
+      getMessageTimestamp(message) ?? parseFiniteTimestamp(replayMeta?.taggedAt);
+    if (messageTimestamp === undefined) {
+      continue;
+    }
     if (now - messageTimestamp <= STALE_TOOL_RESULT_REPLAY_THRESHOLD_MS) {
       return {
         questionType: detected.questionType,
