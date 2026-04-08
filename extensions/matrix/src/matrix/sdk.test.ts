@@ -1027,6 +1027,34 @@ describe("MatrixClient event bridge", () => {
     });
   });
 
+  it("aborts before post-ready startup work when shutdown races ready sync", async () => {
+    matrixJsClient.startClient = vi.fn(async () => {
+      queueMicrotask(() => {
+        matrixJsClient.emit("sync", "PREPARED", null, undefined);
+      });
+    });
+
+    const abortController = new AbortController();
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    const bootstrapCryptoSpy = vi.spyOn(
+      client as unknown as { bootstrapCryptoIfNeeded: () => Promise<void> },
+      "bootstrapCryptoIfNeeded",
+    );
+    bootstrapCryptoSpy.mockImplementation(async () => {});
+
+    client.on("sync.state", (state) => {
+      if (state === "PREPARED") {
+        abortController.abort();
+      }
+    });
+
+    await expect(client.start({ abortSignal: abortController.signal })).rejects.toMatchObject({
+      message: "Matrix startup aborted",
+      name: "AbortError",
+    });
+    expect(bootstrapCryptoSpy).not.toHaveBeenCalled();
+  });
+
   it("times out startup when no ready sync state arrives", async () => {
     vi.useFakeTimers();
     matrixJsClient.startClient = vi.fn(async () => {});

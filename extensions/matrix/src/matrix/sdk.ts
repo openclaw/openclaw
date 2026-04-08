@@ -146,6 +146,18 @@ const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
   strict: true,
 } satisfies MatrixCryptoBootstrapOptions;
 
+function createMatrixStartupAbortError(): Error {
+  const error = new Error("Matrix startup aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfMatrixStartupAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted === true) {
+    throw createMatrixStartupAbortError();
+  }
+}
+
 function createMatrixExplicitBootstrapOptions(params?: {
   forceResetCrossSigning?: boolean;
 }): MatrixCryptoBootstrapOptions {
@@ -449,9 +461,7 @@ export class MatrixClient {
       };
 
       const onAbort = () => {
-        const error = new Error("Matrix startup aborted");
-        error.name = "AbortError";
-        settleReject(error);
+        settleReject(createMatrixStartupAbortError());
       };
 
       this.on("sync.state", onSyncState);
@@ -479,9 +489,11 @@ export class MatrixClient {
       return;
     }
 
+    throwIfMatrixStartupAborted(opts.abortSignal);
     await this.ensureCryptoSupportInitialized();
+    throwIfMatrixStartupAborted(opts.abortSignal);
     this.registerBridge();
-    await this.initializeCryptoIfNeeded();
+    await this.initializeCryptoIfNeeded(opts.abortSignal);
 
     await this.client.startClient({
       initialSyncLimit: this.initialSyncLimit,
@@ -490,9 +502,11 @@ export class MatrixClient {
       abortSignal: opts.abortSignal,
       timeoutMs: opts.readyTimeoutMs,
     });
+    throwIfMatrixStartupAborted(opts.abortSignal);
     if (opts.bootstrapCrypto && this.autoBootstrapCrypto) {
-      await this.bootstrapCryptoIfNeeded();
+      await this.bootstrapCryptoIfNeeded(opts.abortSignal);
     }
+    throwIfMatrixStartupAborted(opts.abortSignal);
     this.started = true;
     this.emitOutstandingInviteEvents();
     await this.refreshDmCache().catch(noop);
@@ -576,10 +590,11 @@ export class MatrixClient {
     await this.stopPersistPromise;
   }
 
-  private async bootstrapCryptoIfNeeded(): Promise<void> {
+  private async bootstrapCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {
     if (!this.encryptionEnabled || !this.cryptoInitialized || this.cryptoBootstrapped) {
       return;
     }
+    throwIfMatrixStartupAborted(abortSignal);
     await this.ensureCryptoSupportInitialized();
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     if (!crypto) {
@@ -593,6 +608,7 @@ export class MatrixClient {
       crypto,
       MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS,
     );
+    throwIfMatrixStartupAborted(abortSignal);
     if (!initial.crossSigningPublished || initial.ownDeviceVerified === false) {
       const status = await this.getOwnDeviceVerificationStatus();
       if (status.signedByOwner) {
@@ -610,6 +626,7 @@ export class MatrixClient {
             crypto,
             MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,
           );
+          throwIfMatrixStartupAborted(abortSignal);
           if (repaired.crossSigningPublished && repaired.ownDeviceVerified !== false) {
             LogService.info(
               "MatrixClientLite",
@@ -633,26 +650,30 @@ export class MatrixClient {
     this.cryptoBootstrapped = true;
   }
 
-  private async initializeCryptoIfNeeded(): Promise<void> {
+  private async initializeCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {
     if (!this.encryptionEnabled || this.cryptoInitialized) {
       return;
     }
+    throwIfMatrixStartupAborted(abortSignal);
     const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
 
     // Restore persisted IndexedDB crypto store before initializing WASM crypto.
     await restoreIdbFromDisk(this.idbSnapshotPath);
+    throwIfMatrixStartupAborted(abortSignal);
 
     try {
       await this.client.initRustCrypto({
         cryptoDatabasePrefix: this.cryptoDatabasePrefix,
       });
       this.cryptoInitialized = true;
+      throwIfMatrixStartupAborted(abortSignal);
 
       // Persist the crypto store after successful init (captures fresh keys on first run).
       await persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
         databasePrefix: this.cryptoDatabasePrefix,
       });
+      throwIfMatrixStartupAborted(abortSignal);
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
