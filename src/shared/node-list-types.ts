@@ -29,8 +29,9 @@ export type PendingRequest = {
   coreVersion?: string;
   uiVersion?: string;
   remoteIp?: string;
-  isRepair?: boolean;
   ts: number;
+  commands?: string[];
+  requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
 export type PairedNode = {

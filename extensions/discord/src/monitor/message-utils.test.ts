@@ -1,12 +1,14 @@
 import { ChannelType, type Client, type Message } from "@buape/carbon";
-import { StickerFormatType } from "discord-api-types/v10";
+import { MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
   return {
     ...actual,
     fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
@@ -14,9 +16,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  logVerbose: () => {},
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: () => {},
+  };
+});
 
 let __resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").__resetDiscordChannelInfoCacheForTest;
 let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
@@ -69,6 +77,8 @@ function expectSinglePngDownload(params: {
     filePathHint?: string;
     maxBytes?: number;
     fetchImpl?: unknown;
+    readIdleTimeoutMs?: number;
+    requestInit?: { signal?: AbortSignal };
     ssrfPolicy?: unknown;
   };
   expect(call).toMatchObject({
@@ -122,6 +132,35 @@ function asForwardedSnapshotMessage(params: {
         },
       ],
     },
+  });
+}
+
+function asReferencedForwardMessage(params: {
+  content?: string;
+  embeds?: Array<{ title?: string; description?: string }>;
+  attachments?: Array<Record<string, unknown>>;
+  messageReferenceType?: MessageReferenceType;
+}) {
+  return asMessage({
+    content: "",
+    messageReference: {
+      type: params.messageReferenceType ?? MessageReferenceType.Forward,
+      message_id: "m0",
+      channel_id: "c1",
+    },
+    referencedMessage: asMessage({
+      id: "m0",
+      channelId: "c1",
+      content: params.content ?? "",
+      attachments: params.attachments ?? [],
+      embeds: params.embeds ?? [],
+      stickers: [],
+      author: {
+        id: "u2",
+        username: "Bob",
+        discriminator: "0",
+      },
+    }),
   });
 }
 
@@ -216,7 +255,7 @@ describe("resolveForwardedMediaList", () => {
         },
       }),
       512,
-      proxyFetch,
+      { fetchImpl: proxyFetch },
     );
 
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
@@ -285,6 +324,38 @@ describe("resolveForwardedMediaList", () => {
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 
+  it("downloads forwarded referenced attachments when snapshots are absent", async () => {
+    const attachment = {
+      id: "att-ref-1",
+      url: "https://cdn.discordapp.com/attachments/1/ref-image.png",
+      filename: "ref-image.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/ref-image.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveForwardedMediaList(
+      asReferencedForwardMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: attachment.url,
+      filePathHint: attachment.filename,
+      expectedPath: "/tmp/ref-image.png",
+      placeholder: "<media:image>",
+    });
+  });
+
   it("skips snapshots without attachments", async () => {
     const result = await resolveForwardedMediaList(
       asMessage({
@@ -297,6 +368,67 @@ describe("resolveForwardedMediaList", () => {
 
     expect(result).toEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("passes readIdleTimeoutMs to forwarded attachment downloads", async () => {
+    const attachment = {
+      id: "att-timeout-forwarded",
+      url: "https://cdn.discordapp.com/attachments/1/forwarded-timeout.png",
+      filename: "forwarded-timeout.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/forwarded-timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { attachments: [attachment] } }],
+        },
+      }),
+      512,
+      { readIdleTimeoutMs: 60_000 },
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ readIdleTimeoutMs: 60_000 }),
+    );
+  });
+
+  it("passes readIdleTimeoutMs to forwarded sticker downloads", async () => {
+    const sticker = {
+      id: "sticker-timeout-forwarded",
+      name: "timeout-forwarded",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/forwarded-sticker-timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { sticker_items: [sticker] } }],
+        },
+      }),
+      512,
+      { readIdleTimeoutMs: 60_000 },
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ readIdleTimeoutMs: 60_000 }),
+    );
   });
 });
 
@@ -358,7 +490,7 @@ describe("resolveMediaList", () => {
         stickers: [sticker],
       }),
       512,
-      proxyFetch,
+      { fetchImpl: proxyFetch },
     );
 
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
@@ -486,6 +618,145 @@ describe("resolveMediaList", () => {
       },
     ]);
   });
+
+  it("passes readIdleTimeoutMs to fetchRemoteMedia for attachments", async () => {
+    const attachment = {
+      id: "att-timeout",
+      url: "https://cdn.discordapp.com/attachments/1/timeout.png",
+      filename: "timeout.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+      { readIdleTimeoutMs: 60_000 },
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ readIdleTimeoutMs: 60_000 }),
+    );
+  });
+
+  it("passes readIdleTimeoutMs to fetchRemoteMedia for stickers", async () => {
+    const sticker = {
+      id: "sticker-timeout",
+      name: "timeout",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker-timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+      { readIdleTimeoutMs: 60_000 },
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ readIdleTimeoutMs: 60_000 }),
+    );
+  });
+
+  it("times out slow attachment downloads and returns fallback", async () => {
+    const attachment = {
+      id: "att-total-timeout",
+      url: "https://cdn.discordapp.com/attachments/1/slow.png",
+      filename: "slow.png",
+      content_type: "image/png",
+    };
+    vi.useFakeTimers();
+    fetchRemoteMedia.mockImplementation(
+      () =>
+        new Promise(() => {
+          // never resolves
+        }),
+    );
+
+    try {
+      const resultPromise = resolveMediaList(
+        asMessage({
+          attachments: [attachment],
+        }),
+        512,
+        { totalTimeoutMs: 100 },
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(resultPromise).resolves.toEqual([
+        {
+          path: attachment.url,
+          contentType: "image/png",
+          placeholder: "<media:image>",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes abortSignal to fetchRemoteMedia and falls back when aborted", async () => {
+    const attachment = {
+      id: "att-abort",
+      url: "https://cdn.discordapp.com/attachments/1/abort.png",
+      filename: "abort.png",
+      content_type: "image/png",
+    };
+    const abortController = new AbortController();
+    fetchRemoteMedia.mockImplementationOnce(
+      (params: { requestInit?: { signal?: AbortSignal } }) =>
+        new Promise((_, reject) => {
+          const signal = params.requestInit?.signal;
+          const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+          if (signal?.aborted) {
+            reject(abortError);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(abortError), { once: true });
+        }),
+    );
+
+    const resultPromise = resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+      { abortSignal: abortController.signal },
+    );
+    abortController.abort();
+
+    await expect(resultPromise).resolves.toEqual([
+      {
+        path: attachment.url,
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestInit: expect.objectContaining({ signal: abortController.signal }),
+      }),
+    );
+  });
 });
 
 describe("Discord media SSRF policy", () => {
@@ -530,11 +801,12 @@ describe("Discord media SSRF policy", () => {
         attachments: [{ id: "b1", url: "https://cdn.discordapp.com/b.png", filename: "b.png" }],
       }),
       1024,
-      undefined,
       {
-        allowPrivateNetwork: true,
-        hostnameAllowlist: ["assets.example.com"],
-        allowedHostnames: ["assets.example.com"],
+        ssrfPolicy: {
+          allowPrivateNetwork: true,
+          hostnameAllowlist: ["assets.example.com"],
+          allowedHostnames: ["assets.example.com"],
+        },
       },
     );
 
@@ -562,6 +834,30 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("forwarded hello");
+  });
+
+  it("falls back to referenced forward message text when snapshots are absent", () => {
+    const text = resolveDiscordMessageText(
+      asReferencedForwardMessage({
+        content: "forwarded from referenced message",
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("forwarded from referenced message");
+  });
+
+  it("does not treat ordinary replies as forwarded context", () => {
+    const text = resolveDiscordMessageText(
+      asReferencedForwardMessage({
+        content: "quoted reply content",
+        messageReferenceType: MessageReferenceType.Default,
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe("");
   });
 
   it("resolves user mentions in content", () => {

@@ -21,7 +21,7 @@ IRC ships as an extension plugin, but it is configured in the main config under 
   channels: {
     irc: {
       enabled: true,
-      host: "irc.libera.chat",
+      host: "irc.example.com",
       port: 6697,
       tls: true,
       nick: "openclaw-bot",
@@ -30,6 +30,8 @@ IRC ships as an extension plugin, but it is configured in the main config under 
   },
 }
 ```
+
+Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
 
 3. Start/restart gateway:
 

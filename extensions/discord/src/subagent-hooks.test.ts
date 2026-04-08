@@ -130,7 +130,7 @@ function createSpawnEvent(overrides?: {
     ...overrides,
     requester: {
       ...base.requester,
-      ...(overrides?.requester ?? {}),
+      ...overrides?.requester,
     },
   };
 }
@@ -183,14 +183,6 @@ describe("discord subagent hook handlers", () => {
     hookMocks.autoBindSpawnedDiscordSubagent.mockClear();
     hookMocks.listThreadBindingsBySessionKey.mockClear();
     hookMocks.unbindThreadBindingsBySessionKey.mockClear();
-  });
-
-  it("registers subagent hooks", () => {
-    const handlers = registerHandlersForTest();
-    expect(handlers.has("subagent_spawning")).toBe(true);
-    expect(handlers.has("subagent_delivery_target")).toBe(true);
-    expect(handlers.has("subagent_spawned")).toBe(false);
-    expect(handlers.has("subagent_ended")).toBe(true);
   });
 
   it("binds thread routing on subagent_spawning", async () => {

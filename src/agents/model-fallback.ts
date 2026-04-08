@@ -3,18 +3,20 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import {
-  ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
-  loadAuthProfileStoreForRuntime,
   resolveProfilesUnavailableReason,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
+} from "./auth-profiles/usage.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
+  FailoverError,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -25,6 +27,7 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -215,6 +218,48 @@ function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
 
+function recordFailedCandidateAttempt(params: {
+  attempts: FallbackAttempt[];
+  candidate: ModelCandidate;
+  error: unknown;
+  runId?: string;
+  requestedProvider?: string;
+  requestedModel?: string;
+  attempt: number;
+  total: number;
+  nextCandidate?: ModelCandidate;
+  isPrimary: boolean;
+  requestedModelMatched: boolean;
+  fallbackConfigured: boolean;
+}) {
+  const described = describeFailoverError(params.error);
+  params.attempts.push({
+    provider: params.candidate.provider,
+    model: params.candidate.model,
+    error: described.message,
+    reason: described.reason ?? "unknown",
+    status: described.status,
+    code: described.code,
+  });
+  logModelFallbackDecision({
+    decision: "candidate_failed",
+    runId: params.runId,
+    requestedProvider: params.requestedProvider ?? params.candidate.provider,
+    requestedModel: params.requestedModel ?? params.candidate.model,
+    candidate: params.candidate,
+    attempt: params.attempt,
+    total: params.total,
+    reason: described.reason,
+    status: described.status,
+    code: described.code,
+    error: described.message,
+    nextCandidate: params.nextCandidate,
+    isPrimary: params.isPrimary,
+    requestedModelMatched: params.requestedModelMatched,
+    fallbackConfigured: params.fallbackConfigured,
+  });
+}
+
 function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
@@ -342,8 +387,8 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
-  const modelRaw = String(params.model ?? "").trim() || defaultModel;
+  const providerRaw = normalizeOptionalString(String(params.provider ?? "")) || defaultProvider;
+  const modelRaw = normalizeOptionalString(String(params.model ?? "")) || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
@@ -411,7 +456,7 @@ const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = String(agentDir ?? "").trim();
+  const scope = normalizeOptionalString(String(agentDir ?? "")) ?? "";
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
@@ -771,7 +816,7 @@ export async function runWithModelFallback<T>(params: {
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
+      const errMessage = formatErrorMessage(err);
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
@@ -780,6 +825,36 @@ export async function runWithModelFallback<T>(params: {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
+
+      // LiveSessionModelSwitchError during fallback means the session's
+      // persisted model conflicts with this fallback candidate.  Treat it
+      // as a known failover so the chain continues to the next candidate
+      // instead of re-throwing and triggering infinite retry loops in the
+      // outer runner.  (#58466)
+      if (err instanceof LiveSessionModelSwitchError) {
+        const switchMsg = err.message;
+        const switchNormalized = new FailoverError(switchMsg, {
+          reason: "overloaded",
+          provider: candidate.provider,
+          model: candidate.model,
+        });
+        lastError = switchNormalized;
+        recordFailedCandidateAttempt({
+          attempts,
+          candidate,
+          error: switchNormalized,
+          runId: params.runId,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          attempt: i + 1,
+          total: candidates.length,
+          nextCandidate: candidates[i + 1],
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+        continue;
+      }
 
       // Even unrecognized errors should not abort the fallback loop when
       // there are remaining candidates.  Only abort/context-overflow errors
@@ -790,27 +865,15 @@ export async function runWithModelFallback<T>(params: {
       }
 
       lastError = isKnownFailover ? normalized : err;
-      const described = describeFailoverError(normalized);
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described.message,
-        reason: described.reason ?? "unknown",
-        status: described.status,
-        code: described.code,
-      });
-      logModelFallbackDecision({
-        decision: "candidate_failed",
+      recordFailedCandidateAttempt({
+        attempts,
+        candidate,
+        error: normalized,
         runId: params.runId,
         requestedProvider: params.provider,
         requestedModel: params.model,
-        candidate,
         attempt: i + 1,
         total: candidates.length,
-        reason: described.reason,
-        status: described.status,
-        code: described.code,
-        error: described.message,
         nextCandidate: candidates[i + 1],
         isPrimary,
         requestedModelMatched: requestedModel,
@@ -876,7 +939,7 @@ export async function runWithImageModelFallback<T>(params: {
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
       await params.onError?.({
         provider: candidate.provider,

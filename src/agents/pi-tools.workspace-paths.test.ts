@@ -2,14 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
@@ -77,8 +80,7 @@ describe("workspace path resolution", () => {
           await fs.writeFile(path.join(workspaceDir, editFile), "hello world", "utf8");
           await editTool.execute("ws-edit", {
             path: editFile,
-            oldText: "world",
-            newText: "openclaw",
+            edits: [{ oldText: "world", newText: "openclaw" }],
           });
           expect(await fs.readFile(path.join(workspaceDir, editFile), "utf8")).toBe(
             "hello openclaw",
@@ -103,11 +105,39 @@ describe("workspace path resolution", () => {
 
           await editTool.execute("ws-edit-delete", {
             path: testFile,
-            oldText: " world",
-            newText: "",
+            edits: [{ oldText: " world", newText: "" }],
           });
 
           expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("hello");
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
+  it("supports multi-edit edits[] payloads", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "batch.txt";
+        await fs.writeFile(path.join(workspaceDir, testFile), "alpha beta gamma delta", "utf8");
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { editTool } = expectReadWriteEditTools(tools);
+
+          await editTool.execute("ws-edit-batch", {
+            path: testFile,
+            edits: [
+              { oldText: "alpha", newText: "ALPHA" },
+              { oldText: "delta", newText: "DELTA" },
+            ],
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe(
+            "ALPHA beta gamma DELTA",
+          );
         } finally {
           cwdSpy.mockRestore();
         }
@@ -221,8 +251,7 @@ describe("sandboxed workspace paths", () => {
 
         await editTool?.execute("sbx-edit", {
           path: "new.txt",
-          oldText: "write",
-          newText: "edit",
+          edits: [{ oldText: "write", newText: "edit" }],
         });
         const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");

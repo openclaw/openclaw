@@ -1,15 +1,5 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
-import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import {
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "../gateway/session-utils.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   isValidAgentId,
@@ -17,18 +7,16 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
-import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -37,12 +25,32 @@ import {
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
-import { readStringParam } from "./tools/common.js";
 import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  resolveSubagentModelAndThinkingPlan,
+  splitModelRef,
+} from "./subagent-spawn-plan.js";
+import {
+  ADMIN_SCOPE,
+  AGENT_LANE_SUBAGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  buildSubagentSystemPrompt,
+  callGateway,
+  emitSessionLifecycleEvent,
+  getGlobalHookRunner,
+  loadConfig,
+  mergeSessionEntry,
+  normalizeDeliveryContext,
+  pruneLegacyStoreKeys,
+  resolveAgentConfig,
   resolveDisplaySessionKey,
+  resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-} from "./tools/sessions-helpers.js";
+  resolveSandboxRuntimeStatus,
+  updateSessionStore,
+  isAdminOnlyMethod,
+} from "./subagent-spawn.runtime.js";
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
@@ -78,6 +86,7 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
+  lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;
@@ -123,20 +132,7 @@ export type SpawnSubagentResult = {
   };
 };
 
-export function splitModelRef(ref?: string) {
-  if (!ref) {
-    return { provider: undefined, model: undefined };
-  }
-  const trimmed = ref.trim();
-  if (!trimmed) {
-    return { provider: undefined, model: undefined };
-  }
-  const [provider, model] = trimmed.split("/", 2);
-  if (model) {
-    return { provider, model };
-  }
-  return { provider: undefined, model: trimmed };
-}
+export { splitModelRef } from "./subagent-spawn-plan.js";
 
 async function updateSubagentSessionStore(
   storePath: string,
@@ -148,7 +144,21 @@ async function updateSubagentSessionStore(
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
-  return await subagentSpawnDeps.callGateway(params);
+  // Subagent lifecycle requires methods spanning multiple scope tiers
+  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // independently negotiates least-privilege scopes the first connection pairs
+  // at a lower tier and every subsequent higher-tier call triggers a
+  // scope-upgrade handshake that headless gateway-client connections cannot
+  // complete interactively, causing close(1008) "pairing required" (#59428).
+  //
+  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" → write) keep their least-privilege scope so that the gateway does
+  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  return await subagentSpawnDeps.callGateway({
+    ...params,
+    ...(scopes != null ? { scopes } : {}),
+  });
 }
 
 function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
@@ -195,7 +205,7 @@ async function persistInitialChildSessionRuntimeModel(params: {
 }
 
 function sanitizeMountPathHint(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -384,15 +394,10 @@ export async function spawnSubagentDirect(
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
   // preserving current behavior for existing deployments.
-  const cfgSubagentTimeout =
-    typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
-    Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
-      : 0;
-  const runTimeoutSeconds =
-    typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-      : cfgSubagentTimeout;
+  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
+    cfg,
+    runTimeoutSeconds: params.runTimeoutSeconds,
+  });
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -445,13 +450,16 @@ export async function spawnSubagentDirect(
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const allowAgents =
+      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
+      cfg?.agents?.defaults?.subagents?.allowAgents ??
+      [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = targetAgentId.toLowerCase();
+    const normalizedTargetId = normalizeLowercaseStringOrEmpty(targetAgentId);
     const allowSet = new Set(
       allowAgents
         .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeAgentId(value).toLowerCase()),
+        .map((value) => normalizeLowercaseStringOrEmpty(normalizeAgentId(value))),
     );
     if (!allowAny && !allowSet.has(normalizedTargetId)) {
       const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
@@ -491,30 +499,20 @@ export async function spawnSubagentDirect(
     maxSpawnDepth,
   });
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const resolvedModel = resolveSubagentSpawnModelSelection({
+  const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
-    agentId: targetAgentId,
+    targetAgentId,
+    targetAgentConfig,
     modelOverride,
+    thinkingOverrideRaw,
   });
-
-  const resolvedThinkingDefaultRaw =
-    readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
-    readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
-
-  let thinkingOverride: string | undefined;
-  const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
-  if (thinkingCandidateRaw) {
-    const normalized = normalizeThinkLevel(thinkingCandidateRaw);
-    if (!normalized) {
-      const { provider, model } = splitModelRef(resolvedModel);
-      const hint = formatThinkingLevels(provider, model);
-      return {
-        status: "error",
-        error: `Invalid thinking level "${thinkingCandidateRaw}". Use one of: ${hint}.`,
-      };
-    }
-    thinkingOverride = normalized;
+  if (plan.status === "error") {
+    return {
+      status: "error",
+      error: plan.error,
+    };
   }
+  const { resolvedModel, thinkingOverride } = plan;
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
       await callSubagentGateway({
@@ -532,13 +530,8 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
+    ...plan.initialSessionPatch,
   };
-  if (resolvedModel) {
-    initialChildSessionPatch.model = resolvedModel;
-  }
-  if (thinkingOverride !== undefined) {
-    initialChildSessionPatch.thinkingLevel = thinkingOverride === "off" ? null : thinkingOverride;
-  }
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);
   if (initialPatchError) {
@@ -653,6 +646,10 @@ export async function spawnSubagentDirect(
     childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
   }
 
+  const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
+    ? "lightweight"
+    : undefined;
+
   const childTaskMessage = [
     `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
     spawnMode === "session"
@@ -723,6 +720,12 @@ export async function spawnSubagentDirect(
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
+        ...(bootstrapContextMode
+          ? {
+              bootstrapContextMode,
+              bootstrapContextRunKind: "default" as const,
+            }
+          : {}),
         ...publicSpawnedMetadata,
       },
       timeoutMs: 10_000,

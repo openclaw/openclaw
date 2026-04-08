@@ -97,6 +97,55 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          ["FOO=from-gateway", "BAR=from-gateway"].join("\n"),
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+        expect(process.env.BAR).toBe("from-gateway");
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Conflicting values in"));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.env"));
+      });
+    });
+  });
+
+  it("does not warn about dotenv conflicts when the key is already set", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        process.env.HOME = base;
+        process.env.FOO = "from-shell";
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "FOO=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-shell");
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   it("blocks dangerous and workspace-control vars from CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -109,6 +158,8 @@ describe("loadDotEnv", () => {
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "HTTP_PROXY=http://evil-proxy:8080",
+            "UV_PYTHON=./attacker-python",
+            "uv_python=./attacker-python-lower",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -119,6 +170,8 @@ describe("loadDotEnv", () => {
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
+        delete process.env.UV_PYTHON;
+        delete process.env.uv_python;
 
         loadDotEnv({ quiet: true });
 
@@ -129,6 +182,8 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
+        expect(process.env.UV_PYTHON).toBeUndefined();
+        expect(process.env.uv_python).toBeUndefined();
       });
     });
   });
@@ -207,27 +262,95 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks path-override vars (OPENCLAW_AGENT_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
+  it("blocks path-override vars (OPENCLAW_AGENT_DIR, OPENCLAW_BUNDLED_PLUGINS_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir }) => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        const bundledPluginsDir = path.join(base, "attacker-bundled");
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
             "OPENCLAW_AGENT_DIR=./evil-agent",
+            `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "PI_CODING_AGENT_DIR=./evil-coding",
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
           ].join("\n"),
         );
 
         delete process.env.OPENCLAW_AGENT_DIR;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.PI_CODING_AGENT_DIR;
         delete process.env.OPENCLAW_OAUTH_DIR;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks OPENCLAW_TEST_TAILSCALE_BINARY from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "OPENCLAW_TEST_TAILSCALE_BINARY=/tmp/attacker-tailscale\n",
+        );
+
+        delete process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_TEST_TAILSCALE_BINARY).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks pinned helper interpreter vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_PINNED_PYTHON=./attacker-python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=./attacker-write-python",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBeUndefined();
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks bundled trust-root vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
+            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
       });
     });
   });
@@ -237,16 +360,25 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(
           path.join(stateDir, ".env"),
-          "ANTHROPIC_BASE_URL=https://trusted.example.com/v1\nHTTP_PROXY=http://proxy.test:8080\n",
+          [
+            "ANTHROPIC_BASE_URL=https://trusted.example.com/v1",
+            "HTTP_PROXY=http://proxy.test:8080",
+            "OPENCLAW_PINNED_PYTHON=/trusted/python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=/trusted/write-python",
+          ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.ANTHROPIC_BASE_URL).toBe("https://trusted.example.com/v1");
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBe("/trusted/python");
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBe("/trusted/write-python");
       });
     });
   });
@@ -344,17 +476,114 @@ describe("loadCliDotEnv", () => {
     });
   });
 
+  it("loads the gateway.env compatibility fallback during CLI startup", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "BAR=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+        expect(process.env.BAR).toBe("from-gateway");
+      });
+    });
+  });
+
+  it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        const customStateDir = path.join(base, "custom-state");
+        process.env.HOME = base;
+        process.env.OPENCLAW_STATE_DIR = customStateDir;
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "FOO=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBeUndefined();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(customStateDir);
+        expect(process.env.BAR).toBeUndefined();
+      });
+    });
+  });
+
+  it("keeps the legacy state-dir fallback for CLI dotenv loading", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
+      const cwdDir = path.join(base, "cwd");
+      const legacyStateDir = path.join(base, ".clawdbot");
+      process.env.HOME = base;
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_TEST_FAST;
+      await fs.mkdir(cwdDir, { recursive: true });
+      await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
+
+      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+      delete process.env.LEGACY_ONLY;
+
+      loadCliDotEnv({ quiet: true });
+
+      expect(process.env.LEGACY_ONLY).toBe("from-legacy");
+    });
+  });
+
+  it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
+            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks workspace .env takeover vars before loading the global fallback", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        const bundledPluginsDir = path.join(base, "attacker-bundled");
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
             "SAFE_KEY=from-cwd",
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
+            `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "NODE_OPTIONS=--require ./evil.js",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+            "UV_PYTHON=./attacker-python",
+            "uv_python=./attacker-python-lower",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -362,8 +591,11 @@ describe("loadCliDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
         delete process.env.OPENCLAW_CONFIG_PATH;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
         delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.UV_PYTHON;
+        delete process.env.uv_python;
         delete process.env.BAR;
 
         loadCliDotEnv({ quiet: true });
@@ -372,8 +604,11 @@ describe("loadCliDotEnv", () => {
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+        expect(process.env.UV_PYTHON).toBeUndefined();
+        expect(process.env.uv_python).toBeUndefined();
       });
     });
   });

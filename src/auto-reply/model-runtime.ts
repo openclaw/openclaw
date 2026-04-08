@@ -1,8 +1,12 @@
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export function formatProviderModelRef(providerRaw: string, modelRaw: string): string {
-  const provider = String(providerRaw ?? "").trim();
-  const model = String(modelRaw ?? "").trim();
+  const provider = normalizeOptionalString(providerRaw) ?? "";
+  const model = normalizeOptionalString(modelRaw) ?? "";
   if (!provider) {
     return model;
   }
@@ -10,7 +14,7 @@ export function formatProviderModelRef(providerRaw: string, modelRaw: string): s
     return provider;
   }
   const prefix = `${provider}/`;
-  if (model.toLowerCase().startsWith(prefix.toLowerCase())) {
+  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
     const normalizedModel = model.slice(prefix.length).trim();
     if (normalizedModel) {
       return `${provider}/${normalizedModel}`;
@@ -26,12 +30,12 @@ type ModelRef = {
 };
 
 function normalizeModelWithinProvider(provider: string, modelRaw: string): string {
-  const model = String(modelRaw ?? "").trim();
+  const model = normalizeOptionalString(modelRaw) ?? "";
   if (!provider || !model) {
     return model;
   }
   const prefix = `${provider}/`;
-  if (model.toLowerCase().startsWith(prefix.toLowerCase())) {
+  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
     const withoutPrefix = model.slice(prefix.length).trim();
     if (withoutPrefix) {
       return withoutPrefix;
@@ -45,11 +49,11 @@ function normalizeModelRef(
   fallbackProvider: string,
   parseEmbeddedProvider = false,
 ): ModelRef {
-  const trimmed = String(rawModel ?? "").trim();
+  const trimmed = normalizeOptionalString(rawModel) ?? "";
   const slashIndex = parseEmbeddedProvider ? trimmed.indexOf("/") : -1;
   if (slashIndex > 0) {
-    const provider = trimmed.slice(0, slashIndex).trim();
-    const model = trimmed.slice(slashIndex + 1).trim();
+    const provider = normalizeOptionalString(trimmed.slice(0, slashIndex)) ?? "";
+    const model = normalizeOptionalString(trimmed.slice(slashIndex + 1)) ?? "";
     if (provider && model) {
       return {
         provider,
@@ -58,7 +62,7 @@ function normalizeModelRef(
       };
     }
   }
-  const provider = String(fallbackProvider ?? "").trim();
+  const provider = normalizeOptionalString(fallbackProvider) ?? "";
   const dedupedModel = normalizeModelWithinProvider(provider, trimmed);
   return {
     provider,
@@ -77,8 +81,8 @@ export function resolveSelectedAndActiveModel(params: {
   activeDiffers: boolean;
 } {
   const selected = normalizeModelRef(params.selectedModel, params.selectedProvider);
-  const runtimeModel = params.sessionEntry?.model?.trim();
-  const runtimeProvider = params.sessionEntry?.modelProvider?.trim();
+  const runtimeModel = normalizeOptionalString(params.sessionEntry?.model);
+  const runtimeProvider = normalizeOptionalString(params.sessionEntry?.modelProvider);
 
   const active = runtimeModel
     ? normalizeModelRef(runtimeModel, runtimeProvider || selected.provider, !runtimeProvider)

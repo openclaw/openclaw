@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";
@@ -200,9 +201,12 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
   return XAI_MODEL_CATALOG.map((entry) => toModelDefinition(entry));
 }
 
-export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
-  const lower = modelId.trim().toLowerCase();
-  const exact = XAI_MODEL_CATALOG.find((entry) => entry.id.toLowerCase() === lower);
+export function resolveXaiCatalogEntry(modelId: string) {
+  const trimmed = modelId.trim();
+  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
+  const exact = XAI_MODEL_CATALOG.find(
+    (entry) => normalizeOptionalLowercaseString(entry.id) === lower,
+  );
   if (exact) {
     return toModelDefinition(exact);
   }
@@ -211,8 +215,8 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
   }
   if (lower.startsWith("grok-code-fast")) {
     return toModelDefinition({
-      id: modelId.trim(),
-      name: modelId.trim(),
+      id: trimmed,
+      name: trimmed,
       reasoning: true,
       input: ["text"],
       contextWindow: XAI_CODE_CONTEXT_WINDOW,
@@ -234,8 +238,8 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
           ? { input: 5, output: 25, cacheRead: 1.25, cacheWrite: 0 }
           : XAI_GROK_4_COST;
     return toModelDefinition({
-      id: modelId.trim(),
-      name: modelId.trim(),
+      id: trimmed,
+      name: trimmed,
       reasoning: lower.includes("mini"),
       input: ["text"],
       contextWindow: XAI_LEGACY_CONTEXT_WINDOW,
@@ -249,8 +253,8 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
     lower.startsWith("grok-4-fast")
   ) {
     return toModelDefinition({
-      id: modelId.trim(),
-      name: modelId.trim(),
+      id: trimmed,
+      name: trimmed,
       reasoning: !lower.includes("non-reasoning"),
       input: ["text", "image"],
       contextWindow: XAI_LARGE_CONTEXT_WINDOW,
