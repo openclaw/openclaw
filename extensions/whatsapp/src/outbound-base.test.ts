@@ -54,6 +54,47 @@ describe("createWhatsAppOutboundBase", () => {
     expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-1" });
   });
 
+  it("sendMedia bypasses legacy deps and always calls sendMessageWhatsApp directly (#63126)", async () => {
+    const legacyShim = vi.fn(async () => ({
+      messageId: "legacy-msg",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const sendMessageWhatsApp = vi.fn(async () => ({
+      messageId: "direct-msg",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const outbound = createWhatsAppOutboundBase({
+      chunker: (text) => [text],
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+
+    const result = await outbound.sendMedia!({
+      cfg: {} as never,
+      to: "whatsapp:+15551234567",
+      text: "voice memo",
+      mediaUrl: "/tmp/workspace/test.mp3",
+      mediaLocalRoots: ["/tmp/workspace"],
+      accountId: "default",
+      deps: { sendWhatsApp: legacyShim, whatsapp: legacyShim },
+      gifPlayback: false,
+    });
+
+    // Legacy shim must NOT be called — it drops mediaUrl silently.
+    expect(legacyShim).not.toHaveBeenCalled();
+    // The direct sendMessageWhatsApp must receive the mediaUrl.
+    expect(sendMessageWhatsApp).toHaveBeenCalledWith(
+      "whatsapp:+15551234567",
+      "voice memo",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/test.mp3",
+      }),
+    );
+    expect(result).toMatchObject({ channel: "whatsapp", messageId: "direct-msg" });
+  });
+
   it("threads cfg into sendPollWhatsApp call", async () => {
     const sendPollWhatsApp = vi.fn(async () => ({
       messageId: "wa-poll-1",

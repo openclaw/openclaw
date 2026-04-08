@@ -97,14 +97,13 @@ export function createWhatsAppOutboundBase({
         mediaLocalRoots,
         mediaReadFile,
         accountId,
-        deps,
         gifPlayback,
       }) => {
-        const send =
-          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp", {
-            legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
-          }) ?? sendMessageWhatsApp;
-        return await send(to, normalizeText(text), {
+        // Always call sendMessageWhatsApp directly for media sends.
+        // Legacy deps resolved via resolveOutboundSendDep pre-date the
+        // media-aware signature and silently drop mediaUrl, causing
+        // attachments to never reach the recipient.  See #63126.
+        return await sendMessageWhatsApp(to, normalizeText(text), {
           verbose: false,
           cfg,
           mediaUrl,
