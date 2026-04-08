@@ -37,7 +37,7 @@ export function describeSessionsSpawnTool(): string {
     '`mode="run"` is one-shot and `mode="session"` is persistent or thread-bound.',
     "Subagents inherit the parent workspace directory automatically.",
     "Use this when the work should happen in a fresh child session instead of the current one.",
-    'For subagent spawns, only pass task, agentId, and runTimeoutSeconds. Do not set streamTo or resumeSessionId — those require runtime="acp".',
+    'For subagent spawns, do not set streamTo or resumeSessionId — those require runtime="acp".',
   ].join(" ");
 }
 
