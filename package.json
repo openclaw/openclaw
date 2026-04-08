@@ -1192,6 +1192,8 @@
     "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
+    "qa:local-agents:bootstrap": "node scripts/dev/bootstrap-local-coding-agents.mjs",
+    "qa:local-agents:selftest": "bash scripts/dev/local-coding-agents-selftest.sh",
     "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
