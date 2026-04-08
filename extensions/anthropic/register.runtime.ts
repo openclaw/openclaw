@@ -477,6 +477,17 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
     wrapStreamFn: wrapAnthropicProviderStream,
+    supportsXHighThinking: ({ modelId }) => {
+      // Only Opus 4.6 truly supports xhigh (mapped to "max" effort).
+      // Sonnet 4.6 gets downgraded to "high" by the transport, so
+      // advertising xhigh for it would be misleading.
+      const lower = normalizeLowercaseStringOrEmpty(modelId);
+      return (
+        (lower.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
+          lower.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID)) ||
+        undefined
+      );
+    },
     resolveDefaultThinkingLevel: ({ modelId }) =>
       matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
         ? "adaptive"
