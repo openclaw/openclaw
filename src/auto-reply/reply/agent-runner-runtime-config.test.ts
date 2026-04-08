@@ -80,4 +80,47 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
 
     expect(resolved.config).toBe(runtimeConfig);
   });
+
+  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", () => {
+    const staleSnapshot: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const resolvedRunConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "resolved-runtime-key",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run: makeRun(resolvedRunConfig),
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile: resolveProviderScopedAuthProfile({
+        provider: "openai",
+        primaryProvider: "openai",
+      }),
+    });
+
+    expect(resolved.config).toBe(resolvedRunConfig);
+  });
 });

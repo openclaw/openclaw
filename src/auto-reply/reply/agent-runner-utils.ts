@@ -125,14 +125,14 @@ export const resolveEnforceFinalTag = (
     (run.skipProviderRuntimeHints ? false : undefined) ??
     (run.enforceFinalTag ||
       isReasoningTagProvider(provider, {
-        config: resolveQueuedReplyRuntimeConfig(run.config),
+        config: run.config,
         workspaceDir: run.workspaceDir,
         modelId: model,
       })),
   );
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  const config = resolveQueuedReplyRuntimeConfig(run.config);
+  const config = run.config;
   return {
     cfg: config,
     provider: run.provider,
@@ -154,7 +154,7 @@ export function buildEmbeddedRunBaseParams(params: {
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
+  const config = params.run.config;
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
@@ -185,7 +185,7 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
+  const config = params.run.config;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
