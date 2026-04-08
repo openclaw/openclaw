@@ -5,11 +5,7 @@
 // Phases 2 and 3 (embeddings + speech) will register additional contracts
 // against the same provider id without changing the auth surface.
 
-import {
-  PROVIDER_ID,
-  createProviderApiKeyAuthMethod,
-  definePluginEntry,
-} from "./api.js";
+import { PROVIDER_ID, createProviderApiKeyAuthMethod, definePluginEntry } from "./api.js";
 import { buildHuggingFaceExtrasImageGenerationProvider } from "./image-generation-provider.js";
 
 export default definePluginEntry({

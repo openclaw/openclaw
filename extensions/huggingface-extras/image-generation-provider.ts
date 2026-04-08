@@ -35,13 +35,7 @@ const KNOWN_MODELS: ReadonlyArray<string> = [
   "stabilityai/stable-diffusion-xl-base-1.0",
 ];
 
-const SUPPORTED_SIZES = [
-  "512x512",
-  "768x768",
-  "1024x1024",
-  "1024x1536",
-  "1536x1024",
-] as const;
+const SUPPORTED_SIZES = ["512x512", "768x768", "1024x1024", "1024x1536", "1536x1024"] as const;
 
 const SUPPORTED_ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16"] as const;
 
@@ -194,16 +188,14 @@ async function callHuggingFace(params: {
   return { buffer: Buffer.from(arrayBuffer), mimeType };
 }
 
-function buildAsset(
-  params: {
-    buffer: Buffer;
-    mimeType: string;
-    modelId: string;
-    width: number;
-    height: number;
-    prompt: string;
-  },
-): GeneratedImageAsset {
+function buildAsset(params: {
+  buffer: Buffer;
+  mimeType: string;
+  modelId: string;
+  width: number;
+  height: number;
+  prompt: string;
+}): GeneratedImageAsset {
   const extension = params.mimeType.includes("jpeg")
     ? "jpg"
     : params.mimeType.includes("webp")
@@ -259,16 +251,15 @@ export function buildHuggingFaceExtrasImageGenerationProvider(): ImageGeneration
     isConfigured,
     async generateImage(req: ImageGenerationRequest): Promise<ImageGenerationResult> {
       if (req.inputImages && req.inputImages.length > 0) {
-        throw new Error(
-          "huggingface-extras does not support image-to-image edits in this release",
-        );
+        throw new Error("huggingface-extras does not support image-to-image edits in this release");
       }
-      const apiKey = await resolveApiKeyForProvider({
+      const auth = await resolveApiKeyForProvider({
         provider: PROVIDER_ID,
         cfg: req.cfg,
         agentDir: req.agentDir,
-        authStore: req.authStore,
+        store: req.authStore,
       });
+      const apiKey = auth?.apiKey;
       if (!apiKey) {
         throw new Error(
           "Hugging Face API key is not configured. Run `openclaw onboard --auth-choice huggingface-extras-api-key` or set HUGGINGFACE_HUB_TOKEN.",
