@@ -24,6 +24,7 @@ import { formatUncaughtError } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveAccessMode } from "../security/access-mode.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -234,7 +235,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
-  const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+  // Resolve accessMode (new unified model) with backward-compat fallback to dmPolicy
+  const effectiveAccessMode = resolveAccessMode({
+    accessMode: telegramCfg.accessMode,
+    dmPolicy: telegramCfg.dmPolicy,
+  });
+  // Map accessMode back to dmPolicy for existing enforcement code
+  const dmPolicy = effectiveAccessMode === "open" ? "open" : (telegramCfg.dmPolicy ?? "pairing");
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ??

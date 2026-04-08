@@ -31,6 +31,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { resolveAccessMode } from "../../security/access-mode.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
@@ -221,7 +222,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
+  // Resolve accessMode (new unified model) with backward-compat fallback to dmPolicy
+  const effectiveAccessMode = resolveAccessMode({
+    accessMode: discordCfg.accessMode,
+    dmPolicy: discordCfg.dmPolicy ?? dmConfig?.policy,
+  });
+  const dmPolicy =
+    effectiveAccessMode === "open"
+      ? "open"
+      : (discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing");
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   const nativeEnabled = resolveNativeCommandsEnabled({

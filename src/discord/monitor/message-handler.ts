@@ -19,7 +19,12 @@ type DiscordMessageHandlerParams = Omit<
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageHandler {
-  const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
+  const groupPolicy =
+    params.discordConfig?.groupEnabled === false ||
+    (params.discordConfig?.groupEnabled == null &&
+      params.cfg.channels?.defaults?.groupEnabled === false)
+      ? "disabled"
+      : (params.discordConfig?.groupPolicy ?? "open");
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
 
