@@ -63,6 +63,20 @@ export interface ReplyContext {
   };
 }
 
+/** True when `synthesizeAndDeliverTtsVoice` has a concrete QQ send route (mirrors dispatch branches). */
+function canDeliverSynthesizedTtsVoice(target: MessageTarget): boolean {
+  if (target.type === "c2c") {
+    return true;
+  }
+  if (target.type === "group") {
+    return Boolean(target.groupOpenid);
+  }
+  if (target.type === "dm") {
+    return Boolean(target.guildId);
+  }
+  return Boolean(target.channelId);
+}
+
 /** Send a message and retry once if the token appears to have expired. */
 export async function sendWithTokenRetry<T>(
   appId: string,
@@ -396,6 +410,13 @@ export async function synthesizeAndDeliverTtsVoice(
     return false;
   }
 
+  if (!canDeliverSynthesizedTtsVoice(target)) {
+    log?.error(
+      `[qqbot:${account.accountId}] TTS/voice skipped: incomplete delivery target (type=${target.type})`,
+    );
+    return false;
+  }
+
   try {
     let silkBase64: string | undefined;
     let silkPath: string | undefined;
@@ -459,10 +480,10 @@ export async function synthesizeAndDeliverTtsVoice(
       `[qqbot:${account.accountId}] TTS done (${providerLabel}): ${duration ? formatDuration(duration) : "N/A"}, file: ${silkPath ?? "N/A"}`,
     );
 
-    await sendWithTokenRetry(
+    const delivered = await sendWithTokenRetry(
       account.appId,
       account.clientSecret,
-      async (token) => {
+      async (token): Promise<boolean> => {
         if (target.type === "c2c") {
           await sendC2CVoiceMessage(
             account.appId,
@@ -474,7 +495,9 @@ export async function synthesizeAndDeliverTtsVoice(
             trimmed,
             silkPath,
           );
-        } else if (target.type === "group" && target.groupOpenid) {
+          return true;
+        }
+        if (target.type === "group" && target.groupOpenid) {
           await sendGroupVoiceMessage(
             account.appId,
             token,
@@ -483,21 +506,33 @@ export async function synthesizeAndDeliverTtsVoice(
             undefined,
             target.messageId,
           );
-        } else if (target.type === "dm" && target.guildId) {
+          return true;
+        }
+        if (target.type === "dm" && target.guildId) {
           log?.error(
             `[qqbot:${account.accountId}] Voice not supported in DM, sending text fallback`,
           );
           await sendDmMessage(token, target.guildId, trimmed, target.messageId);
-        } else if (target.channelId) {
+          return true;
+        }
+        if (target.channelId) {
           log?.error(
             `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
           );
           await sendChannelMessage(token, target.channelId, trimmed, target.messageId);
+          return true;
         }
+        return false;
       },
       log,
       account.accountId,
     );
+    if (!delivered) {
+      log?.error(
+        `[qqbot:${account.accountId}] TTS/voice: no message dispatched (unexpected target shape)`,
+      );
+      return false;
+    }
     log?.info(`[qqbot:${account.accountId}] Voice message sent`);
     return true;
   } catch (err) {

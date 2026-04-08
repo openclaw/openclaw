@@ -19,7 +19,11 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("./api.js", () => apiMocks);
 
-import { handleStructuredPayload, type ReplyContext } from "./reply-dispatcher.js";
+import {
+  handleStructuredPayload,
+  synthesizeAndDeliverTtsVoice,
+  type ReplyContext,
+} from "./reply-dispatcher.js";
 
 function buildCtx(): ReplyContext {
   return {
@@ -43,6 +47,28 @@ function buildCtx(): ReplyContext {
 }
 
 describe("qqbot reply dispatcher", () => {
+  it("synthesizeAndDeliverTtsVoice returns false for incomplete group target without calling token API", async () => {
+    const ctx = buildCtx();
+    ctx.target = { type: "group", senderId: "u", messageId: "m" };
+    vi.clearAllMocks();
+
+    const out = await synthesizeAndDeliverTtsVoice(ctx, "hello");
+
+    expect(out).toBe(false);
+    expect(apiMocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("synthesizeAndDeliverTtsVoice returns false for guild target without channelId", async () => {
+    const ctx = buildCtx();
+    ctx.target = { type: "guild", senderId: "u", messageId: "m" };
+    vi.clearAllMocks();
+
+    const out = await synthesizeAndDeliverTtsVoice(ctx, "hello");
+
+    expect(out).toBe(false);
+    expect(apiMocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
   it("allows inline data image URLs for structured image payloads", async () => {
     const ctx = buildCtx();
     const recordActivity = vi.fn();

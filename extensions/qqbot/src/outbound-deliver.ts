@@ -400,9 +400,8 @@ export async function sendPlainReply(
   for (const m of bareUrlMatches) {
     speechText = speechText.replace(m[0], "").trim();
   }
-  if (speechText && event.type !== "c2c") {
-    speechText = speechText.replace(/([a-zA-Z0-9])\.([a-zA-Z0-9])/g, "$1_$2");
-  }
+  // Do not apply group plain-text dot→underscore sanitization to TTS input; providers
+  // should speak real hostnames (e.g. openclaw.ai). That workaround stays in sendPlainTextReply.
 
   let voiceHandled = false;
   if (
