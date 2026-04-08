@@ -8,6 +8,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
@@ -53,7 +54,7 @@ export function resolveHeartbeatIntervalMs(
   if (!raw) {
     return null;
   }
-  const trimmed = String(raw).trim();
+  const trimmed = normalizeOptionalString(String(raw)) ?? "";
   if (!trimmed) {
     return null;
   }

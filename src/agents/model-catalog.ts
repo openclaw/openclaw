@@ -1,6 +1,10 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -131,18 +135,18 @@ export async function loadModelCatalog(params?: {
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
       for (const entry of entries) {
-        const id = String(entry?.id ?? "").trim();
+        const id = normalizeOptionalString(String(entry?.id ?? "")) ?? "";
         if (!id) {
           continue;
         }
-        const provider = String(entry?.provider ?? "").trim();
+        const provider = normalizeOptionalString(String(entry?.provider ?? "")) ?? "";
         if (!provider) {
           continue;
         }
         if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
-        const name = String(entry?.name ?? id).trim() || id;
+        const name = normalizeOptionalString(String(entry?.name ?? id)) || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
@@ -164,11 +168,12 @@ export async function loadModelCatalog(params?: {
       if (supplemental.length > 0) {
         const seen = new Set(
           models.map(
-            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+            (entry) =>
+              `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`,
           ),
         );
         for (const entry of supplemental) {
-          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+          const key = `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`;
           if (seen.has(key)) {
             continue;
           }
@@ -226,10 +231,10 @@ export function findModelInCatalog(
   modelId: string,
 ): ModelCatalogEntry | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModelId = modelId.toLowerCase().trim();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return catalog.find(
     (entry) =>
       normalizeProviderId(entry.provider) === normalizedProvider &&
-      entry.id.toLowerCase() === normalizedModelId,
+      normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
   );
 }

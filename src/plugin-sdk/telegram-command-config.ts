@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export type TelegramCustomCommandInput = {
   command?: string | null;
   description?: string | null;
@@ -16,7 +18,7 @@ function normalizeTelegramCommandNameImpl(value: string): string {
     return "";
   }
   const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
-  return withoutSlash.trim().toLowerCase().replace(/-/g, "_");
+  return normalizeLowercaseStringOrEmpty(withoutSlash).replace(/-/g, "_");
 }
 
 function normalizeTelegramCommandDescriptionImpl(value: string): string {

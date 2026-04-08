@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -31,6 +35,7 @@ export const HeartbeatSchema = z
     to: z.string().optional(),
     accountId: z.string().optional(),
     prompt: z.string().optional(),
+    includeSystemPromptSection: z.boolean().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
     lightContext: z.boolean().optional(),
@@ -140,7 +145,7 @@ export const SandboxDockerSchema = z
   .superRefine((data, ctx) => {
     if (data.binds) {
       for (let i = 0; i < data.binds.length; i += 1) {
-        const bind = data.binds[i]?.trim() ?? "";
+        const bind = normalizeOptionalString(data.binds[i]) ?? "";
         if (!bind) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -183,7 +188,7 @@ export const SandboxDockerSchema = z
           "Use a custom bridge network, or set dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
       });
     }
-    if (data.seccompProfile?.trim().toLowerCase() === "unconfined") {
+    if (normalizeLowercaseStringOrEmpty(data.seccompProfile ?? "") === "unconfined") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["seccompProfile"],
@@ -192,7 +197,7 @@ export const SandboxDockerSchema = z
           "Use a custom seccomp profile file or omit this setting.",
       });
     }
-    if (data.apparmorProfile?.trim().toLowerCase() === "unconfined") {
+    if (normalizeLowercaseStringOrEmpty(data.apparmorProfile ?? "") === "unconfined") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["apparmorProfile"],
@@ -222,7 +227,7 @@ export const SandboxBrowserSchema = z
     binds: z.array(z.string()).optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.network?.trim().toLowerCase() === "host") {
+    if (normalizeLowercaseStringOrEmpty(data.network ?? "") === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["network"],
@@ -777,6 +782,7 @@ export const AgentEntrySchema = z
     name: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
+    systemPromptOverride: z.string().optional(),
     model: AgentModelSchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])

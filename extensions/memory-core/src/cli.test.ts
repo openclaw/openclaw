@@ -141,25 +141,6 @@ describe("memory cli", () => {
     );
   }
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
-    const startedAt = Date.now();
-    let lastError: unknown;
-    while (Date.now() - startedAt < timeoutMs) {
-      try {
-        return await task();
-      } catch (error) {
-        lastError = error;
-        await new Promise((resolve) => {
-          setTimeout(resolve, 20);
-        });
-      }
-    }
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-    throw new Error("Timed out waiting for async test condition");
-  }
-
   async function runMemoryCli(args: string[]) {
     const program = new Command();
     program.name("test");
@@ -198,7 +179,6 @@ describe("memory cli", () => {
 
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
     const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
-    await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
     await run(workspaceDir);
   }
@@ -836,42 +816,6 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("records short-term recall entries from memory search hits", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const close = vi.fn(async () => {});
-      const search = vi.fn(async () => [
-        {
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 2,
-          score: 0.91,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ]);
-      mockManager({
-        search,
-        status: () => makeMemoryStatus({ workspaceDir }),
-        close,
-      });
-
-      await runMemoryCli(["search", "glacier", "--json"]);
-
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
-      const store = JSON.parse(storeRaw) as {
-        entries?: Record<string, { path: string; recallCount: number }>;
-      };
-      const entries = Object.values(store.entries ?? {});
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
-        recallCount: 1,
-      });
-      expect(close).toHaveBeenCalled();
-    });
-  });
-
   it("prints no candidates when promote has no short-term recall data", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});
@@ -1118,6 +1062,61 @@ describe("memory cli", () => {
 
       expect(log).toHaveBeenCalledWith(expect.stringContaining("consolidate="));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("concepts="));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+    const startedAt = Date.now();
+    let lastError: unknown;
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        return await task();
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      }
+    }
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error("Timed out waiting for async test condition");
+  }
+
+  it("records short-term recall entries from memory search hits", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const search = vi.fn(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ]);
+      mockManager({
+        search,
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
+      const store = JSON.parse(storeRaw) as {
+        entries?: Record<string, { path: string; recallCount: number }>;
+      };
+      const entries = Object.values(store.entries ?? {});
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 1,
+      });
       expect(close).toHaveBeenCalled();
     });
   });

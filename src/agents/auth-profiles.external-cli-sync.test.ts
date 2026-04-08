@@ -56,6 +56,7 @@ function getProviderCases() {
 describe("syncExternalCliCredentials", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.doUnmock("./auth-profiles/external-cli-sync.js");
     mocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
     mocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
     vi.doMock("./cli-credentials.js", () => ({

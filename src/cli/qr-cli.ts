@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../gateway/credentials.js";
+import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -44,7 +44,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   cfg: ReturnType<typeof loadConfig>,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (readGatewayPasswordEnv(env)) {
+  if (trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) {
     return false;
   }
   const authMode = cfg.gateway?.auth?.mode;
@@ -54,7 +54,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
     return false;
   }
-  const envToken = readGatewayTokenEnv(env);
+  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   const configTokenConfigured = hasConfiguredSecretInput(
     cfg.gateway?.auth?.token,
     cfg.secrets?.defaults,
@@ -121,15 +121,15 @@ export function registerQrCli(program: Command) {
           throw new Error("Use either --token or --password, not both.");
         }
 
-        const token = typeof opts.token === "string" ? opts.token.trim() : "";
-        const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const token = trimToUndefined(opts.token) ?? "";
+        const password = trimToUndefined(opts.password) ?? "";
         const wantsRemote = opts.remote === true;
 
         const loadedRaw = loadConfig();
         if (wantsRemote && !opts.url && !opts.publicUrl) {
           const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
           const remoteUrl = loadedRaw.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasRemoteUrl = Boolean(trimToUndefined(remoteUrl));
           const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
           if (!hasRemoteUrl && !hasTailscaleServe) {
             throw new Error(
@@ -170,12 +170,8 @@ export function registerQrCli(program: Command) {
           cfg.gateway.auth.token = undefined;
         }
         if (wantsRemote && !token && !password) {
-          const remoteToken =
-            typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
-          const remotePassword =
-            typeof cfg.gateway?.remote?.password === "string"
-              ? cfg.gateway.remote.password.trim()
-              : "";
+          const remoteToken = trimToUndefined(cfg.gateway?.remote?.token) ?? "";
+          const remotePassword = trimToUndefined(cfg.gateway?.remote?.password) ?? "";
           if (remoteToken) {
             cfg.gateway.auth.mode = "token";
             cfg.gateway.auth.token = remoteToken;

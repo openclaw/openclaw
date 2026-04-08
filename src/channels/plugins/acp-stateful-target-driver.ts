@@ -1,12 +1,13 @@
 import {
   ensureConfiguredAcpBindingReady,
   ensureConfiguredAcpBindingSession,
-  resetAcpSessionInPlace,
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { performGatewaySessionReset } from "./acp-stateful-target-reset.runtime.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -22,24 +23,45 @@ function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): StatefulBindingTargetDescriptor | null {
-  const meta = readAcpSessionEntry(params)?.acp;
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const meta = readAcpSessionEntry({
+    ...params,
+    sessionKey,
+  })?.acp;
   const metaAgentId = meta?.agent?.trim();
   if (metaAgentId) {
     return {
       kind: "stateful",
       driverId: "acp",
-      sessionKey: params.sessionKey,
+      sessionKey,
       agentId: metaAgentId,
     };
   }
-  const spec = resolveConfiguredAcpBindingSpecBySessionKey(params);
+  const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+    ...params,
+    sessionKey,
+  });
   if (!spec) {
-    return null;
+    if (!isAcpSessionKey(sessionKey)) {
+      return null;
+    }
+    // Bound ACP sessions can intentionally clear their ACP metadata after a
+    // reset. The native /reset path still needs to recognize the ACP session
+    // key as resettable while that metadata is absent.
+    return {
+      kind: "stateful",
+      driverId: "acp",
+      sessionKey,
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+    };
   }
   return {
     kind: "stateful",
     driverId: "acp",
-    sessionKey: params.sessionKey,
+    sessionKey,
     agentId: spec.agentId,
     ...(spec.label ? { label: spec.label } : {}),
   };
@@ -88,9 +110,22 @@ async function ensureAcpTargetSession(params: {
 async function resetAcpTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  bindingTarget: StatefulBindingTargetDescriptor;
   reason: "new" | "reset";
+  commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
-  return await resetAcpSessionInPlace(params);
+  const result = await performGatewaySessionReset({
+    key: params.sessionKey,
+    reason: params.reason,
+    commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
+  });
+  if (result.ok) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    error: result.error.message,
+  };
 }
 
 export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {

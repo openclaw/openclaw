@@ -4,6 +4,10 @@ import path from "node:path";
 import { Command, Option } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { pathExists } from "../utils.js";
@@ -23,8 +27,8 @@ function isCompletionShell(value: string): value is CompletionShell {
 }
 
 export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
-  const shellPath = env.SHELL?.trim() ?? "";
-  const shellName = shellPath ? path.basename(shellPath).toLowerCase() : "";
+  const shellPath = normalizeOptionalString(env.SHELL) ?? "";
+  const shellName = shellPath ? normalizeLowercaseStringOrEmpty(path.basename(shellPath)) : "";
   if (shellName === "zsh") {
     return "zsh";
   }

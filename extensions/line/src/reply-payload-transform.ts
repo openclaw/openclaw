@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ReplyPayload } from "../runtime-api.js";
 import {
   createAgendaCard,
@@ -33,8 +34,7 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     ...(result.channelData?.line as LineChannelData | undefined),
   };
   const toSlug = (value: string): string =>
-    value
-      .toLowerCase()
+    normalizeLowercaseStringOrEmpty(value)
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "") || "device";
   const lineActionData = (action: string, extras?: Record<string, string>): string => {
@@ -85,10 +85,10 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const [question, yesPart, noPart] = parts;
       const [yesLabel, yesData] = yesPart.includes(":")
         ? yesPart.split(":").map((s) => s.trim())
-        : [yesPart, yesPart.toLowerCase()];
+        : [yesPart, normalizeLowercaseStringOrEmpty(yesPart)];
       const [noLabel, noData] = noPart.includes(":")
         ? noPart.split(":").map((s) => s.trim())
-        : [noPart, noPart.toLowerCase()];
+        : [noPart, normalizeLowercaseStringOrEmpty(noPart)];
 
       lineData.templateMessage = {
         type: "confirm",
@@ -116,7 +116,7 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
           if (index === -1) {
             return -1;
           }
-          const lower = trimmed.toLowerCase();
+          const lower = normalizeLowercaseStringOrEmpty(trimmed);
           if (lower.startsWith("http://") || lower.startsWith("https://")) {
             return -1;
           }
@@ -161,7 +161,7 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     const parts = mediaPlayerMatch[1].split("|").map((s) => s.trim());
     if (parts.length >= 1) {
       const [title, artist, source, imageUrl, statusStr] = parts;
-      const isPlaying = statusStr?.toLowerCase() === "playing";
+      const isPlaying = normalizeLowercaseStringOrEmpty(statusStr) === "playing";
       const validImageUrl = imageUrl?.startsWith("https://") ? imageUrl : undefined;
       const deviceKey = toSlug(source || title || "media");
       const card = createMediaPlayerCard({
@@ -281,7 +281,7 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const controls = controlsStr
         ? controlsStr.split(",").map((ctrlStr) => {
             const [label, data] = ctrlStr.split(":").map((s) => s.trim());
-            const action = data || label.toLowerCase().replace(/\s+/g, "_");
+            const action = data || normalizeLowercaseStringOrEmpty(label).replace(/\s+/g, "_");
             return { label, data: lineActionData(action, { "line.device": deviceKey }) };
           })
         : [];

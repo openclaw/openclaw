@@ -1,4 +1,5 @@
 import { note } from "openclaw/plugin-sdk/browser-setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   parseBrowserMajorVersion,
   readBrowserVersion,
@@ -26,8 +27,7 @@ function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[]
   }
 
   const profiles = new Map<string, ExistingSessionProfile>();
-  const defaultProfile =
-    typeof browser.defaultProfile === "string" ? browser.defaultProfile.trim() : "";
+  const defaultProfile = normalizeOptionalString(browser.defaultProfile) ?? "";
   if (defaultProfile === "user") {
     profiles.set("user", { name: "user" });
   }
@@ -39,11 +39,12 @@ function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[]
 
   for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
     const profile = asRecord(rawProfile);
-    const driver = typeof profile?.driver === "string" ? profile.driver.trim() : "";
+    const driver = normalizeOptionalString(profile?.driver) ?? "";
     if (driver === "existing-session") {
-      const userDataDir =
-        typeof profile?.userDataDir === "string" ? profile.userDataDir.trim() : undefined;
-      profiles.set(profileName, { name: profileName, userDataDir: userDataDir || undefined });
+      profiles.set(profileName, {
+        name: profileName,
+        userDataDir: normalizeOptionalString(profile?.userDataDir),
+      });
     }
   }
 

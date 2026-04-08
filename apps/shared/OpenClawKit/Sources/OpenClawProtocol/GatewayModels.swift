@@ -537,6 +537,8 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let bootstrapcontextmode: AnyCodable?
+    public let bootstrapcontextrunkind: AnyCodable?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
@@ -566,6 +568,8 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        bootstrapcontextmode: AnyCodable?,
+        bootstrapcontextrunkind: AnyCodable?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
@@ -594,6 +598,8 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.bootstrapcontextmode = bootstrapcontextmode
+        self.bootstrapcontextrunkind = bootstrapcontextrunkind
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
@@ -624,6 +630,8 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case bootstrapcontextmode = "bootstrapContextMode"
+        case bootstrapcontextrunkind = "bootstrapContextRunKind"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
@@ -1324,6 +1332,236 @@ public struct SessionsResolveParams: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+    }
+}
+
+public struct SessionCompactionCheckpoint: Codable, Sendable {
+    public let checkpointid: String
+    public let sessionkey: String
+    public let sessionid: String
+    public let createdat: Int
+    public let reason: AnyCodable
+    public let tokensbefore: Int?
+    public let tokensafter: Int?
+    public let summary: String?
+    public let firstkeptentryid: String?
+    public let precompaction: [String: AnyCodable]
+    public let postcompaction: [String: AnyCodable]
+
+    public init(
+        checkpointid: String,
+        sessionkey: String,
+        sessionid: String,
+        createdat: Int,
+        reason: AnyCodable,
+        tokensbefore: Int?,
+        tokensafter: Int?,
+        summary: String?,
+        firstkeptentryid: String?,
+        precompaction: [String: AnyCodable],
+        postcompaction: [String: AnyCodable])
+    {
+        self.checkpointid = checkpointid
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.createdat = createdat
+        self.reason = reason
+        self.tokensbefore = tokensbefore
+        self.tokensafter = tokensafter
+        self.summary = summary
+        self.firstkeptentryid = firstkeptentryid
+        self.precompaction = precompaction
+        self.postcompaction = postcompaction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case checkpointid = "checkpointId"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case createdat = "createdAt"
+        case reason
+        case tokensbefore = "tokensBefore"
+        case tokensafter = "tokensAfter"
+        case summary
+        case firstkeptentryid = "firstKeptEntryId"
+        case precompaction = "preCompaction"
+        case postcompaction = "postCompaction"
+    }
+}
+
+public struct SessionsCompactionListParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsCompactionGetParams: Codable, Sendable {
+    public let key: String
+    public let checkpointid: String
+
+    public init(
+        key: String,
+        checkpointid: String)
+    {
+        self.key = key
+        self.checkpointid = checkpointid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case checkpointid = "checkpointId"
+    }
+}
+
+public struct SessionsCompactionBranchParams: Codable, Sendable {
+    public let key: String
+    public let checkpointid: String
+
+    public init(
+        key: String,
+        checkpointid: String)
+    {
+        self.key = key
+        self.checkpointid = checkpointid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case checkpointid = "checkpointId"
+    }
+}
+
+public struct SessionsCompactionRestoreParams: Codable, Sendable {
+    public let key: String
+    public let checkpointid: String
+
+    public init(
+        key: String,
+        checkpointid: String)
+    {
+        self.key = key
+        self.checkpointid = checkpointid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case checkpointid = "checkpointId"
+    }
+}
+
+public struct SessionsCompactionListResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let checkpoints: [SessionCompactionCheckpoint]
+
+    public init(
+        ok: Bool,
+        key: String,
+        checkpoints: [SessionCompactionCheckpoint])
+    {
+        self.ok = ok
+        self.key = key
+        self.checkpoints = checkpoints
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case checkpoints
+    }
+}
+
+public struct SessionsCompactionGetResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let checkpoint: SessionCompactionCheckpoint
+
+    public init(
+        ok: Bool,
+        key: String,
+        checkpoint: SessionCompactionCheckpoint)
+    {
+        self.ok = ok
+        self.key = key
+        self.checkpoint = checkpoint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case checkpoint
+    }
+}
+
+public struct SessionsCompactionBranchResult: Codable, Sendable {
+    public let ok: Bool
+    public let sourcekey: String
+    public let key: String
+    public let sessionid: String
+    public let checkpoint: SessionCompactionCheckpoint
+    public let entry: [String: AnyCodable]
+
+    public init(
+        ok: Bool,
+        sourcekey: String,
+        key: String,
+        sessionid: String,
+        checkpoint: SessionCompactionCheckpoint,
+        entry: [String: AnyCodable])
+    {
+        self.ok = ok
+        self.sourcekey = sourcekey
+        self.key = key
+        self.sessionid = sessionid
+        self.checkpoint = checkpoint
+        self.entry = entry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case sourcekey = "sourceKey"
+        case key
+        case sessionid = "sessionId"
+        case checkpoint
+        case entry
+    }
+}
+
+public struct SessionsCompactionRestoreResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let sessionid: String
+    public let checkpoint: SessionCompactionCheckpoint
+    public let entry: [String: AnyCodable]
+
+    public init(
+        ok: Bool,
+        key: String,
+        sessionid: String,
+        checkpoint: SessionCompactionCheckpoint,
+        entry: [String: AnyCodable])
+    {
+        self.ok = ok
+        self.key = key
+        self.sessionid = sessionid
+        self.checkpoint = checkpoint
+        self.entry = entry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case sessionid = "sessionId"
+        case checkpoint
+        case entry
     }
 }
 

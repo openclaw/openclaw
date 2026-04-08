@@ -8,6 +8,10 @@ import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
@@ -80,9 +84,9 @@ function resolveConfiguredDirectiveAliases(params: {
     return [];
   }
   return Object.values(params.cfg.agents?.defaults?.models ?? {})
-    .map((entry) => entry.alias?.trim())
+    .map((entry) => normalizeOptionalString(entry.alias))
     .filter((alias): alias is string => Boolean(alias))
-    .filter((alias) => !params.reservedCommands.has(alias.toLowerCase()));
+    .filter((alias) => !params.reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)));
 }
 
 export type ReplyDirectiveContinuation = {
@@ -241,7 +245,7 @@ export async function resolveReplyDirectives(params: {
     const { listChatCommands } = await loadCommandsRegistry();
     for (const chatCommand of listChatCommands()) {
       for (const alias of chatCommand.textAliases) {
-        reservedCommands.add(alias.replace(/^\//, "").toLowerCase());
+        reservedCommands.add(normalizeLowercaseStringOrEmpty(alias.replace(/^\//, "")));
       }
     }
   }
@@ -264,11 +268,11 @@ export async function resolveReplyDirectives(params: {
         })
       : [];
   for (const command of skillCommands) {
-    reservedCommands.add(command.name.toLowerCase());
+    reservedCommands.add(normalizeLowercaseStringOrEmpty(command.name));
   }
 
   const configuredAliases = rawAliases.filter(
-    (alias) => !reservedCommands.has(alias.toLowerCase()),
+    (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
   const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
   let parsedDirectives = parseInlineDirectives(commandText, {
@@ -378,8 +382,11 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
-  const messageProviderKey =
-    sessionCtx.Provider?.trim().toLowerCase() ?? ctx.Provider?.trim().toLowerCase() ?? "";
+  const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
+    ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
+    : normalizeOptionalString(ctx.Provider)
+      ? normalizeLowercaseStringOrEmpty(ctx.Provider)
+      : "";
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
@@ -464,8 +471,8 @@ export async function resolveReplyDirectives(params: {
     useFastReplyRuntime &&
     !directives.hasModelDirective &&
     !hasResolvedHeartbeatModelOverride &&
-    !sessionEntry?.modelOverride?.trim() &&
-    !sessionEntry?.providerOverride?.trim()
+    !normalizeOptionalString(sessionEntry?.modelOverride) &&
+    !normalizeOptionalString(sessionEntry?.providerOverride)
       ? createFastTestModelSelectionState({
           agentCfg,
           provider,
@@ -522,7 +529,9 @@ export async function resolveReplyDirectives(params: {
     alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
   const isModelListAlias =
     directives.hasModelDirective &&
-    ["status", "list"].includes(directives.rawModelDirective?.trim().toLowerCase() ?? "");
+    ["status", "list"].includes(
+      normalizeLowercaseStringOrEmpty(normalizeOptionalString(directives.rawModelDirective)),
+    );
   const effectiveModelDirective = isModelListAlias ? undefined : directives.rawModelDirective;
 
   const inlineStatusRequested = hasInlineStatus && allowTextCommands && command.isAuthorizedSender;

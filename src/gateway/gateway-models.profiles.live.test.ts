@@ -73,7 +73,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
-  "google/gemini-2.5-flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
@@ -387,7 +386,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<final>Visible</final>",
-        "google/gemini-2.5-flash",
+        "google/gemini-3-flash-preview",
       ),
     ).toBe("Visible");
     expect(
@@ -412,12 +411,6 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
         "google/gemini-3.1-pro-preview-customtools",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-2.5-flash",
       ),
     ).toBe("Visible");
   });
@@ -631,7 +624,7 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
     ).toBe(1);
     expect(
-      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-2.5-flash" }),
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
     ).toBe(2);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,

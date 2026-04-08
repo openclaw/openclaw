@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   LIVE_CACHE_REGRESSION_BASELINE,
   type LiveCacheFloor,
@@ -217,8 +218,10 @@ async function completeCacheProbe(params: {
     timeoutMs,
   );
   const text = extractAssistantText(response);
+  const responseTextLower = normalizeLowercaseStringOrEmpty(text);
+  const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
   assert(
-    text.toLowerCase().includes(params.suffix.toLowerCase()),
+    responseTextLower.includes(suffixLower),
     `expected response to contain ${params.suffix}, got ${JSON.stringify(text)}`,
   );
   const usage = normalizeCacheUsage(response.usage);

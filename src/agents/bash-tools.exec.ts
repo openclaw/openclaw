@@ -17,6 +17,11 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -108,7 +113,7 @@ function isEnvExecutableToken(token: string | undefined): boolean {
   if (!token) {
     return false;
   }
-  const base = token.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+  const base = normalizeOptionalLowercaseString(token.split(/[\\/]/u).at(-1)) ?? "";
   const normalizedBase = base.endsWith(".exe") ? base.slice(0, -4) : base;
   return normalizedBase === "env";
 }
@@ -157,7 +162,7 @@ function findFirstPythonScriptArg(tokens: string[]): string | null {
     const token = tokens[i];
     if (token === "--") {
       const next = tokens[i + 1];
-      return next?.toLowerCase().endsWith(".py") ? next : null;
+      return normalizeLowercaseStringOrEmpty(next).endsWith(".py") ? next : null;
     }
     if (token === "-") {
       return null;
@@ -175,7 +180,7 @@ function findFirstPythonScriptArg(tokens: string[]): string | null {
     if (token.startsWith("-")) {
       continue;
     }
-    return token.toLowerCase().endsWith(".py") ? token : null;
+    return normalizeLowercaseStringOrEmpty(token).endsWith(".py") ? token : null;
   }
   return null;
 }
@@ -190,7 +195,7 @@ function findNodeScriptArgs(tokens: string[]): string[] {
     if (token === "--") {
       if (!hasInlineEvalOrPrint && !entryScript) {
         const next = tokens[i + 1];
-        if (next?.toLowerCase().endsWith(".js")) {
+        if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
           entryScript = next;
         }
       }
@@ -213,7 +218,7 @@ function findNodeScriptArgs(tokens: string[]): string[] {
     }
     if (optionsWithSeparateValue.has(token)) {
       const next = tokens[i + 1];
-      if (next?.toLowerCase().endsWith(".js")) {
+      if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
         preloadScripts.push(next);
       }
       i += 1;
@@ -227,7 +232,7 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       const inlineValue = token.startsWith("-r")
         ? token.slice(2)
         : token.slice(token.indexOf("=") + 1);
-      if (inlineValue.toLowerCase().endsWith(".js")) {
+      if (normalizeLowercaseStringOrEmpty(inlineValue).endsWith(".js")) {
         preloadScripts.push(inlineValue);
       }
       continue;
@@ -235,7 +240,11 @@ function findNodeScriptArgs(tokens: string[]): string[] {
     if (token.startsWith("-")) {
       continue;
     }
-    if (!hasInlineEvalOrPrint && !entryScript && token.toLowerCase().endsWith(".js")) {
+    if (
+      !hasInlineEvalOrPrint &&
+      !entryScript &&
+      normalizeLowercaseStringOrEmpty(token).endsWith(".js")
+    ) {
       entryScript = token;
     }
     break;
@@ -257,7 +266,7 @@ function extractInterpreterScriptTargetFromArgv(
   while (commandIdx < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])) {
     commandIdx += 1;
   }
-  const executable = argv[commandIdx]?.toLowerCase();
+  const executable = normalizeOptionalLowercaseString(argv[commandIdx]);
   if (!executable) {
     return null;
   }
@@ -549,7 +558,8 @@ function hasUnquotedScriptHint(raw: string): boolean {
   let token = "";
 
   const flushToken = (): boolean => {
-    if (token.toLowerCase().endsWith(".py") || token.toLowerCase().endsWith(".js")) {
+    const normalizedToken = normalizeLowercaseStringOrEmpty(token);
+    if (normalizedToken.endsWith(".py") || normalizedToken.endsWith(".js")) {
       return true;
     }
     token = "";
@@ -626,7 +636,7 @@ function resolveLeadingShellSegmentExecutable(rawSegment: string): string | unde
   ) {
     commandIdx += 1;
   }
-  return normalizedArgv[commandIdx]?.toLowerCase();
+  return normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
 }
 
 function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
@@ -665,7 +675,7 @@ function extractShellWrappedCommandPayload(
   if (!executable) {
     return null;
   }
-  const executableBase = executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+  const executableBase = normalizeOptionalLowercaseString(executable.split(/[\\/]/u).at(-1)) ?? "";
   const normalizedExecutable = executableBase.endsWith(".exe")
     ? executableBase.slice(0, -4)
     : executableBase;
@@ -723,7 +733,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   ) {
     commandIdx += 1;
   }
-  const directExecutable = argv?.[commandIdx]?.toLowerCase();
+  const directExecutable = normalizeOptionalLowercaseString(argv?.[commandIdx]);
   const args = argv ? argv.slice(commandIdx + 1) : [];
 
   const isDirectPythonExecutable = Boolean(
@@ -769,7 +779,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
     ) {
       commandIdx += 1;
     }
-    const executable = normalizedArgv[commandIdx]?.toLowerCase();
+    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
     if (!executable) {
       return false;
     }
@@ -987,9 +997,9 @@ function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand |
   return {
     approvalId: match[1],
     decision:
-      match[2].toLowerCase() === "always"
+      normalizeLowercaseStringOrEmpty(match[2]) === "always"
         ? "allow-always"
-        : (match[2].toLowerCase() as ParsedExecApprovalCommand["decision"]),
+        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
   };
 }
 
@@ -1330,7 +1340,7 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
-  const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
+  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -1410,8 +1420,8 @@ export function createExecTool(
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
           const contextParts: string[] = [];
-          const provider = defaults?.messageProvider?.trim();
-          const sessionKey = defaults?.sessionKey?.trim();
+          const provider = normalizeOptionalString(defaults?.messageProvider);
+          const sessionKey = normalizeOptionalString(defaults?.sessionKey);
           if (provider) {
             contextParts.push(`provider=${provider}`);
           }
@@ -1478,8 +1488,8 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const explicitWorkdir = params.workdir?.trim() || undefined;
-      const defaultWorkdir = defaults?.cwd?.trim() || undefined;
+      const explicitWorkdir = normalizeOptionalString(params.workdir);
+      const defaultWorkdir = normalizeOptionalString(defaults?.cwd);
       let workdir: string | undefined;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {

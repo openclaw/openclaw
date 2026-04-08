@@ -9,20 +9,18 @@ const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 const requireActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentConfig: (...args: unknown[]) => resolveAgentConfigMock(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveAgentConfig: resolveAgentConfigMock,
+  resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
 }));
 
 vi.mock("./index.js", () => ({
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  getChannelPlugin: getChannelPluginMock,
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-    getActivePluginChannelRegistryVersionMock(...args),
-  requireActivePluginChannelRegistry: (...args: unknown[]) =>
-    requireActivePluginChannelRegistryMock(...args),
+  getActivePluginChannelRegistryVersion: getActivePluginChannelRegistryVersionMock,
+  requireActivePluginChannelRegistry: requireActivePluginChannelRegistryMock,
 }));
 
 async function importConfiguredBindings() {

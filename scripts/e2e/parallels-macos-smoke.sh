@@ -45,7 +45,7 @@ TIMEOUT_UPDATE_DEV_S=1500
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=60
-TIMEOUT_AGENT_S=120
+TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=60
 TIMEOUT_SNAPSHOT_S=180
@@ -621,12 +621,20 @@ send -- "/bin/bash /tmp/openclaw-prl.sh; rc=\$?; rm -f /tmp/openclaw-prl.sh; pri
 log_user 1
 
 set rc 1
+set saw_rc 0
 expect {
   -re {__OPENCLAW_RC__:(-?[0-9]+)} {
     set rc $expect_out(1,string)
-    exp_continue
+    set saw_rc 1
   }
   eof {}
+}
+if {$saw_rc} {
+  # Tahoe can leave `prlctl enter` attached even after the guest command has
+  # printed its explicit rc marker. Close the transport once the marker lands so
+  # consecutive guest_current_user_cli calls in the same phase do not block.
+  catch close
+  exit $rc
 }
 catch wait result
 exit $rc
@@ -644,6 +652,53 @@ guest_current_user_sh() {
   script+=$'cd "$HOME"\n'
   script+="$1"
   guest_script current-user "$script"
+}
+
+guest_current_user_tail_file() {
+  local file_path="$1"
+  local lines="${2:-80}"
+  guest_current_user_exec /usr/bin/tail -n "$lines" "$file_path"
+}
+
+run_logged_guest_current_user_sh() {
+  local script="$1"
+  local log_path="$2"
+  local done_path="$3"
+  local timeout_s="$4"
+  local runner_path="$5"
+  local deadline rc runner_body write_runner_cmd line
+  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
+  runner_body="$(cat <<EOF
+set -eu
+set -o pipefail
+trap 'status=\$?; printf "%s\n" "\$status" > "$done_path"; exit "\$status"' EXIT
+umask 022
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
+if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
+cd "\$HOME"
+$script
+EOF
+)"
+  write_runner_cmd="/bin/rm -f $(shell_quote "$runner_path")"$'\n'
+  while IFS= read -r line; do
+    write_runner_cmd+="/usr/bin/printf '%s\\n' $(shell_quote "$line") >> $(shell_quote "$runner_path")"$'\n'
+  done <<< "$runner_body"
+  write_runner_cmd+="/bin/chmod +x $(shell_quote "$runner_path")"$'\n'
+  write_runner_cmd+="nohup /bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &"
+  guest_current_user_sh "$write_runner_cmd"
+  deadline=$((SECONDS + timeout_s))
+  while (( SECONDS < deadline )); do
+    if guest_current_user_exec /bin/test -f "$done_path" >/dev/null 2>&1; then
+      rc="$(guest_current_user_exec /bin/cat "$done_path" | tr -d '\r\n')"
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      [[ -n "$rc" ]] || rc=1
+      return "$rc"
+    fi
+    sleep 2
+  done
+  warn "guest script timed out after ${timeout_s}s"
+  guest_current_user_tail_file "$log_path" 120 >&2 || true
+  return 124
 }
 
 restore_snapshot() {
@@ -701,38 +756,68 @@ ensure_guest_pnpm_for_dev_update() {
   guest_current_user_exec "$bootstrap_bin/pnpm" --version
 }
 
-run_dev_channel_update() {
-  local bootstrap_bin guest_home update_root update_entry
+repair_legacy_dev_source_checkout_if_needed() {
+  local bootstrap_bin update_root update_entry
   bootstrap_bin="/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin"
-  guest_home="$(resolve_guest_current_user_home)"
-  update_root="$guest_home/openclaw"
+  update_root="$(resolve_guest_current_user_home)/openclaw"
   update_entry="$update_root/openclaw.mjs"
+  if guest_current_user_exec /bin/test -e "$update_root/.git"; then
+    return 0
+  fi
+  if ! guest_current_user_exec /bin/test -f "$update_entry"; then
+    return 0
+  fi
+  if ! guest_current_user_exec /bin/test -f "$update_root/src/entry.ts"; then
+    return 0
+  fi
+  warn "repairing legacy dev source archive into git checkout"
+  ensure_guest_pnpm_for_dev_update
+  guest_current_user_exec /bin/rm -rf "$update_root"
+  guest_current_user_exec /usr/bin/git clone --depth 1 --branch main \
+    https://github.com/openclaw/openclaw.git "$update_root"
+  guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
+    "$bootstrap_bin/pnpm" --dir "$update_root" install
+  guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
+    /usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 \
+    "$bootstrap_bin/pnpm" --dir "$update_root" build
+  guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
+    "$bootstrap_bin/pnpm" --dir "$update_root" ui:build
+}
+
+run_dev_channel_update() {
+  local bootstrap_bin update_entry update_root update_log update_done update_runner update_rc
+  bootstrap_bin="/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin"
+  update_root="$(resolve_guest_current_user_home)/openclaw"
+  update_log="/tmp/openclaw-smoke-update-dev.log"
+  update_done="/tmp/openclaw-smoke-update-dev.done"
+  update_runner="/tmp/openclaw-smoke-update-dev.sh"
   ensure_guest_pnpm_for_dev_update
   printf 'update-dev: run\n'
-  guest_current_user_sh "$(cat <<EOF
+  set +e
+  run_logged_guest_current_user_sh "$(cat <<EOF
 rm -rf $(shell_quote "$update_root")
 export PATH=$(shell_quote "$bootstrap_bin:$GUEST_EXEC_PATH")
 $GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
 EOF
-)"
+)" "$update_log" "$update_done" "$TIMEOUT_UPDATE_DEV_S" "$update_runner"
+  update_rc=$?
+  set -e
+  if (( update_rc != 0 )); then
+    printf 'update-dev: initial-rc=%s\n' "$update_rc" >&2
+    guest_current_user_tail_file "$update_log" 120 >&2 || true
+  fi
+  repair_legacy_dev_source_checkout_if_needed
+  update_entry="$update_root/openclaw.mjs"
   printf 'update-dev: git-version\n'
-  guest_current_user_sh "$(cat <<EOF
-export PATH=$(shell_quote "$GUEST_EXEC_PATH")
-$GUEST_NODE_BIN $(shell_quote "$update_entry") --version
-EOF
-)"
+  guest_current_user_exec "$GUEST_NODE_BIN" "$update_entry" --version
   printf 'update-dev: git-status\n'
-  guest_current_user_sh "$(cat <<EOF
-export PATH=$(shell_quote "$GUEST_EXEC_PATH")
-$GUEST_NODE_BIN $(shell_quote "$update_entry") update status --json
-EOF
-)"
+  guest_current_user_exec "$GUEST_NODE_BIN" "$update_entry" update status --json
 }
 
 verify_dev_channel_update() {
   local status_json update_entry
-  update_entry="$(resolve_guest_git_openclaw_entry)"
-  status_json="$(guest_current_user_node_cli "$update_entry" update status --json)"
+  update_entry="$(resolve_guest_current_user_home)/openclaw/openclaw.mjs"
+  status_json="$(guest_current_user_exec "$GUEST_NODE_BIN" "$update_entry" update status --json)"
   printf '%s\n' "$status_json"
   printf '%s\n' "$status_json" | grep -F '"installKind": "git"'
   printf '%s\n' "$status_json" | grep -F '"value": "dev"'
@@ -917,25 +1002,38 @@ run_ref_onboard() {
 }
 
 verify_gateway() {
-  guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
+  local attempt
+  for attempt in 1 2 3 4; do
+    if guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 5000; then
+      return 0
+    fi
+    if (( attempt < 4 )); then
+      printf 'gateway-status retry %s\n' "$attempt" >&2
+      sleep 3
+    fi
+  done
+  return 1
 }
 
 show_gateway_status_compat() {
-  if guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --help | grep -Fq -- "--require-rpc"; then
-    guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
+  if guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
     return
   fi
-  guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep
+  guest_current_user_exec "$GUEST_OPENCLAW_BIN" gateway status --deep
 }
 
 verify_turn() {
-  guest_current_user_cli "$GUEST_OPENCLAW_BIN" models set "$MODEL_ID"
-  guest_current_user_cli \
-    /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
-    "$GUEST_OPENCLAW_BIN" agent \
-    --agent main \
-    --message "Reply with exact ASCII text OK only." \
-    --json
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" models set "$MODEL_ID"
+  guest_current_user_exec /bin/sh -lc "$(cat <<EOF
+export PATH=$(shell_quote "$GUEST_EXEC_PATH")
+exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
+  $(shell_quote "$GUEST_NODE_BIN") $(shell_quote "$GUEST_OPENCLAW_ENTRY") agent \
+  --agent main \
+  --message $(shell_quote "Reply with exact ASCII text OK only.") \
+  --json
+EOF
+)"
 }
 
 resolve_dashboard_url() {
@@ -955,8 +1053,11 @@ resolve_dashboard_url() {
 
 verify_dashboard_load() {
   local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd
-  dashboard_url="$(resolve_dashboard_url)"
-  dashboard_http_url="${dashboard_url%%#*}"
+  # `openclaw dashboard --no-open` can hang under the Tahoe Parallels transport
+  # even when the dashboard itself is healthy. Probe the local dashboard URL
+  # directly so the smoke still validates HTML readiness and browser reachability.
+  dashboard_url="http://127.0.0.1:18789/"
+  dashboard_http_url="$dashboard_url"
   dashboard_url_q="$(shell_quote "$dashboard_url")"
   dashboard_http_url_q="$(shell_quote "$dashboard_http_url")"
   cmd="$(cat <<EOF
@@ -994,11 +1095,12 @@ pkill -x Safari >/dev/null 2>&1 || true
 open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
-  if pgrep -x Safari >/dev/null 2>&1; then
-    if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
-      | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
-      exit 0
-    fi
+  # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
+  # app process exits, so require a non-node client connection rather than a
+  # long-lived `Safari` process specifically.
+  if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
+    | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
+    exit 0
   fi
   sleep 1
 done

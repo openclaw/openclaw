@@ -36,6 +36,28 @@ const WikiGetSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const WikiClaimEvidenceSchema = Type.Object(
+  {
+    sourceId: Type.Optional(Type.String({ minLength: 1 })),
+    path: Type.Optional(Type.String({ minLength: 1 })),
+    lines: Type.Optional(Type.String({ minLength: 1 })),
+    weight: Type.Optional(Type.Number({ minimum: 0 })),
+    note: Type.Optional(Type.String({ minLength: 1 })),
+    updatedAt: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
+const WikiClaimSchema = Type.Object(
+  {
+    id: Type.Optional(Type.String({ minLength: 1 })),
+    text: Type.String({ minLength: 1 }),
+    status: Type.Optional(Type.String({ minLength: 1 })),
+    confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    evidence: Type.Optional(Type.Array(WikiClaimEvidenceSchema)),
+    updatedAt: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
 const WikiApplySchema = Type.Object(
   {
     op: Type.Union([Type.Literal("create_synthesis"), Type.Literal("update_metadata")]),
@@ -43,6 +65,7 @@ const WikiApplySchema = Type.Object(
     body: Type.Optional(Type.String({ minLength: 1 })),
     lookup: Type.Optional(Type.String({ minLength: 1 })),
     sourceIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+    claims: Type.Optional(Type.Array(WikiClaimSchema)),
     contradictions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     questions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     confidence: Type.Optional(Type.Union([Type.Number({ minimum: 0, maximum: 1 }), Type.Null()])),
@@ -58,6 +81,11 @@ async function syncImportedSourcesIfNeeded(
   await syncMemoryWikiImportedSources({ config, appConfig });
 }
 
+type WikiToolMemoryContext = {
+  agentId?: string;
+  agentSessionKey?: string;
+};
+
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
@@ -70,7 +98,9 @@ export function createWikiStatusTool(
     parameters: WikiStatusSchema,
     execute: async () => {
       await syncImportedSourcesIfNeeded(config, appConfig);
-      const status = await resolveMemoryWikiStatus(config);
+      const status = await resolveMemoryWikiStatus(config, {
+        appConfig,
+      });
       return {
         content: [{ type: "text", text: renderMemoryWikiStatus(status) }],
         details: status,
@@ -82,6 +112,7 @@ export function createWikiStatusTool(
 export function createWikiSearchTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_search",
@@ -100,6 +131,8 @@ export function createWikiSearchTool(
       const results = await searchMemoryWiki({
         config,
         appConfig,
+        agentId: memoryContext.agentId,
+        agentSessionKey: memoryContext.agentSessionKey,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
@@ -193,6 +226,7 @@ export function createWikiApplyTool(
 export function createWikiGetTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_get",
@@ -212,6 +246,8 @@ export function createWikiGetTool(
       const result = await getMemoryWikiPage({
         config,
         appConfig,
+        agentId: memoryContext.agentId,
+        agentSessionKey: memoryContext.agentSessionKey,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

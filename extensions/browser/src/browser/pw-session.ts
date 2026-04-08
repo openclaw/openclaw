@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   Browser,
   BrowserContext,
@@ -146,7 +147,7 @@ function roleRefsKey(cdpUrl: string, targetId: string) {
 }
 
 function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
-  const normalizedTargetId = targetId?.trim() || "";
+  const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
     return false;
   }
@@ -154,7 +155,7 @@ function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
 }
 
 function markTargetBlocked(cdpUrl: string, targetId?: string): void {
-  const normalizedTargetId = targetId?.trim() || "";
+  const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
     return;
   }
@@ -162,7 +163,7 @@ function markTargetBlocked(cdpUrl: string, targetId?: string): void {
 }
 
 function clearBlockedTarget(cdpUrl: string, targetId?: string): void {
-  const normalizedTargetId = targetId?.trim() || "";
+  const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
     return;
   }
@@ -237,7 +238,7 @@ export function rememberRoleRefsForTarget(opts: {
   frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
 }): void {
-  const targetId = opts.targetId.trim();
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (!targetId) {
     return;
   }
@@ -267,12 +268,13 @@ export function storeRoleRefsForTarget(opts: {
   state.roleRefs = opts.refs;
   state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsMode = opts.mode;
-  if (!opts.targetId?.trim()) {
+  const targetId = normalizeOptionalString(opts.targetId);
+  if (!targetId) {
     return;
   }
   rememberRoleRefsForTarget({
     cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
+    targetId,
     refs: opts.refs,
     frameSelector: opts.frameSelector,
     mode: opts.mode,
@@ -284,7 +286,7 @@ export function restoreRoleRefsForTarget(opts: {
   targetId?: string;
   page: Page;
 }): void {
-  const targetId = opts.targetId?.trim() || "";
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (!targetId) {
     return;
   }
@@ -459,7 +461,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
       } catch (err) {
         lastErr = err;
         // Don't retry rate-limit errors; retrying worsens the 429.
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         if (errMsg.includes("rate limit")) {
           break;
         }
@@ -523,7 +525,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
   const session = await page.context().newCDPSession(page);
   try {
     const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
-    const targetId = String(info?.targetInfo?.targetId ?? "").trim();
+    const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
     return targetId || null;
   } finally {
     await session.detach().catch(() => {});
@@ -665,13 +667,29 @@ export async function getPageForTargetId(opts: {
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  if (!request.isNavigationRequest()) {
+  let sameMainFrame = false;
+  try {
+    sameMainFrame = request.frame() === page.mainFrame();
+  } catch {
+    // Frame resolution can fail during redirect/renderer churn; fail closed.
+    sameMainFrame = true;
+  }
+  if (!sameMainFrame) {
     return false;
   }
+
   try {
-    return request.frame() === page.mainFrame();
+    if (request.isNavigationRequest()) {
+      return true;
+    }
   } catch {
-    return true;
+    // Ignore and fall back to resource-type check below.
+  }
+
+  try {
+    return request.resourceType() === "document";
+  } catch {
+    return false;
   }
 }
 
@@ -687,7 +705,7 @@ async function closeBlockedNavigationTarget(opts: {
   // Quarantine the concrete page first; then persist by target id when available.
   markPageRefBlocked(opts.cdpUrl, opts.page);
   const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
-  const fallbackTargetId = opts.targetId?.trim() || "";
+  const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
   const targetIdToBlock = resolvedTargetId || fallbackTargetId;
   if (targetIdToBlock) {
     markTargetBlocked(opts.cdpUrl, targetIdToBlock);
@@ -883,8 +901,9 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
 
-  const target = pages.find((p) => String(p.id ?? "").trim() === opts.targetId);
-  const wsUrlRaw = String(target?.webSocketDebuggerUrl ?? "").trim();
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
+  const target = pages.find((p) => normalizeOptionalString(p.id) === targetId);
+  const wsUrlRaw = normalizeOptionalString(target?.webSocketDebuggerUrl) ?? "";
   if (!wsUrlRaw) {
     return;
   }
@@ -915,8 +934,9 @@ async function tryTerminateExecutionViaCdp(opts: {
             send("Target.attachToTarget", { targetId: opts.targetId, flatten: true }),
             1500,
           )) as { sessionId?: unknown };
-          if (typeof attached?.sessionId === "string" && attached.sessionId.trim()) {
-            sessionId = attached.sessionId;
+          const attachedSessionId = normalizeOptionalString(attached?.sessionId);
+          if (attachedSessionId) {
+            sessionId = attachedSessionId;
           }
         }
         await runWithTimeout(send("Runtime.terminateExecution", undefined, sessionId), 1500);
@@ -974,7 +994,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
 
   // Best-effort: kill any stuck JS to unblock the target's execution context before we
   // disconnect Playwright's CDP connection.
-  const targetId = opts.targetId?.trim() || "";
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (targetId) {
     await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
   }

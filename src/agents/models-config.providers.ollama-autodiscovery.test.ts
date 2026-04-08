@@ -138,7 +138,7 @@ describe("Ollama auto-discovery", () => {
     await runOllamaCatalog({
       explicitProviders: {
         ollama: {
-          baseUrl: "http://127.0.0.1:11434/v1",
+          baseUrl: "http://gpu-node-server:11434/v1",
           api: "openai-completions",
           models: [],
         },

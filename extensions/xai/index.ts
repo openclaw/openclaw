@@ -1,8 +1,7 @@
-import type { OpenClawConfig } from "@openclaw/plugin-sdk/config-runtime";
-import { defineSingleProviderPluginEntry } from "@openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "@openclaw/plugin-sdk/provider-model-shared";
-import { jsonResult, readProviderEnvValue } from "@openclaw/plugin-sdk/provider-web-search";
 import { Type } from "@sinclair/typebox";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -30,8 +29,7 @@ const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
-    resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
-    readProviderEnvValue(["XAI_API_KEY"]),
+    resolveFallbackXaiAuth(config as never)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
 

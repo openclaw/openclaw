@@ -12,6 +12,7 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -66,15 +67,6 @@ function clearRefreshTimer(): void {
   refreshTimer = null;
 }
 
-function listLikePrimary(value: ModelListLike): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  const trimmed = value?.primary?.trim();
-  return trimmed || undefined;
-}
-
 function listLikeFallbacks(value: ModelListLike): string[] {
   if (!value || typeof value !== "object") {
     return [];
@@ -82,8 +74,8 @@ function listLikeFallbacks(value: ModelListLike): string[] {
   return Array.isArray(value.fallbacks)
     ? value.fallbacks
         .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+        .map((entry) => normalizeOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry))
     : [];
 }
 
@@ -225,7 +217,7 @@ function addModelListLike(params: {
   refs: Map<string, ModelRef>;
 }): void {
   addResolvedModelRef({
-    raw: listLikePrimary(params.value),
+    raw: resolvePrimaryStringValue(params.value),
     aliasIndex: params.aliasIndex,
     refs: params.refs,
   });
@@ -341,7 +333,7 @@ async function fetchOpenRouterPricingCatalog(
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
     const obj = entry as OpenRouterModelPayload;
-    const id = typeof obj.id === "string" ? obj.id.trim() : "";
+    const id = normalizeOptionalString(obj.id) ?? "";
     const pricing = parseOpenRouterPricing(obj.pricing);
     if (!id || !pricing) {
       continue;

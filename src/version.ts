@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { normalizeOptionalString } from "./shared/string-coerce.js";
 
 declare const __OPENCLAW_VERSION__: string | undefined;
 const CORE_PACKAGE_NAME = "openclaw";
@@ -26,7 +27,7 @@ function readVersionFromJsonCandidates(
     for (const candidate of candidates) {
       try {
         const parsed = require(candidate) as { name?: string; version?: string };
-        const version = parsed.version?.trim();
+        const version = normalizeOptionalString(parsed.version);
         if (!version) {
           continue;
         }
@@ -46,7 +47,7 @@ function readVersionFromJsonCandidates(
 
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
-    const trimmed = value?.trim();
+    const trimmed = normalizeOptionalString(value);
     if (trimmed) {
       return trimmed;
     }
@@ -94,7 +95,7 @@ export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
 type RuntimeVersionPreference = "env-first" | "runtime-first";
 
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
-  const trimmed = version?.trim();
+  const trimmed = normalizeOptionalString(version);
   // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
   // Prefer explicit service/package markers in that edge case.
   if (!trimmed || trimmed === "0.0.0") {

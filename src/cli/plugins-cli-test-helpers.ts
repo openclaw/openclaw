@@ -54,6 +54,33 @@ const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
 
 export { runtimeErrors, runtimeLogs };
 
+function restoreRuntimeCaptureMocks() {
+  defaultRuntime.log.mockReset();
+  defaultRuntime.log.mockImplementation((...args: unknown[]) => {
+    runtimeLogs.push(args.map((value) => String(value)).join(" "));
+  });
+
+  defaultRuntime.error.mockReset();
+  defaultRuntime.error.mockImplementation((...args: unknown[]) => {
+    runtimeErrors.push(args.map((value) => String(value)).join(" "));
+  });
+
+  defaultRuntime.writeStdout.mockReset();
+  defaultRuntime.writeStdout.mockImplementation((value: string) => {
+    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+  });
+
+  defaultRuntime.writeJson.mockReset();
+  defaultRuntime.writeJson.mockImplementation((value: unknown, space = 2) => {
+    defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+  });
+
+  defaultRuntime.exit.mockReset();
+  defaultRuntime.exit.mockImplementation((code: number) => {
+    throw new Error(`__exit__:${code}`);
+  });
+}
+
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
@@ -318,15 +345,18 @@ const { registerPluginsCli } = await import("./plugins-cli.js");
 
 export { registerPluginsCli };
 
-export function runPluginsCommand(argv: string[]) {
+export async function runPluginsCommand(argv: string[]) {
   const program = new Command();
   program.exitOverride();
-  registerPluginsCli(program);
-  return program.parseAsync(argv, { from: "user" });
+  vi.resetModules();
+  const { registerPluginsCli: registerPluginsCliFresh } = await import("./plugins-cli.js");
+  registerPluginsCliFresh(program);
+  return await program.parseAsync(argv, { from: "user" });
 }
 
 export function resetPluginsCliTestState() {
   resetRuntimeCapture();
+  restoreRuntimeCaptureMocks();
   loadConfig.mockReset();
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset();

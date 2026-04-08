@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export function normalizeProviderId(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
   if (normalized === "modelstudio" || normalized === "qwencloud") {
     return "qwen";
   }
