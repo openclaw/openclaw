@@ -51,6 +51,11 @@ const slackTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   pluginId: "slack",
   artifactBasename: "test-api.js",
 });
+const whatsappTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "whatsapp",
+  artifactBasename: "test-api.js",
+});
 
 let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
 let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
@@ -59,7 +64,11 @@ let slackTestApiPromise:
       createSlackOutboundPayloadHarness: CreateSlackOutboundPayloadHarness;
     }>
   | undefined;
-let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
+let whatsappTestApiPromise:
+  | Promise<{
+      whatsappOutbound: ChannelOutboundAdapter;
+    }>
+  | undefined;
 let chunkZaloTextForOutboundCache: ChunkZaloTextForOutbound | undefined;
 let sendZaloPayloadWithChunkedTextAndMediaCache: SendPayloadWithChunkedTextAndMedia | undefined;
 let sendZalouserPayloadWithChunkedTextAndMediaCache: SendPayloadWithChunkedTextAndMedia | undefined;
@@ -82,13 +91,12 @@ async function getCreateSlackOutboundPayloadHarness(): Promise<CreateSlackOutbou
   return createSlackOutboundPayloadHarness;
 }
 
-function getWhatsAppOutbound(): ChannelOutboundAdapter {
-  if (!whatsappOutboundCache) {
-    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
-      whatsappOutbound: ChannelOutboundAdapter;
-    }>("whatsapp"));
-  }
-  return whatsappOutboundCache;
+async function getWhatsAppOutboundAsync(): Promise<ChannelOutboundAdapter> {
+  whatsappTestApiPromise ??= import(whatsappTestApiModuleId) as Promise<{
+    whatsappOutbound: ChannelOutboundAdapter;
+  }>;
+  const { whatsappOutbound } = await whatsappTestApiPromise;
+  return whatsappOutbound;
 }
 
 function getChunkZaloTextForOutbound(): ChunkZaloTextForOutbound {
@@ -319,7 +327,7 @@ function createWhatsAppHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await getWhatsAppOutbound().sendPayload!(ctx),
+    run: async () => await (await getWhatsAppOutboundAsync()).sendPayload!(ctx),
     sendMock: sendWhatsApp,
     to: ctx.to,
   };

@@ -21,13 +21,13 @@ const FORBIDDEN_CONTRACT_MODULE_SOURCE_PATTERNS = [
   /["']openclaw\/plugin-sdk\/testing["']/u,
   /["'](?:\.{1,2}\/)+[^"']*test-api(?:\.[cm]?[jt]s)?["']/u,
   /["'](?:\.{1,2}\/)+[^"']*__tests__\/[^"']*["']/u,
-  /["'](?:\.{1,2}\/)+[^"']*\.test-[^"']*["']/u,
+  /["'](?:\.{1,2}\/)+[^"']*\.test(?:[-.][^"']*)?(?:\.[cm]?[jt]s)?["']/u,
   /["'](?:\.{1,2}\/)+[^"']*(?:test-harness|test-plugin|test-helper|harness)[^"']*["']/u,
 ] as const;
 const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
   /(^|\/)__tests__(\/|$)/u,
   /(^|\/)test-api\.[cm]?[jt]s$/u,
-  /(^|\/)[^/]*\.test-[^/]*\.[cm]?[jt]s$/u,
+  /(^|\/)[^/]*\.test(?:[-.][^/]*)?\.[cm]?[jt]s$/u,
   /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*\.[cm]?[jt]s$/u,
 ] as const;
 const EXPORT_FROM_RE = /\bexport\b[\s\S]*?\bfrom\s*["']([^"']+)["']/gu;
