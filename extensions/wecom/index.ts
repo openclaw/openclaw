@@ -3,7 +3,14 @@ import {
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
-import { CHANNEL_ID, WEBHOOK_PATHS } from "./src/const.js";
+const CHANNEL_ID = "wecom" as const;
+const WEBHOOK_PATHS = {
+  BOT: "/wecom",
+  BOT_ALT: "/wecom/bot",
+  AGENT: "/wecom/agent",
+  BOT_PLUGIN: "/plugins/wecom/bot",
+  AGENT_PLUGIN: "/plugins/wecom/agent",
+} as const;
 
 export default defineBundledChannelEntry({
   id: "wecom",

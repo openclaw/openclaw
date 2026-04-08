@@ -136,7 +136,7 @@ Control who can interact with the bot:
 {
   channels: {
     wecom: {
-      dmPolicy: "open",       // "open" | "allowlist" | "pairing" | "disabled"
+      dmPolicy: "open", // "open" | "allowlist" | "pairing" | "disabled"
       allowFrom: ["userid1", "userid2"],
     },
   },
@@ -154,8 +154,8 @@ Control who can interact with the bot:
 {
   channels: {
     wecom: {
-      groupPolicy: "open",           // "open" | "allowlist" | "disabled"
-      groupAllowFrom: ["CHATID1"],   // required when groupPolicy is "allowlist"
+      groupPolicy: "open", // "open" | "allowlist" | "disabled"
+      groupAllowFrom: ["CHATID1"], // required when groupPolicy is "allowlist"
     },
   },
 }
@@ -195,10 +195,10 @@ openclaw channels add --channel wecom --account bot2 --token "BOT_2_ID" --privat
 
 ## Target formats
 
-| Format                    | Description  |
-| ------------------------- | ------------ |
-| `wecom:direct:USERID`     | Direct chat  |
-| `wecom:group:CHATID`      | Group chat   |
+| Format                | Description |
+| --------------------- | ----------- |
+| `wecom:direct:USERID` | Direct chat |
+| `wecom:group:CHATID`  | Group chat  |
 
 ## MCP tool integration
 
