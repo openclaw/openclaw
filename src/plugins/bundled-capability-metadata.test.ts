@@ -1,16 +1,45 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { normalizeBundledPluginStringList } from "./bundled-plugin-scan.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
 } from "./contracts/inventory/bundled-capability-metadata.js";
 import { uniqueStrings } from "./contracts/shared.js";
+import { pluginTestRepoRoot as repoRoot } from "./generated-plugin-test-helpers.js";
+import type { PluginManifest } from "./manifest.js";
+
+function readManifestRecords(): PluginManifest[] {
+  const extensionsDir = path.join(repoRoot, "extensions");
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(extensionsDir, entry.name))
+    .filter((pluginDir) => {
+      const packagePath = path.join(pluginDir, "package.json");
+      if (!fs.existsSync(packagePath)) {
+        return false;
+      }
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as {
+        openclaw?: { extensions?: unknown };
+      };
+      return normalizeBundledPluginStringList(packageJson.openclaw?.extensions).length > 0;
+    })
+    .map(
+      (pluginDir) =>
+        JSON.parse(
+          fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf-8"),
+        ) as PluginManifest,
+    )
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
 
 describe("bundled capability metadata", () => {
   it("keeps contract snapshots aligned with bundled plugin manifests", () => {
-    const expected = listBundledPluginMetadata()
-      .map(({ manifest }) => ({
+    const expected = readManifestRecords()
+      .map((manifest) => ({
         pluginId: manifest.id,
         cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
         providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
@@ -70,7 +99,7 @@ describe("bundled capability metadata", () => {
   });
 
   it("keeps lightweight alias maps aligned with bundled plugin manifests", () => {
-    const manifests = listBundledPluginMetadata().map((entry) => entry.manifest);
+    const manifests = readManifestRecords();
     const expectedLegacyAliases = Object.fromEntries(
       manifests
         .flatMap((manifest) =>

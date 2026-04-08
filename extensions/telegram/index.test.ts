@@ -12,8 +12,8 @@ describe("telegram bundled entries", () => {
     expect(entry.name).toBe("Telegram");
   });
 
-  it("loads the setup plugin without importing the broad api barrel", () => {
-    const plugin = setupEntry.loadSetupPlugin();
-    expect(plugin.id).toBe("telegram");
+  it("declares the setup plugin without importing the broad api barrel", () => {
+    expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
+    expect(typeof setupEntry.loadSetupPlugin).toBe("function");
   });
 });

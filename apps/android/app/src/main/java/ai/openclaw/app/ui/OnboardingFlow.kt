@@ -1148,11 +1148,15 @@ private fun GatewayStep(
               onboardingTextFieldColors(),
           )
 
-          Text("PORT", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          Text(
+            if (manualTls) "PORT (optional, defaults to 443)" else "PORT",
+            style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp),
+            color = onboardingTextSecondary,
+          )
           OutlinedTextField(
             value = manualPort,
             onValueChange = onManualPortChange,
-            placeholder = { Text("18789", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            placeholder = { Text(if (manualTls) "443" else "18789", color = onboardingTextTertiary, style = onboardingBodyStyle) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { isRecord } from "../utils.js";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import {
+  appendConfigAuditRecord,
+  appendConfigAuditRecordSync,
+  type ConfigObserveAuditRecord,
+} from "./io.audit.js";
 import { resolveStateDir } from "./paths.js";
 
 export type ObserveRecoveryDeps = {
@@ -98,6 +102,86 @@ type ConfigHealthEntry = {
 type ConfigHealthState = {
   entries?: Record<string, ConfigHealthEntry>;
 };
+
+function createConfigObserveAuditRecord(params: {
+  ts: string;
+  configPath: string;
+  valid: boolean;
+  current: ConfigHealthFingerprint;
+  suspicious: string[];
+  lastKnownGood: ConfigHealthFingerprint | undefined;
+  backup: ConfigHealthFingerprint | null | undefined;
+  clobberedPath: string | null;
+  restoredFromBackup: boolean;
+  restoredBackupPath: string | null;
+}): ConfigObserveAuditRecord {
+  return {
+    ts: params.ts,
+    source: "config-io",
+    event: "config.observe",
+    phase: "read",
+    configPath: params.configPath,
+    pid: process.pid,
+    ppid: process.ppid,
+    cwd: process.cwd(),
+    argv: process.argv.slice(0, 8),
+    execArgv: process.execArgv.slice(0, 8),
+    exists: true,
+    valid: params.valid,
+    hash: params.current.hash,
+    bytes: params.current.bytes,
+    mtimeMs: params.current.mtimeMs,
+    ctimeMs: params.current.ctimeMs,
+    dev: params.current.dev,
+    ino: params.current.ino,
+    mode: params.current.mode,
+    nlink: params.current.nlink,
+    uid: params.current.uid,
+    gid: params.current.gid,
+    hasMeta: params.current.hasMeta,
+    gatewayMode: params.current.gatewayMode,
+    suspicious: params.suspicious,
+    lastKnownGoodHash: params.lastKnownGood?.hash ?? null,
+    lastKnownGoodBytes: params.lastKnownGood?.bytes ?? null,
+    lastKnownGoodMtimeMs: params.lastKnownGood?.mtimeMs ?? null,
+    lastKnownGoodCtimeMs: params.lastKnownGood?.ctimeMs ?? null,
+    lastKnownGoodDev: params.lastKnownGood?.dev ?? null,
+    lastKnownGoodIno: params.lastKnownGood?.ino ?? null,
+    lastKnownGoodMode: params.lastKnownGood?.mode ?? null,
+    lastKnownGoodNlink: params.lastKnownGood?.nlink ?? null,
+    lastKnownGoodUid: params.lastKnownGood?.uid ?? null,
+    lastKnownGoodGid: params.lastKnownGood?.gid ?? null,
+    lastKnownGoodGatewayMode: params.lastKnownGood?.gatewayMode ?? null,
+    backupHash: params.backup?.hash ?? null,
+    backupBytes: params.backup?.bytes ?? null,
+    backupMtimeMs: params.backup?.mtimeMs ?? null,
+    backupCtimeMs: params.backup?.ctimeMs ?? null,
+    backupDev: params.backup?.dev ?? null,
+    backupIno: params.backup?.ino ?? null,
+    backupMode: params.backup?.mode ?? null,
+    backupNlink: params.backup?.nlink ?? null,
+    backupUid: params.backup?.uid ?? null,
+    backupGid: params.backup?.gid ?? null,
+    backupGatewayMode: params.backup?.gatewayMode ?? null,
+    clobberedPath: params.clobberedPath,
+    restoredFromBackup: params.restoredFromBackup,
+    restoredBackupPath: params.restoredBackupPath,
+  };
+}
+
+type ConfigObserveAuditRecordParams = Parameters<typeof createConfigObserveAuditRecord>[0];
+
+function createConfigObserveAuditAppendParams(
+  deps: ObserveRecoveryDeps,
+  params: ConfigObserveAuditRecordParams,
+) {
+  return {
+    fs: deps.fs,
+    env: deps.env,
+    homedir: deps.homedir,
+    record: createConfigObserveAuditRecord(params),
+  };
+}
 
 function hashConfigRaw(raw: string | null): string {
   return crypto
@@ -462,61 +546,20 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
   params.deps.logger.warn(
     `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
   );
-  await appendConfigAuditRecord({
-    fs: params.deps.fs,
-    env: params.deps.env,
-    homedir: params.deps.homedir,
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: params.configPath,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: true,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup,
-    restoredBackupPath: backupPath,
-  });
+  await appendConfigAuditRecord(
+    createConfigObserveAuditAppendParams(params.deps, {
+      ts: now,
+      configPath: params.configPath,
+      valid: true,
+      current,
+      suspicious,
+      lastKnownGood: entry.lastKnownGood,
+      backup,
+      clobberedPath,
+      restoredFromBackup,
+      restoredBackupPath: backupPath,
+    }),
+  );
 
   healthState = setConfigHealthEntry(healthState, params.configPath, {
     ...entry,
@@ -599,61 +642,20 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   params.deps.logger.warn(
     `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
   );
-  appendConfigAuditRecordSync({
-    fs: params.deps.fs,
-    env: params.deps.env,
-    homedir: params.deps.homedir,
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: params.configPath,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: true,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup,
-    restoredBackupPath: backupPath,
-  });
+  appendConfigAuditRecordSync(
+    createConfigObserveAuditAppendParams(params.deps, {
+      ts: now,
+      configPath: params.configPath,
+      valid: true,
+      current,
+      suspicious,
+      lastKnownGood: entry.lastKnownGood,
+      backup,
+      clobberedPath,
+      restoredFromBackup,
+      restoredBackupPath: backupPath,
+    }),
+  );
 
   healthState = setConfigHealthEntry(healthState, params.configPath, {
     ...entry,
@@ -742,61 +744,20 @@ export async function observeConfigSnapshot(
   });
 
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  await appendConfigAuditRecord({
-    fs: deps.fs,
-    env: deps.env,
-    homedir: deps.homedir,
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: snapshot.path,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: snapshot.valid,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup: false,
-    restoredBackupPath: null,
-  });
+  await appendConfigAuditRecord(
+    createConfigObserveAuditAppendParams(deps, {
+      ts: now,
+      configPath: snapshot.path,
+      valid: snapshot.valid,
+      current,
+      suspicious,
+      lastKnownGood: entry.lastKnownGood,
+      backup,
+      clobberedPath,
+      restoredFromBackup: false,
+      restoredBackupPath: null,
+    }),
+  );
 
   healthState = setConfigHealthEntry(healthState, snapshot.path, {
     ...entry,
@@ -867,61 +828,20 @@ export function observeConfigSnapshotSync(
   });
 
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  appendConfigAuditRecordSync({
-    fs: deps.fs,
-    env: deps.env,
-    homedir: deps.homedir,
-    ts: now,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: snapshot.path,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-    exists: true,
-    valid: snapshot.valid,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious,
-    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath,
-    restoredFromBackup: false,
-    restoredBackupPath: null,
-  });
+  appendConfigAuditRecordSync(
+    createConfigObserveAuditAppendParams(deps, {
+      ts: now,
+      configPath: snapshot.path,
+      valid: snapshot.valid,
+      current,
+      suspicious,
+      lastKnownGood: entry.lastKnownGood,
+      backup,
+      clobberedPath,
+      restoredFromBackup: false,
+      restoredBackupPath: null,
+    }),
+  );
 
   healthState = setConfigHealthEntry(healthState, snapshot.path, {
     ...entry,

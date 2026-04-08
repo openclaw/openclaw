@@ -16,9 +16,93 @@ codeRefs:
   - src/gateway/server-methods/config.ts
   - src/gateway/server-restart-sentinel.ts
 execution:
-  kind: custom
-  handler: config-apply-restart-wakeup
+  kind: flow
   summary: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
   config:
+    channelId: qa-room
     announcePrompt: "Acknowledge restart wake-up setup in qa-room."
+```
+
+```yaml qa-flow
+steps:
+  - name: restarts cleanly and posts the restart sentinel back into qa-channel
+    actions:
+      - call: reset
+      - set: sessionKey
+        value:
+          expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', peer: { kind: 'channel', id: config.channelId } })"
+      - call: createSession
+        args:
+          - ref: env
+          - Restart wake-up
+          - ref: sessionKey
+      - call: runAgentPrompt
+        args:
+          - ref: env
+          - sessionKey:
+              ref: sessionKey
+            to:
+              expr: "`channel:${config.channelId}`"
+            message:
+              expr: config.announcePrompt
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 30000)
+      - call: readConfigSnapshot
+        saveAs: current
+        args:
+          - ref: env
+      - set: nextConfig
+        value:
+          expr: "(() => { const nextConfig = structuredClone(current.config); const gatewayConfig = (nextConfig.gateway ??= {}); const controlUi = (gatewayConfig.controlUi ??= {}); const allowedOrigins = Array.isArray(controlUi.allowedOrigins) ? [...controlUi.allowedOrigins] : []; if (!allowedOrigins.includes('http://127.0.0.1:65535')) allowedOrigins.push('http://127.0.0.1:65535'); controlUi.allowedOrigins = allowedOrigins; return nextConfig; })()"
+      - set: wakeMarker
+        value:
+          expr: "`QA-RESTART-${randomUUID().slice(0, 8)}`"
+      - call: applyConfig
+        args:
+          - env:
+              ref: env
+            nextConfig:
+              ref: nextConfig
+            sessionKey:
+              ref: sessionKey
+            note:
+              ref: wakeMarker
+      - try:
+          actions:
+            - call: waitForGatewayHealthy
+              args:
+                - ref: env
+                - 60000
+          catchAs: healthyError
+          catch:
+            - throw:
+                message:
+                  expr: "`gateway never returned healthy after config.apply: ${formatErrorMessage(healthyError)}`"
+      - try:
+          actions:
+            - call: waitForQaChannelReady
+              args:
+                - ref: env
+                - 60000
+          catchAs: readyError
+          catch:
+            - throw:
+                message:
+                  expr: "`qa-channel never returned ready after config.apply: ${formatErrorMessage(readyError)}`"
+      - try:
+          actions:
+            - call: waitForOutboundMessage
+              saveAs: outbound
+              args:
+                - ref: state
+                - lambda:
+                    params: [candidate]
+                    expr: "candidate.text.includes(wakeMarker)"
+                - 60000
+          catchAs: wakeError
+          catch:
+            - throw:
+                message:
+                  expr: "`restart sentinel never appeared: ${formatErrorMessage(wakeError)}; outbound=${recentOutboundSummary(state)}`"
+    detailsExpr: "`${outbound.conversation.id}: ${outbound.text}`"
 ```

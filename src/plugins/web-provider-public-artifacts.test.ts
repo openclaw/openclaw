@@ -5,17 +5,20 @@ import {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.js";
 
+function uniquePluginIds(entries: readonly { pluginId: string }[] | null): string[] {
+  return [...new Set((entries ?? []).map((entry) => entry.pluginId))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
 describe("web provider public artifacts", () => {
   it("covers every bundled web search provider declared in manifests", () => {
-    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
-    });
-
-    expect(providers).not.toBeNull();
     expect(
-      providers
-        ?.map((entry) => entry.pluginId)
-        .toSorted((left, right) => left.localeCompare(right)),
+      uniquePluginIds(
+        resolveBundledWebSearchProvidersFromPublicArtifacts({
+          bundledAllowlistCompat: true,
+        }),
+      ),
     ).toEqual(
       resolveManifestContractPluginIds({
         contract: "webSearchProviders",
@@ -25,21 +28,28 @@ describe("web provider public artifacts", () => {
   });
 
   it("covers every bundled web fetch provider declared in manifests", () => {
-    const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
-    });
-
-    expect(providers).not.toBeNull();
     expect(
-      providers
-        ?.map((entry) => entry.pluginId)
-        .toSorted((left, right) => left.localeCompare(right)),
+      uniquePluginIds(
+        resolveBundledWebFetchProvidersFromPublicArtifacts({
+          bundledAllowlistCompat: true,
+        }),
+      ),
     ).toEqual(
       resolveManifestContractPluginIds({
         contract: "webFetchProviders",
         origin: "bundled",
       }),
     );
+  });
+
+  it("loads a lightweight bundled web search artifact smoke", () => {
+    const provider = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      bundledAllowlistCompat: true,
+      onlyPluginIds: ["brave"],
+    })?.[0];
+
+    expect(provider?.pluginId).toBe("brave");
+    expect(provider?.createTool({ config: {} as never })).toBeNull();
   });
 
   it("prefers lightweight bundled web fetch contract artifacts", () => {

@@ -47,6 +47,8 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
     isGroup: commandParams.isGroup,
     defaultGroupActivation: commandParams.defaultGroupActivation,
+    modelAuthOverride: "api-key",
+    activeModelAuthOverride: "api-key",
   });
 }
 
@@ -473,6 +475,8 @@ describe("buildStatusReply subagent summary", () => {
         resolveDefaultThinkingLevel: async () => undefined,
         isGroup: false,
         defaultGroupActivation: () => "mention",
+        modelAuthOverride: "api-key",
+        activeModelAuthOverride: "api-key",
       });
 
       expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");

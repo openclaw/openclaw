@@ -464,14 +464,18 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               colors = outlinedColors(),
             )
 
-            Text("Port", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(
+              if (manualTlsInput) "Port (optional, defaults to 443)" else "Port",
+              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+              color = mobileTextSecondary,
+            )
             OutlinedTextField(
               value = manualPortInput,
               onValueChange = {
                 manualPortInput = it
                 validationText = null
               },
-              placeholder = { Text("18789", style = mobileBody, color = mobileTextTertiary) },
+              placeholder = { Text(if (manualTlsInput) "443" else "18789", style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
               keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
