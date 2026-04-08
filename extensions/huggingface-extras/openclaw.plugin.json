@@ -1,0 +1,32 @@
+{
+  "id": "huggingface-extras",
+  "enabledByDefault": false,
+  "providers": ["huggingface-extras"],
+  "providerAuthEnvVars": {
+    "huggingface-extras": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "huggingface-extras",
+      "method": "api-key",
+      "choiceId": "huggingface-extras-api-key",
+      "choiceLabel": "Hugging Face API key (extras)",
+      "choiceHint": "Image generation, embeddings, and speech via HF Inference API",
+      "groupId": "huggingface-extras",
+      "groupLabel": "Hugging Face (Extras)",
+      "groupHint": "Image / embeddings / speech via HF Inference API",
+      "optionKey": "huggingfaceExtrasApiKey",
+      "cliFlag": "--huggingface-extras-api-key",
+      "cliOption": "--huggingface-extras-api-key <key>",
+      "cliDescription": "Hugging Face API key for the huggingface-extras provider"
+    }
+  ],
+  "contracts": {
+    "imageGenerationProviders": ["huggingface-extras"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
