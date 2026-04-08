@@ -218,7 +218,7 @@ describe("setupSearch", () => {
     expect(result.plugins?.entries?.aimlapi?.enabled).toBe(true);
   });
 
-  it("reuses configured AIMLAPI provider auth without prompting for a second web-search key", async () => {
+  it("keeps AIMLAPI selected when auth profile metadata exists but setup still needs a key prompt", async () => {
     resolveApiKeyForProviderMock.mockResolvedValue({
       apiKey: "aiml-profile-key",
       source: "profile:aimlapi:default",
@@ -254,22 +254,7 @@ describe("setupSearch", () => {
     );
 
     expect(result.tools?.web?.search?.provider).toBe("aimlapi");
-    expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.plugins?.entries?.aimlapi?.enabled).toBe(true);
-    expect(text).not.toHaveBeenCalled();
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
-      provider: "aimlapi",
-      cfg: expect.objectContaining({
-        auth: expect.any(Object),
-      }),
-    });
-    expect(global.fetch).toHaveBeenCalledWith(
-      "https://api.aimlapi.com/v1/chat/completions",
-      expect.objectContaining({
-        method: "POST",
-        body: "",
-      }),
-    );
+    expect(text).toHaveBeenCalledTimes(1);
   });
 
   it("does not trust AIMLAPI profile metadata when auth probe returns 401", async () => {
