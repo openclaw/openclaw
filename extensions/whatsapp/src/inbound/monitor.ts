@@ -559,6 +559,7 @@ export async function monitorWebInbox(options: {
     close: async () => {
       try {
         detachMessagesUpsert();
+        await debouncer.flushAll();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
       } catch (err) {
