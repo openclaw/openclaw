@@ -48,6 +48,8 @@ const REM_STABLE_PERSON_SIGNAL_RE =
   /\b(partner|wife|husband|boyfriend|girlfriend|relationship interest|lives in)\b/i;
 const REM_EXPLICIT_PREFERENCE_SIGNAL_RE =
   /\b(explicitly|wants?|does not want|don't want|default .* should|should default to|likes?|dislikes?|treat .* as|prefers?)\b/i;
+const REM_MONITORING_SIGNAL_RE =
+  /\b(heartbeat|ariston|collect-temps|low pressure|exit code|invalid[_-]?grant|token expired|token revoked|warning\/error|warning|alert(?:ing)?|checkpoint at|daily note file already existed|header creation|local time verified|calendar access failed|gmail .* failed|no proactive .* sent|silent log only|gateway restarted successfully|still no response|no reply yet|blocked\b|passkey|credential|password in bws|working correctly|catchup completed)\b/i;
 const REM_SPECIFICITY_BURDEN_RE =
   /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|€|\$\d|→|\b\d{1,2}:\d{2}\b|\+\d{6,}/i;
 const REM_TIME_PREFIX_RE = /^\d{1,2}:\d{2}\s*-\s*/;
@@ -388,10 +390,27 @@ function compactCandidateTitle(title: string): string {
 
 function compactCandidateSnippetText(text: string, title: string): string {
   const normalized = normalizeWhitespace(text);
+  if (REM_MONITORING_SIGNAL_RE.test(`${title} ${normalized}`)) {
+    return normalized
+      .replace(/\b(?:local time verified[^.;]*[.;]?\s*)/gi, "")
+      .replace(/\b(?:daily note file already existed[^.;]*[.;]?\s*)/gi, "")
+      .replace(/\b(?:header creation[^.;]*[.;]?\s*)/gi, "")
+      .trim();
+  }
   if (REM_STABLE_PERSON_SIGNAL_RE.test(`${title} ${normalized}`)) {
     return (normalized.split(/(?<=[.?!])\s+/)[0] ?? normalized).trim();
   }
   return normalized;
+}
+
+function isDurableSignalSnippet(text: string, title: string): boolean {
+  return (
+    REM_MEMORY_SIGNAL_RE.test(text) ||
+    REM_PERSISTENCE_SIGNAL_RE.test(text) ||
+    REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text) ||
+    REM_STABLE_PERSON_SIGNAL_RE.test(`${title} ${text}`) ||
+    REM_PERSON_PATTERN_SIGNAL_RE.test(text)
+  );
 }
 
 function scoreCandidateSnippet(text: string, title: string): number {
@@ -428,6 +447,9 @@ function scoreCandidateSnippet(text: string, title: string): number {
   }
   if (REM_TOOLING_META_SIGNAL_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
     score -= 2.1;
+  }
+  if (REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !REM_MEMORY_SIGNAL_RE.test(text)) {
+    score -= 4.2;
   }
   if (REM_TRAVEL_DECISION_SIGNAL_RE.test(text)) {
     score -= 2.6;
@@ -473,6 +495,11 @@ function chooseFactSnippets(
         scoreCandidateSnippet(text, section.title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0);
       return { snippet: { ...snippet, text }, score };
     })
+    .filter(
+      (entry) =>
+        !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
+        isDurableSignalSnippet(entry.snippet.text, section.title),
+    )
     .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.4)
     .toSorted((left, right) => {
       if (right.score !== left.score) {
@@ -511,9 +538,21 @@ function chooseCandidateSnippets(
   return [...snippets]
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
-      const score = scoreCandidateSnippet(text, section.title);
+      const claimScores = atomizeClaimText(text).map((claim) =>
+        scoreCandidateSnippet(claim, section.title),
+      );
+      const score = Math.max(
+        scoreCandidateSnippet(text, section.title),
+        ...claimScores,
+        Number.NEGATIVE_INFINITY,
+      );
       return { snippet: { ...snippet, text }, score };
     })
+    .filter(
+      (entry) =>
+        !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
+        isDurableSignalSnippet(entry.snippet.text, section.title),
+    )
     .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.8)
     .toSorted((left, right) => {
       if (right.score !== left.score) {
@@ -528,6 +567,75 @@ function chooseCandidateSnippets(
 
 function buildCandidateSnippetText(title: string, text: string): string {
   return buildFactText(title, text);
+}
+
+function findTopLevelDelimiter(text: string, delimiter: string): number {
+  let roundDepth = 0;
+  let squareDepth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") {
+      roundDepth += 1;
+    } else if (char === ")") {
+      roundDepth = Math.max(0, roundDepth - 1);
+    } else if (char === "[") {
+      squareDepth += 1;
+    } else if (char === "]") {
+      squareDepth = Math.max(0, squareDepth - 1);
+    } else if (char === delimiter && roundDepth === 0 && squareDepth === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function splitTopLevelClauses(text: string, delimiter: string): string[] {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > 0) {
+    const splitAt = findTopLevelDelimiter(rest, delimiter);
+    if (splitAt < 0) {
+      parts.push(rest);
+      break;
+    }
+    parts.push(rest.slice(0, splitAt));
+    rest = rest.slice(splitAt + 1);
+  }
+  return parts.map((part) => normalizeWhitespace(part)).filter(Boolean);
+}
+
+function splitSubjectLeadClaim(text: string): string[] {
+  const match = /^(?<subject>.+?(?:—|–|-))\s*(?<rest>.+)$/u.exec(text);
+  if (!match?.groups) {
+    return [text];
+  }
+  const subject = normalizeWhitespace(match.groups.subject);
+  const rest = normalizeWhitespace(match.groups.rest);
+  if (!subject || !rest) {
+    return [text];
+  }
+  const commaIndex = findTopLevelDelimiter(rest, ",");
+  if (commaIndex < 0) {
+    return [text];
+  }
+  const first = normalizeWhitespace(rest.slice(0, commaIndex));
+  const remainder = normalizeWhitespace(rest.slice(commaIndex + 1));
+  if (first.length < 3 || remainder.length < 6) {
+    return [text];
+  }
+  return [`${subject} ${first}`, `${subject} ${remainder}`];
+}
+
+function atomizeClaimText(text: string): string[] {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) {
+    return [];
+  }
+  const atomic = splitTopLevelClauses(normalized, ";")
+    .flatMap((part) => splitSubjectLeadClaim(part))
+    .map((part) => normalizeWhitespace(part))
+    .filter(Boolean);
+  return Array.from(new Set(atomic)).slice(0, 3);
 }
 
 function classifyCandidateLeanFromText(text: string, title: string): GroundedRemCandidate["lean"] {
@@ -575,6 +683,13 @@ function previewGroundedRemForFile(params: {
     section,
     snippets: sectionToSnippets(section),
   }));
+  const monitoringSignal = sectionScores.reduce(
+    (sum, { section, snippets }) =>
+      sum +
+      countMatchingSnippets(snippets, REM_MONITORING_SIGNAL_RE) +
+      (REM_MONITORING_SIGNAL_RE.test(section.title) ? 1 : 0),
+    0,
+  );
   const summaries = sectionScores
     .map(({ section }) => summarizeSection(params.relPath, section))
     .filter((summary): summary is SectionSummary => summary !== null);
@@ -610,18 +725,20 @@ function previewGroundedRemForFile(params: {
     if (snippets.length === 0) {
       return [];
     }
-    return chooseCandidateSnippets(section, snippets)
-      .map((snippet) => {
-        const score = scoreCandidateSnippet(snippet.text, section.title);
-        const text = buildCandidateSnippetText(section.title, snippet.text);
-        return {
-          text,
-          refs: [makeRef(params.relPath, snippet.line)],
-          lean: classifyCandidateLeanFromText(snippet.text, section.title),
-          score,
-        };
-      })
-      .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8);
+    return chooseCandidateSnippets(section, snippets).flatMap((snippet) =>
+      atomizeClaimText(snippet.text)
+        .map((claim) => {
+          const score = scoreCandidateSnippet(claim, section.title);
+          const text = buildCandidateSnippetText(section.title, claim);
+          return {
+            text,
+            refs: [makeRef(params.relPath, snippet.line)],
+            lean: classifyCandidateLeanFromText(claim, section.title),
+            score,
+          };
+        })
+        .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
+    );
   });
 
   const candidates = candidateSnippets
@@ -679,7 +796,7 @@ function previewGroundedRemForFile(params: {
       break;
     }
   }
-  if (facts.length === 0) {
+  if (facts.length === 0 && monitoringSignal < 3) {
     const bestFor = (metric: keyof SectionSummary["scores"]) =>
       summaries
         .filter((summary) => summary.scores[metric] > 0)
@@ -712,6 +829,8 @@ function previewGroundedRemForFile(params: {
 
   const reflections: GroundedRemPreviewItem[] = [];
   const seenReflections = new Set<string>();
+  const relationshipFacts = facts.filter((item) => REM_STABLE_PERSON_SIGNAL_RE.test(item.text));
+  const multiRelationshipContext = relationshipFacts.length >= 2;
   const buildSignal = summaries.reduce((sum, item) => sum + item.scores.build, 0);
   const incidentSignal = summaries.reduce((sum, item) => sum + item.scores.incident, 0);
   const logisticsSignal = summaries.reduce((sum, item) => sum + item.scores.logistics, 0);
@@ -735,6 +854,20 @@ function previewGroundedRemForFile(params: {
     .filter((summary) => summary.scores.externalization > 0)
     .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
 
+  if (facts.length === 0 && monitoringSignal >= 3) {
+    addReflection(
+      reflections,
+      seenReflections,
+      "This day reads mostly as monitoring and operational state, not as durable memory. It should be treated as current-state exhaust unless a clearer rule or preference appears.",
+      [
+        makeRef(
+          params.relPath,
+          sections[0]?.startLine ?? 1,
+          sections[sections.length - 1]?.endLine ?? 1,
+        ),
+      ],
+    );
+  }
   if (effectiveMemoryImplications.length > 0) {
     addReflection(
       reflections,
@@ -743,7 +876,21 @@ function previewGroundedRemForFile(params: {
       effectiveMemoryImplications.flatMap((item) => item.refs).slice(0, 3),
     );
   }
-  if (facts.length > 0 && routingSignal >= 2 && strongestRoutingSummary && buildSignal >= incidentSignal) {
+  if (multiRelationshipContext) {
+    addReflection(
+      reflections,
+      seenReflections,
+      "More than one active relationship thread appears in the same day, which means person-memory matters operationally: who each person is should be kept separate from the transient date or venue details attached to them.",
+      relationshipFacts.flatMap((item) => item.refs).slice(0, 3),
+    );
+  }
+  if (
+    !multiRelationshipContext &&
+    facts.length > 0 &&
+    routingSignal >= 2 &&
+    strongestRoutingSummary &&
+    buildSignal >= incidentSignal
+  ) {
     addReflection(
       reflections,
       seenReflections,
@@ -751,7 +898,12 @@ function previewGroundedRemForFile(params: {
       strongestRoutingSummary.refs,
     );
   }
-  if (facts.length > 0 && externalizationSignal >= 2 && strongestExternalizationSummary) {
+  if (
+    !multiRelationshipContext &&
+    facts.length > 0 &&
+    externalizationSignal >= 2 &&
+    strongestExternalizationSummary
+  ) {
     addReflection(
       reflections,
       seenReflections,
@@ -759,7 +911,7 @@ function previewGroundedRemForFile(params: {
       strongestExternalizationSummary.refs,
     );
   }
-  if (facts.length > 0 && buildSignal >= 2) {
+  if (!multiRelationshipContext && facts.length > 0 && buildSignal >= 2) {
     const buildRefs = facts
       .filter((item) => REM_BUILD_SIGNAL_RE.test(item.text))
       .flatMap((item) => item.refs)
@@ -783,7 +935,7 @@ function previewGroundedRemForFile(params: {
       strongestIncidentSummary.refs,
     );
   }
-  if (facts.length > 0 && logisticsSignal >= 2) {
+  if (!multiRelationshipContext && facts.length > 0 && logisticsSignal >= 2) {
     const logisticsRefs = facts
       .filter((item) => REM_LOGISTICS_SIGNAL_RE.test(item.text))
       .flatMap((item) => item.refs)
@@ -812,7 +964,13 @@ function previewGroundedRemForFile(params: {
     );
   }
 
-  const visibleReflections = reflections.slice(0, REM_SUMMARY_REFLECTION_LIMIT);
+  const reflectionLimit =
+    facts.length === 0
+      ? 1
+      : facts.length === 1
+        ? 2
+        : Math.min(REM_SUMMARY_REFLECTION_LIMIT, facts.length + 1);
+  const visibleReflections = reflections.slice(0, reflectionLimit);
 
   const renderedLines: string[] = [];
   renderedLines.push("## What Happened");
