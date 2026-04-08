@@ -13,6 +13,40 @@ interface BaseAgentMessage {
   content: string | unknown[];
   toolCalls?: unknown[];
   toolCallId?: string;
+  name?: string;
+}
+
+function mapDatabricksMessages(context: { messages: unknown[]; systemPrompt?: string }) {
+  const result: any[] = [];
+  if (context.systemPrompt) {
+    result.push({ role: "system", content: context.systemPrompt });
+  }
+  for (const m of context.messages) {
+    const msg = m as BaseAgentMessage;
+    const role = msg.role === "toolResult" ? "tool" : msg.role;
+    result.push({
+      role,
+      content: msg.content,
+      ...(msg.toolCalls ? { tool_calls: msg.toolCalls } : {}),
+      ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
+      ...(msg.name ? { name: msg.name } : {}),
+    });
+  }
+  return result;
+}
+
+function mapDatabricksTools(tools: any[] | undefined) {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+  return tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }));
 }
 
 function mapDatabricksStopReason(reason: string | null | undefined): string {
@@ -195,17 +229,9 @@ export default definePluginEntry({
             throw new Error("Databricks base URL not found. Please provide it during onboarding or in the configuration.");
           }
 
-          const url = `${baseUrl}/serving-endpoints/${model.id}/invocations`;
-          
-          const messages = (context.messages || []).map((m: unknown) => {
-            const msg = m as BaseAgentMessage;
-            return {
-              role: msg.role,
-              content: msg.content,
-              ...(msg.toolCalls ? { tool_calls: msg.toolCalls } : {}),
-              ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
-            };
-          });
+          const messages = mapDatabricksMessages(context);
+          const tools = mapDatabricksTools(context.tools);
+          const toolChoice = (streamOptions as any).toolChoice;
 
           const extraParams = (streamOptions as Record<string, unknown>).extraParams as Record<string, unknown> | undefined || {};
           const payload = {
@@ -216,8 +242,8 @@ export default definePluginEntry({
             temperature: streamOptions.temperature,
             top_p: extraParams.top_p,
             stop: extraParams.stop,
-            ...(extraParams.tools ? { tools: extraParams.tools } : {}),
-            ...(extraParams.tool_choice ? { tool_choice: extraParams.tool_choice } : {}),
+            ...(tools ? { tools } : {}),
+            ...(toolChoice ? { tool_choice: toolChoice } : {}),
             ...(extraParams.response_format ? { response_format: extraParams.response_format } : {}),
           };
 
@@ -236,13 +262,18 @@ export default definePluginEntry({
 
           void (async () => {
             try {
+              const url = `${baseUrl}/serving-endpoints/${model.id}/invocations`;
+              const mergedHeaders = {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                ...(model.headers as Record<string, string> || {}),
+                ...(streamOptions.headers as Record<string, string> || {}),
+              };
+
               const response = await fetch(url, {
                 method: "POST",
-                headers: {
-                  "Authorization": `Bearer ${apiKey}`,
-                  "Content-Type": "application/json",
-                  "Accept": "text/event-stream",
-                },
+                headers: mergedHeaders,
                 body: JSON.stringify(payload),
                 signal: streamOptions.signal,
               });
@@ -266,6 +297,9 @@ export default definePluginEntry({
               while (true) {
                 const { done, value } = await reader.read();
                 if (done || doneSent) {
+                  if (doneSent) {
+                    await reader.cancel().catch(() => {});
+                  }
                   break;
                 }
 

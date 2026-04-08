@@ -112,6 +112,45 @@ describe("Databricks plugin", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "toolcall_delta", delta: '"London"}' }));
       expect(events).toContainEqual(expect.objectContaining({ type: "done", reason: "toolUse" }));
     });
+
+    it("includes systemPrompt and maps toolResult role", async () => {
+      const api = { registerProvider: vi.fn() } as any;
+      plugin.register(api);
+      const wrapStreamFn = api.registerProvider.mock.calls[0][0].wrapStreamFn;
+
+      const model = { id: "test", baseUrl: "https://test.com", api: "openai-completions", headers: { "X-Model-Header": "foo" } } as any;
+      const context = {
+        systemPrompt: "You are a helpful assistant",
+        messages: [
+          { role: "user", content: "call tool" },
+          { role: "assistant", content: null, toolCalls: [{ id: "call_1", function: { name: "t1", arguments: "{}" } }] },
+          { role: "toolResult", toolCallId: "call_1", content: "result" }
+        ],
+        tools: [{ name: "t1", description: "d1", parameters: {} }]
+      } as any;
+      const options = { apiKey: "token", headers: { "X-Options-Header": "bar" } } as any;
+
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("data: [DONE]\n", { status: 200 })));
+
+      const streamFn = wrapStreamFn({} as ProviderWrapStreamFnContext);
+      await streamFn(model, context, options);
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "X-Model-Header": "foo",
+            "X-Options-Header": "bar"
+          }),
+          body: expect.stringContaining('"role":"system","content":"You are a helpful assistant"'),
+        })
+      );
+
+      const body = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as any).body);
+      expect(body.messages[0].role).toBe("system");
+      expect(body.messages[3].role).toBe("tool"); // toolResult -> tool
+      expect(body.tools[0].type).toBe("function");
+    });
   });
 
   describe("catalog", () => {
