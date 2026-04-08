@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import path, { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../bundled-plugin-metadata.js";
@@ -15,15 +15,22 @@ const GUARDED_CONTRACT_ARTIFACT_BASENAMES = new Set([
   "secret-contract-api.js",
   "security-contract-api.js",
 ]);
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".cts"] as const;
-const FORBIDDEN_CONTRACT_BARREL_PATTERNS = [
+const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
+const FORBIDDEN_CONTRACT_MODULE_SOURCE_PATTERNS = [
   /["']vitest["']/u,
   /["']openclaw\/plugin-sdk\/testing["']/u,
-  /["']\.\/test-api\.js["']/u,
-  /["'](?:__tests__\/|[^"']*\/__tests__\/)[^"']*["']/u,
-  /["'][^"']*\.test-[^"']*["']/u,
-  /["'][^"']*(?:test-harness|test-plugin|test-helper|harness)[^"']*["']/u,
+  /["'](?:\.{1,2}\/)+[^"']*test-api(?:\.[cm]?[jt]s)?["']/u,
+  /["'](?:\.{1,2}\/)+[^"']*__tests__\/[^"']*["']/u,
+  /["'](?:\.{1,2}\/)+[^"']*\.test-[^"']*["']/u,
+  /["'](?:\.{1,2}\/)+[^"']*(?:test-harness|test-plugin|test-helper|harness)[^"']*["']/u,
 ] as const;
+const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
+  /(^|\/)__tests__(\/|$)/u,
+  /(^|\/)test-api\.[cm]?[jt]s$/u,
+  /(^|\/)[^/]*\.test-[^/]*\.[cm]?[jt]s$/u,
+  /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|harness)[^/]*\.[cm]?[jt]s$/u,
+] as const;
+const EXPORT_FROM_RE = /\bexport\b[\s\S]*?\bfrom\s*["']([^"']+)["']/gu;
 
 function listBundledPluginRoots() {
   return loadPluginManifestRegistry({})
@@ -40,7 +47,7 @@ function resolvePublicSurfaceSourcePath(
   artifactBasename: string,
 ): string | null {
   const stem = artifactBasename.replace(/\.[^.]+$/u, "");
-  for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+  for (const extension of SOURCE_MODULE_EXTENSIONS) {
     const candidate = resolve(pluginDir, `${stem}${extension}`);
     try {
       readFileSync(candidate, "utf8");
@@ -72,13 +79,89 @@ function collectProductionContractEntryPaths(): Array<{ pluginId: string; entryP
   });
 }
 
-function findForbiddenContractBarrelPatterns(entryPath: string): string[] {
-  const failures: string[] = [];
-  const source = readFileSync(entryPath, "utf8");
+function formatRepoRelativePath(filePath: string): string {
+  return relative(REPO_ROOT, filePath).replaceAll(path.sep, "/");
+}
 
-  for (const pattern of FORBIDDEN_CONTRACT_BARREL_PATTERNS) {
-    if (pattern.test(source)) {
-      failures.push(`${entryPath.replace(`${REPO_ROOT}/`, "")} matched ${pattern}`);
+function collectRelativeReExportSpecifiers(source: string): string[] {
+  const specifiers = new Set<string>();
+  EXPORT_FROM_RE.lastIndex = 0;
+  for (const match of source.matchAll(EXPORT_FROM_RE)) {
+    const specifier = match[1];
+    if (specifier?.startsWith(".")) {
+      specifiers.add(specifier);
+    }
+  }
+  return [...specifiers];
+}
+
+function resolveRelativeSourceModulePath(fromPath: string, specifier: string): string | null {
+  const rawTargetPath = resolve(dirname(fromPath), specifier);
+  const candidates = new Set<string>();
+  const rawExtension = path.extname(rawTargetPath);
+  if (rawExtension) {
+    candidates.add(rawTargetPath);
+    const stem = rawTargetPath.slice(0, -rawExtension.length);
+    for (const extension of SOURCE_MODULE_EXTENSIONS) {
+      candidates.add(`${stem}${extension}`);
+    }
+  } else {
+    for (const extension of SOURCE_MODULE_EXTENSIONS) {
+      candidates.add(`${rawTargetPath}${extension}`);
+      candidates.add(resolve(rawTargetPath, `index${extension}`));
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function findForbiddenContractModuleGraphPaths(params: {
+  entryPath: string;
+  pluginDir: string;
+}): string[] {
+  const failures: string[] = [];
+  const visited = new Set<string>();
+  const pending = [params.entryPath];
+
+  while (pending.length > 0) {
+    const currentPath = pending.pop();
+    if (!currentPath || visited.has(currentPath)) {
+      continue;
+    }
+    visited.add(currentPath);
+
+    const repoRelativePath = formatRepoRelativePath(currentPath);
+    for (const pattern of FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS) {
+      if (pattern.test(repoRelativePath)) {
+        failures.push(`${repoRelativePath} matched ${pattern}`);
+      }
+    }
+
+    const source = readFileSync(currentPath, "utf8");
+    for (const pattern of FORBIDDEN_CONTRACT_MODULE_SOURCE_PATTERNS) {
+      if (pattern.test(source)) {
+        failures.push(`${repoRelativePath} matched ${pattern}`);
+      }
+    }
+
+    for (const specifier of collectRelativeReExportSpecifiers(source)) {
+      const resolvedModulePath = resolveRelativeSourceModulePath(currentPath, specifier);
+      if (!resolvedModulePath) {
+        continue;
+      }
+      if (resolvedModulePath === currentPath) {
+        continue;
+      }
+      if (!resolvedModulePath.startsWith(params.pluginDir + path.sep)) {
+        continue;
+      }
+      pending.push(resolvedModulePath);
     }
   }
 
@@ -131,9 +214,10 @@ describe("plugin entry guardrails", () => {
 
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
     const failures = collectProductionContractEntryPaths().flatMap(({ pluginId, entryPath }) =>
-      findForbiddenContractBarrelPatterns(entryPath).map(
-        (failure) => `${pluginId}: ${failure.replace(`${REPO_ROOT}/`, "")}`,
-      ),
+      findForbiddenContractModuleGraphPaths({
+        entryPath,
+        pluginDir: dirname(entryPath),
+      }).map((failure) => `${pluginId}: ${failure}`),
     );
 
     expect(failures).toEqual([]);
