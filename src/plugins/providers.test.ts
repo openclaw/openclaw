@@ -583,6 +583,45 @@ describe("resolvePluginProviders", () => {
     });
   });
 
+  it("does not include trusted-but-disabled workspace providers when denylist blocks them", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter", "workspace-provider"],
+          deny: ["workspace-provider"],
+          entries: {
+            "workspace-provider": { enabled: false },
+          },
+        },
+      },
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
+    });
+
+    expectLastSetupRegistryLoad({
+      onlyPluginIds: ["google", "kilocode", "moonshot"],
+    });
+  });
+
+  it("does not include workspace providers blocked by allowlist gating", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+          entries: {
+            "workspace-provider": { enabled: true },
+          },
+        },
+      },
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
+    });
+
+    expectLastSetupRegistryLoad({
+      onlyPluginIds: ["google", "kilocode", "moonshot"],
+    });
+  });
+
   it("loads provider plugins from the auto-enabled config snapshot", () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledProviderConfig();
     applyPluginAutoEnableMock.mockReturnValue({

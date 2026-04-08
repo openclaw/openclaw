@@ -99,7 +99,15 @@ export function resolveDiscoveredProviderPluginIds(params: {
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
       });
-      return activation.activated || activation.explicitlyEnabled;
+      if (activation.activated) {
+        return true;
+      }
+      const explicitlyTrustedButDisabled =
+        normalizedConfig.enabled &&
+        !normalizedConfig.deny.includes(plugin.id) &&
+        normalizedConfig.allow.includes(plugin.id) &&
+        normalizedConfig.entries[plugin.id]?.enabled === false;
+      return explicitlyTrustedButDisabled;
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
