@@ -39,7 +39,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { hasContextOverflowTag, isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -816,8 +816,10 @@ export async function runWithModelFallback<T>(params: {
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
+      // Belt-and-suspenders: check both the regex and the structural tag so
+      // a new error format never silently falls through to model fallback.
       const errMessage = formatErrorMessage(err);
-      if (isLikelyContextOverflowError(errMessage)) {
+      if (isLikelyContextOverflowError(errMessage) || hasContextOverflowTag(err)) {
         throw err;
       }
       const normalized =

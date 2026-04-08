@@ -3,6 +3,7 @@ import {
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
+  hasContextOverflowTag,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -17,6 +18,7 @@ import {
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
+  tagContextOverflowError,
 } from "./pi-embedded-helpers.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -505,6 +507,26 @@ describe("isLikelyContextOverflowError", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+
+  it("matches internal overflow errors from tool-result-context-guard", () => {
+    expect(
+      isLikelyContextOverflowError(
+        "Context overflow: estimated context size exceeds safe threshold during tool loop.",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches internal overflow errors from preemptive-compaction", () => {
+    expect(
+      isLikelyContextOverflowError("Context overflow: prompt too large for the model (precheck)."),
+    ).toBe(true);
+  });
+
+  it("matches any internal overflow error with the 'Context overflow:' prefix", () => {
+    expect(
+      isLikelyContextOverflowError("Context overflow: some future internal error message"),
+    ).toBe(true);
   });
 });
 
@@ -1099,5 +1121,26 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"permission_error: OAuth authentication is currently not allowed for this organization"}}',
       ),
     ).toBe("auth_permanent");
+  });
+});
+
+describe("tagContextOverflowError / hasContextOverflowTag", () => {
+  it("tags an error and detects the tag", () => {
+    const err = new Error("some overflow");
+    expect(hasContextOverflowTag(err)).toBe(false);
+    tagContextOverflowError(err);
+    expect(hasContextOverflowTag(err)).toBe(true);
+  });
+
+  it("returns false for non-errors", () => {
+    expect(hasContextOverflowTag(null)).toBe(false);
+    expect(hasContextOverflowTag(undefined)).toBe(false);
+    expect(hasContextOverflowTag("string")).toBe(false);
+    expect(hasContextOverflowTag(42)).toBe(false);
+  });
+
+  it("overflow with unrecognized message but structural tag is still detected", () => {
+    const err = tagContextOverflowError(new Error("totally novel overflow format xyz123"));
+    expect(hasContextOverflowTag(err)).toBe(true);
   });
 });

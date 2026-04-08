@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { tagContextOverflowError } from "../pi-embedded-helpers/errors.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -228,7 +229,7 @@ export function installToolResultContextGuard(params: {
         maxContextChars,
       })
     ) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+      throw tagContextOverflowError(new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE));
     }
 
     return contextMessages;

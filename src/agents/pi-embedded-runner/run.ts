@@ -53,10 +53,12 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
+  hasContextOverflowTag,
   isCompactionFailureError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isLikelyContextOverflowError,
+  tagContextOverflowError,
   isRateLimitAssistantError,
   parseImageDimensionError,
   parseImageSizeError,
@@ -1256,7 +1258,7 @@ export async function runEmbeddedPiAgent(
               const status = resolveFailoverStatus(fallbackReason);
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
-              throw (
+              const thrown =
                 normalizedPromptFailover ??
                 new FailoverError(errorText, {
                   reason: fallbackReason,
@@ -1264,8 +1266,13 @@ export async function runEmbeddedPiAgent(
                   model: modelId,
                   profileId: lastProfileId,
                   status,
-                })
-              );
+                });
+              // Propagate the structural overflow tag so model-fallback can
+              // detect it even if the regex-based check misses a new format.
+              if (hasContextOverflowTag(promptError)) {
+                tagContextOverflowError(thrown);
+              }
+              throw thrown;
             }
             if (promptFailoverDecision.action === "surface_error") {
               logPromptFailoverDecision("surface_error");
