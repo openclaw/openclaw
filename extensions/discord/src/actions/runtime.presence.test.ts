@@ -1,8 +1,8 @@
 import type { GatewayPlugin } from "@buape/carbon/gateway";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionGate } from "../../../../src/agents/tools/common.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
+import type { ActionGate } from "../runtime-api.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
 const mockUpdatePresence = vi.fn();

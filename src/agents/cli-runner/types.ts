@@ -1,9 +1,11 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 
 export type RunCliAgentParams = {
@@ -28,17 +30,23 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  messageProvider?: string;
+  agentAccountId?: string;
+  abortSignal?: AbortSignal;
+  replyOperation?: ReplyOperation;
 };
 
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  env?: Record<string, string>;
 };
 
 export type CliReusableSession = {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "system-prompt" | "mcp";
+  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
 };
 
 export type PreparedCliRunContext = {
@@ -54,5 +62,6 @@ export type PreparedCliRunContext = {
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
   heartbeatPrompt?: string;
+  authEpoch?: string;
   extraSystemPromptHash?: string;
 };

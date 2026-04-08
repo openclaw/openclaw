@@ -1,8 +1,13 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import { getNextcloudTalkRuntime } from "./runtime.js";
-import { generateNextcloudTalkSignature } from "./signature.js";
+import {
+  convertMarkdownTables,
+  fetchWithSsrFGuard,
+  generateNextcloudTalkSignature,
+  getNextcloudTalkRuntime,
+  resolveMarkdownTableMode,
+  resolveNextcloudTalkAccount,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
@@ -61,6 +66,20 @@ function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
   return { cfg, account, baseUrl, secret };
 }
 
+function recordNextcloudTalkOutboundActivity(accountId: string): void {
+  try {
+    getNextcloudTalkRuntime().channel.activity.record({
+      channel: "nextcloud-talk",
+      accountId,
+      direction: "outbound",
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "Nextcloud Talk runtime not initialized") {
+      throw error;
+    }
+  }
+}
+
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
@@ -73,15 +92,12 @@ export async function sendMessageNextcloudTalk(
     throw new Error("Message must be non-empty for Nextcloud Talk sends");
   }
 
-  const tableMode = getNextcloudTalkRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "nextcloud-talk",
     accountId: account.accountId,
   });
-  const message = getNextcloudTalkRuntime().channel.text.convertMarkdownTables(
-    text.trim(),
-    tableMode,
-  );
+  const message = convertMarkdownTables(text.trim(), tableMode);
 
   const body: Record<string, unknown> = {
     message,
@@ -115,7 +131,7 @@ export async function sendMessageNextcloudTalk(
       body: bodyStr,
     },
     auditContext: "nextcloud-talk-send",
-    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
   });
 
   try {
@@ -164,11 +180,7 @@ export async function sendMessageNextcloudTalk(
       console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
     }
 
-    getNextcloudTalkRuntime().channel.activity.record({
-      channel: "nextcloud-talk",
-      accountId: account.accountId,
-      direction: "outbound",
-    });
+    recordNextcloudTalkOutboundActivity(account.accountId);
 
     return { messageId, roomToken, timestamp };
   } finally {
@@ -207,7 +219,7 @@ export async function sendReactionNextcloudTalk(
       body,
     },
     auditContext: "nextcloud-talk-reaction",
-    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
   });
 
   try {

@@ -86,12 +86,12 @@ describe("getSoonestCooldownExpiry", () => {
       "openai:p2": {
         cooldownUntil: now + 30_000,
         cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.2",
+        cooldownModel: "gpt-5.4",
       },
     });
 
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.2" }),
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
     ).toBe(now + 30_000);
   });
 
@@ -107,12 +107,12 @@ describe("getSoonestCooldownExpiry", () => {
       "openai:p2": {
         cooldownUntil: now + 30_000,
         cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.2",
+        cooldownModel: "gpt-5.4",
       },
     });
 
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.2" }),
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
     ).toBe(now + 20_000);
   });
 });

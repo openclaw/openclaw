@@ -67,9 +67,9 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
+    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
   };
   mediaUnderstanding: {
     runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
@@ -81,6 +81,14 @@ export type PluginRuntimeCore = {
   imageGeneration: {
     generate: typeof import("../../image-generation/runtime.js").generateImage;
     listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+  };
+  videoGeneration: {
+    generate: typeof import("../../video-generation/runtime.js").generateVideo;
+    listProviders: typeof import("../../video-generation/runtime.js").listRuntimeVideoGenerationProviders;
+  };
+  musicGeneration: {
+    generate: typeof import("../../music-generation/runtime.js").generateMusic;
+    listProviders: typeof import("../../music-generation/runtime.js").listRuntimeMusicGenerationProviders;
   };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
@@ -103,12 +111,26 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  tasks: {
+    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
+    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  };
+  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
       cfg?: import("../../config/config.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+    /** Resolve request-ready auth for a model, including provider runtime exchanges. */
+    getRuntimeAuthForModel: (params: {
+      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      cfg?: import("../../config/config.js").OpenClawConfig;
+      workspaceDir?: string;
+    }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
     /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;

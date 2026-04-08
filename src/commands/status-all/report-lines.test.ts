@@ -65,6 +65,7 @@ describe("buildStatusAllReportLines", () => {
         channelIssues: [],
         gatewayReachable: false,
         health: null,
+        nodeOnlyGateway: null,
       },
     });
 

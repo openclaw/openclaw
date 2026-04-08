@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { SandboxBackendCommandResult } from "./backend.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
@@ -326,7 +327,7 @@ function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
   if (!typeRaw) {
     return "other";
   }
-  const normalized = typeRaw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(typeRaw) ?? "";
   if (normalized.includes("directory")) {
     return "directory";
   }

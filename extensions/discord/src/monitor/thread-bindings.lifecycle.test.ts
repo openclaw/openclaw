@@ -2,13 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-} from "../../../../src/config/config.js";
-import { getSessionBindingService } from "../../../../src/infra/outbound/session-binding-service.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -41,8 +41,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
     addRoleDiscord: vi.fn(),
@@ -1566,7 +1566,7 @@ describe("thread binding lifecycle", () => {
       ).toBeUndefined();
       expect(
         resolveThreadBindingInactivityExpiresAt({
-          record: disabled!,
+          record: disabled,
           defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
         }),
       ).toBeUndefined();

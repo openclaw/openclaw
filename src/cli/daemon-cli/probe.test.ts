@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { probeGatewayStatus } from "./probe.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const probeGatewayMock = vi.hoisted(() => vi.fn());
@@ -14,8 +15,6 @@ vi.mock("../../gateway/probe.js", () => ({
 vi.mock("../progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
-
-const { probeGatewayStatus } = await import("./probe.js");
 
 describe("probeGatewayStatus", () => {
   it("uses lightweight token-only probing for daemon status", async () => {
@@ -78,6 +77,26 @@ describe("probeGatewayStatus", () => {
     probeGatewayMock.mockResolvedValueOnce({
       ok: false,
       error: null,
+      close: { code: 1008, reason: "pairing required" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "gateway closed (1008): pairing required",
+    });
+  });
+
+  it("prefers the close reason over a generic timeout when both are present", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "timeout",
       close: { code: 1008, reason: "pairing required" },
     });
 

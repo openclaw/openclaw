@@ -2,6 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+vi.mock("../model-suppression.js", () => ({
+  shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
+    (provider === "openai" || provider === "azure-openai-responses") &&
+    id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
+  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
+    if (
+      (provider !== "openai" && provider !== "azure-openai-responses") ||
+      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
+    ) {
+      return undefined;
+    }
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+  },
+}));
+
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
@@ -87,165 +102,6 @@ function resolveModelAsyncForTest(
     runtimeHooks: createRuntimeHooks(),
   });
 }
-
-describe("buildInlineProviderModels", () => {
-  it("attaches provider ids to inline models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
-      beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toEqual([
-      {
-        ...makeModel("alpha-model"),
-        provider: "alpha",
-        baseUrl: "http://alpha.local",
-        api: undefined,
-      },
-      {
-        ...makeModel("beta-model"),
-        provider: "beta",
-        baseUrl: "http://beta.local",
-        api: undefined,
-      },
-    ]);
-  });
-
-  it("inherits baseUrl from provider when model does not specify it", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].baseUrl).toBe("http://localhost:8000");
-  });
-
-  it("inherits api from provider when model does not specify it", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        api: "anthropic-messages",
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
-  });
-
-  it("model-level api takes precedence over provider-level api", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        api: "openai-responses",
-        models: [{ ...makeModel("custom-model"), api: "anthropic-messages" as const }],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
-  });
-
-  it("inherits both baseUrl and api from provider config", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:10000",
-        api: "anthropic-messages",
-        models: [makeModel("claude-opus-4.5")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "custom",
-      baseUrl: "http://localhost:10000",
-      api: "anthropic-messages",
-      name: "claude-opus-4.5",
-    });
-  });
-
-  it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      "google-paid ": {
-        baseUrl: "https://generativelanguage.googleapis.com",
-        api: "google-generative-ai",
-        models: [makeModel("gemini-2.5-pro")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "google-paid",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    });
-  });
-
-  it("merges provider-level headers into inline models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      proxy: {
-        baseUrl: "https://proxy.example.com",
-        api: "anthropic-messages",
-        headers: { "User-Agent": "custom-agent/1.0" },
-        models: [makeModel("claude-sonnet-4-6")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
-  });
-
-  it("omits headers when neither provider nor model specifies them", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      plain: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("some-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toBeUndefined();
-  });
-
-  it("drops SecretRef marker headers in inline provider models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        headers: {
-          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-          "X-Managed": "secretref-managed",
-          "X-Static": "tenant-a",
-        },
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({
-      "X-Static": "tenant-a",
-    });
-  });
-});
 
 describe("resolveModel", () => {
   it("defaults model input to text when discovery omits input", () => {
@@ -349,6 +205,64 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(result.model?.api).toBe("google-generative-ai");
     expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
+  it("normalizes custom api.openai.com providers to responses transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-openai": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                provider: "custom-openai",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("normalizes custom api.x.ai providers to responses transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-xai": {
+            baseUrl: "https://api.x.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("grok-4.1-fast"),
+                provider: "custom-xai",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-xai", "grok-4.1-fast", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-xai",
+      id: "grok-4.1-fast",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+    });
   });
 
   it("includes provider headers in provider fallback model", () => {
@@ -476,6 +390,145 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("propagates image input capability from matching configured fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                input: ["text"],
+              },
+              {
+                ...makeModel("model-b"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "typoed-model", "/tmp/agent", cfg);
+
+    expect(result.model?.id).toBe("typoed-model");
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
+  it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.services.ai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                name: "gpt-5.4",
+                api: "azure-openai-responses",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.services.ai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                name: "gpt-5.4",
+                api: "azure-openai-responses",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    mockDiscoveredModel(discoverModels, {
+      provider: "microsoft-foundry",
+      modelId: "gpt-5.4",
+      templateModel: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+        api: "azure-openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+    });
+
+    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("repairs stale text-only Foundry discovered rows without config overrides", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "microsoft-foundry",
+      modelId: "gpt-5.4",
+      templateModel: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+        api: "azure-openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+    });
+
+    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent");
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
   it("matches prefixed OpenRouter native ids in configured fallback models", () => {
     const cfg = {
       models: {
@@ -554,6 +607,34 @@ describe("resolveModel", () => {
       provider: "openrouter",
       id: "openrouter/healer-alpha",
       reasoning: false,
+      input: ["text"],
+    });
+  });
+
+  it("matches prefixed Hugging Face ids against discovered registry models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "huggingface",
+      modelId: "deepseek-ai/DeepSeek-R1",
+      templateModel: {
+        ...makeModel("deepseek-ai/DeepSeek-R1"),
+        provider: "huggingface",
+        baseUrl: "https://router.huggingface.co/v1",
+        reasoning: true,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest(
+      "huggingface",
+      "huggingface/deepseek-ai/DeepSeek-R1",
+      "/tmp/agent",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "huggingface",
+      id: "deepseek-ai/DeepSeek-R1",
+      reasoning: true,
       input: ["text"],
     });
   });
@@ -746,13 +827,13 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
-  it("builds an openai-codex fallback for gpt-5.4", () => {
+  it("builds an openai-codex fallback for gpt-5.4-mini", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"));
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
@@ -788,6 +869,156 @@ describe("resolveModel", () => {
     });
   });
 
+  it("prefers runtime-resolved openai-codex gpt-5.4 metadata when it has a larger context window", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("prefers runtime-resolved openai-codex gpt-5.4 metadata during async resolution too", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+      },
+    });
+
+    const result = await resolveModelAsyncForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("passes configured workspaceDir to runtime preference hooks", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+      },
+    });
+
+    const shouldPreferRuntimeResolvedModel = vi.fn(
+      (params: { workspaceDir?: string; context: { agentDir?: string } }) =>
+        params.workspaceDir === "/tmp/workspace" && params.context.agentDir === "/tmp/agent-state",
+    );
+    const runProviderDynamicModel = vi.fn(
+      (params: { workspaceDir?: string; context: { provider: string; modelId: string } }) =>
+        params.workspaceDir === "/tmp/workspace" &&
+        params.context.provider === "openai-codex" &&
+        params.context.modelId === "gpt-5.4"
+          ? ({
+              ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+              name: "GPT-5.4",
+            } as ReturnType<typeof buildOpenAICodexForwardCompatExpectation>)
+          : undefined,
+    );
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      shouldPreferProviderRuntimeResolvedModel: shouldPreferRuntimeResolvedModel,
+      runProviderDynamicModel,
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent-state", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
+      runtimeHooks,
+    });
+
+    expect(shouldPreferRuntimeResolvedModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          agentDir: "/tmp/agent-state",
+          workspaceDir: "/tmp/workspace",
+        }),
+      }),
+    );
+    expect(runProviderDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          agentDir: "/tmp/agent-state",
+          modelId: "gpt-5.4",
+          provider: "openai-codex",
+        }),
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("keeps exact discovered metadata for other openai-codex models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+        name: "GPT-5.4 Mini",
+        contextWindow: 64_000,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 64_000,
+      input: ["text"],
+    });
+  });
+
   it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
@@ -812,9 +1043,9 @@ describe("resolveModel", () => {
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
       templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         name: "GPT-5.2",
         provider: "openai",
         api: "openai-responses",
@@ -891,12 +1122,23 @@ describe("resolveModel", () => {
     );
   });
 
-  it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
+  it("resolves github-copilot Claude dynamic models to anthropic-messages by default", () => {
+    const result = resolveModelForTest("github-copilot", "claude-sonnet-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "claude-sonnet-4.6",
+      api: "anthropic-messages",
+    });
+  });
+
+  it("builds an openai fallback for gpt-5.4 mini from the gpt-5.4-mini template", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
-      modelId: "gpt-5-mini",
+      modelId: "gpt-5.4-mini",
       templateModel: buildForwardCompatTemplate({
-        id: "gpt-5-mini",
+        id: "gpt-5.4-mini",
         name: "GPT-5 mini",
         provider: "openai",
         api: "openai-responses",
@@ -923,12 +1165,12 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
+  it("builds an openai fallback for gpt-5.4 nano from the gpt-5.4-nano template", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
-      modelId: "gpt-5-nano",
+      modelId: "gpt-5.4-nano",
       templateModel: buildForwardCompatTemplate({
-        id: "gpt-5-nano",
+        id: "gpt-5.4-nano",
         name: "GPT-5 nano",
         provider: "openai",
         api: "openai-responses",
@@ -1000,6 +1242,76 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       api: "openai-completions",
       baseUrl: "https://proxy.example.com/v1",
+    });
+  });
+
+  it("normalizes stale native xai completions transport to responses", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "xai",
+      modelId: "grok-4.20-beta-latest-reasoning",
+      templateModel: buildForwardCompatTemplate({
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+      }),
+    });
+
+    const result = resolveModelForTest("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      id: "grok-4.20-beta-latest-reasoning",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+    });
+  });
+
+  it("normalizes stale native xai completions transport after plugin model normalization", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "xai",
+      modelId: "grok-4.20-beta-latest-reasoning",
+      templateModel: buildForwardCompatTemplate({
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+      }),
+    });
+
+    const result = resolveModel("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        applyProviderResolvedModelCompatWithPlugins: () => undefined,
+        buildProviderUnknownModelHintWithPlugin: () => undefined,
+        clearProviderRuntimeHookCache: () => {},
+        prepareProviderDynamicModel: async () => {},
+        runProviderDynamicModel: () => undefined,
+        applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
+          provider === "xai" &&
+          context.model.api === "openai-completions" &&
+          context.model.baseUrl === "https://api.x.ai/v1"
+            ? {
+                ...context.model,
+                api: "openai-responses",
+              }
+            : undefined,
+        normalizeProviderResolvedModelWithPlugin: ({ provider, context }) =>
+          provider === "xai" ? (context.model as never) : undefined,
+        normalizeProviderTransportWithPlugin: () => undefined,
+      },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      id: "grok-4.20-beta-latest-reasoning",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
     });
   });
 });

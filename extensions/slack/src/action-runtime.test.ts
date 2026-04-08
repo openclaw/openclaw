@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 
@@ -240,6 +240,30 @@ describe("handleSlackAction", () => {
         details: expect.objectContaining({ ok: false }),
       }),
     );
+  });
+
+  it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("tok");
+  });
+
+  it("keeps resolved userToken for downloadFile reads when configured", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123" },
+      slackConfig({
+        accounts: {
+          default: {
+            botToken: "xoxb-bot",
+            userToken: "xoxp-user",
+          },
+        },
+      }),
+    );
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("xoxp-user");
   });
 
   it.each([

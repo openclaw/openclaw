@@ -4,12 +4,18 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { type OpenClawConfig, writeConfigFile } from "../../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
-import { type ChatChannel, channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
+import {
+  type ChatChannel,
+  channelLabel,
+  requireValidConfigFileSnapshot,
+  shouldUseWizard,
+} from "./shared.js";
 
 export type ChannelsRemoveOptions = {
   channel?: string;
@@ -30,15 +36,16 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const loadedCfg = await requireValidConfig(runtime);
-  if (!loadedCfg) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
-  let cfg = loadedCfg;
+  const baseHash = configSnapshot.hash;
+  let cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
-  const rawChannel = opts.channel?.trim() ?? "";
+  const rawChannel = normalizeOptionalString(opts.channel) ?? "";
   let channel: ChatChannel | null = normalizeChannelId(rawChannel);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
@@ -160,7 +167,10 @@ export async function channelsRemoveCommand(
     });
   }
 
-  await writeConfigFile(next);
+  await replaceConfigFile({
+    nextConfig: next,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig

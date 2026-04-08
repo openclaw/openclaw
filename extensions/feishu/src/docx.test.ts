@@ -1,7 +1,10 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
@@ -15,25 +18,44 @@ const driveUploadAllMock = vi.hoisted(() => vi.fn());
 const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
+const toolAccountModule = await import("./tool-account.js");
+const runtimeModule = await import("./runtime.js");
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      media: {
-        fetchRemoteMedia: fetchRemoteMediaMock,
+vi.spyOn(toolAccountModule, "createFeishuToolClient").mockImplementation(() =>
+  createFeishuClientMock(),
+);
+vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
+  doc: true,
+  chat: false,
+  wiki: false,
+  drive: false,
+  perm: false,
+  scopes: false,
+});
+vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockImplementation((...args) =>
+  resolveFeishuToolAccountMock(...args),
+);
+vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
+  () =>
+    ({
+      channel: {
+        media: {
+          fetchRemoteMedia: fetchRemoteMediaMock,
+          saveMediaBuffer: vi.fn(),
+        },
       },
-    },
-    media: {
-      loadWebMedia: loadWebMediaMock,
-    },
-  }),
-}));
+      media: {
+        loadWebMedia: loadWebMediaMock,
+        detectMime: vi.fn(async () => "application/octet-stream"),
+        mediaKindFromMime: vi.fn(() => "image"),
+        isVoiceCompatibleAudio: vi.fn(() => false),
+        getImageMetadata: vi.fn(async () => null),
+        resizeToJpeg: vi.fn(async () => Buffer.alloc(0)),
+      },
+    }) as unknown as ReturnType<typeof runtimeModule.getFeishuRuntime>,
+);
 
-import { registerFeishuDocTools } from "./docx.js";
+const { registerFeishuDocTools } = await import("./docx.js");
 
 type ToolResultWithDetails = {
   details: Record<string, unknown>;
@@ -75,6 +97,9 @@ describe("feishu_doc image fetch hardening", () => {
           list: scopeListMock,
         },
       },
+    });
+    resolveFeishuToolAccountMock.mockReturnValue({
+      config: { mediaMaxMb: 30 },
     });
 
     convertMock.mockResolvedValue({
@@ -132,7 +157,7 @@ describe("feishu_doc image fetch hardening", () => {
     registerFeishuDocTools(harness.api);
     const tool = harness.resolveTool("feishu_doc", context);
     expect(tool).toBeDefined();
-    return tool as ToolLike;
+    return tool;
   }
 
   async function executeFeishuDocTool(
@@ -448,11 +473,11 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.file_token).toBe("token_1");
     expect(result.details.file_name).toBe("test-local.txt");
 
-    // localRoots is not passed — loadWebMedia uses default roots (tmp, media,
-    // workspace, sandboxes) plus workspace-profile auto-discovery.
+    // Without workspace-only policy, localRoots stays undefined so loadWebMedia
+    // applies its default managed-root access behavior.
     expect(loadWebMediaMock).toHaveBeenCalledWith(
       expect.stringContaining("test-local.txt"),
-      expect.objectContaining({ optimizeImages: false }),
+      expect.objectContaining({ optimizeImages: false, localRoots: undefined }),
     );
 
     expect(driveUploadAllMock).toHaveBeenCalledWith(
@@ -464,6 +489,124 @@ describe("feishu_doc image fetch hardening", () => {
         }),
       }),
     );
+  });
+
+  it("passes workspace localRoots for upload_file when workspace-only policy is active", async () => {
+    blockChildrenCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        children: [{ block_type: 23, block_id: "file_block_1" }],
+      },
+    });
+
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("hello from local file", "utf8"),
+      fileName: "test-local.txt",
+    });
+
+    const feishuDocTool = resolveFeishuDocTool({
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: true },
+    });
+
+    await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_file",
+      doc_token: "doc_1",
+      file_path: "/tmp/openclaw-1000/test-local.txt",
+      filename: "test-local.txt",
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      expect.stringContaining("test-local.txt"),
+      expect.objectContaining({ optimizeImages: false, localRoots: ["/workspace"] }),
+    );
+  });
+
+  it("passes empty localRoots when workspace-only policy is active without workspaceDir", async () => {
+    blockChildrenCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        children: [{ block_type: 23, block_id: "file_block_1" }],
+      },
+    });
+
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("hello from local file", "utf8"),
+      fileName: "test-local.txt",
+    });
+
+    const feishuDocTool = resolveFeishuDocTool({
+      fsPolicy: { workspaceOnly: true },
+    });
+
+    await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_file",
+      doc_token: "doc_1",
+      file_path: "/tmp/openclaw-1000/test-local.txt",
+      filename: "test-local.txt",
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      expect.stringContaining("test-local.txt"),
+      expect.objectContaining({ optimizeImages: false, localRoots: [] }),
+    );
+  });
+
+  it("passes workspace localRoots for upload_image local paths when workspace-only policy is active", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("hello from local file", "utf8"),
+      fileName: "test-local.png",
+    });
+
+    const feishuDocTool = resolveFeishuDocTool({
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: true },
+    });
+
+    await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_image",
+      doc_token: "doc_1",
+      image: "./test-local.png",
+      filename: "test-local.png",
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      expect.stringContaining("test-local.png"),
+      expect.objectContaining({ optimizeImages: false, localRoots: ["/workspace"] }),
+    );
+  });
+
+  it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {
+    const fixtureDir = path.join(process.cwd(), ".tmp-docx-upload-image-absolute");
+    const absoluteImagePath = path.join(fixtureDir, "absolute-image.png");
+    mkdirSync(fixtureDir, { recursive: true });
+    writeFileSync(absoluteImagePath, "not-real-image");
+
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("hello from local file", "utf8"),
+      fileName: "absolute-image.png",
+    });
+
+    const feishuDocTool = resolveFeishuDocTool({
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: true },
+    });
+
+    try {
+      await executeFeishuDocTool(feishuDocTool, {
+        action: "upload_image",
+        doc_token: "doc_1",
+        image: absoluteImagePath,
+        filename: "absolute-image.png",
+      });
+
+      expect(loadWebMediaMock).toHaveBeenCalledWith(
+        expect.stringContaining("absolute-image.png"),
+        expect.objectContaining({ optimizeImages: false, localRoots: ["/workspace"] }),
+      );
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
   });
 
   it("returns an error when upload_file cannot list placeholder siblings", async () => {
