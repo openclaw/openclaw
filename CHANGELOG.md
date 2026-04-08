@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/provider-auth: let provider manifests declare `providerAuthAliases` so provider variants can share env vars, auth profiles, config-backed auth, and API-key onboarding choices without core-specific wiring.
 - Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit, and reset flows so old daily notes can be replayed safely into `DREAMS.md`. Thanks @mbelinky.
 - Memory/dreaming: harden grounded diary extraction so `What Happened`, `Reflections`, and durable candidates suppress operational noise and preserve more atomic lasting facts. Thanks @mbelinky.
+- Control UI/dreaming: add a structured diary view with timeline navigation, backfill/reset controls, and traceable dreaming summaries. Thanks @mbelinky.
 
 ### Fixes
 
