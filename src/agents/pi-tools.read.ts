@@ -558,23 +558,31 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
+      const nextArgs = record ? { ...record } : args;
       const pathParamNames =
         options?.pathParamNames && options.pathParamNames.length > 0
           ? options.pathParamNames
           : ["path"];
       for (const pathParamName of pathParamNames) {
         const filePath = record?.[pathParamName];
-        if (typeof filePath !== "string" || !filePath.trim()) {
+        if (typeof filePath !== "string") {
+          continue;
+        }
+        const normalizedFilePath = filePath.trim();
+        if (!normalizedFilePath) {
           continue;
         }
         const sandboxPath = mapContainerPathToWorkspaceRoot({
-          filePath,
+          filePath: normalizedFilePath,
           root,
           containerWorkdir: options?.containerWorkdir,
         });
         await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        if (record) {
+          nextArgs[pathParamName] = sandboxPath;
+        }
       }
-      return tool.execute(toolCallId, args, signal, onUpdate);
+      return tool.execute(toolCallId, nextArgs, signal, onUpdate);
     },
   };
 }

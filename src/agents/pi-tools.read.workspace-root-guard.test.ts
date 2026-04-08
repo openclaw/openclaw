@@ -133,7 +133,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
   it("checks configured alternate path params like outPath", async () => {
     const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
-    const { tool } = createToolHarness();
+    const { execute, tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
       pathParamNames: ["outPath"],
@@ -146,5 +146,36 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       cwd: root,
       root,
     });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-out-path",
+      { outPath: path.resolve(root, "docs", "recording.mp4") },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("trims guarded path params before validation and execution", async () => {
+    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamNames: ["outPath"],
+    });
+
+    await wrapped.execute("tc-out-path-trimmed", {
+      outPath: "  /workspace/docs/recording.mp4  ",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "recording.mp4"),
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-out-path-trimmed",
+      { outPath: path.resolve(root, "docs", "recording.mp4") },
+      undefined,
+      undefined,
+    );
   });
 });
