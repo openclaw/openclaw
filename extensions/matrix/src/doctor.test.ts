@@ -267,6 +267,40 @@ describe("matrix doctor", () => {
     );
   });
 
+  it("migrates legacy 'trusted' policy with whitespace-only allowFrom entries to 'pairing'", () => {
+    // Whitespace-only entries are dropped by downstream allowlist normalization,
+    // so they must not count toward the allowFrom population check — otherwise
+    // the migration would emit policy="allowlist" with an effectively empty
+    // allowlist, silently blocking all DMs.
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: {
+              enabled: true,
+              policy: "trusted",
+              allowFrom: ["   ", "\t", ""],
+            },
+          },
+        },
+      } as never,
+    });
+
+    const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
+    expect(matrixDm?.policy).toBe("pairing");
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "pairing"'),
+      ]),
+    );
+  });
+
   it("migrates legacy channels.matrix.dm.policy 'trusted' without allowFrom to 'pairing'", () => {
     const normalize = matrixDoctor.normalizeCompatibilityConfig;
     expect(normalize).toBeDefined();

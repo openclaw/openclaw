@@ -72,8 +72,14 @@ function migrateLegacyTrustedDmPolicy(params: {
     return { entry: params.entry, changed: false };
   }
   const allowFromRaw = dm.allowFrom;
+  // Trim before counting: downstream allowlist normalization drops whitespace-only
+  // entries, so a config like ["   "] would otherwise migrate to "allowlist" and
+  // then end up with an empty allowFrom — silently blocking all DMs instead of
+  // falling through to the intended "pairing" default.
   const allowFromEntries = Array.isArray(allowFromRaw)
-    ? allowFromRaw.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    ? allowFromRaw.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+      )
     : [];
   // "trusted" with an explicit allowFrom list maps to "allowlist" semantics.
   // "trusted" with no entries maps to "pairing" (the default secure mode), since
