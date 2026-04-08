@@ -101,20 +101,7 @@ fi
 dedupe_chrome_args
 chromium "${CHROME_ARGS[@]}" about:blank &
 
-READY=0
-for _ in $(seq 1 200); do
-  if curl -sS --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" >/dev/null; then
-    READY=1
-    break
-  fi
-  sleep 0.1
-done
-
-if [[ "$READY" != "1" ]]; then
-  echo "ERROR: Chromium CDP not ready within timeout. Killing container."
-  exit 1
-fi
-
+# socat starts immediately; Node.js waitForSandboxCdp is the sole health arbiter
 SOCAT_LISTEN_ADDR="TCP-LISTEN:${CDP_PORT},fork,reuseaddr,bind=0.0.0.0"
 if [[ -n "${CDP_SOURCE_RANGE}" ]]; then
   SOCAT_LISTEN_ADDR="${SOCAT_LISTEN_ADDR},range=${CDP_SOURCE_RANGE}"
