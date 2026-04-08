@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
@@ -109,7 +110,7 @@ function resolveConversationPath(to: string): {
     const [teamId, channelId] = cleaned.split("/", 2);
     return {
       kind: "channel",
-      basePath: `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`,
+      basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
       channelId,
     };
@@ -289,7 +290,7 @@ export type ListReactionsMSTeamsResult = {
 };
 
 function validateReactionType(raw: string): TeamsReactionType {
-  const normalized = raw.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (!TEAMS_REACTION_TYPES.includes(normalized as TeamsReactionType)) {
     throw new Error(
       `Invalid reaction type "${raw}". Valid types: ${TEAMS_REACTION_TYPES.join(", ")}`,

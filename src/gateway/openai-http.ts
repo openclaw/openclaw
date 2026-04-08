@@ -18,6 +18,10 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -25,7 +29,7 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   resolveGatewayRequestContext,
@@ -112,6 +116,7 @@ function buildAgentCommandInput(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
+  abortSignal?: AbortSignal;
 }) {
   return {
     message: params.prompt.message,
@@ -125,6 +130,7 @@ function buildAgentCommandInput(params: {
     bestEffortDeliver: false as const,
     senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
+    abortSignal: params.abortSignal,
   };
 }
 
@@ -240,17 +246,19 @@ type ActiveTurnContext = {
 function parseImageUrlToSource(url: string): InputImageSource {
   const dataUriMatch = /^data:([^,]*?),(.*)$/is.exec(url);
   if (dataUriMatch) {
-    const metadata = dataUriMatch[1]?.trim() ?? "";
+    const metadata = normalizeOptionalString(dataUriMatch[1]) ?? "";
     const data = dataUriMatch[2] ?? "";
     const metadataParts = metadata
       .split(";")
-      .map((part) => part.trim())
+      .map((part) => normalizeOptionalString(part) ?? "")
       .filter(Boolean);
-    const isBase64 = metadataParts.some((part) => part.toLowerCase() === "base64");
+    const isBase64 = metadataParts.some(
+      (part) => normalizeLowercaseStringOrEmpty(part) === "base64",
+    );
     if (!isBase64) {
       throw new Error("image_url data URI must be base64 encoded");
     }
-    if (!data.trim()) {
+    if (!(normalizeOptionalString(data) ?? "")) {
       throw new Error("image_url data URI is missing payload data");
     }
     const mediaTypeRaw = metadataParts.find((part) => part.includes("/"));
@@ -270,7 +278,7 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     if (!msg || typeof msg !== "object") {
       continue;
     }
-    const role = typeof msg.role === "string" ? msg.role.trim() : "";
+    const role = normalizeOptionalString(msg.role) ?? "";
     const normalizedRole = role === "function" ? "tool" : role;
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
@@ -342,7 +350,7 @@ function buildAgentPrompt(
     if (!msg || typeof msg !== "object") {
       continue;
     }
-    const role = typeof msg.role === "string" ? msg.role.trim() : "";
+    const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
     const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
@@ -370,7 +378,7 @@ function buildAgentPrompt(
       continue;
     }
 
-    const name = typeof msg.name === "string" ? msg.name.trim() : "";
+    const name = normalizeOptionalString(msg.name) ?? "";
     const sender =
       normalizedRole === "assistant"
         ? "Assistant"
@@ -493,6 +501,7 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const abortController = new AbortController();
   const commandInput = buildAgentCommandInput({
     prompt: {
       message: prompt.message,
@@ -503,12 +512,18 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    abortSignal: abortController.signal,
     senderIsOwner,
   });
 
   if (!stream) {
+    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+
+      if (abortController.signal.aborted) {
+        return true;
+      }
 
       const content = resolveAgentResponseText(result);
 
@@ -527,10 +542,15 @@ export async function handleOpenAiHttpRequest(
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     } catch (err) {
+      if (abortController.signal.aborted) {
+        return true;
+      }
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
       sendJson(res, 500, {
         error: { message: "internal error", type: "api_error" },
       });
+    } finally {
+      stopWatchingDisconnect();
     }
     return true;
   }
@@ -540,6 +560,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  let stopWatchingDisconnect = () => {};
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -574,6 +595,7 @@ export async function handleOpenAiHttpRequest(
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         writeDone(res);
         res.end();
@@ -581,7 +603,7 @@ export async function handleOpenAiHttpRequest(
     }
   });
 
-  req.on("close", () => {
+  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
   });
@@ -611,10 +633,10 @@ export async function handleOpenAiHttpRequest(
         });
       }
     } catch (err) {
-      logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
-      if (closed) {
+      if (closed || abortController.signal.aborted) {
         return;
       }
+      logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       writeAssistantContentChunk(res, {
         runId,
         model,
@@ -629,6 +651,7 @@ export async function handleOpenAiHttpRequest(
     } finally {
       if (!closed) {
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         writeDone(res);
         res.end();

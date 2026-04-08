@@ -5,6 +5,7 @@
  * error handling, priority ordering, and async support.
  */
 
+import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
@@ -20,6 +21,9 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -74,6 +78,9 @@ export type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -126,10 +133,17 @@ export type HookRunnerLogger = {
   error: (message: string) => void;
 };
 
+export type HookFailurePolicy = "fail-open" | "fail-closed";
+
 export type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
+  /**
+   * Optional per-hook failure policy.
+   * Defaults to fail-open unless explicitly overridden for a hook name.
+   */
+  failurePolicyByHook?: Partial<Record<PluginHookName, HookFailurePolicy>>;
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -162,6 +176,12 @@ export type PluginTargetedInboundClaimOutcome =
       error: string;
     };
 
+type SyncHookName = "tool_result_persist" | "before_message_write";
+type SyncHookHandler<K extends SyncHookName> = NonNullable<PluginHookRegistration<K>["handler"]>;
+type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
+type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
+type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
+
 /**
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
@@ -188,6 +208,10 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
+  const failurePolicyByHook = options.failurePolicyByHook ?? {};
+
+  const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
+    catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
 
   const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
@@ -257,7 +281,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${String(
       params.error,
     )}`;
-    if (catchErrors) {
+    if (shouldCatchHookErrors(params.hookName)) {
       logger?.error(msg);
       return;
     }
@@ -265,9 +289,25 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   };
 
   const sanitizeHookError = (error: unknown): string => {
-    const raw = error instanceof Error ? error.message : String(error);
+    const raw = formatErrorMessage(error);
     const firstLine = raw.split("\n")[0]?.trim();
     return firstLine || "unknown error";
+  };
+
+  const isPromiseLike = (value: unknown): value is PromiseLike<unknown> => {
+    if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+      return false;
+    }
+    return typeof (value as { then?: unknown }).then === "function";
+  };
+
+  const runSyncHookHandler = <K extends SyncHookName>(
+    hook: PluginHookRegistration<K>,
+    event: SyncHookEvent<K>,
+    ctx: SyncHookContext<K>,
+  ): SyncHookResult<K> | PromiseLike<unknown> => {
+    const handler = hook.handler as SyncHookHandler<K>;
+    return handler(event, ctx) as SyncHookResult<K> | PromiseLike<unknown>;
   };
 
   /**
@@ -682,6 +722,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run reply_dispatch hook.
+   * Allows plugins to own reply dispatch before the default model path runs.
+   * First handler returning { handled: true } wins.
+   */
+  async function runReplyDispatch(
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ): Promise<PluginHookReplyDispatchResult | undefined> {
+    return runClaimingHook<"reply_dispatch", PluginHookReplyDispatchResult>(
+      "reply_dispatch",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -799,19 +855,14 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
-        // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
-          | PluginHookToolResultPersistResult
-          | void
-          | Promise<unknown>;
+        const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
 
         // Guard against accidental async handlers (this hook is sync-only).
-        // oxlint-disable-next-line typescript/no-explicit-any
-        if (out && typeof (out as any).then === "function") {
+        if (isPromiseLike(out)) {
           const msg =
             `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
             `this hook is synchronous and the result was ignored.`;
-          if (catchErrors) {
+          if (shouldCatchHookErrors("tool_result_persist")) {
             logger?.warn?.(msg);
             continue;
           }
@@ -824,7 +875,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         }
       } catch (err) {
         const msg = `[hooks] tool_result_persist handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
+        if (shouldCatchHookErrors("tool_result_persist")) {
           logger?.error(msg);
         } else {
           throw new Error(msg, { cause: err });
@@ -864,19 +915,14 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
-        // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
-          | PluginHookBeforeMessageWriteResult
-          | void
-          | Promise<unknown>;
+        const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
 
         // Guard against accidental async handlers (this hook is sync-only).
-        // oxlint-disable-next-line typescript/no-explicit-any
-        if (out && typeof (out as any).then === "function") {
+        if (isPromiseLike(out)) {
           const msg =
             `[hooks] before_message_write handler from ${hook.pluginId} returned a Promise; ` +
             `this hook is synchronous and the result was ignored.`;
-          if (catchErrors) {
+          if (shouldCatchHookErrors("before_message_write")) {
             logger?.warn?.(msg);
             continue;
           }
@@ -896,7 +942,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         }
       } catch (err) {
         const msg = `[hooks] before_message_write handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
+        if (shouldCatchHookErrors("before_message_write")) {
           logger?.error(msg);
         } else {
           throw new Error(msg, { cause: err });
@@ -1090,6 +1136,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaimForPluginOutcome,
     runMessageReceived,
     runBeforeDispatch,
+    runReplyDispatch,
     runMessageSending,
     runMessageSent,
     // Tool hooks

@@ -7,7 +7,13 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "acpx"
+  - "hono"
   - "openclaw"
+  - "@buape/carbon"
+  - "vite"
+  - "@cloudflare/workers-types"
+  - "@hono/node-server"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
   - "@oxlint/*"
@@ -16,6 +22,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
 
 onlyBuiltDependencies:
+  - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
@@ -28,5 +35,4 @@ onlyBuiltDependencies:
   - sharp
 
 ignoredBuiltDependencies:
-  - "@discordjs/opus"
   - koffi

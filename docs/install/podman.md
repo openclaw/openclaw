@@ -92,7 +92,7 @@ Then commands such as these will run inside that container automatically:
 
 ```bash
 openclaw dashboard --no-open
-openclaw gateway status --deep
+openclaw gateway status --deep   # includes extra service scan
 openclaw doctor
 openclaw channels login
 ```
@@ -158,7 +158,9 @@ The launch script and Quadlet bind-mount host state into the container:
 - `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`
 
-By default those are host directories, not anonymous container state, so config and workspace survive container replacement.
+By default those are host directories, not anonymous container state, so
+`openclaw.json`, per-agent `auth-profiles.json`, channel/provider state,
+sessions, and workspace survive container replacement.
 The Podman setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
 
 Useful env vars for the manual launcher:
@@ -178,7 +180,9 @@ If you use a non-default `OPENCLAW_CONFIG_DIR` or `OPENCLAW_WORKSPACE_DIR`, set 
 Quadlet note:
 
 - The generated Quadlet service intentionally keeps a fixed, hardened default shape: `127.0.0.1` published ports, `--bind lan` inside the container, and `keep-id` user namespace.
-- It still reads `~/.openclaw/.env` for gateway runtime env such as `OPENCLAW_GATEWAY_TOKEN`, but it does not consume the manual launcher's Podman-specific override allowlist.
+- It pins `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`.
+- It publishes both `127.0.0.1:18789:18789` (gateway) and `127.0.0.1:18790:18790` (bridge).
+- It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but it does not consume the manual launcher's Podman-specific override allowlist.
 - If you need custom publish ports, publish host, or other container-run flags, use the manual launcher or edit `~/.config/containers/systemd/openclaw.container` directly, then reload and restart the service.
 
 ## Useful commands
@@ -187,7 +191,8 @@ Quadlet note:
 - **Stop container:** `podman stop openclaw`
 - **Remove container:** `podman rm -f openclaw`
 - **Open dashboard URL from host CLI:** `openclaw dashboard --no-open`
-- **Health/status via host CLI:** `openclaw gateway status --deep`
+- **Health/status via host CLI:** `openclaw gateway status --deep` (RPC probe + extra
+  service scan)
 
 ## Troubleshooting
 
