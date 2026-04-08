@@ -165,6 +165,10 @@ export function createCronPromptExecutor(params: {
           timeoutMs: params.timeoutMs,
           bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
+          extraSystemPrompt:
+            params.agentPayload?.lightContext && params.cfgWithAgentDefaults.agents?.defaults?.cron?.systemPrompt
+              ? params.cfgWithAgentDefaults.agents.defaults.cron.systemPrompt
+              : undefined,
           toolsAllow: params.agentPayload?.toolsAllow,
           runId: params.cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,

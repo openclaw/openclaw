@@ -330,6 +330,15 @@ export type AgentDefaultsConfig = {
      */
     beforeRun?: string;
   };
+  /** Cron job defaults. */
+  cron?: {
+    /**
+     * Extra system prompt injected into all cron runs that use lightContext mode.
+     * Useful for adding output rules (e.g. anti-narration) that would normally
+     * come from workspace bootstrap files (SOUL.md) but are absent in lightweight mode.
+     */
+    systemPrompt?: string;
+  };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */

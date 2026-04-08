@@ -189,6 +189,12 @@ export const AgentDefaultsSchema = z
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
+    cron: z
+      .object({
+        systemPrompt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
