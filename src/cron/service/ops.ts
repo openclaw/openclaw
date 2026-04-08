@@ -307,6 +307,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const enabledChanged = patch.enabled !== undefined;
 
     job.updatedAtMs = now;
+    job.configUpdatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
       if (isJobEnabled(job)) {
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);

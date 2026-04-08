@@ -16,51 +16,39 @@ function resolveDefaultCronStorePath(): string {
   return path.join(resolveDefaultCronDir(), "jobs.json");
 }
 
+function resolveStatePath(storePath: string): string {
+  return storePath.replace(/\.json$/, "-state.json");
+}
+
+type CronStateFileEntry = {
+  updatedAtMs?: number;
+  state?: Record<string, unknown>;
+};
+
+type CronStateFile = {
+  version: 1;
+  jobs: Record<string, CronStateFileEntry>;
+};
+
 function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   return {
     version: store.version,
     jobs: store.jobs.map((job) => {
       const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
-      return rest;
+      return { ...rest, state: {} };
     }),
   };
 }
 
-function parseCronStoreForBackupComparison(raw: string): CronStoreFile | null {
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const version = (parsed as { version?: unknown }).version;
-    const jobs = (parsed as { jobs?: unknown }).jobs;
-    if (version !== 1 || !Array.isArray(jobs)) {
-      return null;
-    }
-    return {
-      version: 1,
-      jobs: jobs.filter(Boolean) as CronStoreFile["jobs"],
+function extractStateFile(store: CronStoreFile): CronStateFile {
+  const jobs: Record<string, CronStateFileEntry> = {};
+  for (const job of store.jobs) {
+    jobs[job.id] = {
+      updatedAtMs: job.updatedAtMs,
+      state: job.state ?? {},
     };
-  } catch {
-    return null;
   }
-}
-
-function shouldSkipCronBackupForRuntimeOnlyChanges(
-  previousRaw: string | null,
-  nextStore: CronStoreFile,
-): boolean {
-  if (previousRaw === null) {
-    return false;
-  }
-  const previous = parseCronStoreForBackupComparison(previousRaw);
-  if (!previous) {
-    return false;
-  }
-  return (
-    JSON.stringify(stripRuntimeOnlyCronFields(previous)) ===
-    JSON.stringify(stripRuntimeOnlyCronFields(nextStore))
-  );
+  return { version: 1, jobs };
 }
 
 export function resolveCronStorePath(storePath?: string) {
@@ -72,6 +60,37 @@ export function resolveCronStorePath(storePath?: string) {
     return path.resolve(raw);
   }
   return resolveDefaultCronStorePath();
+}
+
+async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
+  try {
+    const raw = await fs.promises.readFile(statePath, "utf-8");
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (record.version !== 1 || typeof record.jobs !== "object" || record.jobs === null) {
+      return null;
+    }
+    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return null;
+    }
+    // Best-effort: if state file is corrupt, treat as absent.
+    return null;
+  }
+}
+
+function hasInlineState(jobs: Array<Record<string, unknown>>): boolean {
+  return jobs.some(
+    (job) =>
+      job.state !== undefined &&
+      typeof job.state === "object" &&
+      job.state !== null &&
+      Object.keys(job.state as Record<string, unknown>).length > 0,
+  );
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
@@ -94,11 +113,51 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
-    serializedStoreCache.set(storePath, JSON.stringify(store, null, 2));
+
+    // Load state file and merge.
+    const statePath = resolveStatePath(storePath);
+    const stateFile = await loadStateFile(statePath);
+
+    if (stateFile) {
+      // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
+      for (const job of store.jobs) {
+        const entry = stateFile.jobs[job.id];
+        if (entry) {
+          job.updatedAtMs = entry.updatedAtMs ?? job.updatedAtMs;
+          job.state = (entry.state ?? {}) as never;
+        } else {
+          // Job exists in config but not in state file: default to empty state.
+          if (!job.state || typeof job.state !== "object") {
+            job.state = {} as never;
+          }
+        }
+      }
+    } else if (!hasInlineState(jobs as unknown as Array<Record<string, unknown>>)) {
+      // No state file, no inline state: fresh clone or first run.
+      for (const job of store.jobs) {
+        job.state = (job.state && typeof job.state === "object" ? job.state : {}) as never;
+      }
+    }
+    // else: migration mode — no state file but jobs.json has inline state. Use as-is.
+
+    // Ensure every job has a state object (defensive).
+    for (const job of store.jobs) {
+      if (!job.state || typeof job.state !== "object") {
+        job.state = {} as never;
+      }
+    }
+
+    const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
+    serializedStoreCache.set(storePath, configJson);
+    if (stateFile) {
+      serializedStoreCache.set(`${storePath}:state`, JSON.stringify(stateFile, null, 2));
+    }
+
     return store;
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
+      serializedStoreCache.delete(`${storePath}:state`);
       return { version: 1, jobs: [] };
     }
     throw err;
@@ -113,51 +172,71 @@ async function setSecureFileMode(filePath: string): Promise<void> {
   await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
 }
 
+async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.promises.mkdir(dir, { recursive: true, mode: dirMode });
+  await fs.promises.chmod(dir, dirMode).catch(() => undefined);
+  const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  await fs.promises.writeFile(tmp, content, { encoding: "utf-8", mode: 0o600 });
+  await setSecureFileMode(tmp);
+  await renameWithRetry(tmp, filePath);
+  await setSecureFileMode(filePath);
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
-  const storeDir = path.dirname(storePath);
-  await fs.promises.mkdir(storeDir, { recursive: true, mode: 0o700 });
-  await fs.promises.chmod(storeDir, 0o700).catch(() => undefined);
-  const json = JSON.stringify(store, null, 2);
-  const cached = serializedStoreCache.get(storePath);
-  if (cached === json) {
+  const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
+  const stateFile = extractStateFile(store);
+  const stateJson = JSON.stringify(stateFile, null, 2);
+
+  const statePath = resolveStatePath(storePath);
+  const configCacheKey = storePath;
+  const stateCacheKey = `${storePath}:state`;
+
+  const cachedConfig = serializedStoreCache.get(configCacheKey);
+  const cachedState = serializedStoreCache.get(stateCacheKey);
+
+  const configChanged = cachedConfig !== configJson;
+  const stateChanged = cachedState !== stateJson;
+
+  if (!configChanged && !stateChanged) {
     return;
   }
 
-  let previous: string | null = cached ?? null;
-  if (previous === null) {
+  // Detect migration: state file does not exist on disk yet.
+  let migrating = false;
+  if (!cachedState) {
     try {
-      previous = await fs.promises.readFile(storePath, "utf-8");
-    } catch (err) {
-      if ((err as { code?: unknown }).code !== "ENOENT") {
-        throw err;
+      await fs.promises.access(statePath, fs.constants.F_OK);
+    } catch {
+      migrating = true;
+    }
+  }
+
+  // Write state file first (safer ordering for migration — see PR_DRAFT.md Atomicity).
+  if (stateChanged || migrating) {
+    await atomicWrite(statePath, stateJson);
+    serializedStoreCache.set(stateCacheKey, stateJson);
+  }
+
+  if (configChanged || migrating) {
+    // Determine backup need: only when config actually changed (not migration-only).
+    const skipBackup = opts?.skipBackup === true || !configChanged;
+    if (!skipBackup) {
+      try {
+        const backupPath = `${storePath}.bak`;
+        await fs.promises.copyFile(storePath, backupPath);
+        await setSecureFileMode(backupPath);
+      } catch {
+        // best-effort
       }
     }
+    await atomicWrite(storePath, configJson);
+    serializedStoreCache.set(configCacheKey, configJson);
   }
-  if (previous === json) {
-    serializedStoreCache.set(storePath, json);
-    return;
-  }
-  const skipBackup =
-    opts?.skipBackup === true || shouldSkipCronBackupForRuntimeOnlyChanges(previous, store);
-  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await setSecureFileMode(tmp);
-  if (previous !== null && !skipBackup) {
-    try {
-      const backupPath = `${storePath}.bak`;
-      await fs.promises.copyFile(storePath, backupPath);
-      await setSecureFileMode(backupPath);
-    } catch {
-      // best-effort
-    }
-  }
-  await renameWithRetry(tmp, storePath);
-  await setSecureFileMode(storePath);
-  serializedStoreCache.set(storePath, json);
 }
 
 const RENAME_MAX_RETRIES = 3;

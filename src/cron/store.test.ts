@@ -109,8 +109,13 @@ describe("cron store", () => {
 
     const currentRaw = await fs.readFile(store.storePath, "utf-8");
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
-    expect(JSON.parse(currentRaw)).toEqual(second);
-    expect(JSON.parse(backupRaw)).toEqual(first);
+    const current = JSON.parse(currentRaw);
+    const backup = JSON.parse(backupRaw);
+    // jobs.json now contains config-only (state stripped to {}).
+    expect(current.jobs[0].id).toBe("job-2");
+    expect(current.jobs[0].state).toEqual({});
+    expect(backup.jobs[0].id).toBe("job-1");
+    expect(backup.jobs[0].state).toEqual({});
   });
 
   it("skips backup files for runtime-only state churn", async () => {
@@ -132,8 +137,20 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, first);
     await saveCronStore(store.storePath, second);
 
-    const currentRaw = await fs.readFile(store.storePath, "utf-8");
-    expect(JSON.parse(currentRaw)).toEqual(second);
+    // jobs.json should NOT be rewritten (only runtime changed).
+    const configRaw = await fs.readFile(store.storePath, "utf-8");
+    const config = JSON.parse(configRaw);
+    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
+
+    // State file should contain runtime fields.
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const stateRaw = await fs.readFile(statePath, "utf-8");
+    const stateFile = JSON.parse(stateRaw);
+    expect(stateFile.jobs[first.jobs[0].id].state.nextRunAtMs).toBe(
+      first.jobs[0].createdAtMs + 60_000,
+    );
+
     await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
   });
 
