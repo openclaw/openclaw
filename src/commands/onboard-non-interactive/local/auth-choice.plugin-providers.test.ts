@@ -92,6 +92,64 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
+    const runtime = createRuntime();
+    resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+    resolvePluginProviders.mockImplementation(
+      (params: { includeUntrustedWorkspacePlugins?: boolean } | undefined) =>
+        params?.includeUntrustedWorkspacePlugins === false
+          ? []
+          : ([{ id: "workspace-provider", pluginId: "workspace-provider" }] as never),
+    );
+    resolveProviderPluginChoice.mockImplementation(
+      (params: { choice?: string; providers?: Array<{ id?: string }> } | undefined) => {
+        if (params?.choice !== "workspace-provider-api-key") {
+          return undefined;
+        }
+        const providers = Array.isArray(params.providers) ? params.providers : [];
+        if (!providers.some((provider) => provider.id === "workspace-provider")) {
+          return undefined;
+        }
+        return {
+          provider: {
+            id: "workspace-provider",
+            pluginId: "workspace-provider",
+            label: "Workspace Provider",
+          },
+          method: { id: "api-key" },
+        };
+      },
+    );
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "workspace-provider-api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Auth choice "workspace-provider-api-key" matched a provider plugin that is not trusted or enabled for setup.',
+      ),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    );
+  });
+
   it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));

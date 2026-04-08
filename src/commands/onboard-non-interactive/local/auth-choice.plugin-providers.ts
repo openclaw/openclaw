@@ -88,6 +88,26 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       params.runtime.exit(1);
       return null;
     }
+    const unfilteredProviderChoice = resolveProviderPluginChoice({
+      providers: resolvePluginProviders({
+        config: params.nextConfig,
+        workspaceDir,
+        onlyPluginIds: owningPluginIds,
+        mode: "setup",
+        includeUntrustedWorkspacePlugins: true,
+      }),
+      choice: params.authChoice,
+    });
+    if (unfilteredProviderChoice) {
+      params.runtime.error(
+        [
+          `Auth choice "${params.authChoice}" matched a provider plugin that is not trusted or enabled for setup.`,
+          "If this provider comes from a workspace plugin, trust/allow it first and retry.",
+        ].join("\n"),
+      );
+      params.runtime.exit(1);
+      return null;
+    }
     return undefined;
   }
 
