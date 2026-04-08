@@ -66,9 +66,21 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
+  knownPluginCliRoots: readonly string[] = [],
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
   if (!normalizedPluginId) {
+    return null;
+  }
+  if (normalizedPluginId.startsWith("/")) {
+    return null;
+  }
+  const normalizedPluginCliRoots = new Set(
+    knownPluginCliRoots
+      .map((entry) => normalizeOptionalLowercaseString(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+  if (!normalizedPluginCliRoots.has(normalizedPluginId)) {
     return null;
   }
   const allow =
@@ -202,7 +214,8 @@ export async function runCli(argv: string[] = process.argv) {
     });
     if (!shouldSkipPluginRegistration) {
       // Register plugin CLI commands before parsing
-      const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
+      const { getPluginCliCommandRoots, registerPluginCliCommandsFromValidatedConfig } =
+        await import("../plugins/cli.js");
       const config = await registerPluginCliCommandsFromValidatedConfig(
         program,
         undefined,
@@ -214,7 +227,11 @@ export async function runCli(argv: string[] = process.argv) {
       );
       if (config) {
         if (primary && !program.commands.some((command) => command.name() === primary)) {
-          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(
+            primary,
+            config,
+            await getPluginCliCommandRoots(config),
+          );
           if (missingPluginCommandMessage) {
             throw new Error(missingPluginCommandMessage);
           }
