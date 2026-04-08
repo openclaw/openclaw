@@ -22,6 +22,7 @@ type CommandQueueModule = typeof import("./command-queue.js");
 
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let CommandLaneTimeoutError: CommandQueueModule["CommandLaneTimeoutError"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
@@ -60,6 +61,7 @@ describe("command queue", () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
+      CommandLaneTimeoutError,
       enqueueCommand,
       enqueueCommandInLane,
       GatewayDrainingError,
@@ -356,6 +358,90 @@ describe("command queue", () => {
     deferred.resolve();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+  });
+
+  // AGE-728: per-task maxExecutionMs timeout
+  it("rejects a task that exceeds maxExecutionMs with CommandLaneTimeoutError", async () => {
+    const lane = `timeout-basic-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      // Task that never resolves on its own — will be killed by the timeout.
+      // Attach .catch() immediately to suppress unhandled-rejection noise during
+      // timer advancement (the Promise rejects before the await expect() line runs).
+      const taskPromise = enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        maxExecutionMs: 100,
+      });
+      const caught = taskPromise.catch((err) => err);
+
+      await vi.advanceTimersByTimeAsync(110);
+
+      await expect(caught).resolves.toBeInstanceOf(CommandLaneTimeoutError);
+      expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+        expect.stringContaining("lane task timeout: lane="),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("frees the lane slot after maxExecutionMs so queued tasks can run (AGE-724 regression)", async () => {
+    const lane = `timeout-unblocks-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      // First task hangs — will be killed by the 100 ms timeout.
+      // Attach .catch() immediately to suppress unhandled-rejection during timer advancement.
+      const firstCaught = enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        maxExecutionMs: 100,
+      }).catch((err) => err);
+
+      // Second task is queued behind it; should run once the first times out.
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "ok";
+      });
+
+      expect(secondRan).toBe(false);
+
+      // Advance past the timeout — first task is killed, lane slot freed.
+      await vi.advanceTimersByTimeAsync(110);
+
+      await expect(firstCaught).resolves.toBeInstanceOf(CommandLaneTimeoutError);
+      await expect(second).resolves.toBe("ok");
+      expect(secondRan).toBe(true);
+      expect(getActiveTaskCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out tasks below the maxExecutionMs threshold", async () => {
+    const lane = `timeout-no-early-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      let resolveTask!: (v: string) => void;
+      const taskPromise = enqueueCommandInLane(
+        lane,
+        () =>
+          new Promise<string>((r) => {
+            resolveTask = r;
+          }),
+        { maxExecutionMs: 500 },
+      );
+
+      // Advance to just under the limit — no timeout yet.
+      await vi.advanceTimersByTimeAsync(400);
+      resolveTask("done");
+      await expect(taskPromise).resolves.toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
