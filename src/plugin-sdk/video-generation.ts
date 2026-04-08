@@ -33,6 +33,8 @@ export type VideoGenerationSourceAsset = {
   buffer?: Buffer;
   mimeType?: string;
   fileName?: string;
+  /** Semantic role hint forwarded to the provider as-is (e.g. "first_frame", "last_frame", "reference_video", "reference_audio"). */
+  role?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -57,6 +59,10 @@ export type VideoGenerationRequest = {
   watermark?: boolean;
   inputImages?: VideoGenerationSourceAsset[];
   inputVideos?: VideoGenerationSourceAsset[];
+  /** Reference audio assets (e.g. background music) forwarded to the provider. */
+  inputAudios?: VideoGenerationSourceAsset[];
+  /** Arbitrary provider-specific parameters forwarded as-is (e.g. seed, draft, camerafixed). */
+  providerOptions?: Record<string, unknown>;
 };
 
 export type VideoGenerationResult = {
@@ -71,6 +77,8 @@ export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
   maxInputVideos?: number;
+  /** Max number of reference audio assets the provider accepts (e.g. background music, voice reference). */
+  maxInputAudios?: number;
   maxDurationSeconds?: number;
   supportedDurationSeconds?: readonly number[];
   supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
