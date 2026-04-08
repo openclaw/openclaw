@@ -630,12 +630,24 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
+  // Targeted wakes may pass a key that already ends with `:heartbeat` (or nested
+  // suffixes). When isolatedSession is on, normalize before preflight so
+  // peekSystemEventEntries, the session-lane busy check, and the isolated store
+  // key all use the same base session key (#62869).
+  const trimmedForcedSessionKey = opts.sessionKey?.trim();
+  const forcedSessionKeyForPreflight =
+    heartbeat?.isolatedSession === true
+      ? trimmedForcedSessionKey
+        ? stripHeartbeatIsolatedSessionSuffixes(trimmedForcedSessionKey)
+        : undefined
+      : opts.sessionKey;
+
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
   const preflight = await resolveHeartbeatPreflight({
     cfg,
     agentId,
     heartbeat,
-    forcedSessionKey: opts.sessionKey,
+    forcedSessionKey: forcedSessionKeyForPreflight,
     reason: opts.reason,
   });
   if (preflight.skipReason) {
@@ -674,10 +686,10 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     entry,
     heartbeat,
-    // Isolated heartbeat runs drain system events from their dedicated
-    // `:heartbeat` session, not from the base session we peek during preflight.
-    // Reusing base-session turnSource routing here can pin later isolated runs
-    // to stale channels/threads because that base-session event context remains queued.
+    // Isolated runs avoid base-session turnSource routing so delivery does not
+    // stick to stale channels while base-session event context remains queued.
+    // Pending system events are still resolved during preflight on the normalized
+    // store session key (same key used for the session-lane busy check).
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -728,8 +740,7 @@ export async function runHeartbeatOnce(opts: {
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
-    const baseSessionKey = stripHeartbeatIsolatedSessionSuffixes(sessionKey);
-    const isolatedKey = `${baseSessionKey}:heartbeat`;
+    const isolatedKey = `${sessionKey}:heartbeat`;
     const cronSession = resolveCronSession({
       cfg,
       sessionKey: isolatedKey,
