@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
 } from "./pi-model-discovery.js";
-import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -139,5 +139,4 @@ describe("discoverAuthStorage", () => {
       }
     }
   });
-
 });

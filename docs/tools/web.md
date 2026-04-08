@@ -62,6 +62,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
+  <Card title="Bocha Search" icon="magnifying-glass" href="/tools/bocha-search">
+    High quality Web search with structured results. Best for Chinese content.
+  </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free fallback. No API key needed. Unofficial HTML-based integration.
   </Card>
@@ -102,6 +105,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | Provider                                  | Result style               | Filters                                          | API key                                                                          |
 | ----------------------------------------- | -------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
 | [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                  |
+| [Bocha](/tools/bocha-search)              | Structured snippets        | Time range                                       | `BOCHA_API_KEY`                                                                  |
 | [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                                                                  |
 | [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                    |
 | [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                              |
@@ -162,14 +166,15 @@ first one that is ready:
 API-backed providers first:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey` (order 10)
-2. **MiniMax Search** -- `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` or `plugins.entries.minimax.config.webSearch.apiKey` (order 15)
-3. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey` (order 20)
-4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
-5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
-6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
-7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
-8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey` (order 65)
-9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
+2. **Bocha** -- `BOCHA_API_KEY` or `plugins.entries.bocha.config.webSearch.apiKey` (order 12)
+3. **MiniMax Search** -- `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` or `plugins.entries.minimax.config.webSearch.apiKey` (order 15)
+4. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey` (order 20)
+5. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
+6. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
+7. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
+8. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
+9. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey` (order 65)
+10. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 
 Key-free fallbacks after that:
 

@@ -10,6 +10,10 @@ export const pluginRegistrationContractCases = {
     cliBackendIds: ["claude-cli"],
     requireDescribeImages: true,
   },
+  bocha: {
+    pluginId: "bocha",
+    webSearchProviderIds: ["bocha"],
+  },
   brave: {
     pluginId: "brave",
     webSearchProviderIds: ["brave"],

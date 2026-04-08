@@ -2,9 +2,9 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueuedWizardPrompter } from "../../../test/helpers/plugins/setup-wizard.js";
-import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import { whatsappPlugin } from "./channel.js";
+import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
 

@@ -26,6 +26,23 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-01-01to2024-01-31", "brave")).toBe("2024-01-01to2024-01-31");
   });
 
+  it("normalizes bocha freshness", () => {
+    expect(normalizeFreshness("noLimit", "bocha")).toBe("noLimit");
+    expect(normalizeFreshness("oneDay", "bocha")).toBe("oneDay");
+    expect(normalizeFreshness("pd", "bocha")).toBe("oneDay");
+    expect(normalizeFreshness("day", "bocha")).toBe("oneDay");
+    expect(normalizeFreshness("pw", "bocha")).toBe("oneWeek");
+    expect(normalizeFreshness("week", "bocha")).toBe("oneWeek");
+    expect(normalizeFreshness("pm", "bocha")).toBe("oneMonth");
+    expect(normalizeFreshness("month", "bocha")).toBe("oneMonth");
+    expect(normalizeFreshness("py", "bocha")).toBe("oneYear");
+    expect(normalizeFreshness("year", "bocha")).toBe("oneYear");
+    expect(normalizeFreshness("2024-01-01..2024-01-02", "bocha")).toBe("2024-01-01..2024-01-02");
+    expect(normalizeFreshness("2024-01-01to2024-01-02", "bocha")).toBe("2024-01-01..2024-01-02");
+    expect(normalizeFreshness("2024-01-01", "bocha")).toBe("2024-01-01");
+    expect(normalizeFreshness("invalid", "bocha")).toBe("noLimit");
+  });
+
   it("rejects invalid values", () => {
     expect(normalizeFreshness("yesterday", "brave")).toBeUndefined();
     expect(normalizeFreshness("yesterday", "perplexity")).toBeUndefined();

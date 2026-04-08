@@ -9,6 +9,7 @@ type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shar
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
+  { pluginId: "bocha", id: "bocha", order: 12 },
   { pluginId: "google", id: "gemini", order: 20 },
   { pluginId: "xai", id: "grok", order: 30 },
   { pluginId: "moonshot", id: "kimi", order: 40 },
@@ -34,6 +35,7 @@ let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
+  "bocha:bocha",
   "brave:brave",
   "duckduckgo:duckduckgo",
   "exa:exa",
