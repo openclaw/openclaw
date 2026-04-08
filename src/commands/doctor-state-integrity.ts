@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listBundledChannelPluginIds } from "../channels/plugins/bundled-ids.js";
+import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -16,7 +18,10 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { asNullableObjectRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -415,28 +420,27 @@ export function detectMacCloudSyncedStateDir(
   return null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function isPairingPolicy(value: unknown): boolean {
-  return typeof value === "string" && value.trim().toLowerCase() === "pairing";
+  return normalizeOptionalLowercaseString(value) === "pairing";
 }
 
 function hasPairingPolicy(value: unknown): boolean {
-  if (!isRecord(value)) {
+  const record = asNullableObjectRecord(value);
+  if (!record) {
     return false;
   }
-  if (isPairingPolicy(value.dmPolicy)) {
+  if (isPairingPolicy(record.dmPolicy)) {
     return true;
   }
-  if (isRecord(value.dm) && isPairingPolicy(value.dm.policy)) {
+  const dm = asNullableObjectRecord(record.dm);
+  if (dm && isPairingPolicy(dm.policy)) {
     return true;
   }
-  if (!isRecord(value.accounts)) {
+  const accounts = asNullableObjectRecord(record.accounts);
+  if (!accounts) {
     return false;
   }
-  for (const accountCfg of Object.values(value.accounts)) {
+  for (const accountCfg of Object.values(accounts)) {
     if (hasPairingPolicy(accountCfg)) {
       return true;
     }
@@ -445,7 +449,7 @@ function hasPairingPolicy(value: unknown): boolean {
 }
 
 function isSlashRoutingSessionKey(sessionKey: string): boolean {
-  const raw = sessionKey.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return false;
   }
@@ -457,13 +461,14 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
   }
-  const channels = cfg.channels;
-  if (!isRecord(channels)) {
+  const channels = asNullableObjectRecord(cfg.channels);
+  if (!channels) {
     return false;
   }
-  // WhatsApp auth always uses the credentials tree.
-  if (isRecord(channels.whatsapp)) {
-    return true;
+  for (const channelId of listBundledChannelPluginIds()) {
+    if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
+      return true;
+    }
   }
   // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
@@ -475,6 +480,11 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     }
   }
   return false;
+}
+
+function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
 }
 
 export async function noteStateIntegrity(
@@ -502,6 +512,7 @@ export async function noteStateIntegrity(
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -779,7 +790,7 @@ export async function noteStateIntegrity(
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
-    if (orphanTranscriptPaths.length > 0) {
+    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
       warnings.push(

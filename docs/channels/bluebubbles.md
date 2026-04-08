@@ -11,6 +11,11 @@ title: "BlueBubbles"
 
 Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
+## Bundled plugin
+
+Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not
+need a separate `openclaw plugins install` step.
+
 ## Overview
 
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).
@@ -212,6 +217,60 @@ Per-group configuration:
 - Uses `allowFrom` and `groupAllowFrom` to determine command authorization.
 - Authorized senders can run control commands even without mentioning in groups.
 
+## ACP conversation bindings
+
+BlueBubbles chats can be turned into durable ACP workspaces without changing the transport layer.
+
+Fast operator flow:
+
+- Run `/acp spawn codex --bind here` inside the DM or allowed group chat.
+- Future messages in that same BlueBubbles conversation route to the spawned ACP session.
+- `/new` and `/reset` reset the same bound ACP session in place.
+- `/acp close` closes the ACP session and removes the binding.
+
+Configured persistent bindings are also supported through top-level `bindings[]` entries with `type: "acp"` and `match.channel: "bluebubbles"`.
+
+`match.peer.id` can use any supported BlueBubbles target form:
+
+- normalized DM handle such as `+15555550123` or `user@example.com`
+- `chat_id:<id>`
+- `chat_guid:<guid>`
+- `chat_identifier:<identifier>`
+
+For stable group bindings, prefer `chat_id:*` or `chat_identifier:*`.
+
+Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: { agent: "codex", backend: "acpx", mode: "persistent" },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "bluebubbles",
+        accountId: "default",
+        peer: { kind: "dm", id: "+15555550123" },
+      },
+      acp: { label: "codex-imessage" },
+    },
+  ],
+}
+```
+
+See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
+
 ## Typing + read receipts
 
 - **Typing indicators**: Sent automatically before and during response generation.
@@ -350,9 +409,9 @@ Prefer `chat_guid` for stable routing:
 
 ## Security
 
-- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`. Requests from `localhost` are also accepted.
+- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`.
 - Keep the API password and webhook endpoint secret (treat them like credentials).
-- Localhost trust means a same-host reverse proxy can unintentionally bypass the password. If you proxy the gateway, require auth at the proxy and configure `gateway.trustedProxies`. See [Gateway security](/gateway/security#reverse-proxy-configuration).
+- There is no localhost bypass for BlueBubbles webhook auth. If you proxy webhook traffic, keep the BlueBubbles password on the request end-to-end. `gateway.trustedProxies` does not replace `channels.bluebubbles.password` here. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Enable HTTPS + firewall rules on the BlueBubbles server if exposing it outside your LAN.
 
 ## Troubleshooting
@@ -366,3 +425,11 @@ Prefer `chat_guid` for stable routing:
 - For status/health info: `openclaw status --all` or `openclaw status --deep`.
 
 For general channel workflow reference, see [Channels](/channels) and the [Plugins](/tools/plugin) guide.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

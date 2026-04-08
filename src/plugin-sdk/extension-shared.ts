@@ -1,6 +1,7 @@
 import type { z } from "zod";
-import { runPassiveAccountLifecycle } from "./channel-lifecycle.js";
-import { createLoggerBackedRuntime } from "./runtime.js";
+import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
+import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
+import { createLoggerBackedRuntime } from "./runtime-logger.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 
 type PassiveChannelStatusSnapshot = {
@@ -133,4 +134,22 @@ export function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
+  onError?: (error: unknown) => void;
+  onUsingProxy?: () => void;
+  protocol?: "http" | "https";
+}): Promise<TAgent | undefined> {
+  if (!hasEnvHttpProxyConfigured(params?.protocol ?? "https")) {
+    return undefined;
+  }
+  try {
+    const { ProxyAgent } = await import("proxy-agent");
+    params?.onUsingProxy?.();
+    return new ProxyAgent() as TAgent;
+  } catch (error) {
+    params?.onError?.(error);
+    return undefined;
+  }
 }

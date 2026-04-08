@@ -1,8 +1,12 @@
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
-import { matrixOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
+
+type MatrixInteractiveOptions = Parameters<
+  NonNullable<ChannelSetupWizardAdapter["configureInteractive"]>
+>[0]["options"];
 
 const MATRIX_ENV_KEYS = [
   "MATRIX_HOMESERVER",
@@ -60,7 +64,7 @@ export function createMatrixWizardPrompter(params: {
     fallback: PromptHandler<T | Promise<T>> | undefined,
   ): Promise<T> => {
     if (values && message in values) {
-      return values[message] as T;
+      return values[message];
     }
     if (fallback) {
       return await fallback(message);
@@ -89,12 +93,13 @@ export function createMatrixWizardPrompter(params: {
 export async function runMatrixInteractiveConfigure(params: {
   cfg: CoreConfig;
   prompter: WizardPrompter;
-  options?: unknown;
+  options?: MatrixInteractiveOptions;
   accountOverrides?: Record<string, string>;
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
   configured?: boolean;
 }) {
+  const { matrixOnboardingAdapter } = await import("./onboarding.js");
   return await matrixOnboardingAdapter.configureInteractive!({
     cfg: params.cfg,
     runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
@@ -112,13 +117,18 @@ export async function runMatrixAddAccountAllowlistConfigure(params: {
   cfg: CoreConfig;
   allowFromInput: string;
   roomsAllowlistInput: string;
+  autoJoinPolicy?: "always" | "allowlist" | "off";
+  autoJoinAllowlistInput?: string;
   deviceName?: string;
+  notes?: string[];
 }) {
   const prompter = createMatrixWizardPrompter({
+    notes: params.notes,
     select: {
       "Matrix already configured. What do you want to do?": "add-account",
       "Matrix auth method": "token",
       "Matrix rooms access": "allowlist",
+      "Matrix invite auto-join": params.autoJoinPolicy ?? "allowlist",
     },
     text: {
       "Matrix account name": "ops",
@@ -127,10 +137,13 @@ export async function runMatrixAddAccountAllowlistConfigure(params: {
       "Matrix device name (optional)": params.deviceName ?? "",
       "Matrix allowFrom (full @user:server; display name only if unique)": params.allowFromInput,
       "Matrix rooms allowlist (comma-separated)": params.roomsAllowlistInput,
+      "Matrix invite auto-join allowlist (comma-separated)":
+        params.autoJoinAllowlistInput ?? "#ops-invites:example.org",
     },
     confirm: {
       "Enable end-to-end encryption (E2EE)?": false,
       "Configure Matrix rooms access?": true,
+      "Configure Matrix invite auto-join?": true,
     },
     onConfirm: async () => false,
   });

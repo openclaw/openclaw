@@ -7,7 +7,17 @@ let monolithicSdk = null;
 let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
-const shouldPreferSourceInTests = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+const isDistRootAlias = __filename.includes(
+  `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
+);
+// Source plugin entry loading must stay on the source graph end-to-end. Mixing a
+// source root alias with dist compat/runtime shims can split singleton deps
+// (for example matrix-js-sdk) across two module graphs.
+const shouldPreferSourceGraph =
+  !isDistRootAlias &&
+  (process.env.NODE_ENV !== "production" ||
+    Boolean(process.env.VITEST) ||
+    process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -115,14 +125,16 @@ function buildPluginSdkAliasMap(useDist) {
   const packageRoot = getPackageRoot();
   const pluginSdkDir = path.join(packageRoot, useDist ? "dist" : "src", "plugin-sdk");
   const ext = useDist ? ".js" : ".ts";
+  const normalizeTarget = (target) =>
+    process.platform === "win32" ? target.replace(/\\/g, "/") : target;
   const aliasMap = {
-    "openclaw/plugin-sdk": __filename,
+    "openclaw/plugin-sdk": normalizeTarget(__filename),
   };
 
   for (const subpath of listPluginSdkExportedSubpaths()) {
     const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
     if (fs.existsSync(candidate)) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+      aliasMap[`openclaw/plugin-sdk/${subpath}`] = normalizeTarget(candidate);
     }
   }
 
@@ -130,20 +142,22 @@ function buildPluginSdkAliasMap(useDist) {
 }
 
 function getJiti(tryNative) {
-  if (jitiLoaders.has(tryNative)) {
-    return jitiLoaders.get(tryNative);
+  const effectiveTryNative = process.platform === "win32" ? false : tryNative;
+
+  if (jitiLoaders.has(effectiveTryNative)) {
+    return jitiLoaders.get(effectiveTryNative);
   }
 
   const { createJiti } = require("jiti");
   const jitiLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(tryNative),
+    alias: buildPluginSdkAliasMap(effectiveTryNative),
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative,
+    tryNative: effectiveTryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  jitiLoaders.set(tryNative, jitiLoader);
+  jitiLoaders.set(effectiveTryNative, jitiLoader);
   return jitiLoader;
 }
 
@@ -153,7 +167,7 @@ function loadMonolithicSdk() {
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
+  if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
@@ -179,7 +193,7 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceInTests) {
+  if (!shouldPreferSourceGraph) {
     const distCandidate =
       (fs.existsSync(directDistCandidate) && directDistCandidate) ||
       findDistChunkByPrefix("diagnostic-events");

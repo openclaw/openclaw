@@ -12,28 +12,21 @@ function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;
   expectedLogFragment: string;
 }) {
-  const registry = createEmptyPluginRegistry();
-  const logs: string[] = [];
+  const { registry, logs, register } = createLoggedRouteHarness();
 
-  registerPluginHttpRoute({
+  register({
     path: "/plugins/demo",
     auth: "plugin",
-    handler: vi.fn(),
-    registry,
     pluginId: "demo-a",
     source: "demo-a-src",
-    log: (msg) => logs.push(msg),
   });
 
-  const unregister = registerPluginHttpRoute({
+  const unregister = register({
     path: "/plugins/demo",
     auth: "plugin",
     ...(params.replaceExisting ? { replaceExisting: true } : {}),
-    handler: vi.fn(),
-    registry,
     pluginId: "demo-b",
     source: "demo-b-src",
-    log: (msg) => logs.push(msg),
   });
 
   expect(registry.httpRoutes).toHaveLength(1);
@@ -41,6 +34,49 @@ function expectRouteRegistrationDenied(params: {
 
   unregister();
   expect(registry.httpRoutes).toHaveLength(1);
+}
+
+function expectRegisteredRouteShape(
+  registry: ReturnType<typeof createEmptyPluginRegistry>,
+  params: {
+    path: string;
+    handler?: unknown;
+    auth: "plugin" | "gateway";
+    match?: "exact" | "prefix";
+  },
+) {
+  expect(registry.httpRoutes).toHaveLength(1);
+  expect(registry.httpRoutes[0]).toEqual(
+    expect.objectContaining({
+      path: params.path,
+      auth: params.auth,
+      ...(params.match ? { match: params.match } : {}),
+      ...(params.handler ? { handler: params.handler } : {}),
+    }),
+  );
+}
+
+function createLoggedRouteHarness() {
+  const registry = createEmptyPluginRegistry();
+  const logs: string[] = [];
+  return {
+    registry,
+    logs,
+    register: (
+      params: Omit<
+        Parameters<typeof registerPluginHttpRoute>[0],
+        "registry" | "handler" | "log"
+      > & {
+        handler?: Parameters<typeof registerPluginHttpRoute>[0]["handler"];
+      },
+    ) =>
+      registerPluginHttpRoute({
+        ...params,
+        handler: params.handler ?? vi.fn(),
+        registry,
+        log: (msg) => logs.push(msg),
+      }),
+  };
 }
 
 describe("registerPluginHttpRoute", () => {
@@ -60,11 +96,12 @@ describe("registerPluginHttpRoute", () => {
       registry,
     });
 
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.path).toBe("/plugins/demo");
-    expect(registry.httpRoutes[0]?.handler).toBe(handler);
-    expect(registry.httpRoutes[0]?.auth).toBe("plugin");
-    expect(registry.httpRoutes[0]?.match).toBe("exact");
+    expectRegisteredRouteShape(registry, {
+      path: "/plugins/demo",
+      handler,
+      auth: "plugin",
+      match: "exact",
+    });
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
@@ -88,30 +125,25 @@ describe("registerPluginHttpRoute", () => {
   });
 
   it("replaces stale route on same path when replaceExisting=true", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
+    const { registry, logs, register } = createLoggedRouteHarness();
     const firstHandler = vi.fn();
     const secondHandler = vi.fn();
 
-    const unregisterFirst = registerPluginHttpRoute({
+    const unregisterFirst = register({
       path: "/plugins/synology",
       auth: "plugin",
       handler: firstHandler,
-      registry,
       accountId: "default",
       pluginId: "synology-chat",
-      log: (msg) => logs.push(msg),
     });
 
-    const unregisterSecond = registerPluginHttpRoute({
+    const unregisterSecond = register({
       path: "/plugins/synology",
       auth: "plugin",
       replaceExisting: true,
       handler: secondHandler,
-      registry,
       accountId: "default",
       pluginId: "synology-chat",
-      log: (msg) => logs.push(msg),
     });
 
     expect(registry.httpRoutes).toHaveLength(1);
@@ -129,44 +161,41 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
-  it("rejects conflicting route registrations without replaceExisting", () => {
-    expectRouteRegistrationDenied({
+  it.each([
+    {
+      name: "rejects conflicting route registrations without replaceExisting",
       replaceExisting: false,
       expectedLogFragment: "route conflict",
-    });
-  });
-
-  it("rejects route replacement when a different plugin owns the route", () => {
-    expectRouteRegistrationDenied({
+    },
+    {
+      name: "rejects route replacement when a different plugin owns the route",
       replaceExisting: true,
       expectedLogFragment: "route replacement denied",
+    },
+  ] as const)("$name", ({ replaceExisting, expectedLogFragment }) => {
+    expectRouteRegistrationDenied({
+      replaceExisting,
+      expectedLogFragment,
     });
   });
 
   it("rejects mixed-auth overlapping routes", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
+    const { registry, logs, register } = createLoggedRouteHarness();
 
-    registerPluginHttpRoute({
+    register({
       path: "/plugin/secure",
       auth: "gateway",
       match: "prefix",
-      handler: vi.fn(),
-      registry,
       pluginId: "demo-gateway",
       source: "demo-gateway-src",
-      log: (msg) => logs.push(msg),
     });
 
-    const unregister = registerPluginHttpRoute({
+    const unregister = register({
       path: "/plugin/secure/report",
       auth: "plugin",
       match: "exact",
-      handler: vi.fn(),
-      registry,
       pluginId: "demo-plugin",
       source: "demo-plugin-src",
-      log: (msg) => logs.push(msg),
     });
 
     expect(registry.httpRoutes).toHaveLength(1);
@@ -190,8 +219,10 @@ describe("registerPluginHttpRoute", () => {
       handler: vi.fn(),
     });
 
-    expect(startupRegistry.httpRoutes).toHaveLength(1);
-    expect(startupRegistry.httpRoutes[0]?.path).toBe("/bluebubbles-webhook");
+    expectRegisteredRouteShape(startupRegistry, {
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+    });
     expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
 
     unregister();

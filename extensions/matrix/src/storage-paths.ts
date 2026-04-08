@@ -1,11 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export function sanitizeMatrixPathSegment(value: string): string {
-  const cleaned = value
-    .trim()
-    .toLowerCase()
+  const cleaned = normalizeLowercaseStringOrEmpty(value)
     .replace(/[^a-z0-9._-]+/g, "_")
     .replace(/^_+|_+$/g, "");
   return cleaned || "unknown";

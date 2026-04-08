@@ -1,8 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { bluebubblesMessageActions } from "./actions.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -36,7 +35,7 @@ vi.mock("./attachments.js", () => ({
   sendBlueBubblesAttachment: vi.fn().mockResolvedValue({ messageId: "att-msg-123" }),
 }));
 
-vi.mock("./monitor.js", () => ({
+vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: vi.fn((id: string) => id),
 }));
 
@@ -44,6 +43,9 @@ vi.mock("./probe.js", () => ({
   isMacOS26OrHigher: vi.fn().mockReturnValue(false),
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
+
+const freshActionsModulePath = "./actions.js?actions-test";
+const { bluebubblesMessageActions } = await import(freshActionsModulePath);
 
 describe("bluebubblesMessageActions", () => {
   const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
@@ -121,6 +123,28 @@ describe("bluebubblesMessageActions", () => {
       // Other actions should still be present
       expect(actions).toContain("edit");
       expect(actions).toContain("unsend");
+    });
+
+    it("honors account-scoped action gates during discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+            actions: { reactions: false },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:5678",
+                password: "work-password",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(describeMessageTool({ cfg, accountId: "default" })?.actions).not.toContain("react");
+      expect(describeMessageTool({ cfg, accountId: "work" })?.actions).toContain("react");
     });
 
     it("hides private-api actions when private API is disabled", () => {

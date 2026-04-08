@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserFormField } from "./client-actions-core.js";
 
 export const DEFAULT_FILL_FIELD_TYPE = "text";
@@ -5,11 +6,11 @@ export const DEFAULT_FILL_FIELD_TYPE = "text";
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
 
 export function normalizeBrowserFormFieldRef(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function normalizeBrowserFormFieldType(value: unknown): string {
-  const type = typeof value === "string" ? value.trim() : "";
+  const type = normalizeOptionalString(value) ?? "";
   return type || DEFAULT_FILL_FIELD_TYPE;
 }
 

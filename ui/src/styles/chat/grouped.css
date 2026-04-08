@@ -24,17 +24,12 @@
   gap: 2px;
   flex: 1 1 auto;
   max-width: min(900px, 68%);
+  align-items: flex-start;
 }
 
 /* User messages align content right */
 .chat-group.user .chat-group-messages {
-  align-items: stretch;
-}
-
-@media (max-width: 600px) {
-  .chat-group-messages {
-    max-width: 82%;
-  }
+  align-items: flex-end;
 }
 
 .chat-group.user .chat-group-footer {
@@ -195,14 +190,14 @@ img.chat-avatar {
   transition:
     background var(--duration-fast) ease-out,
     border-color var(--duration-fast) ease-out;
-  width: 100%;
+  width: auto;
   max-width: 100%;
   box-sizing: border-box;
   word-wrap: break-word;
 }
 
 .chat-bubble.has-copy {
-  padding-right: 36px;
+  padding-right: 70px;
 }
 
 .chat-bubble-actions {
@@ -482,4 +477,26 @@ img.chat-avatar {
 
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
+}
+
+@media (max-width: 768px) {
+  .chat-group {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .chat-group-messages {
+    max-width: 82%;
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-group-messages {
+    max-width: 100%;
+  }
+
+  .chat-avatar,
+  img.chat-avatar {
+    display: none;
+  }
 }

@@ -1,46 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { createPluginRegistry, type PluginRecord } from "../registry.js";
-import type { PluginRuntime } from "../runtime/types.js";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "../../../test/helpers/plugins/contracts-testkit.js";
 import { buildAllPluginInspectReports } from "../status.js";
-import { createPluginRecord } from "../status.test-helpers.js";
-import type { OpenClawPluginApi } from "../types.js";
-
-function registerTestPlugin(params: {
-  registry: ReturnType<typeof createPluginRegistry>;
-  config: OpenClawConfig;
-  record: PluginRecord;
-  register(api: OpenClawPluginApi): void;
-}) {
-  params.registry.registry.plugins.push(params.record);
-  params.register(
-    params.registry.createApi(params.record, {
-      config: params.config,
-    }),
-  );
-}
 
 describe("plugin shape compatibility matrix", () => {
   it("keeps legacy hook-only, plain capability, and hybrid capability shapes explicit", () => {
-    const config = {} as OpenClawConfig;
-    const registry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-    });
+    const { config, registry } = createPluginRegistryFixture();
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "lca-legacy",
-        name: "LCA Legacy",
-        source: "/virtual/lca-legacy/index.ts",
-      }),
+      id: "lca-legacy",
+      name: "LCA Legacy",
       register(api) {
         api.on("before_agent_start", () => ({
           prependContext: "legacy",
@@ -48,14 +21,11 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "plain-provider",
-        name: "Plain Provider",
-        source: "/virtual/plain-provider/index.ts",
-      }),
+      id: "plain-provider",
+      name: "Plain Provider",
       register(api) {
         api.registerProvider({
           id: "plain-provider",
@@ -65,14 +35,11 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "hybrid-company",
-        name: "Hybrid Company",
-        source: "/virtual/hybrid-company/index.ts",
-      }),
+      id: "hybrid-company",
+      name: "Hybrid Company",
       register(api) {
         api.registerProvider({
           id: "hybrid-company",
@@ -100,14 +67,11 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "channel-demo",
-        name: "Channel Demo",
-        source: "/virtual/channel-demo/index.ts",
-      }),
+      id: "channel-demo",
+      name: "Channel Demo",
       register(api) {
         api.registerChannel({
           plugin: {
@@ -168,11 +132,8 @@ describe("plugin shape compatibility matrix", () => {
     ]);
 
     expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
-    expect(inspect[1]?.capabilities.map((entry) => entry.kind)).toEqual(["text-inference"]);
-    expect(inspect[2]?.capabilities.map((entry) => entry.kind)).toEqual([
-      "text-inference",
-      "web-search",
-    ]);
-    expect(inspect[3]?.capabilities.map((entry) => entry.kind)).toEqual(["channel"]);
+    expect(inspect.map((entry) => entry.capabilities.map((capability) => capability.kind))).toEqual(
+      [[], ["text-inference"], ["text-inference", "web-search"], ["channel"]],
+    );
   });
 });
