@@ -3,7 +3,7 @@ import {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
 } from "../../../src/plugin-sdk/facade-runtime.js";
-import { createIMessageTestPlugin } from "./test-plugin.js";
+import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
 
 beforeEach(() => {
   resetFacadeRuntimeStateForTest();

@@ -1,1 +1,1 @@
-export { createIMessageTestPlugin } from "./src/test-plugin.js";
+export { createIMessageTestPlugin } from "./src/imessage.test-plugin.js";
