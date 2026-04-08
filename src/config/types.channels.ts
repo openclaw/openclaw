@@ -1,4 +1,4 @@
-import type { GroupPolicy } from "./types.base.js";
+import type { AccessMode, GroupPolicy } from "./types.base.js";
 import type { DiscordConfig } from "./types.discord.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
@@ -20,6 +20,10 @@ export type ChannelHeartbeatVisibilityConfig = {
 
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
+  /** Unified access mode: "open" (anyone can talk) or "subscribed" (pairing required). Default: "open". */
+  accessMode?: AccessMode;
+  /** Master toggle for group messages. When false, bot only responds to agent owner in groups. Default: true. */
+  groupEnabled?: boolean;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
@@ -31,7 +35,12 @@ export type ChannelDefaultsConfig = {
 export type ExtensionChannelConfig = {
   enabled?: boolean;
   allowFrom?: string | string[];
+  /** @deprecated Use accessMode instead. */
   dmPolicy?: string;
+  /** Unified access mode: "open" (anyone can talk) or "subscribed" (pairing required). */
+  accessMode?: AccessMode;
+  /** Master toggle for group messages. When false, bot only responds to agent owner in groups. */
+  groupEnabled?: boolean;
   groupPolicy?: GroupPolicy;
   accounts?: Record<string, unknown>;
   [key: string]: unknown;

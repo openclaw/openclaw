@@ -20,25 +20,51 @@ export function buildPairingReply(params: {
   ];
 
   if (widgetUrl) {
-    lines.push("", `Or register at: ${widgetUrl}`, "Registration with your channel ID grants instant access.");
+    lines.push(
+      "",
+      `Or register at: ${widgetUrl}`,
+      "Registration with your channel ID grants instant access.",
+    );
   }
 
   return lines.join("\n");
 }
 
-export function buildAllowlistReply(params: {
-  idLine: string;
-  widgetUrl?: string;
-}): string {
+export function buildAllowlistReply(params: { idLine: string; widgetUrl?: string }): string {
   const { idLine, widgetUrl } = params;
   if (widgetUrl) {
+    return ["This bot requires registration.", "", idLine, "", `Register at: ${widgetUrl}`].join(
+      "\n",
+    );
+  }
+  return "This bot requires registration. Contact the bot owner for access.";
+}
+
+/**
+ * Build reply for subscribed access mode.
+ * Directs users to register on the widget to gain access.
+ */
+export function buildSubscribedAccessReply(params: {
+  channel: PairingChannel;
+  idLine: string;
+  widgetUrl?: string;
+  agentName?: string;
+}): string {
+  const { idLine, widgetUrl, agentName } = params;
+  const registerPath = agentName
+    ? `${widgetUrl}/pair?agent=${encodeURIComponent(agentName)}`
+    : widgetUrl;
+
+  if (registerPath) {
     return [
-      "This bot requires registration.",
+      "This bot requires a subscription to use.",
       "",
       idLine,
       "",
-      `Register at: ${widgetUrl}`,
+      `Register or sign in at: ${registerPath}`,
+      "Once registered, link your channel to get access.",
     ].join("\n");
   }
-  return "This bot requires registration. Contact the bot owner for access.";
+
+  return "This bot requires a subscription. Contact the bot owner for access.";
 }

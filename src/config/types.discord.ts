@@ -1,6 +1,7 @@
 import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
   BlockStreamingCoalesceConfig,
+  AccessMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -177,7 +178,12 @@ export type DiscordAccountConfig = {
    * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.discord.dm.policy.
    */
+  /** @deprecated Use accessMode instead. */
   dmPolicy?: DmPolicy;
+  /** Unified access mode: "open" (anyone can talk) or "subscribed" (pairing required). */
+  accessMode?: AccessMode;
+  /** Master toggle for group messages. When false, bot only responds to agent owner in groups. */
+  groupEnabled?: boolean;
   /**
    * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.discord.dm.allowFrom.

@@ -90,21 +90,29 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   requireSenderForAllowlistAuthorization: boolean;
   checkChatAllowlist: boolean;
 }): TelegramGroupPolicyAccessResult => {
-  const fallbackPolicy =
-    firstDefined(
-      params.telegramCfg.groupPolicy,
-      params.cfg.channels?.defaults?.groupPolicy,
-      "open",
-    ) ?? "open";
-  const groupPolicy = params.useTopicAndGroupOverrides
-    ? (firstDefined(
-        params.topicConfig?.groupPolicy,
-        params.groupConfig?.groupPolicy,
+  // groupEnabled: false overrides groupPolicy to "disabled"
+  const groupDisabledByToggle =
+    params.telegramCfg.groupEnabled === false ||
+    (params.telegramCfg.groupEnabled == null &&
+      params.cfg.channels?.defaults?.groupEnabled === false);
+  const fallbackPolicy = groupDisabledByToggle
+    ? "disabled"
+    : (firstDefined(
         params.telegramCfg.groupPolicy,
         params.cfg.channels?.defaults?.groupPolicy,
         "open",
-      ) ?? "open")
-    : fallbackPolicy;
+      ) ?? "open");
+  const groupPolicy = groupDisabledByToggle
+    ? "disabled"
+    : params.useTopicAndGroupOverrides
+      ? (firstDefined(
+          params.topicConfig?.groupPolicy,
+          params.groupConfig?.groupPolicy,
+          params.telegramCfg.groupPolicy,
+          params.cfg.channels?.defaults?.groupPolicy,
+          "open",
+        ) ?? "open")
+      : fallbackPolicy;
 
   if (!params.isGroup || !params.enforcePolicy) {
     return { allowed: true, groupPolicy };

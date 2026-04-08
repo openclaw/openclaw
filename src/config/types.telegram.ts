@@ -1,6 +1,7 @@
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  AccessMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -63,7 +64,12 @@ export type TelegramAccountConfig = {
    * - "open": allow all inbound DMs (requires allowFrom to include "*")
    * - "disabled": ignore all inbound DMs
    */
+  /** @deprecated Use accessMode instead. */
   dmPolicy?: DmPolicy;
+  /** Unified access mode: "open" (anyone can talk) or "subscribed" (pairing required). */
+  accessMode?: AccessMode;
+  /** Master toggle for group messages. When false, bot only responds to agent owner in groups. */
+  groupEnabled?: boolean;
   /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
   botToken?: string;
