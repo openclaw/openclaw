@@ -457,6 +457,12 @@ async function sendSubagentAnnounceDirectly(params: {
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
+    // Completion announces are internal wake events for the requester session.
+    // Preserve the resolved origin so the resumed session knows where to reply,
+    // but do not directly deliver to the user from this announce call. Let the
+    // resumed requester session own the single user-visible response.
+    const shouldDeliverExternally =
+      !params.expectsCompletionMessage && deliveryTarget.deliver;
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -474,21 +480,21 @@ async function sendSubagentAnnounceDirectly(params: {
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: deliveryTarget.deliver,
-            bestEffortDeliver: params.bestEffortDeliver,
+            deliver: shouldDeliverExternally,
+            bestEffortDeliver: shouldDeliverExternally ? params.bestEffortDeliver : undefined,
             internalEvents: params.internalEvents,
-            channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
-            accountId: deliveryTarget.deliver
+            channel: shouldDeliverExternally ? deliveryTarget.channel : sessionOnlyOriginChannel,
+            accountId: shouldDeliverExternally
               ? deliveryTarget.accountId
               : sessionOnlyOriginChannel
                 ? sessionOnlyOrigin?.accountId
                 : undefined,
-            to: deliveryTarget.deliver
+            to: shouldDeliverExternally
               ? deliveryTarget.to
               : sessionOnlyOriginChannel
                 ? sessionOnlyOrigin?.to
                 : undefined,
-            threadId: deliveryTarget.deliver
+            threadId: shouldDeliverExternally
               ? deliveryTarget.threadId
               : sessionOnlyOriginChannel
                 ? sessionOnlyOrigin?.threadId
