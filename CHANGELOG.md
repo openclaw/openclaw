@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - QQBot/media-tags: support HTML entity-encoded angle brackets (`&lt;`/`&gt;`) in media-tag regexes so entity-escaped `<qqimg>` tags from upstream are correctly parsed and normalized. (#60493) Thanks @ylc0919.
 - npm packaging: mirror bundled Slack, Telegram, Discord, and Feishu channel runtime deps at the root and harden published-install verification so fresh installs fail fast on manifest drift instead of missing-module crashes. (#63065) Thanks @scoootscooob.
 - npm packaging: derive required root runtime mirrors from bundled plugin manifests and built root chunks, then install packed release tarballs without the repo `node_modules` so release checks catch missing plugin deps before publish.
+- Reply/doctor: resolve reply-run SecretRefs before preflight helpers touch config, surface gateway OAuth reauth failures to users, and make `openclaw doctor` call out exact reauth commands.
 
 ## 2026.4.8
 
