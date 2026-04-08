@@ -1,5 +1,5 @@
 import type { MatrixClient } from "../sdk.js";
-import type { MatrixSyncState } from "../sync-state.js";
+import { isMatrixTerminalSyncState, type MatrixSyncState } from "../sync-state.js";
 import type { MatrixMonitorStatusController } from "./status.js";
 
 function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Error {
@@ -37,7 +37,7 @@ export function createMatrixMonitorSyncLifecycle(params: {
 
   const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
     params.statusController.noteSyncState(state, error);
-    if (state === "STOPPED" && !params.isStopping?.()) {
+    if (isMatrixTerminalSyncState(state) && !params.isStopping?.()) {
       settleFatal(formatSyncLifecycleError(state, error));
     }
   };

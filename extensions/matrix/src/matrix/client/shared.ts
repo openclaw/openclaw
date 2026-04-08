@@ -91,8 +91,6 @@ function deleteSharedClientState(state: SharedMatrixClientState): void {
 
 async function ensureSharedClientStarted(params: {
   state: SharedMatrixClientState;
-  timeoutMs?: number;
-  initialSyncLimit?: number;
   encryption?: boolean;
   abortSignal?: AbortSignal;
 }): Promise<void> {
@@ -170,8 +168,6 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: existingState,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
         abortSignal: params.abortSignal,
       });
@@ -185,8 +181,6 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: pending,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
         abortSignal: params.abortSignal,
       });
@@ -206,8 +200,6 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: created,
-        timeoutMs: params.timeoutMs,
-        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
         abortSignal: params.abortSignal,
       });
