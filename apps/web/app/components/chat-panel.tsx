@@ -2659,13 +2659,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 				{/* Scroll to bottom button */}
 				{showScrollButton && !showHeroState && (
-					<div className="flex justify-center pointer-events-none" style={{ marginTop: -44, position: "relative", zIndex: 20 }}>
+					<div className="flex justify-center pointer-events-none" style={{ marginTop: -80, marginBottom: 4, position: "relative", zIndex: 20 }}>
 						<button
 							type="button"
 							onClick={scrollToBottom}
-							className="pointer-events-auto w-8 h-8 rounded-full flex items-center justify-center shadow-md border transition-opacity hover:opacity-80"
+							className="pointer-events-auto w-8 h-8 rounded-full flex items-center justify-center shadow-md border backdrop-blur-xl transition-colors"
 							style={{
-								background: "var(--color-surface)",
+								background: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
 								borderColor: "var(--color-border)",
 								color: "var(--color-text-muted)",
 							}}
