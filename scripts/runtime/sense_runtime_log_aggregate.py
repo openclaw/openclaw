@@ -396,6 +396,12 @@ def derive_digest_bucket_ui_layouts(
             else 'UNK'
         ),
     }
+    meta['leader_parts'] = {
+        'label': meta['leader_label'],
+        'symbol': meta['leader_symbol'],
+        'compact': meta['leader_compact'],
+        'tokens': list(meta['leader_tokens']),
+    }
     return {
         'badge': badge,
         'hint': hint,
