@@ -94,9 +94,11 @@ describe(".devcontainer", () => {
       expect(dockerfile).toContain("@anthropic-ai/claude-code");
     });
 
-    it("installs Copilot via on-create script (requires auth)", async () => {
+    it("checks for built-in gh copilot (no retired extension install)", async () => {
       const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
-      expect(script).toContain("gh extension install github/gh-copilot");
+      expect(script).toContain("gh copilot");
+      // Must not reference the retired gh-copilot extension
+      expect(script).not.toContain("gh extension install github/gh-copilot");
     });
 
     it("enables corepack for pnpm", async () => {
@@ -149,18 +151,9 @@ describe(".devcontainer", () => {
       expect(script).toContain('[ -n "$final_name" ] && [ -n "$final_email" ]');
     });
 
-    it("counts copilot install failure as a warning", async () => {
+    it("does not reference retired gh-copilot extension", async () => {
       const script = await readFile(join(devcontainerDir, "on-create.sh"), "utf8");
-      // The else branch after "gh extension install github/gh-copilot" must
-      // increment warn so the summary footer reflects the actual setup state.
-      const copilotBlock = script.slice(
-        script.indexOf("gh extension install github/gh-copilot"),
-      );
-      const elseBranch = copilotBlock.slice(
-        copilotBlock.indexOf("else"),
-        copilotBlock.indexOf("fi"),
-      );
-      expect(elseBranch).toContain("warn=$((warn + 1))");
+      expect(script).not.toContain("gh extension install github/gh-copilot");
     });
 
     it("checks SSH agent forwarding", async () => {

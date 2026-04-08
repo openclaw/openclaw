@@ -17,17 +17,13 @@ if gh auth status >/dev/null 2>&1; then
   echo "  ✓ GitHub CLI: authenticated"
   ok=$((ok + 1))
 
-  # Install GitHub Copilot extension (requires auth, so done here).
+  # GitHub Copilot is built into gh CLI (gh-copilot extension was retired Oct 2025).
   if gh copilot --version >/dev/null 2>&1; then
-    echo "  ✓ GitHub Copilot: already installed"
+    echo "  ✓ GitHub Copilot CLI: available (built-in)"
+    ok=$((ok + 1))
   else
-    echo "    Installing GitHub Copilot gh extension..."
-    if gh extension install github/gh-copilot 2>/dev/null; then
-      echo "  ✓ GitHub Copilot: installed"
-    else
-      echo "  ✗ GitHub Copilot: install failed (can retry with 'gh extension install github/gh-copilot')"
-      warn=$((warn + 1))
-    fi
+    echo "  ✗ GitHub Copilot CLI: not available (requires a Copilot subscription)"
+    warn=$((warn + 1))
   fi
 else
   echo "  ✗ GitHub CLI: not authenticated"
