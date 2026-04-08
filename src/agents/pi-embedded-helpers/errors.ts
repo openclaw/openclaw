@@ -262,6 +262,9 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     errorMessage.includes("上下文长度超") ||
     errorMessage.includes("超出最大上下文") ||
     errorMessage.includes("请压缩上下文") ||
+    // Alibaba DashScope/Bailian API: "Range of input length should be [1, 202745]"
+    lower.includes("range of input length") ||
+    (lower.includes("input length") && lower.includes("should be")) ||
     // Provider-specific patterns (Bedrock, Azure, Ollama, Mistral, Cohere, etc.)
     matchesProviderContextOverflow(errorMessage)
   );
@@ -269,7 +272,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
 const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
 const CONTEXT_OVERFLOW_HINT_RE =
-  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|range of input length|input length.*(should|must)\s/i;
 const RATE_LIMIT_HINT_RE =
   /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i;
 
