@@ -905,6 +905,8 @@ For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides
 
 `digest_bucket_ui_layouts.meta` also exposes `leader_parts` as a small nested structure with `label`, `symbol`, `compact`, and `tokens`, so UI code can consume all leader-specific display variants from one place without losing the existing flat `leader_*` fields.
 
+`digest_bucket_ui_layouts.meta` also exposes `display_parts` as a shallow wrapper over `badge_parts` and `leader_parts`, so UI code can read both display-oriented substructures from one `meta.display_parts` entry without extra recomposition.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

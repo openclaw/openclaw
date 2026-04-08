@@ -413,6 +413,10 @@ def derive_digest_bucket_ui_layouts(
         'palette': meta['palette'],
         'order': meta['order'],
     }
+    meta['display_parts'] = {
+        'badge': meta['badge_parts'],
+        'leader': meta['leader_parts'],
+    }
     return {
         'badge': badge,
         'hint': hint,
