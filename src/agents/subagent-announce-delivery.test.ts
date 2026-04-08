@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
+import { callGateway as runtimeCallGateway } from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 afterEach(() => {
@@ -69,7 +70,9 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
   it("keeps completion announces session-internal while preserving route context", async () => {
-    const callGateway = vi.fn(async () => undefined);
+    const callGateway = vi.fn(
+      async () => ({}) as Record<string, unknown>,
+    ) as unknown as typeof runtimeCallGateway;
     __testing.setDepsForTest({
       callGateway,
       loadConfig: () => ({}) as never,
@@ -133,7 +136,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it("keeps direct external delivery for non-completion announces", async () => {
-    const callGateway = vi.fn(async () => undefined);
+    const callGateway = vi.fn(
+      async () => ({}) as Record<string, unknown>,
+    ) as unknown as typeof runtimeCallGateway;
     __testing.setDepsForTest({
       callGateway,
       loadConfig: () => ({}) as never,
