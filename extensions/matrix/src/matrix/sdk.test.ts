@@ -113,7 +113,7 @@ type MatrixJsClientStub = EventEmitter & {
 };
 
 function createMatrixJsClientStub(): MatrixJsClientStub {
-  const client = new EventEmitter();
+  const client = new EventEmitter() as MatrixJsClientStub;
   client.startClient = vi.fn(async () => {
     queueMicrotask(() => {
       client.emit("sync", "PREPARED", null, undefined);
