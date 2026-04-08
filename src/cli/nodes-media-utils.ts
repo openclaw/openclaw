@@ -30,6 +30,15 @@ export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: 
   return {
     tmpDir,
     id: opts.id ?? randomUUID(),
-    ext: opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`,
+    ext: normalizeTempPathExt(opts.ext),
   };
+}
+
+function normalizeTempPathExt(ext: string): string {
+  const trimmed = ext.trim();
+  const normalized = trimmed.startsWith(".") ? trimmed.slice(1) : trimmed;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(normalized)) {
+    throw new Error(`invalid temp file extension: ${ext}`);
+  }
+  return `.${normalized}`;
 }

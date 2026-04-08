@@ -60,7 +60,10 @@ async function executeCameraSnap({
   gatewayOpts,
   modelHasVision,
   imageSanitization,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
@@ -119,6 +122,7 @@ async function executeCameraSnap({
       kind: "snap",
       facing,
       ext: isJpeg ? "jpg" : "png",
+      ...(tmpDir ? { tmpDir } : {}),
     });
     await writeCameraPayloadToFile({
       filePath,
@@ -163,7 +167,10 @@ async function executePhotosLatest({
   gatewayOpts,
   modelHasVision,
   imageSanitization,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
@@ -221,6 +228,7 @@ async function executePhotosLatest({
       kind: "snap",
       ext: isJpeg ? "jpg" : "png",
       id: crypto.randomUUID(),
+      ...(tmpDir ? { tmpDir } : {}),
     });
     await writeCameraPayloadToFile({
       filePath,
@@ -270,7 +278,10 @@ async function executePhotosLatest({
 async function executeCameraClip({
   params,
   gatewayOpts,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const tmpDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
@@ -305,6 +316,7 @@ async function executeCameraClip({
   const filePath = await writeCameraClipPayloadToFile({
     payload,
     facing,
+    ...(tmpDir ? { tmpDir } : {}),
     expectedHost: resolvedNode.remoteIp,
   });
   return {
@@ -353,12 +365,13 @@ async function executeScreenRecord({
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseScreenRecordPayload(raw?.payload);
+  const tempDir = resolveWorkspaceTempDir({ workspaceDir, workspaceOnly });
   const filePath =
     typeof params.outPath === "string" && params.outPath.trim()
       ? params.outPath.trim()
       : screenRecordTempPath({
           ext: payload.format || "mp4",
-          ...(workspaceOnly && workspaceDir ? { tmpDir: workspaceDir } : {}),
+          ...(tempDir ? { tmpDir: tempDir } : {}),
         });
   const written = await writeScreenRecordToFile(filePath, payload.base64);
   return {
@@ -379,6 +392,20 @@ function requireString(params: Record<string, unknown>, key: string): string {
     throw new Error(`${key} required`);
   }
   return raw.trim();
+}
+
+function resolveWorkspaceTempDir(params: {
+  workspaceDir?: string;
+  workspaceOnly?: boolean;
+}): string | undefined {
+  if (!params.workspaceOnly) {
+    return undefined;
+  }
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    throw new Error("workspaceDir is required when workspaceOnly is enabled");
+  }
+  return workspaceDir;
 }
 
 const DEFAULT_PHOTOS_LIMIT = 1;

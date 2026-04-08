@@ -12,7 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/nodes: enforce `tools.fs.workspaceOnly` on `nodes` `screen_record` output paths so screen recordings cannot write outside the configured workspace boundary.
+- Agents/nodes: enforce `tools.fs.workspaceOnly` on `nodes` media output paths and reject unsafe temp-file extensions so node captures stay inside the configured workspace boundary when that hardening is enabled.
 - Channels/secrets: keep bundled channel artifact and secret-contract loading stable under lazy loading so bundled channel secrets continue to appear in `openclaw secret`, status, and security-audit surfaces.
 - Providers/xAI: recognize `api.grok.x.ai` as an xAI-native endpoint again so native xAI web-search attribution keeps working on Grok-hosted base URLs. (#61377) Thanks @jjjojoj.
 - Providers/Anthropic/cache: preserve thinking blocks for Claude Opus 4.5+, Sonnet 4.5+, and newer Claude 4-family models so Anthropic prompt-cache prefixes keep matching after thinking turns. (#61793)
