@@ -2,16 +2,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+  randomIdempotencyKey: () => "idem-1",
+}));
+vi.mock("./agent.js", () => ({
+  agentCommand: vi.fn(),
+}));
+
 import type { OpenClawConfig } from "../config/config.js";
+import * as configModule from "../config/config.js";
+import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { agentCliCommand as AgentCliCommand } from "./agent-via-gateway.js";
-import type { agentCommand as AgentCommand } from "./agent.js";
-
-const loadConfig = vi.hoisted(() => vi.fn());
-const callGateway = vi.hoisted(() => vi.fn());
-const agentCommand = vi.hoisted(() => vi.fn());
-
-let agentCliCommand: typeof AgentCliCommand;
+import { agentCliCommand } from "./agent-via-gateway.js";
+import { agentCommand } from "./agent.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -19,8 +24,10 @@ const runtime: RuntimeEnv = {
   exit: vi.fn(),
 };
 
+const configSpy = vi.spyOn(configModule, "loadConfig");
+
 function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
-  loadConfig.mockReturnValue({
+  configSpy.mockReturnValue({
     agents: {
       defaults: {
         timeoutSeconds: 600,
@@ -51,7 +58,7 @@ async function withTempStore(
 }
 
 function mockGatewaySuccessReply(text = "hello") {
-  callGateway.mockResolvedValue({
+  vi.mocked(callGateway).mockResolvedValue({
     runId: "idem-1",
     status: "ok",
     result: {
@@ -62,25 +69,17 @@ function mockGatewaySuccessReply(text = "hello") {
 }
 
 function mockLocalAgentReply(text = "local") {
-  agentCommand.mockImplementationOnce(async (_opts, rt) => {
+  vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
     rt?.log?.(text);
     return {
       payloads: [{ text }],
       meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
-    } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
+    } as unknown as Awaited<ReturnType<typeof agentCommand>>;
   });
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
-  vi.resetModules();
-  vi.doMock("../config/config.js", () => ({ loadConfig }));
-  vi.doMock("../gateway/call.js", () => ({
-    callGateway,
-    randomIdempotencyKey: () => "idem-1",
-  }));
-  vi.doMock("./agent.js", () => ({ agentCommand }));
-  ({ agentCliCommand } = await import("./agent-via-gateway.js"));
 });
 
 describe("agentCliCommand", () => {
@@ -91,7 +90,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = callGateway.mock.calls[0]?.[0] as { timeoutMs?: number };
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as { timeoutMs?: number };
       expect(request.timeoutMs).toBe(2_147_000_000);
     });
   });
@@ -110,7 +109,7 @@ describe("agentCliCommand", () => {
 
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
@@ -136,7 +135,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
       expect(runtime.log).toHaveBeenCalledWith("local");
@@ -145,13 +144,13 @@ describe("agentCliCommand", () => {
 
   it("does not force bundle MCP cleanup on gateway fallback", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
+      expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).not.toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
     });

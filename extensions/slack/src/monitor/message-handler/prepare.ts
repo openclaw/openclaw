@@ -286,15 +286,19 @@ function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // When replyToMode="all", align session routing with Slack reply threading so
-  // a top-level room message roots its own session immediately using message ts.
-  // That keeps the later thread attached to the same session from the first turn.
-  // For DMs, preserve the existing auto-thread behavior.
+  // Keep true thread replies thread-scoped, but preserve channel-level sessions
+  // for top-level room turns when replyToMode is off.
+  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  const roomThreadId = isThreadReply && threadTs ? threadTs : autoThreadId;
+  // Only fork channel/group messages into thread-specific sessions when they are
+  // actual thread replies (thread_ts present, different from message ts).
+  // Top-level channel messages must stay on the per-channel session for continuity.
+  // Before this fix, every channel message used its own ts as threadId, creating
+  // isolated sessions per message (regression from #10686).
+  const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
@@ -303,7 +307,7 @@ function resolveSlackRoutingContext(params: {
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
-    canonicalThreadId && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
+    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   return {
     route,

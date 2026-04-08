@@ -87,8 +87,8 @@ describe("thread-level session keys", () => {
     expect(sessionKey).not.toContain("1770408522.168859");
   });
 
-  it("keeps top-level channel messages on the per-channel session when replyToMode is not all", async () => {
-    for (const mode of ["first", "off"] as const) {
+  it("keeps top-level channel messages on the per-channel session regardless of replyToMode", async () => {
+    for (const mode of ["all", "first", "off"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
       ctx.resolveUserName = async () => ({ name: "Carol" });
       const account = createSlackTestAccount({ replyToMode: mode });
@@ -113,64 +113,6 @@ describe("thread-level session keys", () => {
       expect(firstKey).toBe(secondKey);
       expect(firstKey).not.toContain(":thread:");
     }
-  });
-
-  it("roots top-level channel messages to per-message thread sessions when replyToMode=all", async () => {
-    const ctx = buildCtx({ replyToMode: "all" });
-    ctx.resolveUserName = async () => ({ name: "Carol" });
-    const account = createSlackTestAccount({ replyToMode: "all" });
-
-    const first = await prepareSlackMessage({
-      ctx,
-      account,
-      message: buildChannelMessage({ ts: "1770408530.000000" }),
-      opts: { source: "message" },
-    });
-    const second = await prepareSlackMessage({
-      ctx,
-      account,
-      message: buildChannelMessage({ ts: "1770408531.000000" }),
-      opts: { source: "message" },
-    });
-
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
-    const firstKey = first!.ctxPayload.SessionKey as string;
-    const secondKey = second!.ctxPayload.SessionKey as string;
-    expect(firstKey).not.toBe(secondKey);
-    expect(firstKey).toContain(":thread:1770408530.000000");
-    expect(secondKey).toContain(":thread:1770408531.000000");
-    expect(first!.ctxPayload.MessageThreadId).toBe("1770408530.000000");
-    expect(second!.ctxPayload.MessageThreadId).toBe("1770408531.000000");
-  });
-
-  it("keeps thread replies on the same session as the root channel message when replyToMode=all", async () => {
-    const ctx = buildCtx({ replyToMode: "all" });
-    ctx.resolveUserName = async () => ({ name: "Dana" });
-    const account = createSlackTestAccount({ replyToMode: "all" });
-
-    const root = await prepareSlackMessage({
-      ctx,
-      account,
-      message: buildChannelMessage({ ts: "1770408600.000000" }),
-      opts: { source: "message" },
-    });
-    const reply = await prepareSlackMessage({
-      ctx,
-      account,
-      message: buildChannelMessage({
-        ts: "1770408601.000000",
-        thread_ts: "1770408600.000000",
-        text: "follow up",
-      }),
-      opts: { source: "message" },
-    });
-
-    expect(root).toBeTruthy();
-    expect(reply).toBeTruthy();
-    expect(root!.ctxPayload.SessionKey).toBe(reply!.ctxPayload.SessionKey);
-    expect(reply!.ctxPayload.SessionKey).toContain(":thread:1770408600.000000");
-    expect(reply!.ctxPayload.SessionKey).not.toContain("1770408601.000000");
   });
 
   it("does not add thread suffix for DMs when replyToMode=off", async () => {
