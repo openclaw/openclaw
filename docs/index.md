@@ -97,9 +97,25 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 
 <Steps>
   <Step title="Install OpenClaw">
-    ```bash
-    npm install -g openclaw@latest
-    ```
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install -g openclaw@latest
+        ```
+      </Tab>
+      <Tab title="pnpm">
+        ```bash
+        pnpm add -g openclaw@latest
+        ```
+      </Tab>
+      <Tab title="bun">
+        ```bash
+        bun add -g openclaw@latest
+        ```
+      </Tab>
+    </Tabs>
+
+    For the Gateway runtime, Node remains the recommended daemon runtime.
   </Step>
   <Step title="Onboard and install the service">
     ```bash

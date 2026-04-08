@@ -27,7 +27,7 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 Preferred setup: run `openclaw onboard` in your terminal.
 OpenClaw Onboard guides you step by step through setting up the gateway, workspace, channels, and skills. It is the recommended CLI setup path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
-Works with npm, pnpm, or bun.
+Works with npm, pnpm, or bun. For the Gateway runtime, Node remains the recommended daemon runtime.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
 ## Sponsors
@@ -103,6 +103,7 @@ Runtime: **Node 24 (recommended) or Node 22.16+**.
 ```bash
 npm install -g openclaw@latest
 # or: pnpm add -g openclaw@latest
+# or: bun add -g openclaw@latest
 
 openclaw onboard --install-daemon
 ```
