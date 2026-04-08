@@ -262,7 +262,7 @@ describe("stripTrailingErrorFileEntries", () => {
     expect(sm.fileEntries).toHaveLength(2); // session + user
     expect(sm.byId.has("m2")).toBe(false);
     expect(sm.byId.has("m3")).toBe(false);
-    expect(sm.leafId).toBe("s1"); // m2's parent
+    expect(sm.leafId).toBe("m1"); // m2's parentId (each pop sets leafId = last.parentId)
   });
 
   it("preserves errored entries with ToolCall content", () => {
