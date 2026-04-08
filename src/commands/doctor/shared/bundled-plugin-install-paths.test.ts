@@ -368,4 +368,36 @@ describe("doctor bundled plugin install path repair", () => {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("tolerates non-array plugins.load.paths without throwing", () => {
+    const nextPath = "/pkg/dist/extensions/acpx";
+    const bundledSources = new Map([["acpx", { pluginId: "acpx", localPath: nextPath }]]);
+
+    const hits = scanBundledPluginInstallPathRepairs(
+      {
+        plugins: {
+          load: { paths: 42 as unknown as string[] },
+          installs: {
+            acpx: {
+              source: "path",
+              spec: "acpx",
+              sourcePath: "/pkg/extensions/acpx",
+              installPath: "/pkg/extensions/acpx",
+            },
+          },
+        },
+      },
+      {
+        bundledSources,
+        pathExists: (p) => p === nextPath,
+      },
+    );
+
+    expect(hits).toEqual([
+      expect.objectContaining({
+        pluginId: "acpx",
+        loadPathHits: [],
+      }),
+    ]);
+  });
 });

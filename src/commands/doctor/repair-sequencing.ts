@@ -1,6 +1,7 @@
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
+import {
   type BundledPluginInstallPathOptions,
   maybeRepairBundledPluginInstallPaths,
 } from "./shared/bundled-plugin-install-paths.js";

@@ -158,7 +158,8 @@ export function scanBundledPluginInstallPathRepairs(
     options.bundledSources ?? resolveBundledPluginSources({ env: options.env ?? process.env });
   const pathExists = options.pathExists ?? fs.existsSync;
   const installs = cfg.plugins?.installs ?? {};
-  const loadPaths = cfg.plugins?.load?.paths ?? [];
+  const rawLoadPaths = cfg.plugins?.load?.paths;
+  const loadPaths = Array.isArray(rawLoadPaths) ? rawLoadPaths : [];
   const hits: BundledPluginInstallPathRepairHit[] = [];
 
   for (const [pluginId, bundledSource] of bundledSources) {
@@ -255,7 +256,8 @@ export function maybeRepairBundledPluginInstallPaths(
 
   const next = structuredClone(cfg);
   const changes: string[] = [];
-  const nextLoadPaths = [...(next.plugins?.load?.paths ?? [])];
+  const rawNextLoadPaths = next.plugins?.load?.paths;
+  const nextLoadPaths = Array.isArray(rawNextLoadPaths) ? [...rawNextLoadPaths] : [];
   let loadPathsChanged = false;
 
   for (const hit of hits) {
