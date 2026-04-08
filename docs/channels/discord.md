@@ -1003,6 +1003,8 @@ Core examples:
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
 
+The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
+
 Action gates live under `channels.discord.actions.*`.
 
 Default gate behavior:

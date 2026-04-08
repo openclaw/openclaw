@@ -281,6 +281,13 @@ function classifyTarget(arg, cwd) {
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
+  if (
+    relative === "src/gateway/gateway.test.ts" ||
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
+    relative === "src/gateway/sessions-history-http.test.ts"
+  ) {
+    return "e2e";
+  }
   if (relative.startsWith("extensions/")) {
     const extensionRoot = relative.split("/").slice(0, 2).join("/");
     if (isChannelSurfaceTestFile(relative)) {
@@ -612,12 +619,16 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
       },
     ];
   }
-  return fullSuiteVitestShards.map((shard) => ({
-    config: shard.config,
-    forwardedArgs,
-    includePatterns: null,
-    watchMode: false,
-  }));
+  const expandToProjectConfigs = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1";
+  return fullSuiteVitestShards.flatMap((shard) => {
+    const configs = expandToProjectConfigs ? shard.projects : [shard.config];
+    return configs.map((config) => ({
+      config,
+      forwardedArgs,
+      includePatterns: null,
+      watchMode: false,
+    }));
+  });
 }
 
 export function createVitestRunSpecs(args, params = {}) {

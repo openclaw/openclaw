@@ -11,19 +11,29 @@ import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/cont
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { resetGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
-import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import {
+  loadBundledPluginTestApiSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 
-let discordOutboundCache: ChannelOutboundAdapter | undefined;
+const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "discord",
+  artifactBasename: "src/outbound-adapter.js",
+});
+
+let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
 let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
 
-function getDiscordOutbound(): ChannelOutboundAdapter {
-  if (!discordOutboundCache) {
-    ({ discordOutbound: discordOutboundCache } = loadBundledPluginTestApiSync<{
+async function getDiscordOutbound(): Promise<ChannelOutboundAdapter> {
+  discordOutboundCache ??= (async () => {
+    const module = (await import(discordOutboundAdapterModuleId)) as {
       discordOutbound: ChannelOutboundAdapter;
-    }>("discord"));
-  }
-  return discordOutboundCache;
+    };
+    return module.discordOutbound;
+  })();
+  return await discordOutboundCache;
 }
 
 function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
@@ -191,7 +201,7 @@ function createDiscordHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await getDiscordOutbound().sendPayload!(ctx),
+    run: async () => await (await getDiscordOutbound()).sendPayload!(ctx),
     sendMock: sendDiscord,
     to: ctx.to,
   };

@@ -7,6 +7,7 @@ import {
   acquireBoundaryCheckLock,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
+  formatSlowCompileSummary,
   formatSkippedCompileProgress,
   formatStepFailure,
   installCanaryArtifactCleanup,
@@ -206,6 +207,19 @@ describe("check-extension-package-tsc-boundary", () => {
     ).toBe("skipped 97 fresh plugin compiles\n");
   });
 
+  it("formats the slowest plugin compiles in descending order", () => {
+    expect(
+      formatSlowCompileSummary({
+        compileTimings: [
+          { extensionId: "quick", elapsedMs: 40 },
+          { extensionId: "slow", elapsedMs: 900 },
+          { extensionId: "medium", elapsedMs: 250 },
+        ],
+        limit: 2,
+      }),
+    ).toBe(["slowest plugin compiles:", "- slow: 900ms", "- medium: 250ms", ""].join("\n"));
+  });
+
   it("treats a plugin compile as fresh only when its outputs are newer than plugin and shared sdk inputs", () => {
     const { rootDir, extensionRoot } = createTempExtensionRoot();
     const extensionSourcePath = path.join(extensionRoot, "index.ts");
@@ -330,5 +344,26 @@ describe("check-extension-package-tsc-boundary", () => {
     ).rejects.toThrow("fail-fast");
 
     expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("passes successful step timing metadata to onSuccess handlers", async () => {
+    const elapsedTimes: number[] = [];
+
+    await runNodeStepsWithConcurrency(
+      [
+        {
+          label: "demo-step",
+          args: ["--eval", "setTimeout(() => process.exit(0), 10)"],
+          timeoutMs: 5_000,
+          onSuccess(result: { elapsedMs: number }) {
+            elapsedTimes.push(result.elapsedMs);
+          },
+        },
+      ],
+      1,
+    );
+
+    expect(elapsedTimes).toHaveLength(1);
+    expect(elapsedTimes[0]).toBeGreaterThanOrEqual(0);
   });
 });

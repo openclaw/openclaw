@@ -103,6 +103,7 @@ vi.mock("./agent-runner-utils.js", () => ({
         params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
     },
   }),
+  resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(() => ({})),
 }));
 

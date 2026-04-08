@@ -666,7 +666,7 @@ run_logged_guest_current_user_sh() {
   local done_path="$3"
   local timeout_s="$4"
   local runner_path="$5"
-  local deadline rc runner_body write_runner_cmd line
+  local deadline rc runner_body write_runner_cmd
   guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
   runner_body="$(cat <<EOF
 set -eu
@@ -680,9 +680,9 @@ $script
 EOF
 )"
   write_runner_cmd="/bin/rm -f $(shell_quote "$runner_path")"$'\n'
-  while IFS= read -r line; do
-    write_runner_cmd+="/usr/bin/printf '%s\\n' $(shell_quote "$line") >> $(shell_quote "$runner_path")"$'\n'
-  done <<< "$runner_body"
+  write_runner_cmd+="cat > $(shell_quote "$runner_path") <<'__OPENCLAW_RUNNER__'"$'\n'
+  write_runner_cmd+="$runner_body"$'\n'
+  write_runner_cmd+="__OPENCLAW_RUNNER__"$'\n'
   write_runner_cmd+="/bin/chmod +x $(shell_quote "$runner_path")"$'\n'
   write_runner_cmd+="nohup /bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &"
   guest_current_user_sh "$write_runner_cmd"
@@ -785,7 +785,7 @@ repair_legacy_dev_source_checkout_if_needed() {
 }
 
 run_dev_channel_update() {
-  local bootstrap_bin update_entry update_root update_log update_done update_runner update_rc
+  local bootstrap_bin update_root update_log update_done update_runner update_rc
   bootstrap_bin="/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin"
   update_root="$(resolve_guest_current_user_home)/openclaw"
   update_log="/tmp/openclaw-smoke-update-dev.log"
@@ -807,17 +807,15 @@ EOF
     guest_current_user_tail_file "$update_log" 120 >&2 || true
   fi
   repair_legacy_dev_source_checkout_if_needed
-  update_entry="$update_root/openclaw.mjs"
   printf 'update-dev: git-version\n'
-  guest_current_user_exec "$GUEST_NODE_BIN" "$update_entry" --version
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" --version
   printf 'update-dev: git-status\n'
-  guest_current_user_exec "$GUEST_NODE_BIN" "$update_entry" update status --json
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" update status --json
 }
 
 verify_dev_channel_update() {
-  local status_json update_entry
-  update_entry="$(resolve_guest_current_user_home)/openclaw/openclaw.mjs"
-  status_json="$(guest_current_user_exec "$GUEST_NODE_BIN" "$update_entry" update status --json)"
+  local status_json
+  status_json="$(guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" update status --json)"
   printf '%s\n' "$status_json"
   printf '%s\n' "$status_json" | grep -F '"installKind": "git"'
   printf '%s\n' "$status_json" | grep -F '"value": "dev"'
@@ -828,7 +826,7 @@ verify_version_contains() {
   local needle="$1"
   local version
   version="$(
-    guest_current_user_exec "$GUEST_OPENCLAW_BIN" --version
+    guest_current_user_exec "$GUEST_OPENCLAW_BIN" --version 2>&1
   )"
   printf '%s\n' "$version"
   case "$version" in

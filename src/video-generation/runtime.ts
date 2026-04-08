@@ -5,8 +5,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
-  deriveAspectRatioFromSize,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
@@ -134,47 +134,11 @@ export async function generateVideo(
         ignoredOverrides: sanitized.ignoredOverrides,
         metadata: {
           ...result.metadata,
-          ...(sanitized.normalization?.size?.requested !== undefined &&
-          sanitized.normalization.size.applied !== undefined
-            ? {
-                requestedSize: sanitized.normalization.size.requested,
-                normalizedSize: sanitized.normalization.size.applied,
-              }
-            : {}),
-          ...(sanitized.normalization?.aspectRatio?.applied !== undefined
-            ? {
-                ...(sanitized.normalization.aspectRatio.requested !== undefined
-                  ? { requestedAspectRatio: sanitized.normalization.aspectRatio.requested }
-                  : {}),
-                normalizedAspectRatio: sanitized.normalization.aspectRatio.applied,
-                ...(sanitized.normalization.aspectRatio.derivedFrom === "size" && params.size
-                  ? {
-                      requestedSize: params.size,
-                      aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size),
-                    }
-                  : {}),
-              }
-            : {}),
-          ...(sanitized.normalization?.resolution?.requested !== undefined &&
-          sanitized.normalization.resolution.applied !== undefined
-            ? {
-                requestedResolution: sanitized.normalization.resolution.requested,
-                normalizedResolution: sanitized.normalization.resolution.applied,
-              }
-            : {}),
-          ...(sanitized.normalization?.durationSeconds?.requested !== undefined &&
-          sanitized.normalization.durationSeconds.applied !== undefined
-            ? {
-                requestedDurationSeconds: sanitized.normalization.durationSeconds.requested,
-                normalizedDurationSeconds: sanitized.normalization.durationSeconds.applied,
-                ...(sanitized.normalization.durationSeconds.supportedValues?.length
-                  ? {
-                      supportedDurationSeconds:
-                        sanitized.normalization.durationSeconds.supportedValues,
-                    }
-                  : {}),
-              }
-            : {}),
+          ...buildMediaGenerationNormalizationMetadata({
+            normalization: sanitized.normalization,
+            requestedSizeForDerivedAspectRatio: params.size,
+            includeSupportedDurationSeconds: true,
+          }),
         },
       };
     } catch (err) {

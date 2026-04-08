@@ -56,7 +56,8 @@ asset hash changes.
 
 Seed assets live in `qa/`:
 
-- `qa/scenarios.md`
+- `qa/scenarios/index.md`
+- `qa/scenarios/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent. The baseline list should stay broad enough to cover:

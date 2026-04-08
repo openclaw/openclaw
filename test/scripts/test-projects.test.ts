@@ -174,84 +174,120 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
-});
 
-describe("scripts/test-projects full-suite sharding", () => {
-  it("splits untargeted runs into fixed shard configs", () => {
-    expect(buildFullSuiteVitestRunPlans([], process.cwd())).toEqual([
+  it.each([
+    "src/gateway/gateway.test.ts",
+    "src/gateway/server.startup-matrix-migration.integration.test.ts",
+    "src/gateway/sessions-history-http.test.ts",
+  ])("routes gateway integration fixture %s to the e2e lane", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
+
+    expect(plans).toEqual([
       {
-        config: "vitest.full-core-unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-unit-src.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-unit-security.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-unit-support.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-support-boundary.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-contracts.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-bundled.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-core-runtime.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-agentic.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-auto-reply.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "vitest.full-extensions.config.ts",
-        forwardedArgs: [],
+        config: "vitest.e2e.config.ts",
+        forwardedArgs: [target],
         includePatterns: null,
         watchMode: false,
       },
     ]);
+  });
+});
+
+describe("scripts/test-projects full-suite sharding", () => {
+  it("splits untargeted runs into fixed shard configs", () => {
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+
+    expect(buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config)).toEqual([
+      "vitest.full-core-unit-fast.config.ts",
+      "vitest.full-core-unit-src.config.ts",
+      "vitest.full-core-unit-security.config.ts",
+      "vitest.full-core-unit-ui.config.ts",
+      "vitest.full-core-unit-support.config.ts",
+      "vitest.full-core-support-boundary.config.ts",
+      "vitest.full-core-contracts.config.ts",
+      "vitest.full-core-bundled.config.ts",
+      "vitest.full-core-runtime.config.ts",
+      "vitest.full-agentic.config.ts",
+      "vitest.full-auto-reply.config.ts",
+      "vitest.full-extensions.config.ts",
+    ]);
+  });
+
+  it("can expand full-suite shards to project configs for perf experiments", () => {
+    const previous = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
+    const plans = buildFullSuiteVitestRunPlans([], process.cwd());
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    } else {
+      process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previous;
+    }
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "vitest.unit-fast.config.ts",
+      "vitest.unit-src.config.ts",
+      "vitest.unit-security.config.ts",
+      "vitest.unit-ui.config.ts",
+      "vitest.unit-support.config.ts",
+      "vitest.boundary.config.ts",
+      "vitest.tooling.config.ts",
+      "vitest.contracts.config.ts",
+      "vitest.bundled.config.ts",
+      "vitest.infra.config.ts",
+      "vitest.hooks.config.ts",
+      "vitest.acp.config.ts",
+      "vitest.runtime-config.config.ts",
+      "vitest.secrets.config.ts",
+      "vitest.logging.config.ts",
+      "vitest.process.config.ts",
+      "vitest.cron.config.ts",
+      "vitest.media.config.ts",
+      "vitest.media-understanding.config.ts",
+      "vitest.shared-core.config.ts",
+      "vitest.tasks.config.ts",
+      "vitest.tui.config.ts",
+      "vitest.ui.config.ts",
+      "vitest.utils.config.ts",
+      "vitest.wizard.config.ts",
+      "vitest.gateway.config.ts",
+      "vitest.cli.config.ts",
+      "vitest.commands-light.config.ts",
+      "vitest.commands.config.ts",
+      "vitest.agents.config.ts",
+      "vitest.daemon.config.ts",
+      "vitest.plugin-sdk-light.config.ts",
+      "vitest.plugin-sdk.config.ts",
+      "vitest.plugins.config.ts",
+      "vitest.channels.config.ts",
+      "vitest.auto-reply-core.config.ts",
+      "vitest.auto-reply-top-level.config.ts",
+      "vitest.auto-reply-reply.config.ts",
+      "vitest.extension-acpx.config.ts",
+      "vitest.extension-bluebubbles.config.ts",
+      "vitest.extension-channels.config.ts",
+      "vitest.extension-diffs.config.ts",
+      "vitest.extension-feishu.config.ts",
+      "vitest.extension-irc.config.ts",
+      "vitest.extension-mattermost.config.ts",
+      "vitest.extension-matrix.config.ts",
+      "vitest.extension-memory.config.ts",
+      "vitest.extension-messaging.config.ts",
+      "vitest.extension-msteams.config.ts",
+      "vitest.extension-providers.config.ts",
+      "vitest.extension-telegram.config.ts",
+      "vitest.extension-voice-call.config.ts",
+      "vitest.extension-whatsapp.config.ts",
+      "vitest.extension-zalo.config.ts",
+      "vitest.extensions.config.ts",
+    ]);
+    expect(plans).toEqual(
+      plans.map((plan) => ({
+        config: plan.config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
+    );
   });
 
   it("keeps untargeted watch mode on the native root config", () => {
