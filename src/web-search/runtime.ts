@@ -5,8 +5,10 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import {
+  resolvePluginWebSearchProviders,
+  resolveRuntimeWebSearchProviders,
+} from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -292,9 +294,10 @@ export async function runWebSearch(
   const seenProviderIds = new Set<string>();
   const allProviderIds: string[] = [];
 
-  // allProviderIds stores original (non-normalized) ids as returned by
-  // resolveWebSearchDefinition so the execution loop can match them exactly.
-  // Duplicates are detected case-insensitively.
+  // allProviderIds stores normalized fallback ids (lowercased) but original
+  // casing for the primary provider id. The execution loop matches casing
+  // exactly for the primary and lowercased for fallbacks. Duplicates are
+  // detected case-insensitively.
   if (primaryProviderId && !seenProviderIds.has(primaryProviderId.toLowerCase())) {
     seenProviderIds.add(primaryProviderId.toLowerCase());
     allProviderIds.push(primaryProviderId);

@@ -29,16 +29,6 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  // Use the same preferRuntimeProviders logic for runWebSearch
-  const shouldPreferRuntimeProviders =
-    Boolean(runtimeProviderId) &&
-    !resolveManifestContractOwnerPluginId({
-      contract: "webSearchProviders",
-      value: runtimeProviderId,
-      origin: "bundled",
-      config: options?.config,
-    });
-
   return {
     label: "Web Search",
     name: "web_search",
@@ -53,7 +43,7 @@ export function createWebSearchTool(options?: {
         config: options?.config,
         sandboxed: options?.sandboxed,
         runtimeWebSearch: options?.runtimeWebSearch,
-        preferRuntimeProviders: shouldPreferRuntimeProviders,
+        preferRuntimeProviders,
         args,
       });
       return jsonResult({
