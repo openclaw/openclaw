@@ -10,7 +10,7 @@ import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/irc";
 import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/signal-core";
+} from "openclaw/plugin-sdk/status-helpers";
 import { UtopiaConfigSchema } from "./config-schema.js";
 import { getUtopiaRuntime } from "./runtime.js";
 import {
