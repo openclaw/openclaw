@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHint, ConfigUiHints } from "../types.ts";
 
 export type JsonSchema = {
@@ -125,7 +126,7 @@ function isEnvVarPlaceholder(value: string): boolean {
 }
 
 export function isSensitiveConfigPath(path: string): boolean {
-  const lowerPath = path.toLowerCase();
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const whitelisted = SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
   return !whitelisted && SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }

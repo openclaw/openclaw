@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
   hasPotentialConfiguredChannels,
@@ -16,9 +17,22 @@ function makeTempStateDir() {
   return dir;
 }
 
+function expectPotentialConfiguredChannelCase(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  expectedIds: string[];
+  expectedConfigured: boolean;
+}) {
+  expect(listPotentialConfiguredChannelIds(params.cfg, params.env)).toEqual(params.expectedIds);
+  expect(hasPotentialConfiguredChannels(params.cfg, params.env)).toBe(params.expectedConfigured);
+}
+
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -35,7 +49,48 @@ describe("config presence", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
     const cfg = { channels: { matrix: { enabled: false } } };
 
-    expect(listPotentialConfiguredChannelIds(cfg, env)).toEqual([]);
-    expect(hasPotentialConfiguredChannels(cfg, env)).toBe(false);
+    expectPotentialConfiguredChannelCase({
+      cfg,
+      env,
+      expectedIds: [],
+      expectedConfigured: false,
+    });
+  });
+
+  it("detects env-only channel config", () => {
+    const stateDir = makeTempStateDir();
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      MATRIX_ACCESS_TOKEN: "token",
+    } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["matrix"],
+      expectedConfigured: true,
+    });
+  });
+
+  it("detects persisted Matrix credentials without config or env", () => {
+    const stateDir = makeTempStateDir();
+    fs.mkdirSync(path.join(stateDir, "credentials", "matrix"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "credentials", "matrix", "credentials.json"),
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "token",
+      }),
+      "utf8",
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["matrix"],
+      expectedConfigured: true,
+    });
   });
 });

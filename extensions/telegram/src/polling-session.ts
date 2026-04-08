@@ -1,7 +1,11 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  computeBackoff,
+  formatDurationPrecise,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
@@ -201,6 +205,10 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
+    let lastApiActivityAt = Date.now();
+    let nextInFlightApiCallId = 0;
+    let latestInFlightApiStartedAt: number | null = null;
+    const inFlightApiStartedAt = new Map<number, number>();
     let lastGetUpdatesStartedAt: number | null = null;
     let lastGetUpdatesFinishedAt: number | null = null;
     let lastGetUpdatesDurationMs: number | null = null;
@@ -208,12 +216,36 @@ export class TelegramPollingSession {
     let lastGetUpdatesError: string | null = null;
     let lastGetUpdatesOffset: number | null = null;
     let inFlightGetUpdates = 0;
-    let stopSequenceLogged = false;
+    let _stopSequenceLogged = false;
     let stallDiagLoggedAt = 0;
 
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
-        return prev(method, payload, signal);
+        const startedAt = Date.now();
+        const callId = nextInFlightApiCallId;
+        nextInFlightApiCallId += 1;
+        inFlightApiStartedAt.set(callId, startedAt);
+        latestInFlightApiStartedAt =
+          latestInFlightApiStartedAt == null
+            ? startedAt
+            : Math.max(latestInFlightApiStartedAt, startedAt);
+        try {
+          const result = await prev(method, payload, signal);
+          lastApiActivityAt = Date.now();
+          return result;
+        } finally {
+          inFlightApiStartedAt.delete(callId);
+          if (latestInFlightApiStartedAt === startedAt) {
+            let newestStartedAt: number | null = null;
+            for (const activeStartedAt of inFlightApiStartedAt.values()) {
+              newestStartedAt =
+                newestStartedAt == null
+                  ? activeStartedAt
+                  : Math.max(newestStartedAt, activeStartedAt);
+            }
+            latestInFlightApiStartedAt = newestStartedAt;
+          }
+        }
       }
 
       const startedAt = Date.now();
@@ -298,8 +330,20 @@ export class TelegramPollingSession {
       const idleElapsed =
         inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
+      const apiLivenessAt =
+        latestInFlightApiStartedAt == null
+          ? lastApiActivityAt
+          : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
+      const apiElapsed = now - apiLivenessAt;
 
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      // Treat recent non-getUpdates success and recent non-getUpdates start as
+      // the same liveness signal. Slow delivery should suppress the watchdog,
+      // but only for the same bounded window as recent successful API traffic.
+      if (
+        elapsed > POLL_STALL_THRESHOLD_MS &&
+        apiElapsed > POLL_STALL_THRESHOLD_MS &&
+        runner.isRunning()
+      ) {
         if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
           return;
         }
@@ -342,7 +386,7 @@ export class TelegramPollingSession {
           : "runner stopped (maxRetryTime exceeded or graceful stop)";
       this.#forceRestarted = false;
       this.opts.log(
-        `[telegram][diag] polling cycle finished reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}`,
+        `[telegram][diag] polling cycle finished reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${String(lastGetUpdatesError)}` : ""}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
@@ -367,7 +411,7 @@ export class TelegramPollingSession {
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
       this.opts.log(
-        `[telegram][diag] polling cycle error reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"} err=${errMsg}${lastGetUpdatesError ? ` lastGetUpdatesError=${lastGetUpdatesError}` : ""}`,
+        `[telegram][diag] polling cycle error reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"} err=${errMsg}${lastGetUpdatesError ? ` lastGetUpdatesError=${String(lastGetUpdatesError)}` : ""}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
@@ -407,7 +451,7 @@ const isGetUpdatesConflict = (err: unknown) => {
   }
   const haystack = [typed.method, typed.description, typed.message]
     .filter((value): value is string => typeof value === "string")
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes("getupdates");
+    .join(" ");
+  const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
+  return normalizedHaystack.includes("getupdates");
 };

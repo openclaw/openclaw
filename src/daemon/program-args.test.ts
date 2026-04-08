@@ -10,15 +10,27 @@ const fsMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  default: { access: fsMocks.access, realpath: fsMocks.realpath },
-  access: fsMocks.access,
-  realpath: fsMocks.realpath,
-}));
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      access: fsMocks.access,
+      realpath: fsMocks.realpath,
+    },
+    access: fsMocks.access,
+    realpath: fsMocks.realpath,
+  };
+});
 
-vi.mock("node:child_process", () => ({
-  execFileSync: childProcessMocks.execFileSync,
-}));
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: childProcessMocks.execFileSync,
+  };
+});
 
 import { resolveGatewayProgramArguments } from "./program-args.js";
 

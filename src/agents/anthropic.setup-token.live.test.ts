@@ -141,9 +141,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   }
 
   const preferred = [
-    "claude-opus-4-5",
+    "claude-opus-4-6",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
     "claude-sonnet-4-0",
     "claude-haiku-3-5",
   ];

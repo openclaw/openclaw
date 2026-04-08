@@ -3,6 +3,7 @@ import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   adaptScopedAccountAccessor,
+  authorizeConfigWrite,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -12,10 +13,24 @@ import {
   createTopLevelChannelConfigBase,
   createHybridChannelConfigBase,
   mapAllowFromEntries,
+  resolveChannelConfigWrites,
   resolveOptionalConfigString,
 } from "./channel-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
+
+function createConfigWritesCfg() {
+  return {
+    channels: {
+      telegram: {
+        configWrites: true,
+        accounts: {
+          Work: { configWrites: false },
+        },
+      },
+    },
+  };
+}
 
 function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
   const channelAdapter = adapter as {
@@ -40,27 +55,77 @@ function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
 }
 
 describe("mapAllowFromEntries", () => {
-  it("coerces allowFrom entries to strings", () => {
-    expect(mapAllowFromEntries(["user", 42])).toEqual(["user", "42"]);
-  });
-
-  it("returns empty list for missing input", () => {
-    expect(mapAllowFromEntries(undefined)).toEqual([]);
+  it.each([
+    {
+      name: "coerces allowFrom entries to strings",
+      input: ["user", 42],
+      expected: ["user", "42"],
+    },
+    {
+      name: "returns empty list for missing input",
+      input: undefined,
+      expected: [],
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(mapAllowFromEntries(input)).toEqual(expected);
   });
 });
 
 describe("resolveOptionalConfigString", () => {
-  it("trims and returns string values", () => {
-    expect(resolveOptionalConfigString("  room:123  ")).toBe("room:123");
+  it.each([
+    {
+      name: "trims and returns string values",
+      input: "  room:123  ",
+      expected: "room:123",
+    },
+    {
+      name: "coerces numeric values",
+      input: 123,
+      expected: "123",
+    },
+    {
+      name: "returns undefined for empty string values",
+      input: "   ",
+      expected: undefined,
+    },
+    {
+      name: "returns undefined for missing values",
+      input: undefined,
+      expected: undefined,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(resolveOptionalConfigString(input)).toBe(expected);
+  });
+});
+
+describe("config write helpers", () => {
+  it("matches account ids case-insensitively", () => {
+    expect(
+      resolveChannelConfigWrites({
+        cfg: createConfigWritesCfg(),
+        channelId: "telegram",
+        accountId: "work",
+      }),
+    ).toBe(false);
   });
 
-  it("coerces numeric values", () => {
-    expect(resolveOptionalConfigString(123)).toBe("123");
-  });
-
-  it("returns undefined for empty values", () => {
-    expect(resolveOptionalConfigString("   ")).toBeUndefined();
-    expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  it("blocks account-scoped writes when the configured account key differs only by case", () => {
+    expect(
+      authorizeConfigWrite({
+        cfg: createConfigWritesCfg(),
+        target: {
+          kind: "account",
+          scope: { channelId: "telegram", accountId: "work" },
+        },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: {
+        kind: "target",
+        scope: { channelId: "telegram", accountId: "work" },
+      },
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type MessagingToolSend = {
   tool: string;
@@ -23,7 +24,7 @@ export function isMessagingToolSendAction(
   toolName: string,
   args: Record<string, unknown>,
 ): boolean {
-  const action = typeof args.action === "string" ? args.action.trim() : "";
+  const action = normalizeOptionalString(args.action) ?? "";
   if (toolName === "sessions_send") {
     return true;
   }

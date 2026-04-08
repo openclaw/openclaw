@@ -1,105 +1,285 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
+import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
-const { resolvePluginToolsMock } = vi.hoisted(() => ({
-  resolvePluginToolsMock: vi.fn((params?: unknown) => {
-    void params;
-    return [];
-  }),
-}));
-
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: resolvePluginToolsMock,
-  copyPluginToolMeta: vi.fn(),
-  getPluginToolMeta: vi.fn(() => undefined),
-}));
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
-let createOpenClawCodingTools: typeof import("./pi-tools.js").createOpenClawCodingTools;
-
-describe("createOpenClawTools plugin context", () => {
-  beforeEach(async () => {
-    resolvePluginToolsMock.mockClear();
-    vi.resetModules();
-    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-    ({ createOpenClawCodingTools } = await import("./pi-tools.js"));
-  });
-
-  it("forwards trusted requester sender identity to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      requesterSenderId: "trusted-sender",
-      senderIsOwner: true,
+describe("openclaw plugin tool context", () => {
+  it("forwards trusted requester sender identity", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        requesterSenderId: "trusted-sender",
+        senderIsOwner: true,
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          requesterSenderId: "trusted-sender",
-          senderIsOwner: true,
-        }),
+        requesterSenderId: "trusted-sender",
+        senderIsOwner: true,
       }),
     );
   });
 
-  it("forwards ephemeral sessionId to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      agentSessionKey: "agent:main:telegram:direct:12345",
-      sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  it("forwards fs policy for plugin tool sandbox enforcement", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        fsPolicy: { workspaceOnly: true },
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          sessionKey: "agent:main:telegram:direct:12345",
-          sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        }),
+        fsPolicy: { workspaceOnly: true },
       }),
     );
   });
 
-  it("forwards browser session wiring to plugin tool context", () => {
-    createOpenClawTools({
-      config: {} as never,
-      sandboxBrowserBridgeUrl: "http://127.0.0.1:9999",
-      allowHostBrowserControl: true,
+  it("forwards ephemeral sessionId", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentSessionKey: "agent:main:telegram:direct:12345",
+        sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        context: expect.objectContaining({
-          browser: {
-            sandboxBridgeUrl: "http://127.0.0.1:9999",
-            allowHostControl: true,
+        sessionKey: "agent:main:telegram:direct:12345",
+        sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      }),
+    );
+  });
+
+  it("infers the default agent workspace when workspaceDir is omitted", () => {
+    const workspaceDir = path.join(process.cwd(), "tmp-main-workspace");
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {
+          agents: {
+            defaults: { workspace: workspaceDir },
+            list: [{ id: "main", default: true }],
           },
-        }),
+        } as never,
+        agentSessionKey: "main",
+      },
+      resolvedConfig: {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true }],
+        },
+      } as never,
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        workspaceDir,
       }),
     );
   });
 
-  it("forwards gateway subagent binding for plugin tools", () => {
-    createOpenClawTools({
-      config: {} as never,
-      allowGatewaySubagentBinding: true,
+  it("infers the session agent workspace when workspaceDir is omitted", () => {
+    const supportWorkspace = path.join(process.cwd(), "tmp-support-workspace");
+    const config = {
+      agents: {
+        defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
+        list: [
+          { id: "main", default: true },
+          { id: "support", workspace: supportWorkspace },
+        ],
+      },
+    } as never;
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config,
+        agentSessionKey: "agent:support:main",
+      },
+      resolvedConfig: config,
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        allowGatewaySubagentBinding: true,
+        agentId: "support",
+        workspaceDir: supportWorkspace,
       }),
     );
   });
 
-  it("forwards gateway subagent binding through coding tools", () => {
-    createOpenClawCodingTools({
-      config: {} as never,
-      allowGatewaySubagentBinding: true,
+  it("forwards browser session wiring", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        sandboxBrowserBridgeUrl: "http://127.0.0.1:9999",
+        allowHostBrowserControl: true,
+      },
     });
 
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+    expect(result.context).toEqual(
       expect.objectContaining({
-        allowGatewaySubagentBinding: true,
+        browser: {
+          sandboxBridgeUrl: "http://127.0.0.1:9999",
+          allowHostControl: true,
+        },
       }),
     );
+  });
+
+  it("forwards gateway subagent binding", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        allowGatewaySubagentBinding: true,
+      },
+    });
+
+    expect(result.allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("forwards ambient deliveryContext", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "slack",
+        agentTo: "channel:C123",
+        agentAccountId: "work",
+        agentThreadId: "1710000000.000100",
+      },
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "work",
+          threadId: "1710000000.000100",
+        },
+      }),
+    );
+  });
+
+  it("does not inject ambient thread defaults into plugin tools", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const sharedTool: AnyAgentTool = {
+      name: "plugin-thread-default",
+      label: "plugin-thread-default",
+      description: "test",
+      parameters: {
+        type: "object",
+        properties: {
+          threadId: { type: "string" },
+        },
+      },
+      execute: executeMock,
+    };
+
+    const [first] = applyPluginToolDeliveryDefaults({
+      tools: [sharedTool],
+      deliveryContext: { threadId: "111.222" },
+    });
+    const [second] = applyPluginToolDeliveryDefaults({
+      tools: [sharedTool],
+      deliveryContext: { threadId: "333.444" },
+    });
+
+    expect(first).toBe(sharedTool);
+    expect(second).toBe(sharedTool);
+
+    await first?.execute("call-1", {});
+    await second?.execute("call-2", {});
+
+    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", {});
+    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", {});
+  });
+
+  it("does not inject messageThreadId defaults for missing params objects", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const tool: AnyAgentTool = {
+      name: "plugin-message-thread-default",
+      label: "plugin-message-thread-default",
+      description: "test",
+      parameters: {
+        type: "object",
+        properties: {
+          messageThreadId: { type: "number" },
+        },
+      },
+      execute: executeMock,
+    };
+
+    const [wrapped] = applyPluginToolDeliveryDefaults({
+      tools: [tool],
+      deliveryContext: { threadId: "77" },
+    });
+
+    await wrapped?.execute("call-1", undefined);
+
+    expect(executeMock).toHaveBeenCalledWith("call-1", undefined);
+  });
+
+  it("does not infer string thread ids for tools that declare thread parameters", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const tool: AnyAgentTool = {
+      name: "plugin-string-thread-default",
+      label: "plugin-string-thread-default",
+      description: "test",
+      parameters: {
+        type: "object",
+        properties: {
+          threadId: { type: "string" },
+        },
+      },
+      execute: executeMock,
+    };
+
+    const [wrapped] = applyPluginToolDeliveryDefaults({
+      tools: [tool],
+      deliveryContext: { threadId: "77" },
+    });
+
+    await wrapped?.execute("call-1", {});
+
+    expect(executeMock).toHaveBeenCalledWith("call-1", {});
+  });
+
+  it("preserves explicit thread params when ambient defaults exist", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const tool: AnyAgentTool = {
+      name: "plugin-thread-override",
+      label: "plugin-thread-override",
+      description: "test",
+      parameters: {
+        type: "object",
+        properties: {
+          threadId: { type: "string" },
+        },
+      },
+      execute: executeMock,
+    };
+
+    const [wrapped] = applyPluginToolDeliveryDefaults({
+      tools: [tool],
+      deliveryContext: { threadId: "111.222" },
+    });
+
+    await wrapped?.execute("call-1", { threadId: "explicit" });
+
+    expect(executeMock).toHaveBeenCalledWith("call-1", { threadId: "explicit" });
   });
 });

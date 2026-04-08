@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const evaluateSenderGroupAccessForPolicy = vi.hoisted(() => vi.fn());
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
@@ -6,7 +6,7 @@ const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
 const resolveControlCommandGate = vi.hoisted(() => vi.fn());
 const resolveEffectiveAllowFromLists = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("./runtime-api.js", () => ({
   evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistMatchSimple,
@@ -15,17 +15,35 @@ vi.mock("../runtime-api.js", () => ({
 }));
 
 describe("mattermost monitor auth", () => {
-  it("normalizes allowlist entries and resolves effective lists", async () => {
+  let authorizeMattermostCommandInvocation: typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation;
+  let isMattermostSenderAllowed: typeof import("./monitor-auth.js").isMattermostSenderAllowed;
+  let normalizeMattermostAllowEntry: typeof import("./monitor-auth.js").normalizeMattermostAllowEntry;
+  let normalizeMattermostAllowList: typeof import("./monitor-auth.js").normalizeMattermostAllowList;
+  let resolveMattermostEffectiveAllowFromLists: typeof import("./monitor-auth.js").resolveMattermostEffectiveAllowFromLists;
+
+  beforeAll(async () => {
+    ({
+      authorizeMattermostCommandInvocation,
+      isMattermostSenderAllowed,
+      normalizeMattermostAllowEntry,
+      normalizeMattermostAllowList,
+      resolveMattermostEffectiveAllowFromLists,
+    } = await import("./monitor-auth.js"));
+  });
+
+  beforeEach(() => {
+    evaluateSenderGroupAccessForPolicy.mockReset();
+    isDangerousNameMatchingEnabled.mockReset();
+    resolveAllowlistMatchSimple.mockReset();
+    resolveControlCommandGate.mockReset();
+    resolveEffectiveAllowFromLists.mockReset();
+  });
+
+  it("normalizes allowlist entries and resolves effective lists", () => {
     resolveEffectiveAllowFromLists.mockReturnValue({
       effectiveAllowFrom: ["alice"],
       effectiveGroupAllowFrom: ["team"],
     });
-
-    const {
-      normalizeMattermostAllowEntry,
-      normalizeMattermostAllowList,
-      resolveMattermostEffectiveAllowFromLists,
-    } = await import("./monitor-auth.js");
 
     expect(normalizeMattermostAllowEntry(" @Alice ")).toBe("alice");
     expect(normalizeMattermostAllowEntry("mattermost:Bob")).toBe("bob");
@@ -53,10 +71,8 @@ describe("mattermost monitor auth", () => {
     });
   });
 
-  it("checks sender allowlists against normalized ids and names", async () => {
+  it("checks sender allowlists against normalized ids and names", () => {
     resolveAllowlistMatchSimple.mockReturnValue({ allowed: true });
-
-    const { isMattermostSenderAllowed } = await import("./monitor-auth.js");
     expect(
       isMattermostSenderAllowed({
         senderId: "@Alice",
@@ -88,8 +104,6 @@ describe("mattermost monitor auth", () => {
       reason: "empty_allowlist",
     });
     resolveAllowlistMatchSimple.mockReturnValue({ allowed: false });
-
-    const { authorizeMattermostCommandInvocation } = await import("./monitor-auth.js");
 
     expect(
       authorizeMattermostCommandInvocation({
