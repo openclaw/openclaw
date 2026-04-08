@@ -1,7 +1,7 @@
 import {
-  isWhatsAppGroupJid,
   resolveReactionMessageId,
   handleWhatsAppAction,
+  isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
   readStringOrNumberParam,
   readStringParam,
@@ -55,6 +55,9 @@ export async function handleWhatsAppReactAction(params: {
   const explicitMessageId = readStringOrNumberParam(params.params, "messageId");
   const emoji = readStringParam(params.params, "emoji", { allowEmpty: true });
   const remove = typeof params.params.remove === "boolean" ? params.params.remove : undefined;
+  const chatJid =
+    readStringParam(params.params, "chatJid") ??
+    readStringParam(params.params, "to", { required: true });
   const explicitParticipant = readStringParam(params.params, "participant");
   const inferredParticipant =
     explicitParticipant ||
@@ -69,9 +72,7 @@ export async function handleWhatsAppReactAction(params: {
   return await handleWhatsAppAction(
     {
       action: "react",
-      chatJid:
-        readStringParam(params.params, "chatJid") ??
-        readStringParam(params.params, "to", { required: true }),
+      chatJid,
       messageId,
       emoji,
       remove,
