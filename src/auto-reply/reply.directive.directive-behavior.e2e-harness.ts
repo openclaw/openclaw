@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
@@ -61,7 +62,8 @@ function createThinkingPolicyProvider(
     id: providerId,
     label: providerId,
     auth: [],
-    supportsXHighThinking: ({ modelId }) => xhighModelIds.includes(modelId.trim().toLowerCase()),
+    supportsXHighThinking: ({ modelId }) =>
+      xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId)),
   };
 }
 

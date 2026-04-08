@@ -1,21 +1,28 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveApiKeyForProvider } from "./model-auth.js";
 import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
-import {
-  resolveEnvApiKeyVarName,
-  resolveMissingProviderApiKey,
-} from "./models-config.providers.secrets.js";
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
 installModelsConfigTestHooks();
+
+let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
+let resolveEnvApiKeyVarName: typeof import("./models-config.providers.secrets.js").resolveEnvApiKeyVarName;
+let resolveMissingProviderApiKey: typeof import("./models-config.providers.secrets.js").resolveMissingProviderApiKey;
+
+beforeEach(async () => {
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.resetModules();
+  ({ resolveApiKeyForProvider } = await import("./model-auth.js"));
+  ({ resolveEnvApiKeyVarName, resolveMissingProviderApiKey } =
+    await import("./models-config.providers.secrets.js"));
+});
 
 function createTestModel(id: string): ModelDefinitionConfig {
   return {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
+import { formatMatrixErrorMessage, formatMatrixErrorReason } from "../errors.js";
 import { LogService } from "./logger.js";
 import type {
   MatrixCryptoBootstrapApi,
@@ -11,7 +12,7 @@ import type {
 } from "./types.js";
 
 export function isRepairableSecretStorageAccessError(err: unknown): boolean {
-  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  const message = formatMatrixErrorReason(err);
   if (!message) {
     return false;
   }
@@ -142,10 +143,9 @@ export class MatrixRecoveryKeyStore {
     try {
       privateKey = decodeRecoveryKey(encodedPrivateKey);
     } catch (err) {
-      throw new Error(
-        `Invalid Matrix recovery key: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
+      throw new Error(`Invalid Matrix recovery key: ${formatMatrixErrorMessage(err)}`, {
+        cause: err,
+      });
     }
     const keyId =
       typeof params.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : null;

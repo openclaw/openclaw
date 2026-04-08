@@ -3,6 +3,10 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { fetchRemoteMedia } from "./fetch.js";
@@ -19,7 +23,7 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
-import { detectMime, extensionForMime, kindFromMime } from "./mime.js";
+import { detectMime, extensionForMime, kindFromMime, normalizeMimeType } from "./mime.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -100,10 +104,10 @@ function isPixelLimitError(error: unknown): boolean {
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
-  if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
+  if (HEIC_MIME_RE.test(normalizeOptionalString(opts.contentType) ?? "")) {
     return true;
   }
-  if (opts.fileName && HEIC_EXT_RE.test(opts.fileName.trim())) {
+  if (HEIC_EXT_RE.test(normalizeOptionalString(opts.fileName) ?? "")) {
     return true;
   }
   return false;
@@ -117,12 +121,13 @@ function assertHostReadMediaAllowed(params: {
     return;
   }
   if (params.kind !== "document") {
+    const contentType = normalizeMimeType(params.contentType);
     throw new LocalMediaAccessError(
       "path-not-allowed",
-      `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${params.contentType?.trim().toLowerCase() ?? "unknown"}).`,
+      `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${contentType ?? "unknown"}).`,
     );
   }
-  const normalizedMime = params.contentType?.trim().toLowerCase();
+  const normalizedMime = normalizeMimeType(params.contentType);
   if (normalizedMime && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)) {
     return;
   }
@@ -180,7 +185,9 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
-  const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+  const isPng =
+    meta?.contentType === "image/png" ||
+    normalizeLowercaseStringOrEmpty(meta?.fileName).endsWith(".png");
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 
   if (hasAlpha) {

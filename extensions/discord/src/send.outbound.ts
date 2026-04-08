@@ -13,7 +13,7 @@ import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
@@ -105,10 +105,7 @@ const DISCORD_THREAD_NAME_LIMIT = 100;
 /** Derive a thread title from the first non-empty line of the message text. */
 function deriveForumThreadName(text: string): string {
   const firstLine =
-    text
-      .split("\n")
-      .find((l) => l.trim())
-      ?.trim() ?? "";
+    normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
   return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
 }
 
@@ -361,13 +358,13 @@ export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookSendOpts,
 ): Promise<DiscordSendResult> {
-  const webhookId = opts.webhookId.trim();
-  const webhookToken = opts.webhookToken.trim();
+  const webhookId = normalizeOptionalString(opts.webhookId) ?? "";
+  const webhookToken = normalizeOptionalString(opts.webhookToken) ?? "";
   if (!webhookId || !webhookToken) {
     throw new Error("Discord webhook id/token are required");
   }
 
-  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
+  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,
@@ -391,8 +388,8 @@ export async function sendWebhookMessageDiscord(
       },
       body: JSON.stringify({
         content: rewrittenText,
-        username: opts.username?.trim() || undefined,
-        avatar_url: opts.avatarUrl?.trim() || undefined,
+        username: normalizeOptionalString(opts.username),
+        avatar_url: normalizeOptionalString(opts.avatarUrl),
         ...(messageReference ? { message_reference: messageReference } : {}),
       }),
     },

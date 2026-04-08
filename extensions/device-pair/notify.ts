@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "./api.js";
 import { listDevicePairing } from "./api.js";
 
@@ -41,7 +42,7 @@ function formatStringList(values?: readonly string[]): string {
 }
 
 function formatRoleList(request: PendingPairingRequest): string {
-  const role = request.role?.trim();
+  const role = normalizeOptionalString(request.role);
   if (role) {
     return role;
   }
@@ -58,9 +59,9 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   }
   const lines: string[] = ["Pending device pairing requests:"];
   for (const req of pending) {
-    const label = req.displayName?.trim() || req.deviceId;
-    const platform = req.platform?.trim();
-    const ip = req.remoteIp?.trim();
+    const label = normalizeOptionalString(req.displayName) || req.deviceId;
+    const platform = normalizeOptionalString(req.platform);
+    const ip = normalizeOptionalString(req.remoteIp);
     const parts = [
       `- ${req.requestId}`,
       label ? `name=${label}` : null,
@@ -92,17 +93,14 @@ function normalizeNotifyState(raw: unknown): NotifyStateFile {
       continue;
     }
     const record = item as Record<string, unknown>;
-    const to = typeof record.to === "string" ? record.to.trim() : "";
+    const to = normalizeOptionalString(record.to) ?? "";
     if (!to) {
       continue;
     }
-    const accountId =
-      typeof record.accountId === "string" && record.accountId.trim()
-        ? record.accountId.trim()
-        : undefined;
+    const accountId = normalizeOptionalString(record.accountId) ?? undefined;
     const messageThreadId =
       typeof record.messageThreadId === "string"
-        ? record.messageThreadId.trim() || undefined
+        ? normalizeOptionalString(record.messageThreadId) || undefined
         : typeof record.messageThreadId === "number" && Number.isFinite(record.messageThreadId)
           ? Math.trunc(record.messageThreadId)
           : undefined;
@@ -122,13 +120,14 @@ function normalizeNotifyState(raw: unknown): NotifyStateFile {
 
   const notifiedRequestIds: Record<string, number> = {};
   for (const [requestId, ts] of Object.entries(notifiedRaw)) {
-    if (!requestId.trim()) {
+    const normalizedRequestId = normalizeOptionalString(requestId);
+    if (!normalizedRequestId) {
       continue;
     }
     if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
       continue;
     }
-    notifiedRequestIds[requestId] = Math.trunc(ts);
+    notifiedRequestIds[normalizedRequestId] = Math.trunc(ts);
   }
 
   return { subscribers, notifiedRequestIds };
@@ -170,7 +169,11 @@ function resolveNotifyTarget(ctx: {
   accountId?: string;
   messageThreadId?: string | number;
 }): NotifyTarget | null {
-  const to = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+  const to =
+    normalizeOptionalString(ctx.senderId) ||
+    normalizeOptionalString(ctx.from) ||
+    normalizeOptionalString(ctx.to) ||
+    "";
   if (!to) {
     return null;
   }
@@ -206,9 +209,9 @@ function upsertNotifySubscriber(
 }
 
 function buildPairingRequestNotificationText(request: PendingPairingRequest): string {
-  const label = request.displayName?.trim() || request.deviceId;
-  const platform = request.platform?.trim();
-  const ip = request.remoteIp?.trim();
+  const label = normalizeOptionalString(request.displayName) || request.deviceId;
+  const platform = normalizeOptionalString(request.platform);
+  const ip = normalizeOptionalString(request.remoteIp);
   const role = formatRoleList(request);
   const scopes = formatScopeList(request);
   const lines = [

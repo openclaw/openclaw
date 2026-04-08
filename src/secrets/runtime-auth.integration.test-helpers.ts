@@ -7,6 +7,20 @@ import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../con
 import { captureEnv } from "../test-utils/env.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 
+const secretsRuntimePluginMocks = vi.hoisted(() => ({
+  resolveExternalAuthProfilesWithPluginsMock: vi.fn(() => []),
+  resolvePluginWebSearchProvidersMock: vi.fn(() => []),
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins:
+    secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock,
+}));
+
 export const OPENAI_ENV_KEY_REF = {
   source: "env",
   provider: "default",
@@ -109,6 +123,10 @@ export function expectResolvedOpenAIRuntime(agentDir: string) {
 }
 
 export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
+  secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReset();
+  secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+  secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock.mockReset();
+  secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock.mockReturnValue([]);
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",

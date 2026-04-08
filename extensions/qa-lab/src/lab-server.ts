@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer,
@@ -11,6 +12,8 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
@@ -159,14 +162,14 @@ function missingUiHtml() {
 </html>`;
 }
 
-function resolveUiDistDir(overrideDir?: string | null) {
+function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
   if (overrideDir?.trim()) {
     return overrideDir;
   }
   const candidates = [
+    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
+    path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
     fileURLToPath(new URL("../web/dist", import.meta.url)),
-    path.resolve(process.cwd(), "extensions/qa-lab/web/dist"),
-    path.resolve(process.cwd(), "dist/extensions/qa-lab/web/dist"),
   ];
   return (
     candidates.find((candidate) => {
@@ -177,6 +180,45 @@ function resolveUiDistDir(overrideDir?: string | null) {
       return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
     }) ?? candidates[0]
   );
+}
+
+function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
+  const entries = fs
+    .readdirSync(currentDir, { withFileTypes: true })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+  const files: string[] = [];
+  for (const entry of entries) {
+    const resolved = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listUiAssetFiles(rootDir, resolved));
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    files.push(path.relative(rootDir, resolved));
+  }
+  return files;
+}
+
+function resolveUiAssetVersion(overrideDir?: string | null): string | null {
+  try {
+    const distDir = resolveUiDistDir(overrideDir);
+    const indexPath = path.join(distDir, "index.html");
+    if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+      return null;
+    }
+    const hash = createHash("sha1");
+    for (const relativeFile of listUiAssetFiles(distDir)) {
+      hash.update(relativeFile);
+      hash.update("\0");
+      hash.update(fs.readFileSync(path.join(distDir, relativeFile)));
+      hash.update("\0");
+    }
+    return hash.digest("hex").slice(0, 12);
+  } catch {
+    return null;
+  }
 }
 
 function resolveAdvertisedBaseUrl(params: {
@@ -305,7 +347,7 @@ function proxyUpgradeRequest(params: {
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
     const value = params.req.rawHeaders[index + 1] ?? "";
-    if (name.toLowerCase() === "host") {
+    if (normalizeLowercaseStringOrEmpty(name) === "host") {
       continue;
     }
     headerLines.push(`${name}: ${value}`);
@@ -346,8 +388,12 @@ function proxyUpgradeRequest(params: {
   params.socket.on("close", closeBoth);
 }
 
-function tryResolveUiAsset(pathname: string, overrideDir?: string | null): string | null {
-  const distDir = resolveUiDistDir(overrideDir);
+function tryResolveUiAsset(
+  pathname: string,
+  overrideDir?: string | null,
+  repoRoot = process.cwd(),
+): string | null {
+  const distDir = resolveUiDistDir(overrideDir, repoRoot);
   if (!fs.existsSync(distDir)) {
     return null;
   }
@@ -418,6 +464,7 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
 }
 
 export async function startQaLabServer(params?: {
+  repoRoot?: string;
   host?: string;
   port?: number;
   outputPath?: string;
@@ -431,6 +478,7 @@ export async function startQaLabServer(params?: {
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
 }) {
+  const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -468,18 +516,68 @@ export async function startQaLabServer(params?: {
   } | null = null;
 
   let publicBaseUrl = "";
-  const runnerModelCatalogPromise = (async () => {
-    try {
-      const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
-      runnerModelOptions = await loadQaRunnerModelOptions({
-        repoRoot: process.cwd(),
-      });
-      runnerModelCatalogStatus = "ready";
-    } catch {
-      runnerModelOptions = [];
-      runnerModelCatalogStatus = "failed";
+  let runnerModelCatalogPromise: Promise<void> | null = null;
+  const ensureRunnerModelCatalog = () => {
+    if (runnerModelCatalogPromise) {
+      return runnerModelCatalogPromise;
     }
-  })();
+    runnerModelCatalogPromise = (async () => {
+      try {
+        const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
+        runnerModelOptions = await loadQaRunnerModelOptions({
+          repoRoot,
+        });
+        runnerModelCatalogStatus = "ready";
+      } catch {
+        runnerModelOptions = [];
+        runnerModelCatalogStatus = "failed";
+      }
+    })();
+    return runnerModelCatalogPromise;
+  };
+
+  async function runSelfCheck(): Promise<QaSelfCheckResult> {
+    latestScenarioRun = withQaLabRunCounts({
+      kind: "self-check",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      scenarios: [
+        {
+          id: "qa-self-check",
+          name: "Synthetic Slack-class roundtrip",
+          status: "running",
+        },
+      ],
+    });
+    const result = await runQaSelfCheckAgainstState({
+      state,
+      cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
+      outputPath: params?.outputPath,
+      repoRoot,
+    });
+    latestScenarioRun = withQaLabRunCounts({
+      kind: "self-check",
+      status: "completed",
+      startedAt: latestScenarioRun.startedAt,
+      finishedAt: new Date().toISOString(),
+      scenarios: [
+        {
+          id: "qa-self-check",
+          name: result.scenarioResult.name,
+          status: result.scenarioResult.status,
+          details: result.scenarioResult.details,
+          steps: result.scenarioResult.steps,
+        },
+      ],
+    });
+    latestReport = {
+      outputPath: result.outputPath,
+      markdown: result.report,
+      generatedAt: new Date().toISOString(),
+    };
+    return result;
+  }
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -500,6 +598,7 @@ export async function startQaLabServer(params?: {
       }
 
       if (req.method === "GET" && url.pathname === "/api/bootstrap") {
+        void ensureRunnerModelCatalog();
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
@@ -533,6 +632,14 @@ export async function startQaLabServer(params?: {
       }
       if (req.method === "GET" && url.pathname === "/api/report") {
         writeJson(res, 200, { report: latestReport });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/ui-version") {
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/outcomes") {
@@ -580,43 +687,7 @@ export async function startQaLabServer(params?: {
           writeError(res, 409, "QA suite run already in progress");
           return;
         }
-        latestScenarioRun = withQaLabRunCounts({
-          kind: "self-check",
-          status: "running",
-          startedAt: new Date().toISOString(),
-          scenarios: [
-            {
-              id: "qa-self-check",
-              name: "Synthetic Slack-class roundtrip",
-              status: "running",
-            },
-          ],
-        });
-        const result = await runQaSelfCheckAgainstState({
-          state,
-          cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
-          outputPath: params?.outputPath,
-        });
-        latestScenarioRun = withQaLabRunCounts({
-          kind: "self-check",
-          status: "completed",
-          startedAt: latestScenarioRun.startedAt,
-          finishedAt: new Date().toISOString(),
-          scenarios: [
-            {
-              id: "qa-self-check",
-              name: result.scenarioResult.name,
-              status: result.scenarioResult.status,
-              details: result.scenarioResult.details,
-              steps: result.scenarioResult.steps,
-            },
-          ],
-        });
-        latestReport = {
-          outputPath: result.outputPath,
-          markdown: result.report,
-          generatedAt: new Date().toISOString(),
-        };
+        const result = await runSelfCheck();
         writeJson(res, 200, serializeSelfCheck(result));
         return;
       }
@@ -643,11 +714,10 @@ export async function startQaLabServer(params?: {
             const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
             const result = await runQaSuiteFromRuntime({
               lab: labHandle ?? undefined,
-              outputDir: createQaRunOutputDir(),
+              outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,
               primaryModel: selection.primaryModel,
               alternateModel: selection.alternateModel,
-              fastMode: selection.fastMode,
               scenarioIds: selection.scenarioIds,
             });
             runnerSnapshot = {
@@ -670,7 +740,7 @@ export async function startQaLabServer(params?: {
               startedAt,
               finishedAt: new Date().toISOString(),
               artifacts: null,
-              error: error instanceof Error ? error.message : String(error),
+              error: formatErrorMessage(error),
             };
           } finally {
             activeSuiteRun = null;
@@ -688,7 +758,7 @@ export async function startQaLabServer(params?: {
         return;
       }
 
-      const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir);
+      const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir, repoRoot);
       if (!asset) {
         const html = missingUiHtml();
         res.writeHead(200, {
@@ -746,7 +816,6 @@ export async function startQaLabServer(params?: {
       kickoffTask: scenarioCatalog.kickoffTask,
     });
   }
-  void runnerModelCatalogPromise;
 
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -783,46 +852,7 @@ export async function startQaLabServer(params?: {
     setLatestReport(next: QaLabLatestReport | null) {
       latestReport = next;
     },
-    async runSelfCheck() {
-      latestScenarioRun = withQaLabRunCounts({
-        kind: "self-check",
-        status: "running",
-        startedAt: new Date().toISOString(),
-        scenarios: [
-          {
-            id: "qa-self-check",
-            name: "Synthetic Slack-class roundtrip",
-            status: "running",
-          },
-        ],
-      });
-      const result = await runQaSelfCheckAgainstState({
-        state,
-        cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
-        outputPath: params?.outputPath,
-      });
-      latestScenarioRun = withQaLabRunCounts({
-        kind: "self-check",
-        status: "completed",
-        startedAt: latestScenarioRun.startedAt,
-        finishedAt: new Date().toISOString(),
-        scenarios: [
-          {
-            id: "qa-self-check",
-            name: result.scenarioResult.name,
-            status: result.scenarioResult.status,
-            details: result.scenarioResult.details,
-            steps: result.scenarioResult.steps,
-          },
-        ],
-      });
-      latestReport = {
-        outputPath: result.outputPath,
-        markdown: result.report,
-        generatedAt: new Date().toISOString(),
-      };
-      return result;
-    },
+    runSelfCheck,
     async stop() {
       await gateway?.stop();
       await new Promise<void>((resolve, reject) =>

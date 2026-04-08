@@ -1,22 +1,14 @@
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { resolveProviderHttpRequestConfig } from "openclaw/plugin-sdk/provider-http";
 import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
-import {
-  DEFAULT_VIDEO_GENERATION_DURATION_SECONDS,
+  DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  DASHSCOPE_WAN_VIDEO_MODELS,
+  DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
   DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
-  DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
-  buildDashscopeVideoGenerationInput,
-  buildDashscopeVideoGenerationParameters,
-  downloadDashscopeGeneratedVideos,
-  extractDashscopeVideoUrls,
-  pollDashscopeVideoTaskUntilComplete,
+  runDashscopeVideoGenerationTask,
 } from "openclaw/plugin-sdk/video-generation";
 import type {
-  DashscopeVideoGenerationResponse,
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationResult,
@@ -24,7 +16,7 @@ import type {
 import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
 const DEFAULT_QWEN_VIDEO_BASE_URL = "https://dashscope-intl.aliyuncs.com";
-const DEFAULT_QWEN_VIDEO_MODEL = "wan2.6-t2v";
+const DEFAULT_QWEN_VIDEO_MODEL = DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL;
 
 function resolveQwenVideoBaseUrl(req: VideoGenerationRequest): string {
   const direct = req.cfg?.models?.providers?.qwen?.baseUrl?.trim();
@@ -66,45 +58,13 @@ export function buildQwenVideoGenerationProvider(): VideoGenerationProvider {
     id: "qwen",
     label: "Qwen Cloud",
     defaultModel: DEFAULT_QWEN_VIDEO_MODEL,
-    models: ["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v", "wan2.6-r2v-flash", "wan2.7-r2v"],
+    models: [...DASHSCOPE_WAN_VIDEO_MODELS],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "qwen",
         agentDir,
       }),
-    capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 10,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
-      },
-      imageToVideo: {
-        enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: 10,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
-      },
-      videoToVideo: {
-        enabled: true,
-        maxVideos: 1,
-        maxInputVideos: 4,
-        maxDurationSeconds: 10,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
-      },
-    },
+    capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
     async generateVideo(req): Promise<VideoGenerationResult> {
       const fetchFn = fetch;
       const auth = await resolveApiKeyForProvider({
@@ -133,68 +93,19 @@ export function buildQwenVideoGenerationProvider(): VideoGenerationProvider {
         });
 
       const model = req.model?.trim() || DEFAULT_QWEN_VIDEO_MODEL;
-      const { response, release } = await postJsonRequest({
+      return await runDashscopeVideoGenerationTask({
+        providerLabel: "Qwen",
+        model,
+        req,
         url: `${resolveDashscopeAigcApiBaseUrl(baseUrl)}/api/v1/services/aigc/video-generation/video-synthesis`,
         headers,
-        body: {
-          model,
-          input: buildDashscopeVideoGenerationInput({
-            providerLabel: "Qwen",
-            req,
-          }),
-          parameters: buildDashscopeVideoGenerationParameters(
-            {
-              ...req,
-              durationSeconds: req.durationSeconds ?? DEFAULT_VIDEO_GENERATION_DURATION_SECONDS,
-            },
-            DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
-          ),
-        },
+        baseUrl: resolveDashscopeAigcApiBaseUrl(baseUrl),
         timeoutMs: req.timeoutMs,
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
+        defaultTimeoutMs: DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
       });
-
-      try {
-        await assertOkOrThrowHttpError(response, "Qwen video generation failed");
-        const submitted = (await response.json()) as DashscopeVideoGenerationResponse;
-        const taskId = submitted.output?.task_id?.trim();
-        if (!taskId) {
-          throw new Error("Qwen video generation response missing task_id");
-        }
-        const completed = await pollDashscopeVideoTaskUntilComplete({
-          providerLabel: "Qwen",
-          taskId,
-          headers,
-          timeoutMs: req.timeoutMs,
-          fetchFn,
-          baseUrl: resolveDashscopeAigcApiBaseUrl(baseUrl),
-          defaultTimeoutMs: DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
-        });
-        const urls = extractDashscopeVideoUrls(completed);
-        if (urls.length === 0) {
-          throw new Error("Qwen video generation completed without output video URLs");
-        }
-        const videos = await downloadDashscopeGeneratedVideos({
-          providerLabel: "Qwen",
-          urls,
-          timeoutMs: req.timeoutMs,
-          fetchFn,
-          defaultTimeoutMs: DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
-        });
-        return {
-          videos,
-          model,
-          metadata: {
-            requestId: submitted.request_id,
-            taskId,
-            taskStatus: completed.output?.task_status,
-          },
-        };
-      } finally {
-        await release();
-      }
     },
   };
 }

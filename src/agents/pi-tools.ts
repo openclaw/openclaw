@@ -6,6 +6,10 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -24,6 +28,7 @@ import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
@@ -61,43 +66,11 @@ import {
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
-  const normalized = provider?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(provider);
   return normalized === "openai" || normalized === "openai-codex";
 }
 
-const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
-  voice: ["tts"],
-};
-const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
-  node: ["canvas", "image", "pdf", "tts", "web_fetch", "web_search"],
-};
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
-
-function normalizeMessageProvider(messageProvider?: string): string | undefined {
-  const normalized = messageProvider?.trim().toLowerCase();
-  return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function applyMessageProviderToolPolicy(
-  tools: AnyAgentTool[],
-  messageProvider?: string,
-): AnyAgentTool[] {
-  const normalizedProvider = normalizeMessageProvider(messageProvider);
-  if (!normalizedProvider) {
-    return tools;
-  }
-  const allowedTools = TOOL_ALLOW_BY_MESSAGE_PROVIDER[normalizedProvider];
-  if (allowedTools && allowedTools.length > 0) {
-    const allowedSet = new Set(allowedTools);
-    return tools.filter((tool) => allowedSet.has(tool.name));
-  }
-  const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
-  if (!deniedTools || deniedTools.length === 0) {
-    return tools;
-  }
-  const deniedSet = new Set(deniedTools);
-  return tools.filter((tool) => !deniedSet.has(tool.name));
-}
 
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
@@ -159,14 +132,14 @@ function isApplyPatchAllowedForModel(params: {
   if (!modelId) {
     return false;
   }
-  const normalizedModelId = modelId.toLowerCase();
-  const provider = params.modelProvider?.trim().toLowerCase();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const provider = normalizeOptionalLowercaseString(params.modelProvider);
   const normalizedFull =
     provider && !normalizedModelId.includes("/")
       ? `${provider}/${normalizedModelId}`
       : normalizedModelId;
   return allowModels.some((entry) => {
-    const normalized = entry.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(entry);
     if (!normalized) {
       return false;
     }
@@ -617,7 +590,7 @@ export function createOpenClawCodingTools(options?: {
           return [tool];
         })
       : tools;
-  const toolsForMessageProvider = applyMessageProviderToolPolicy(
+  const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,
   );

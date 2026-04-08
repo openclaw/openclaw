@@ -6,6 +6,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
@@ -189,6 +190,7 @@ export const ModelCompatSchema = z
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
+    requiresStringContent: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
@@ -539,6 +541,7 @@ export const CliBackendSchema = z
       .optional(),
     imageArg: z.string().optional(),
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
+    imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
     reliability: z
       .object({
@@ -556,7 +559,7 @@ export const CliBackendSchema = z
   .strict();
 
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
-  (values ?? []).map((v) => String(v).trim()).filter(Boolean);
+  normalizeStringEntries(values);
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;

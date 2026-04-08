@@ -8,6 +8,9 @@ import {
 } from "../config/mcp-config.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 
 function fail(message: string): never {
   defaultRuntime.error(message);
@@ -26,8 +29,8 @@ function resolveSecretOption(params: {
   fileFlag: string;
   label: string;
 }) {
-  const direct = params.direct?.trim();
-  const file = params.file?.trim();
+  const direct = normalizeOptionalString(params.direct);
+  const file = normalizeOptionalString(params.file);
   if (direct && file) {
     throw new Error(`Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`);
   }
@@ -82,9 +85,9 @@ export function registerMcpCli(program: Command) {
         if (opts.password) {
           warnSecretCliFlag("--password");
         }
-        const claudeChannelMode = String(opts.claudeChannelMode ?? "auto")
-          .trim()
-          .toLowerCase();
+        const claudeChannelMode = normalizeLowercaseStringOrEmpty(
+          normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
+        );
         if (
           claudeChannelMode !== "auto" &&
           claudeChannelMode !== "on" &&

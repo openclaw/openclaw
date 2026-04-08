@@ -15,6 +15,7 @@ export {
   resolveSingleAccountPromotionTarget,
   singleAccountKeysToMove,
 } from "./src/setup-contract.js";
+export { mergeTelegramAccountConfig } from "./src/accounts.js";
 export {
   buildCommandsPaginationKeyboard,
   buildTelegramModelsProviderChannelData,

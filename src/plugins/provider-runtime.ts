@@ -3,6 +3,8 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -34,6 +36,7 @@ import type {
   ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
+  ProviderPreferRuntimeResolvedModelContext,
   ProviderResolveExternalAuthProfilesContext,
   ProviderResolveExternalOAuthProfilesContext,
   ProviderPrepareRuntimeAuthContext,
@@ -249,6 +252,18 @@ export async function prepareProviderDynamicModel(params: {
   await resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
 }
 
+export function shouldPreferProviderRuntimeResolvedModel(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderPreferRuntimeResolvedModelContext;
+}): boolean {
+  return (
+    resolveProviderRuntimePlugin(params)?.preferRuntimeResolvedModel?.(params.context) ?? false
+  );
+}
+
 export function normalizeProviderResolvedModelWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -400,9 +415,7 @@ export function normalizeProviderModelIdWithPlugin(params: {
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
-  const normalized = plugin?.normalizeModelId?.(params.context);
-  const trimmed = normalized?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(plugin?.normalizeModelId?.(params.context));
 }
 
 export function normalizeProviderTransportWithPlugin(params: {
@@ -443,6 +456,11 @@ export function normalizeProviderConfigWithPlugin(params: {
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.normalizeConfig) {
+    const normalized = bundledSurface.normalizeConfig(params.context);
+    return normalized && hasConfigChange(normalized) ? normalized : undefined;
+  }
   const matchedPlugin = resolveProviderHookPlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
   if (normalizedMatched && hasConfigChange(normalizedMatched)) {
@@ -482,9 +500,13 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveConfigApiKeyContext;
 }): string | undefined {
-  const resolved = resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context);
-  const trimmed = resolved?.trim();
-  return trimmed ? trimmed : undefined;
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.resolveConfigApiKey) {
+    return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
+  }
+  return normalizeOptionalString(
+    resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context),
+  );
 }
 
 export function resolveProviderReplayPolicyWithPlugin(params: {
@@ -760,6 +782,10 @@ export function applyProviderConfigDefaultsWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderApplyConfigDefaultsContext;
 }) {
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.applyConfigDefaults) {
+    return bundledSurface.applyConfigDefaults(params.context) ?? undefined;
+  }
   return resolveProviderRuntimePlugin(params)?.applyConfigDefaults?.(params.context) ?? undefined;
 }
 

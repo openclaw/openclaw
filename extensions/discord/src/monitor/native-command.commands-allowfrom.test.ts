@@ -95,18 +95,19 @@ async function runGuildSlashCommand(params?: {
 }
 
 function expectNotUnauthorizedReply(interaction: MockCommandInteraction) {
-  expect(interaction.reply).not.toHaveBeenCalledWith(
+  expect(interaction.followUp).not.toHaveBeenCalledWith(
     expect.objectContaining({ content: "You are not authorized to use this command." }),
   );
 }
 
 function expectUnauthorizedReply(interaction: MockCommandInteraction) {
-  expect(interaction.reply).toHaveBeenCalledWith(
+  expect(interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({
       content: "You are not authorized to use this command.",
       ephemeral: true,
     }),
   );
+  expect(interaction.reply).not.toHaveBeenCalled();
 }
 
 describe("Discord native slash commands with commands.allowFrom", () => {
@@ -273,14 +274,15 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
 
-    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock
-      .calls[0]?.[0] as
+    const dispatchCall:
       | Parameters<typeof dispatcherModule.dispatchReplyWithDispatcher>[0]
-      | undefined;
+      | undefined = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls[0]?.[0];
     await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
 
-    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: longReply }));
-    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: longReply }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("swallows expired slash interactions before dispatch when defer returns Unknown interaction", async () => {

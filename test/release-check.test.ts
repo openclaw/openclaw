@@ -1,13 +1,18 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
-  collectBundledExtensionRootDependencyMirrorErrors,
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
+  packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
 import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
@@ -110,125 +115,131 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
-  it("flags a non-array mirror allowlist", () => {
+describe("bundled plugin root runtime mirrors", () => {
+  function makeBundledSpecs() {
+    return new Map([
+      ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
+    ]);
+  }
+
+  it("maps package names from import specifiers", () => {
+    expect(packageNameFromSpecifier("@larksuiteoapi/node-sdk/subpath")).toBe(
+      "@larksuiteoapi/node-sdk",
+    );
+    expect(packageNameFromSpecifier("grammy/web")).toBe("grammy");
+    expect(packageNameFromSpecifier("node:fs")).toBeNull();
+    expect(packageNameFromSpecifier("./local")).toBeNull();
+  });
+
+  it("derives required root mirrors from built root dist imports", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-"));
+
+    try {
+      const distDir = join(tempRoot, "dist");
+      mkdirSync(join(distDir, "extensions", "feishu"), { recursive: true });
+      writeFileSync(
+        join(distDir, "probe-Cz2PiFtC.js"),
+        `import("@larksuiteoapi/node-sdk");\nrequire("grammy");\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(distDir, "extensions", "feishu", "index.js"),
+        `import("@larksuiteoapi/node-sdk");\n`,
+        "utf8",
+      );
+
+      const mirrors = collectRootDistBundledRuntimeMirrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        distDir,
+      });
+
+      expect([...mirrors.keys()]).toEqual(["@larksuiteoapi/node-sdk"]);
+      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("flags missing root mirrors for plugin deps imported by root dist", () => {
     expect(
-      collectBundledExtensionRootDependencyMirrorErrors(
-        [
-          {
-            id: "matrix",
-            packageJson: {
-              openclaw: {
-                releaseChecks: {
-                  rootDependencyMirrorAllowlist: true,
-                },
-              },
+      collectBundledPluginRootRuntimeMirrorErrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        requiredRootMirrors: new Map([
+          [
+            "@larksuiteoapi/node-sdk",
+            {
+              importers: new Set(["probe-Cz2PiFtC.js"]),
+              pluginIds: ["feishu"],
+              spec: "^1.60.0",
             },
-          },
-        ],
-        new Map(),
-      ),
+          ],
+        ]),
+        rootPackageJson: { dependencies: {} },
+      }),
     ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array",
+      "root dist imports bundled plugin runtime dependency '@larksuiteoapi/node-sdk' from probe-Cz2PiFtC.js; mirror '@larksuiteoapi/node-sdk: ^1.60.0' in root package.json (declared by feishu).",
     ]);
   });
 
-  it("flags mirror entries missing from extension runtime dependencies", () => {
+  it("flags root mirror version drift from plugin manifests", () => {
     expect(
-      collectBundledExtensionRootDependencyMirrorErrors(
-        [
-          {
-            id: "matrix",
-            packageJson: {
-              dependencies: {
-                "matrix-js-sdk": "41.2.0",
-              },
-              openclaw: {
-                releaseChecks: {
-                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
-                },
-              },
+      collectBundledPluginRootRuntimeMirrorErrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        requiredRootMirrors: new Map([
+          [
+            "@larksuiteoapi/node-sdk",
+            {
+              importers: new Set(["probe-Cz2PiFtC.js"]),
+              pluginIds: ["feishu"],
+              spec: "^1.60.0",
             },
-          },
-        ],
-        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
-      ),
+          ],
+        ]),
+        rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.61.0" } },
+      }),
     ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be declared in extension runtime dependencies",
+      "root dist imports bundled plugin runtime dependency '@larksuiteoapi/node-sdk' from probe-Cz2PiFtC.js; root package.json has '^1.61.0' but plugin manifest declares '^1.60.0' (feishu).",
     ]);
   });
 
-  it("flags mirror entries missing from root runtime dependencies", () => {
+  it("accepts matching root mirrors for plugin deps imported by root dist", () => {
     expect(
-      collectBundledExtensionRootDependencyMirrorErrors(
-        [
-          {
-            id: "matrix",
-            packageJson: {
-              dependencies: {
-                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
-              },
-              openclaw: {
-                releaseChecks: {
-                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
-                },
-              },
+      collectBundledPluginRootRuntimeMirrorErrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        requiredRootMirrors: new Map([
+          [
+            "@larksuiteoapi/node-sdk",
+            {
+              importers: new Set(["probe-Cz2PiFtC.js"]),
+              pluginIds: ["feishu"],
+              spec: "^1.60.0",
             },
-          },
-        ],
-        new Map(),
-      ),
-    ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be mirrored in root runtime dependencies",
-    ]);
-  });
-
-  it("flags mirror entries whose root version drifts from the extension", () => {
-    expect(
-      collectBundledExtensionRootDependencyMirrorErrors(
-        [
-          {
-            id: "matrix",
-            packageJson: {
-              dependencies: {
-                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
-              },
-              openclaw: {
-                releaseChecks: {
-                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
-                },
-              },
-            },
-          },
-        ],
-        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.1.0"]]),
-      ),
-    ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must match root runtime dependency version (extension '18.0.0', root '18.1.0')",
-    ]);
-  });
-
-  it("accepts mirror entries declared by both the extension and root package", () => {
-    expect(
-      collectBundledExtensionRootDependencyMirrorErrors(
-        [
-          {
-            id: "matrix",
-            packageJson: {
-              dependencies: {
-                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
-              },
-              openclaw: {
-                releaseChecks: {
-                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
-                },
-              },
-            },
-          },
-        ],
-        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
-      ),
+          ],
+        ]),
+        rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.60.0" } },
+      }),
     ).toEqual([]);
+  });
+
+  it("flags conflicting plugin dependency specs", () => {
+    expect(
+      collectBundledPluginRootRuntimeMirrorErrors({
+        bundledRuntimeDependencySpecs: new Map([
+          [
+            "@example/sdk",
+            {
+              conflicts: [{ pluginId: "right", spec: "2.0.0" }],
+              pluginIds: ["left"],
+              spec: "1.0.0",
+            },
+          ],
+        ]),
+        requiredRootMirrors: new Map(),
+        rootPackageJson: { dependencies: {} },
+      }),
+    ).toEqual([
+      "bundled runtime dependency '@example/sdk' has conflicting plugin specs: left use '1.0.0', right uses '2.0.0'.",
+    ]);
   });
 });
 
@@ -254,6 +265,12 @@ describe("collectForbiddenPackPaths", () => {
     ).toEqual([
       "docs/.generated/config-baseline.core.json",
       "docs/.generated/config-baseline.json",
+    ]);
+  });
+
+  it("blocks plugin SDK TypeScript build info from npm pack output", () => {
+    expect(collectForbiddenPackPaths(["dist/index.js", "dist/plugin-sdk/.tsbuildinfo"])).toEqual([
+      "dist/plugin-sdk/.tsbuildinfo",
     ]);
   });
 });

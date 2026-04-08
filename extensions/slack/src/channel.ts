@@ -28,6 +28,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -97,8 +98,8 @@ function getTokenForOperation(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
-  const userToken = account.config.userToken?.trim() || undefined;
-  const botToken = account.botToken?.trim();
+  const userToken = normalizeOptionalString(account.config.userToken);
+  const botToken = normalizeOptionalString(account.botToken);
   const allowUserWrites = account.config.userTokenReadOnly === false;
   if (operation === "read") {
     return userToken ?? botToken;
@@ -270,7 +271,7 @@ const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver(
 const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
-    account.config.userToken?.trim() || account.botToken?.trim(),
+    normalizeOptionalString(account.config.userToken) ?? normalizeOptionalString(account.botToken),
   resolveNames: async ({ token, entries }) =>
     (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
@@ -384,7 +385,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const account = resolveSlackAccount({ cfg, accountId });
         if (kind === "group") {
           return resolveTargetsWithOptionalToken({
-            token: account.config.userToken?.trim() || account.botToken?.trim(),
+            token:
+              normalizeOptionalString(account.config.userToken) ??
+              normalizeOptionalString(account.botToken),
             inputs,
             missingTokenNote: "missing Slack token",
             resolveWithToken: async ({ token, inputs }) =>
@@ -397,7 +400,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           });
         }
         return resolveTargetsWithOptionalToken({
-          token: account.config.userToken?.trim() || account.botToken?.trim(),
+          token:
+            normalizeOptionalString(account.config.userToken) ??
+            normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs }) =>
@@ -493,6 +498,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,
+          channelRuntime: ctx.channelRuntime,
           abortSignal: ctx.abortSignal,
           mediaMaxMb: account.config.mediaMaxMb,
           slashCommand: account.config.slashCommand,

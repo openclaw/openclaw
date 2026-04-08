@@ -211,7 +211,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
         started.ws,
         (obj) => obj.type === "event" && obj.event === "device.pair.requested",
         300,
-      );
+      )
+        .then((event) => ({ ok: true as const, event }))
+        .catch((error: unknown) => ({ ok: false as const, error }));
 
       ws = await openTrackedWs(started.port);
       const res = await connectReq(ws, {
@@ -224,7 +226,13 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBeUndefined();
-      await expect(requestedEvent).rejects.toThrow("timeout");
+      const requested = await requestedEvent;
+      expect(requested.ok).toBe(false);
+      if (requested.ok) {
+        throw new Error("expected pairing request watcher to time out");
+      }
+      expect(requested.error).toBeInstanceOf(Error);
+      expect((requested.error as Error).message).toContain("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toEqual([]);

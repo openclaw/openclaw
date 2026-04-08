@@ -7,8 +7,10 @@ import {
 } from "../../context-engine/index.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -16,6 +18,7 @@ import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
+  resolveAuthProfileEligibility,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
@@ -101,7 +104,6 @@ import {
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
-import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
@@ -118,7 +120,7 @@ function backfillSessionKey(params: {
   sessionKey?: string;
   agentId?: string;
 }): string | undefined {
-  const trimmed = params.sessionKey?.trim() || undefined;
+  const trimmed = normalizeOptionalString(params.sessionKey);
   if (trimmed) {
     return trimmed;
   }
@@ -126,7 +128,7 @@ function backfillSessionKey(params: {
     return undefined;
   }
   try {
-    const resolved = params.agentId?.trim()
+    const resolved = normalizeOptionalString(params.agentId)
       ? resolveStoredSessionKeyForSessionId({
           cfg: params.config,
           sessionId: params.sessionId,
@@ -136,10 +138,10 @@ function backfillSessionKey(params: {
           cfg: params.config,
           sessionId: params.sessionId,
         });
-    return resolved.sessionKey?.trim() || undefined;
+    return normalizeOptionalString(resolved.sessionKey);
   } catch (err) {
     log.warn(
-      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${describeUnknownError(err)}`,
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
@@ -293,6 +295,17 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
+      if (lockedProfileId) {
+        const eligibility = resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: authStore,
+          provider,
+          profileId: lockedProfileId,
+        });
+        if (!eligibility.eligible) {
+          throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
+        }
+      }
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
         : resolveAuthProfileOrder({
@@ -301,9 +314,6 @@ export async function runEmbeddedPiAgent(
             provider,
             preferredProfile: preferredProfileId,
           });
-      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
-        throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
-      }
       const profileCandidates = lockedProfileId
         ? [lockedProfileId]
         : profileOrder.length > 0
@@ -665,6 +675,8 @@ export async function runEmbeddedPiAgent(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
+            bootstrapContextMode: params.bootstrapContextMode,
+            bootstrapContextRunKind: params.bootstrapContextRunKind,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
@@ -673,8 +685,10 @@ export async function runEmbeddedPiAgent(
           const {
             aborted,
             promptError,
+            promptErrorSource,
             preflightRecovery,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
             lastAssistant,
@@ -800,6 +814,7 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "timeout_recovery",
                   diagId: timeoutDiagId,
@@ -850,7 +865,7 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
-                  const errorText = describeUnknownError(promptError);
+                  const errorText = formatErrorMessage(promptError);
                   if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
                   }
@@ -941,6 +956,7 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
                   ...(observedOverflowTokens !== undefined
@@ -1081,9 +1097,13 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          if (promptError && !aborted) {
+          if (promptError && !aborted && promptErrorSource !== "compaction") {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
+            //
+            // promptErrorSource === "compaction" means the model call already completed and the
+            // abort happened only while waiting for compaction/retry cleanup. Retrying from here
+            // would replay that completed tool turn as a fresh prompt attempt.
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
@@ -1092,7 +1112,7 @@ export async function runEmbeddedPiAgent(
             const promptErrorDetails = normalizedPromptFailover
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
-            const errorText = promptErrorDetails.message || describeUnknownError(promptError);
+            const errorText = promptErrorDetails.message || formatErrorMessage(promptError);
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
               continue;
@@ -1414,12 +1434,15 @@ export async function runEmbeddedPiAgent(
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            const timeoutText = idleTimedOut
+              ? "The model did not produce a response before the LLM idle timeout. " +
+                "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
+              : "Request timed out before a response was generated. " +
+                "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             return {
               payloads: [
                 {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  text: timeoutText,
                   isError: true,
                 },
               ],
@@ -1584,7 +1607,7 @@ export async function runEmbeddedPiAgent(
         if (params.cleanupBundleMcpOnRunEnd === true) {
           await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
             log.warn(
-              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
+              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${formatErrorMessage(error)}`,
             );
           });
         }

@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
@@ -414,6 +415,11 @@ const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string
   telegram: ["streaming"],
 };
 
+const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
+  // Keep top-level Telegram policy fallback intact when only auth needs seeding.
+  telegram: ["botToken", "tokenFile"],
+};
+
 type ChannelSetupPromotionSurface = {
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
@@ -455,9 +461,9 @@ export function resolveSingleAccountKeysToMove(params: {
   const hasNamedAccounts =
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
-  const namedAccountPromotionKeys = getChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.namedAccountPromotionKeys;
+  const namedAccountPromotionKeys =
+    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
+    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
   return Object.entries(params.channel)
     .filter(([key, value]) => {
       if (key === "accounts" || key === "enabled" || value === undefined) {
@@ -469,7 +475,6 @@ export function resolveSingleAccountKeysToMove(params: {
       if (
         hasNamedAccounts &&
         namedAccountPromotionKeys &&
-        namedAccountPromotionKeys.length > 0 &&
         !namedAccountPromotionKeys.includes(key)
       ) {
         return false;
@@ -495,8 +500,9 @@ export function resolveSingleAccountPromotionTarget(params: {
   const resolved = surface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
   });
-  if (typeof resolved === "string" && resolved.trim()) {
-    return resolveExistingAccountId(resolved);
+  const normalizedResolved = normalizeOptionalString(resolved);
+  if (normalizedResolved) {
+    return resolveExistingAccountId(normalizedResolved);
   }
   return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
 }

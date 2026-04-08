@@ -3,7 +3,7 @@ type FacadeModule = typeof import("@openclaw/feishu/api.js");
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+} from "./facade-loader.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

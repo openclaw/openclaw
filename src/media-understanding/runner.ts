@@ -24,6 +24,8 @@ import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-r
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -130,8 +132,8 @@ function resolveCatalogImageModelId(params: {
   if (matches.length === 0) {
     return undefined;
   }
-  const autoEntry = matches.find((entry) => entry.id.trim().toLowerCase() === "auto");
-  return (autoEntry ?? matches[0])?.id.trim() || undefined;
+  const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
+  return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
 async function resolveAutoImageModelId(params: {
@@ -139,7 +141,7 @@ async function resolveAutoImageModelId(params: {
   providerId: string;
   explicitModel?: string;
 }): Promise<string | undefined> {
-  const explicit = params.explicitModel?.trim();
+  const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
     return explicit;
   }
@@ -295,7 +297,9 @@ async function probeGeminiCli(): Promise<boolean> {
       const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
         timeoutMs: 8000,
       });
-      return Boolean(extractGeminiResponse(stdout) ?? stdout.toLowerCase().includes("ok"));
+      return Boolean(
+        extractGeminiResponse(stdout) ?? normalizeLowercaseStringOrEmpty(stdout).includes("ok"),
+      );
     } catch {
       return false;
     }
@@ -456,58 +460,6 @@ async function resolveKeyEntry(params: {
     }
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
   };
-
-  if (capability === "image") {
-    const activeProvider = params.activeModel?.provider?.trim();
-    if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) {
-        return activeEntry;
-      }
-    }
-    for (const providerId of resolveConfiguredKeyProviderOrder({
-      cfg,
-      providerRegistry,
-      capability,
-      fallbackProviders: resolveAutoMediaKeyProviders({
-        cfg,
-        capability,
-        providerRegistry,
-      }),
-    })) {
-      const entry = await checkProvider(providerId);
-      if (entry) {
-        return entry;
-      }
-    }
-    return null;
-  }
-
-  if (capability === "video") {
-    const activeProvider = params.activeModel?.provider?.trim();
-    if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) {
-        return activeEntry;
-      }
-    }
-    for (const providerId of resolveConfiguredKeyProviderOrder({
-      cfg,
-      providerRegistry,
-      capability,
-      fallbackProviders: resolveAutoMediaKeyProviders({
-        cfg,
-        capability,
-        providerRegistry,
-      }),
-    })) {
-      const entry = await checkProvider(providerId, undefined);
-      if (entry) {
-        return entry;
-      }
-    }
-    return null;
-  }
 
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {

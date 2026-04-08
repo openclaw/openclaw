@@ -17,6 +17,7 @@ import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
@@ -221,7 +222,9 @@ async function promptManualModel(params: {
     message: params.allowBlank ? "Default model (blank to keep)" : "Default model",
     initialValue: params.initialValue,
     placeholder: "provider/model",
-    validate: params.allowBlank ? undefined : (value) => (value?.trim() ? undefined : "Required"),
+    validate: params.allowBlank
+      ? undefined
+      : (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
   const model = String(modelInput ?? "").trim();
   if (!model) {
@@ -410,8 +413,9 @@ export async function promptDefaultModel(
   const includeManual = params.includeManual ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
-  const preferredProvider = params.preferredProvider?.trim()
-    ? normalizeProviderId(params.preferredProvider)
+  const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const configuredRaw = resolveConfiguredModelRaw(cfg);
   const resolved = resolveConfiguredModelRef({
@@ -578,8 +582,9 @@ export async function promptModelAllowlist(params: {
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
-  const preferredProvider = params.preferredProvider?.trim()
-    ? normalizeProviderId(params.preferredProvider)
+  const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const resolved = resolveConfiguredModelRef({
     cfg,

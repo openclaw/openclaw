@@ -11,8 +11,16 @@ import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  buildStatusMessage,
+  buildStatusMessage as buildStatusMessageRaw,
 } from "./status.js";
+import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+
+const buildStatusMessage: typeof BuildStatusMessage = (args) =>
+  buildStatusMessageRaw({
+    modelAuth: "api-key",
+    activeModelAuth: "api-key",
+    ...args,
+  });
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
@@ -221,7 +229,7 @@ describe("buildStatusMessage", () => {
         channel: "discord",
         groupId: "123",
       },
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
     });

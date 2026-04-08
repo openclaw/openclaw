@@ -78,11 +78,11 @@ describe("memory-wiki cli", () => {
   });
 
   it("registers apply metadata and preserves the page body", async () => {
-    const { rootDir, config } = await createCliVault({
-      initialize: true,
-    });
+    const { rootDir, config } = await createCliVault();
+    const targetPath = path.join(rootDir, "entities", "alpha.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(
-      path.join(rootDir, "entities", "alpha.md"),
+      targetPath,
       renderWikiMarkdown({
         frontmatter: {
           pageType: "entity",
@@ -140,7 +140,8 @@ cli note
   it("runs wiki doctor and sets a non-zero exit code when warnings exist", async () => {
     const { rootDir, config } = await createCliVault({
       config: {
-        obsidian: { enabled: true, useOfficialCli: true },
+        vaultMode: "bridge",
+        bridge: { enabled: false },
       },
     });
     const program = new Command();
