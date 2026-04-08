@@ -42,7 +42,9 @@ export function createMatrixMonitorSyncLifecycle(params: {
       settleFatal(fatalError);
       return;
     }
-    if (isMatrixTerminalSyncState(state) && fatalError) {
+    // Fatal sync failures are sticky for telemetry; later SDK state churn during
+    // cleanup or reconnect should not overwrite the first recorded error.
+    if (fatalError) {
       return;
     }
     params.statusController.noteSyncState(state, error);

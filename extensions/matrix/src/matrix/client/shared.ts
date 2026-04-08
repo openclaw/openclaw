@@ -107,7 +107,7 @@ async function ensureSharedClientStarted(params: {
     return;
   }
 
-  params.state.startPromise = (async () => {
+  const startPromise = (async () => {
     const client = params.state.client;
 
     // Initialize crypto if enabled
@@ -126,12 +126,16 @@ async function ensureSharedClientStarted(params: {
     await client.start({ abortSignal: params.abortSignal });
     params.state.started = true;
   })();
+  // Keep the shared startup lock until the underlying start fully settles, even
+  // if one waiter aborts early while another caller still owns the startup.
+  const guardedStart = startPromise.finally(() => {
+    if (params.state.startPromise === guardedStart) {
+      params.state.startPromise = null;
+    }
+  });
+  params.state.startPromise = guardedStart;
 
-  try {
-    await waitForStart(params.state.startPromise);
-  } finally {
-    params.state.startPromise = null;
-  }
+  await waitForStart(guardedStart);
 }
 
 async function resolveSharedMatrixClientState(
