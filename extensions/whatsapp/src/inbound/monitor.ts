@@ -1294,11 +1294,17 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
+  const socketTiming = resolveWhatsAppSocketTiming(options.cfg);
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
-    ...resolveWhatsAppSocketTiming(options.cfg),
+    ...socketTiming,
   });
-  await waitForWaConnection(sock);
+  try {
+    await waitForWaConnection(sock, { timeoutMs: socketTiming.connectTimeoutMs });
+  } catch (err) {
+    closeInboundMonitorSocket(sock);
+    throw err;
+  }
   return attachWebInboxToSocket({
     ...options,
     sock,
