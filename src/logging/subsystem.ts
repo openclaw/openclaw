@@ -319,7 +319,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     const currentParent = loggingState.cachedLogger;
     if (!fileLogger || cachedParentRef !== currentParent) {
       fileLogger = getChildLogger({ subsystem });
-      cachedParentRef = currentParent;
+      cachedParentRef = loggingState.cachedLogger; // read AFTER getChildLogger may have rebuilt the parent
     }
     return fileLogger;
   }
