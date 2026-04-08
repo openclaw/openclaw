@@ -1046,6 +1046,7 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
+        timeoutMs: params.timeoutMs,
       });
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider: params.provider,
@@ -1080,6 +1081,7 @@ export async function runEmbeddedAttempt(
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
+        timeoutMs: params.timeoutMs,
       });
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(

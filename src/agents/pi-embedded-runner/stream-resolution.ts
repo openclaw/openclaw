@@ -3,7 +3,8 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
+import { registerProviderStreamForModel } from "../provider-stream.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
@@ -70,6 +71,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  timeoutMs?: number;
 }): StreamFn {
   if (params.providerStreamFn) {
     const inner = params.providerStreamFn;
@@ -84,7 +86,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
     // so keep injecting the resolved runtime apiKey for streamSimple-compatible
     // transports that still read credentials from options.apiKey.
     if (params.authStorage || params.resolvedApiKey) {
-      const { authStorage, model, resolvedApiKey } = params;
+      const { authStorage, model, resolvedApiKey, timeoutMs } = params;
       return async (m, context, options) => {
         const apiKey = await resolveEmbeddedAgentApiKey({
           provider: model.provider,
@@ -94,10 +96,16 @@ export function resolveEmbeddedAgentStreamFn(params: {
         return inner(m, normalizeContext(context), {
           ...options,
           apiKey: apiKey ?? options?.apiKey,
+          timeoutMs: timeoutMs ?? options?.timeoutMs,
         });
       };
     }
-    return (m, context, options) => inner(m, normalizeContext(context), options);
+    const { timeoutMs } = params;
+    return (m, context, options) =>
+      inner(m, normalizeContext(context), {
+        ...options,
+        timeoutMs: timeoutMs ?? options?.timeoutMs,
+      });
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -114,7 +122,9 @@ export function resolveEmbeddedAgentStreamFn(params: {
   }
 
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model, {
+      timeoutMs: params.timeoutMs,
+    });
     if (boundaryAwareStreamFn) {
       return boundaryAwareStreamFn;
     }

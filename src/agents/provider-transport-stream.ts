@@ -27,19 +27,22 @@ const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "google-generative-ai": "openclaw-google-generative-ai-transport",
 };
 
-function createSupportedTransportStreamFn(api: Api): StreamFn | undefined {
+function createSupportedTransportStreamFn(
+  api: Api,
+  opts?: { timeoutMs?: number },
+): StreamFn | undefined {
   switch (api) {
     case "openai-responses":
     case "openai-codex-responses":
-      return createOpenAIResponsesTransportStreamFn();
+      return createOpenAIResponsesTransportStreamFn(opts);
     case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
+      return createOpenAICompletionsTransportStreamFn(opts);
     case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
+      return createAzureOpenAIResponsesTransportStreamFn(opts);
     case "anthropic-messages":
-      return createAnthropicMessagesTransportStreamFn();
+      return createAnthropicMessagesTransportStreamFn(opts);
     case "google-generative-ai":
-      return createGoogleGenerativeAiTransportStreamFn();
+      return createGoogleGenerativeAiTransportStreamFn(opts);
     default:
       return undefined;
   }

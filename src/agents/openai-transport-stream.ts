@@ -620,17 +620,18 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  timeoutMs?: number,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
-    fetch: buildGuardedModelFetch(model),
+    fetch: buildGuardedModelFetch(model, { timeoutMs }),
   });
 }
 
-export function createOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createOpenAIResponsesTransportStreamFn(opts?: { timeoutMs?: number }): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -666,6 +667,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          opts?.timeoutMs ?? options?.timeoutMs,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -784,7 +786,7 @@ export function buildOpenAIResponsesParams(
   return params;
 }
 
-export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createAzureOpenAIResponsesTransportStreamFn(opts?: { timeoutMs?: number }): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -820,6 +822,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          opts?.timeoutMs ?? options?.timeoutMs,
         );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
@@ -882,6 +885,7 @@ function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  timeoutMs?: number,
 ) {
   return new AzureOpenAI({
     apiKey,
@@ -889,7 +893,7 @@ function createAzureOpenAIClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
-    fetch: buildGuardedModelFetch(model),
+    fetch: buildGuardedModelFetch(model, { timeoutMs }),
   });
 }
 
@@ -919,17 +923,18 @@ function createOpenAICompletionsClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  timeoutMs?: number,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
-    fetch: buildGuardedModelFetch(model),
+    fetch: buildGuardedModelFetch(model, { timeoutMs }),
   });
 }
 
-export function createOpenAICompletionsTransportStreamFn(): StreamFn {
+export function createOpenAICompletionsTransportStreamFn(opts?: { timeoutMs?: number }): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -953,7 +958,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers, opts?.timeoutMs ?? options?.timeoutMs);
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,

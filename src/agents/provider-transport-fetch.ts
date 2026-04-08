@@ -65,7 +65,10 @@ function resolveModelRequestPolicy(model: Model<Api>) {
   });
 }
 
-export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
+export function buildGuardedModelFetch(
+  model: Model<Api>,
+  opts?: { timeoutMs?: number },
+): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   return async (input, init) => {
@@ -93,6 +96,7 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
       url,
       init: requestInit ?? init,
       dispatcherPolicy,
+      timeoutMs: opts?.timeoutMs,
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,

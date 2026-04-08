@@ -1,0 +1,21 @@
+## Summary
+
+Fixes issue #63071: Anthropic prompt cache regression — System prompt timestamp injection causing always cache_creation instead of cache_read.
+
+## Root Cause
+
+`buildTimeSection` was placed before `SYSTEM_PROMPT_CACHE_BOUNDARY` in the system prompt. While the current implementation only outputs a static timezone (not a dynamic timestamp), the section's semantic name "Current Date & Time" implies dynamic content, and any future use of the `userTime`/`userTimeFormat` params could reintroduce the problem.
+
+Additionally, `userTime` and `userTimeFormat` were dead parameters — `buildTimeSection` only ever used `userTimezone`.
+
+## Fix
+
+1. **Move `buildTimeSection` after cache boundary** — placed after the Runtime section, ensuring the time section doesn't participate in prompt cache invalidation
+2. **Remove dead params** — `userTime` and `userTimeFormat` removed from `buildAgentSystemPrompt` Params type, `SystemPromptRuntimeParams`, and all call sites (`compact.ts`, `run/attempt.ts`, `cli-runner/helpers.ts`)
+3. **Clean up unused imports** — `ResolvedTimeFormat`, `formatUserTime`, `resolveUserTimeFormat` removed where no longer needed
+
+## Testing
+
+ESLint: 0 errors on modified files
+
+Closes #63071

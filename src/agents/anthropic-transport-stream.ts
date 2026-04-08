@@ -394,11 +394,12 @@ function createAnthropicTransportClient(params: {
   context: Context;
   apiKey: string;
   options: AnthropicTransportOptions | undefined;
+  timeoutMs?: number;
 }) {
-  const { model, context, apiKey, options } = params;
+  const { model, context, apiKey, options, timeoutMs } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
-  const fetch = buildGuardedModelFetch(model);
+  const fetch = buildGuardedModelFetch(model, { timeoutMs });
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
@@ -592,7 +593,7 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
-export function createAnthropicMessagesTransportStreamFn(): StreamFn {
+export function createAnthropicMessagesTransportStreamFn(opts?: { timeoutMs?: number }): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
     const options = rawOptions as AnthropicTransportOptions | undefined;
@@ -619,6 +620,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           context,
           apiKey,
           options: transportOptions,
+          timeoutMs: opts?.timeoutMs ?? options?.timeoutMs,
         });
         let params = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
         const nextParams = await transportOptions.onPayload?.(params, model);

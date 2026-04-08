@@ -586,7 +586,7 @@ function pushTextBlockEnd(
   }
 }
 
-export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
+export function createGoogleGenerativeAiTransportStreamFn(opts?: { timeoutMs?: number }): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as GoogleTransportModel;
     const options = rawOptions as GoogleTransportOptions | undefined;
@@ -604,7 +604,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
-        const fetch = buildGuardedModelFetch(model);
+        const fetch = buildGuardedModelFetch(model, { timeoutMs: opts?.timeoutMs ?? options?.timeoutMs });
         let params = buildGoogleGenerativeAiParams(model, context, options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {

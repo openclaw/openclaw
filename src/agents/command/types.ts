@@ -18,6 +18,8 @@ export type AgentStreamParams = {
   maxTokens?: number;
   /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;
+  /** Per-request HTTP timeout in milliseconds. Falls back to agents.defaults.timeoutSeconds when unset. */
+  timeoutMs?: number;
 };
 
 export type AgentRunContext = {
