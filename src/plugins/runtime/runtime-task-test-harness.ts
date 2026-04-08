@@ -1,10 +1,10 @@
 import { vi } from "vitest";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryDeliveryRuntimeForTests,
-} from "../../tasks/task-registry.js";
+} from "../../tasks/runtime-internal.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-runtime-internal.js";
 
 const runtimeTaskMocks = vi.hoisted(() => ({
   sendMessageMock: vi.fn(),

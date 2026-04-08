@@ -11,6 +11,11 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+  type OAuthRefreshFailureReason,
+} from "../agents/auth-profiles/oauth-refresh-failure.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
@@ -167,6 +172,40 @@ export function resolveUnusableProfileHint(params: {
   return "Wait for cooldown or switch provider.";
 }
 
+function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
+  switch (reason) {
+    case "refresh_token_reused":
+      return "refresh_token_reused";
+    case "invalid_grant":
+      return "invalid_grant";
+    case "sign_in_again":
+      return "sign in again";
+    case "invalid_refresh_token":
+      return "invalid refresh token";
+    case "revoked":
+      return "revoked";
+    default:
+      return "refresh failed";
+  }
+}
+
+export function formatOAuthRefreshFailureDoctorLine(params: {
+  profileId: string;
+  provider: string;
+  message: string;
+}): string | null {
+  const classified = classifyOAuthRefreshFailure(params.message);
+  if (!classified) {
+    return null;
+  }
+  const provider = classified.provider ?? params.provider;
+  const command = buildOAuthRefreshFailureLoginCommand(provider);
+  if (classified.reason) {
+    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
+  }
+  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
+}
+
 export async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
@@ -275,7 +314,14 @@ export async function noteAuthProfileHealth(params: {
           profileId: profile.profileId,
         });
       } catch (err) {
-        errors.push(`- ${profile.profileId}: ${formatErrorMessage(err)}`);
+        const message = formatErrorMessage(err);
+        errors.push(
+          formatOAuthRefreshFailureDoctorLine({
+            profileId: profile.profileId,
+            provider: profile.provider,
+            message,
+          }) ?? `- ${profile.profileId}: ${message}`,
+        );
       }
     }
     if (errors.length > 0) {
