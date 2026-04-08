@@ -886,7 +886,7 @@ class GatewaySession(
       explicitGatewayToken
         ?: if (
           explicitPassword == null &&
-            explicitBootstrapToken == null
+            (explicitBootstrapToken == null || storedToken != null)
         ) {
           storedToken
         } else {

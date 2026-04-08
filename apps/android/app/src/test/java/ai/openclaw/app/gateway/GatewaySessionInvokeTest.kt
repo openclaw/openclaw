@@ -111,7 +111,7 @@ class GatewaySessionInvokeTest {
   }
 
   @Test
-  fun connect_prefersBootstrapTokenOverStoredDeviceToken() = runBlocking {
+  fun connect_prefersStoredDeviceTokenOverBootstrapToken() = runBlocking {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
     val connectAuth = CompletableDeferred<JsonObject?>()
@@ -148,8 +148,8 @@ class GatewaySessionInvokeTest {
       awaitConnectedOrThrow(connected, lastDisconnect, server)
 
       val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
-      assertEquals("bootstrap-token", auth?.get("bootstrapToken")?.jsonPrimitive?.content)
-      assertNull(auth?.get("token"))
+      assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
+      assertNull(auth?.get("bootstrapToken"))
     } finally {
       shutdownHarness(harness, server)
     }
