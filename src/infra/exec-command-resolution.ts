@@ -360,7 +360,7 @@ export function matchAllowlist(
       if (useArgPattern && bareTarget.toLowerCase().endsWith(".exe")) {
         bareTarget = bareTarget.slice(0, -4);
       }
-      if (matchesExecAllowlistPattern(pattern, bareTarget)) {
+      if (matchesExecAllowlistPattern(pattern, bareTarget, effectivePlatform)) {
         if (!entry.argPattern) {
           if (!useArgPattern) {
             return entry;
@@ -376,7 +376,7 @@ export function matchAllowlist(
       }
       continue;
     }
-    if (!matchesExecAllowlistPattern(pattern, resolvedPath)) {
+    if (!matchesExecAllowlistPattern(pattern, resolvedPath, effectivePlatform)) {
       continue;
     }
     if (!useArgPattern) {

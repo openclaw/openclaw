@@ -46,6 +46,17 @@ describe("exec allowlist matching", () => {
     expect(
       matchAllowlist([{ pattern: "python3" }], winResolution, undefined, "win32")?.pattern,
     ).toBe("python3");
+
+    // On a Linux host evaluating a Windows target, case-insensitive matching
+    // should use the target platform, not the host platform.
+    expect(
+      matchAllowlist(
+        [{ pattern: "RG" }],
+        { ...baseResolution, executableName: "rg" },
+        undefined,
+        "win32",
+      )?.pattern,
+    ).toBe("RG");
   });
 
   it("does not widen wildcard+argPattern entries into global allows", () => {
