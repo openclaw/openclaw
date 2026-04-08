@@ -594,6 +594,123 @@ describe("deliverReplies", () => {
     expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
   });
 
+  it("falls back to text when sendAudio fails with VOICE_MESSAGES_FORBIDDEN", async () => {
+    const runtime = createRuntime();
+    const sendAudio = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 50,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendAudio, sendMessage });
+
+    mockMediaLoad("note.mp3", "audio/mpeg", "audio");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/note.mp3", text: "Here is the summary" }],
+      runtime,
+      bot,
+    });
+
+    // Audio was attempted but failed
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    // Fallback to text succeeded
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Here is the summary"),
+      expect.any(Object),
+    );
+  });
+
+  it("sendAudio fallback applies reply-to, quote, and buttons on first chunk", async () => {
+    const runtime = createRuntime();
+    const sendAudio = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 51,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendAudio, sendMessage });
+
+    mockMediaLoad("note.mp3", "audio/mpeg", "audio");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.mp3",
+          text: "chunk-one\n\nchunk-two",
+          replyToId: "88",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "OK", callback_data: "ok" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      replyToMode: "first",
+      replyQuoteText: "quoted audio",
+      textLimit: 12,
+    });
+
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // First chunk: reply_to + quote + buttons
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_to_message_id: 88,
+        reply_markup: {
+          inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
+        },
+      }),
+    );
+    // Second chunk: no reply_to, no buttons
+    expect(sendMessage.mock.calls[1][2]).not.toEqual(
+      expect.objectContaining({ reply_to_message_id: 88 }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
+  });
+
+  it("rethrows VOICE_MESSAGES_FORBIDDEN from sendAudio when no text fallback", async () => {
+    const runtime = createRuntime();
+    const sendAudio = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendAudio, sendMessage });
+
+    mockMediaLoad("note.mp3", "audio/mpeg", "audio");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/note.mp3" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("VOICE_MESSAGES_FORBIDDEN");
+
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendAudio", async () => {
+    const runtime = createRuntime();
+    const sendAudio = vi.fn().mockRejectedValue(new Error("Network error"));
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendAudio, sendMessage });
+
+    mockMediaLoad("note.mp3", "audio/mpeg", "audio");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/note.mp3", text: "Hello" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("Network error");
+
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),

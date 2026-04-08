@@ -113,15 +113,21 @@ async function deliverTextReply(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    const messageId = await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-      replyToMessageId: replyToForChunk,
-      replyQuoteText: params.replyQuoteText,
-      thread: params.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: params.linkPreview,
-      replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
-    });
+    const messageId = await sendTelegramText(
+      params.bot,
+      params.chatId,
+      chunk.html,
+      params.runtime,
+      {
+        replyToMessageId: replyToForChunk,
+        replyQuoteText: params.replyQuoteText,
+        thread: params.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: params.linkPreview,
+        replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
+      },
+    );
     params.onMessageSent?.(messageId);
     markReplyApplied(params.progress, replyToForChunk);
     markDelivered(params.progress);
@@ -150,14 +156,20 @@ async function sendPendingFollowUpText(params: {
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    const messageId = await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-      replyToMessageId: replyToForFollowUp,
-      thread: params.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: params.linkPreview,
-      replyMarkup: i === 0 ? params.replyMarkup : undefined,
-    });
+    const messageId = await sendTelegramText(
+      params.bot,
+      params.chatId,
+      chunk.html,
+      params.runtime,
+      {
+        replyToMessageId: replyToForFollowUp,
+        thread: params.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: params.linkPreview,
+        replyMarkup: i === 0 ? params.replyMarkup : undefined,
+      },
+    );
     params.onMessageSent?.(messageId);
     markReplyApplied(params.progress, replyToForFollowUp);
     markDelivered(params.progress);
@@ -385,15 +397,49 @@ async function deliverMediaReply(params: {
           throw voiceErr;
         }
       } else {
-        await sendTelegramWithThreadFallback({
-          operation: "sendAudio",
-          runtime: params.runtime,
-          thread: params.thread,
-          requestParams: mediaParams,
-          send: (effectiveParams) =>
-            params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
-        });
-        markDelivered(params.progress);
+        try {
+          await sendTelegramWithThreadFallback({
+            operation: "sendAudio",
+            runtime: params.runtime,
+            thread: params.thread,
+            requestParams: mediaParams,
+            shouldLog: (err) => !isVoiceMessagesForbidden(err),
+            send: (effectiveParams) =>
+              params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+          });
+          markDelivered(params.progress);
+        } catch (audioErr) {
+          if (isVoiceMessagesForbidden(audioErr)) {
+            const fallbackText = params.reply.text;
+            if (!fallbackText || !fallbackText.trim()) {
+              throw audioErr;
+            }
+            logVerbose(
+              "telegram sendAudio forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
+            );
+            const audioFallbackReplyTo = resolveReplyToForSend({
+              replyToId: params.replyToId,
+              replyToMode: params.replyToMode,
+              progress: params.progress,
+            });
+            await sendTelegramVoiceFallbackText({
+              bot: params.bot,
+              chatId: params.chatId,
+              runtime: params.runtime,
+              text: fallbackText,
+              chunkText: params.chunkText,
+              replyToId: audioFallbackReplyTo,
+              thread: params.thread,
+              linkPreview: params.linkPreview,
+              replyMarkup: params.replyMarkup,
+              replyQuoteText: params.replyQuoteText,
+            });
+            markReplyApplied(params.progress, audioFallbackReplyTo);
+            markDelivered(params.progress);
+            continue;
+          }
+          throw audioErr;
+        }
       }
     } else {
       await sendTelegramWithThreadFallback({
