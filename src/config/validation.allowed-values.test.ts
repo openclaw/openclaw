@@ -121,4 +121,28 @@ describe("config validation allowed-values metadata", () => {
       });
     }
   });
+
+  it("keeps generic union messaging for mixed scalar-or-object unions", () => {
+    const result = validateConfigObjectRaw({
+      agents: {
+        list: [{ id: "a", model: true }],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).not.toContainEqual({
+        path: "agents.list.0.model",
+        message: "Invalid input: expected string, received boolean",
+      });
+      expect(result.issues).not.toContainEqual({
+        path: "agents.list.0.model",
+        message: "Invalid input: expected object, received boolean",
+      });
+      expect(result.issues).toContainEqual({
+        path: "agents.list.0.model",
+        message: "Invalid input",
+      });
+    }
+  });
 });

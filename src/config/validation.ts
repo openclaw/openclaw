@@ -275,7 +275,10 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
  *
  * We prefer issues from branches whose `type` discriminator already matches
  * the user input, so a non-matching branch's deeper path does not outrank the
- * real unexpected-key error on the matching branch.
+ * real unexpected-key error on the matching branch. We only surface a branch
+ * issue when it is actually more specific than the union-level error; for
+ * plain scalar unions, a single branch's root-level type error is usually
+ * misleading because several branch types may still be valid.
  */
 function extractBestUnionSubIssue(
   record: UnknownIssueRecord,
@@ -293,7 +296,9 @@ function extractBestUnionSubIssue(
       if (!err || !Array.isArray(err.issues)) {
         continue;
       }
-      branchGroups.push(err.issues.map((issue) => toIssueRecord(issue)).filter(Boolean) as UnknownIssueRecord[]);
+      branchGroups.push(
+        err.issues.map((issue) => toIssueRecord(issue)).filter(Boolean) as UnknownIssueRecord[],
+      );
     }
   }
   if (Array.isArray(record.errors)) {
@@ -326,9 +331,7 @@ function extractBestUnionSubIssue(
       const issueCode = typeof issue.code === "string" ? issue.code : "";
       const issueIsUnrecognized = issueCode === "unrecognized_keys";
       const issueIsTypeMismatch =
-        issueCode === "invalid_value" &&
-        issuePath.length === 1 &&
-        issuePath[0] === "type";
+        issueCode === "invalid_value" && issuePath.length === 1 && issuePath[0] === "type";
 
       if (issueIsTypeMismatch) {
         branchMatchesDiscriminator = false;
@@ -336,9 +339,9 @@ function extractBestUnionSubIssue(
 
       const issuePathLen = issuePath.length;
       const issueIsBetter =
-        issueIsUnrecognized && !branchBestIsUnrecognized
+        issuePathLen > branchBestPathLen
           ? true
-          : issueIsUnrecognized === branchBestIsUnrecognized && issuePathLen > branchBestPathLen;
+          : issuePathLen === branchBestPathLen && issueIsUnrecognized && !branchBestIsUnrecognized;
 
       if (issueIsBetter) {
         branchBestIssue = issue;
@@ -355,12 +358,12 @@ function extractBestUnionSubIssue(
       branchMatchesDiscriminator && !bestBranchMatchesDiscriminator
         ? true
         : branchMatchesDiscriminator === bestBranchMatchesDiscriminator &&
-            branchBestIsUnrecognized &&
-            !bestIssueIsUnrecognized
+            branchBestPathLen > bestIssuePathLen
           ? true
           : branchMatchesDiscriminator === bestBranchMatchesDiscriminator &&
-              branchBestIsUnrecognized === bestIssueIsUnrecognized &&
-              branchBestPathLen > bestIssuePathLen;
+            branchBestPathLen === bestIssuePathLen &&
+            branchBestIsUnrecognized &&
+            !bestIssueIsUnrecognized;
 
     if (branchIsBetter) {
       bestIssue = branchBestIssue;
@@ -371,6 +374,10 @@ function extractBestUnionSubIssue(
   }
 
   if (!bestIssue) {
+    return null;
+  }
+
+  if (bestIssuePathLen === 0 && !bestIssueIsUnrecognized) {
     return null;
   }
 
