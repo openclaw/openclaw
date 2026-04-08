@@ -7,7 +7,7 @@ import {
   type FsRootResolved,
   validatePathAgainstRoots,
 } from "./pi-tools.fs-roots.js";
-import { normalizeToolParams } from "./pi-tools.params.js";
+import { getToolParamsRecord } from "./pi-tools.params.js";
 import { resolveToolPathAgainstWorkspaceRoot } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -119,10 +119,7 @@ export function wrapToolMultiRootGuard(
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const normalized = normalizeToolParams(args);
-      const record =
-        normalized ??
-        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const record = getToolParamsRecord(args);
       const filePath = record?.path;
 
       if (typeof filePath !== "string" || !filePath.trim()) {
@@ -141,7 +138,7 @@ export function wrapToolMultiRootGuard(
         await assertAliasSafe(resolved, roots, { operation });
       }
 
-      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+      return tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
 }

@@ -688,7 +688,7 @@ export function createHostWorkspaceEditTool(
       ? async (absolutePath: string) => (await operations.readFile(absolutePath)).toString("utf8")
       : (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
 function createHostRootReadOperations(roots: FsRootResolved[]) {
