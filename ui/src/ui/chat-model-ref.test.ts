@@ -212,7 +212,7 @@ describe("chat-model-ref helpers", () => {
 
   it("falls back to the server-qualified value for slash-containing ids when the catalog is empty", () => {
     expect(resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [])).toBe(
-      "nvidia/moonshotai/kimi-k2.5",
+      "moonshotai/kimi-k2.5",
     );
   });
 
@@ -226,6 +226,12 @@ describe("chat-model-ref helpers", () => {
     expect(
       resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [OPENAI_GPT5_MINI_MODEL]),
     ).toBe("openai/gpt-5-mini");
+  });
+
+  it("preserves already-qualified server model values when the provider is stale and the catalog is empty", () => {
+    expect(resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [])).toBe(
+      "openai/gpt-5-mini",
+    );
   });
 
   it("uses catalog resolution for provider-less raw server model values", () => {

@@ -39,6 +39,23 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelOverrideValue(state)).toBe("openai/gpt-5-mini");
   });
 
+  it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: [],
+      sessionsResult: createSessionsListResult({
+        model: "openai/gpt-5-mini",
+        modelProvider: "zai",
+      }),
+    };
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.options.map((option) => option.value)).toContain("openai/gpt-5-mini");
+    expect(resolved.options.map((option) => option.value)).not.toContain("zai/openai/gpt-5-mini");
+  });
+
   it("builds picker options without introducing a bare duplicate", () => {
     const state = {
       sessionKey: "main",

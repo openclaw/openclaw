@@ -208,22 +208,35 @@ async function executeModel(
   }
 
   try {
+    const requestedModel = args.trim();
     const [patched, resolvedModelCatalog] = await Promise.all([
       client.request<SessionsPatchResult>("sessions.patch", {
         key: sessionKey,
-        model: args.trim(),
+        model: requestedModel,
       }),
       modelCatalog
         ? Promise.resolve(modelCatalog)
         : loadModelCatalog(client, { allowFailure: true }),
     ]);
-    const resolvedValue = resolvePreferredServerChatModelValue(
-      patched.resolved?.model ?? args.trim(),
+    const resolvedModel = patched.resolved?.model ?? requestedModel;
+    let resolvedValue = resolvePreferredServerChatModelValue(
+      resolvedModel,
       patched.resolved?.modelProvider,
       resolvedModelCatalog,
     );
+    const requestedOverride = createChatModelOverride(requestedModel);
+    const resolvedProvider = patched.resolved?.modelProvider?.trim();
+    if (
+      requestedOverride?.kind === "qualified" &&
+      resolvedProvider &&
+      resolvedValue &&
+      !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
+      requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
+    ) {
+      resolvedValue = requestedOverride.value;
+    }
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${requestedModel}\`.`,
       action: "refresh",
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };

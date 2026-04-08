@@ -155,12 +155,10 @@ export function resolvePreferredServerChatModelValue(
     return qualifiedServerValue;
   }
 
-  const providerPrefix = `${trimmedProvider.toLowerCase()}/`;
-  if (trimmedModel.toLowerCase().startsWith(providerPrefix)) {
-    return resolveServerChatModelValue(trimmedModel, trimmedProvider);
-  }
-
-  return qualifiedServerValue;
+  // Without catalog confirmation, preserve slash-containing server values as-is.
+  // Re-qualifying them here can turn an already-qualified ref under a stale
+  // provider into a nonsense double-prefix like "zai/openai/gpt-5-mini".
+  return resolveServerChatModelValue(trimmedModel, trimmedProvider);
 }
 
 export function formatChatModelDisplay(value: string): string {
