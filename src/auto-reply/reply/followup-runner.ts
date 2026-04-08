@@ -241,6 +241,7 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
+      let fallbackAttempts: { error: string }[] = [];
       let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
@@ -370,6 +371,7 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackAttempts = fallbackResult.attempts;
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
@@ -393,9 +395,26 @@ export function createFollowupRunner(params: {
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
       if (storePath && sessionKey) {
-        // Model is from fallback if the successfully-used provider/model differs from the primary.
+        // Determine the intended model target for fallback detection.
+        // When a LiveSessionModelSwitchError is handled inside the fallback chain
+        // (model-fallback.ts), the switch target becomes the user's intended model
+        // but queued.run.provider/model still reflect the original primary. Use
+        // the switch target as the baseline so the successful switch isn't
+        // mislabelled as a fallback.
+        let intendedProvider = queued.run.provider;
+        let intendedModel = queued.run.model;
+        if (fallbackAttempts.length) {
+          for (const attempt of fallbackAttempts) {
+            const match = attempt.error?.match(/^Live session model switch requested: (.+?)\/(.+)/);
+            if (match) {
+              intendedProvider = match[1];
+              intendedModel = match[2];
+              break;
+            }
+          }
+        }
         const isFromFallback =
-          fallbackProvider !== queued.run.provider || fallbackModel !== queued.run.model;
+          fallbackProvider !== intendedProvider || fallbackModel !== intendedModel;
         await persistRunSessionUsage({
           storePath,
           sessionKey,
