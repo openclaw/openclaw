@@ -408,6 +408,23 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("ignores trailing sentence punctuation in unknown tool errors", () => {
+      const state = createState();
+      const toolName = "my.server:some_tool";
+      const params = { query: "status" };
+      const error = new Error("Unknown tool: my.server:some_tool.");
+
+      recordFailedCall(state, toolName, params, error, 0);
+      recordFailedCall(state, toolName, params, error, 1);
+
+      const loopResult = detectRepeatedUnknownToolCall(state, toolName, params);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("unknown_tool_repeat");
+        expect(loopResult.message).toContain("my.server:some_tool");
+      }
+    });
+
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
       const { params, result } = createNoProgressPollFixture("sess-custom");

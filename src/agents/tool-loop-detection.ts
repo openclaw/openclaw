@@ -184,7 +184,10 @@ function formatErrorForHash(error: unknown): string {
 }
 
 function normalizeUnknownToolName(value: string | undefined): string | undefined {
-  const trimmed = value?.trim().toLowerCase();
+  const trimmed = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[.,!?;]+$/u, "");
   return trimmed ? trimmed : undefined;
 }
 
