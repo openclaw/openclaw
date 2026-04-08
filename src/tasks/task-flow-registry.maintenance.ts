@@ -6,11 +6,13 @@ import {
 } from "./task-flow-registry.audit.js";
 import {
   deleteTaskFlowRecordById,
+  deriveTaskFlowStatusFromTask,
   getTaskFlowById,
   listTaskFlowRecords,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskFlowRecord, TaskFlowStatus } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
@@ -32,6 +34,135 @@ function hasActiveLinkedTasks(flowId: string): boolean {
   return listTasksForFlowId(flowId).some(
     (task) => task.status === "queued" || task.status === "running",
   );
+}
+
+function resolveTaskTerminalReferenceAt(task: TaskRecord): number {
+  return task.endedAt ?? task.lastEventAt ?? task.createdAt;
+}
+
+function pickLatestTask(tasks: TaskRecord[]): TaskRecord | undefined {
+  return [...tasks].sort(
+    (left, right) => resolveTaskTerminalReferenceAt(right) - resolveTaskTerminalReferenceAt(left),
+  )[0];
+}
+
+function resolveManagedFlowTerminalFromLinkedTasks(
+  flow: TaskFlowRecord,
+):
+  | {
+      status: TaskFlowStatus;
+      blockedTaskId: string | null;
+      blockedSummary: string | null;
+      updatedAt: number;
+      endedAt: number;
+    }
+  | undefined {
+  if (flow.syncMode !== "managed" || isTerminalFlow(flow)) {
+    return undefined;
+  }
+  const linkedTasks = listTasksForFlowId(flow.flowId);
+  if (linkedTasks.length === 0) {
+    return undefined;
+  }
+  if (linkedTasks.some((task) => task.status === "queued" || task.status === "running")) {
+    return undefined;
+  }
+
+  const latestEventAt = Math.max(flow.updatedAt, ...linkedTasks.map((task) => resolveTaskTerminalReferenceAt(task)));
+
+  const lostTask = pickLatestTask(linkedTasks.filter((task) => task.status === "lost"));
+  if (lostTask) {
+    return {
+      status: "lost",
+      blockedTaskId: null,
+      blockedSummary: lostTask.error ?? lostTask.terminalSummary ?? lostTask.progressSummary ?? null,
+      updatedAt: latestEventAt,
+      endedAt: latestEventAt,
+    };
+  }
+
+  const failedTask = pickLatestTask(
+    linkedTasks.filter((task) => task.status === "failed" || task.status === "timed_out"),
+  );
+  if (failedTask) {
+    return {
+      status: "failed",
+      blockedTaskId: null,
+      blockedSummary:
+        failedTask.error ?? failedTask.terminalSummary ?? failedTask.progressSummary ?? null,
+      updatedAt: latestEventAt,
+      endedAt: latestEventAt,
+    };
+  }
+
+  const blockedTask = pickLatestTask(
+    linkedTasks.filter(
+      (task) =>
+        task.status === "succeeded" && deriveTaskFlowStatusFromTask(task) === "blocked",
+    ),
+  );
+  if (blockedTask) {
+    return {
+      status: "blocked",
+      blockedTaskId: blockedTask.taskId,
+      blockedSummary: blockedTask.terminalSummary ?? blockedTask.progressSummary ?? null,
+      updatedAt: latestEventAt,
+      endedAt: latestEventAt,
+    };
+  }
+
+  const cancelledTask = pickLatestTask(linkedTasks.filter((task) => task.status === "cancelled"));
+  if (cancelledTask) {
+    return {
+      status: "cancelled",
+      blockedTaskId: null,
+      blockedSummary: null,
+      updatedAt: latestEventAt,
+      endedAt: latestEventAt,
+    };
+  }
+
+  if (linkedTasks.every((task) => task.status === "succeeded")) {
+    return {
+      status: "succeeded",
+      blockedTaskId: null,
+      blockedSummary: null,
+      updatedAt: latestEventAt,
+      endedAt: latestEventAt,
+    };
+  }
+
+  return undefined;
+}
+
+function reconcileManagedFlowTerminalFromLinkedTasks(flow: TaskFlowRecord): boolean {
+  let current = flow;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const projection = resolveManagedFlowTerminalFromLinkedTasks(current);
+    if (!projection) {
+      return false;
+    }
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: current.flowId,
+      expectedRevision: current.revision,
+      patch: {
+        status: projection.status,
+        blockedTaskId: projection.blockedTaskId,
+        blockedSummary: projection.blockedSummary,
+        waitJson: null,
+        endedAt: projection.endedAt,
+        updatedAt: projection.updatedAt,
+      },
+    });
+    if (result.applied) {
+      return true;
+    }
+    if (result.reason === "not_found" || !result.current) {
+      return false;
+    }
+    current = result.current;
+  }
+  return false;
 }
 
 function resolveTerminalAt(flow: TaskFlowRecord): number {
@@ -97,6 +228,10 @@ export function previewTaskFlowRegistryMaintenance(): TaskFlowRegistryMaintenanc
   let reconciled = 0;
   let pruned = 0;
   for (const flow of listTaskFlowRecords()) {
+    if (resolveManagedFlowTerminalFromLinkedTasks(flow)) {
+      reconciled += 1;
+      continue;
+    }
     if (shouldFinalizeCancelledFlow(flow)) {
       reconciled += 1;
       continue;
@@ -115,6 +250,10 @@ export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistry
   for (const flow of listTaskFlowRecords()) {
     const current = getTaskFlowById(flow.flowId);
     if (!current) {
+      continue;
+    }
+    if (reconcileManagedFlowTerminalFromLinkedTasks(current)) {
+      reconciled += 1;
       continue;
     }
     if (shouldFinalizeCancelledFlow(current)) {

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import {
+  completeTaskRunByRunId,
+  createRunningTaskRun,
+  failTaskRunByRunId,
+} from "./task-executor.js";
 import {
   createManagedTaskFlow,
   getTaskFlowById,
@@ -157,6 +161,106 @@ describe("task-flow-registry maintenance", () => {
         cancelRequestedAt: 100,
       });
       expect(child.parentFlowId).toBe(flow.flowId);
+    });
+  });
+
+  it("reconciles managed flows to failed when linked tasks fail terminally", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Follow failed child",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 100,
+      });
+
+      const child = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child-fail",
+        runId: "run-failed-child",
+        task: "Broken child task",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      failTaskRunByRunId({
+        runId: child.runId!,
+        runtime: child.runtime,
+        sessionKey: child.childSessionKey,
+        endedAt: 250,
+        error: "Child runner failed.",
+        terminalSummary: "Child runner failed.",
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "failed",
+        blockedSummary: "Child runner failed.",
+      });
+    });
+  });
+
+  it("reconciles managed flows to blocked when linked tasks end blocked", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Follow blocked child",
+        status: "waiting",
+        createdAt: 1,
+        updatedAt: 100,
+      });
+
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child-blocked",
+        runId: "run-blocked-child",
+        task: "Needs operator approval",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      completeTaskRunByRunId({
+        runId: child.runId!,
+        runtime: child.runtime,
+        sessionKey: child.childSessionKey,
+        endedAt: 260,
+        terminalOutcome: "blocked",
+        terminalSummary: "Needs operator approval.",
+        progressSummary: "Needs operator approval.",
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "blocked",
+        blockedTaskId: child.taskId,
+        blockedSummary: "Needs operator approval.",
+      });
     });
   });
 
