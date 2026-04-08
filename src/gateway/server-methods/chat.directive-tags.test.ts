@@ -19,6 +19,7 @@ const mockState = vi.hoisted(() => ({
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
   dispatchError: null as Error | null,
+  finalPayloads: null as Array<{ text: string }> | null,
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
@@ -95,7 +96,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
-      params.dispatcher.sendFinalReply({ text: mockState.finalText });
+      const payloads = mockState.finalPayloads ?? [{ text: mockState.finalText }];
+      for (const payload of payloads) {
+        params.dispatcher.sendFinalReply(payload);
+      }
       params.dispatcher.markComplete();
       await params.dispatcher.waitForIdle();
       return { ok: true };
@@ -331,6 +335,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   afterEach(() => {
     mockState.finalText = "[[reply_to_current]]";
     mockState.dispatchError = null;
+    mockState.finalPayloads = null;
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
@@ -456,6 +461,26 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("chat.send non-streaming final preserves indentation when an indented block spans multiple payloads", async () => {
+    createTranscriptFixture("openclaw-chat-send-indentation-");
+    mockState.finalPayloads = [
+      { text: "Here is YAML:\n\n```yaml\na:\n" },
+      { text: "  b:\n    c: sadffdsd\n```" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-indentation-preserved",
+    });
+
+    expect(extractFirstTextBlock(payload)).toBe(
+      "Here is YAML:\n\n```yaml\na:\n  b:\n    c: sadffdsd\n```",
+    );
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {

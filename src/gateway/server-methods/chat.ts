@@ -1116,6 +1116,25 @@ function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyP
   );
 }
 
+export function combineNonStreamingReplyParts(parts: string[]): string {
+  let combined = "";
+  for (const part of parts) {
+    if (!part.trim()) {
+      continue;
+    }
+    if (!combined) {
+      combined = part;
+      continue;
+    }
+    const endsWithLineBreak = /(?:\r\n|\r|\n)$/.test(combined);
+    const startsWithLineBreak = /^(?:\r\n|\r|\n)/.test(part);
+    const needsSeparator = !endsWithLineBreak && !startsWithLineBreak;
+    combined += needsSeparator ? "\n\n" : "";
+    combined += part;
+  }
+  return combined.replace(/^(?:\r\n|\r|\n)+/, "").replace(/(?:\r\n|\r|\n)+$/, "");
+}
+
 function broadcastSideResult(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   payload: SideResultPayload;
@@ -1668,11 +1687,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             const btwReplies = deliveredReplies
               .map((entry) => entry.payload)
               .filter(isBtwReplyPayload);
-            const btwText = btwReplies
-              .map((payload) => payload.text.trim())
-              .filter(Boolean)
-              .join("\n\n")
-              .trim();
+            const btwText = combineNonStreamingReplyParts(
+              btwReplies.map((payload) => payload.text),
+            );
             if (btwReplies.length > 0 && btwText) {
               broadcastSideResult({
                 context,
@@ -1692,13 +1709,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const combinedReply = deliveredReplies
-                .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload)
-                .map((part) => part.text?.trim() ?? "")
-                .filter(Boolean)
-                .join("\n\n")
-                .trim();
+              const combinedReply = combineNonStreamingReplyParts(
+                deliveredReplies
+                  .filter((entry) => entry.kind === "final")
+                  .map((entry) =>
+                    typeof entry.payload.text === "string" ? entry.payload.text : "",
+                  ),
+              );
               let message: Record<string, unknown> | undefined;
               if (combinedReply) {
                 const { storePath: latestStorePath, entry: latestEntry } =

@@ -598,13 +598,13 @@ describe("gateway server chat", () => {
       expect(sideResult.payload).toMatchObject({
         kind: "btw",
         runId: "idem-btw-1",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         question: "what is 17 * 19?",
         text: "323",
       });
       expect(finalEvent.payload).toMatchObject({
         runId: "idem-btw-1",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "final",
       });
 
@@ -652,6 +652,46 @@ describe("gateway server chat", () => {
         runId: "idem-btw-block-1",
         question: "what changed?",
         text: "first chunk\n\nsecond chunk",
+      });
+    });
+  });
+
+  test("preserves indentation-sensitive /btw side results when adjacent chunks already carry a single newline", async () => {
+    await withMainSessionStore(async () => {
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({
+          text: "```yaml\nfoo:\n",
+          btw: { question: "show yaml" },
+        });
+        await opts?.onBlockReply?.({
+          text: "  bar: baz\n```",
+          btw: { question: "show yaml" },
+        });
+        return undefined;
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-indent-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw show yaml",
+        idempotencyKey: "idem-btw-indent-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-indent-1",
+        question: "show yaml",
+        text: "```yaml\nfoo:\n  bar: baz\n```",
       });
     });
   });
