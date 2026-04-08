@@ -706,7 +706,7 @@ describe("resolveSlackAttachmentContent", () => {
     const firstCall = mockFetch.mock.calls[0];
     expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
     const firstInit = firstCall?.[1];
-    expect(firstInit?.redirect).toBe("follow");
+    expect(firstInit?.redirect).toBe("manual");
     expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });

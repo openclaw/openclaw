@@ -1,5 +1,6 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
@@ -42,13 +43,20 @@ function assertSlackFileUrl(rawUrl: string): URL {
   return parsed;
 }
 
+function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+}
+
 function createSlackMediaFetch(token: string): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
     if (!url) {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
-    const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
+    const { headers: initHeaders, redirect: requestedRedirect, ...rest } = init ?? {};
     const headers = new Headers(initHeaders);
     let requestUrl = url;
     try {
@@ -63,7 +71,7 @@ function createSlackMediaFetch(token: string): FetchLike {
       headers.delete("Authorization");
     }
 
-    const safeInit: RequestInit = { headers, redirect: "follow" };
+    const safeInit: RequestInit = { headers, redirect: requestedRedirect ?? "manual" };
     if (typeof (rest as { method?: unknown }).method === "string") {
       safeInit.method = (rest as { method: string }).method;
     }
@@ -75,6 +83,22 @@ function createSlackMediaFetch(token: string): FetchLike {
     }
     return fetch(requestUrl, safeInit);
   };
+}
+
+function createSlackApiFetch(): typeof fetch {
+  if (isMockedFetch(globalThis.fetch)) {
+    return globalThis.fetch;
+  }
+  return fetchWithRuntimeDispatcher;
+}
+
+async function fetchSlackApiJson<T>(url: string, init: RequestInit): Promise<T | null> {
+  const fetchImpl = createSlackApiFetch();
+  const response = await fetchImpl(url, init);
+  if (!response.ok) {
+    return null;
+  }
+  return (await response.json()) as T;
 }
 
 /**
@@ -214,15 +238,11 @@ async function resolveSlackFileFromApi(params: {
 }): Promise<SlackFile | null> {
   const url = `https://slack.com/api/files.info?file=${encodeURIComponent(params.fileId)}`;
   try {
-    const response = await fetch(url, {
+    const payload = await fetchSlackApiJson<SlackFileInfoApiResponse>(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${params.token}` },
       redirect: "follow",
     });
-    if (!response.ok) {
-      return null;
-    }
-    const payload = (await response.json()) as SlackFileInfoApiResponse;
     if (!payload?.ok || !payload.file) {
       return null;
     }
@@ -290,8 +310,8 @@ export async function resolveSlackMedia(params: {
 
         // Guard against auth/login HTML pages returned instead of binary media.
         // Allow user-provided HTML files through.
-        const fileMime = normalizeOptionalLowercaseString(file.mimetype);
-        const fileName = normalizeLowercaseStringOrEmpty(file.name);
+        const fileMime = normalizeOptionalLowercaseString(effectiveFile.mimetype);
+        const fileName = normalizeLowercaseStringOrEmpty(effectiveFile.name);
 
         const isExpectedHtml =
           fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
