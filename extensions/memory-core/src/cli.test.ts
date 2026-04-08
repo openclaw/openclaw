@@ -948,6 +948,177 @@ describe("memory cli", () => {
     });
   });
 
+  it("previews rem harness output from a historical daily file path", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "# Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+          "- Calendar ID: udolnrooml2f2ha8jaio24v1r8@group.calendar.google.com",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        sourcePath?: string | null;
+        sourceFiles?: string[];
+        historicalImport?: { importedFileCount?: number; importedSignalCount?: number } | null;
+        rem?: { candidateTruths?: Array<{ snippet?: string }> };
+        deep?: { candidates?: Array<{ snippet?: string; path?: string }> };
+      }>(writeJson);
+      expect(payload?.sourcePath).toBe(historyPath);
+      expect(payload?.sourceFiles).toEqual([historyPath]);
+      expect(payload?.historicalImport?.importedFileCount).toBe(1);
+      expect(payload?.historicalImport?.importedSignalCount).toBeGreaterThan(0);
+      expect(Array.isArray(payload?.rem?.candidateTruths)).toBe(true);
+      expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Happy Together");
+      expect(payload?.deep?.candidates?.[0]?.path).toBe("memory/2025-01-01.md");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("previews grounded rem output from a historical daily file path", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+          "- Calendar ID: udolnrooml2f2ha8jaio24v1r8@group.calendar.google.com",
+          "",
+          "## Setup",
+          "- Set up Gmail access via gog.",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--grounded", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          scannedFiles?: number;
+          files?: Array<{
+            path?: string;
+            renderedMarkdown?: string;
+            memoryImplications?: Array<{ text?: string }>;
+          }>;
+        } | null;
+      }>(writeJson);
+      expect(payload?.grounded?.scannedFiles).toBe(1);
+      expect(payload?.grounded?.files?.[0]?.path).toBe("memory/2025-01-01.md");
+      expect(payload?.grounded?.files?.[0]?.renderedMarkdown).toContain("## What Happened");
+      expect(payload?.grounded?.files?.[0]?.renderedMarkdown).toContain("## Reflections");
+      expect(payload?.grounded?.files?.[0]?.renderedMarkdown).toContain(
+        "## Possible Lasting Updates",
+      );
+      expect(payload?.grounded?.files?.[0]?.memoryImplications?.[0]?.text).toContain(
+        'Always use "Happy Together" calendar for flights and reservations',
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("writes grounded rem backfill entries into DREAMS.md", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+          "- Calendar ID: udolnrooml2f2ha8jaio24v1r8@group.calendar.google.com",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyPath]);
+
+      const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(dreams).toContain("openclaw:dreaming:backfill-entry");
+      expect(dreams).toContain("January 1, 2025");
+      expect(dreams).toContain("What Happened");
+      expect(dreams).toContain("Possible Lasting Updates");
+      expect(dreams).toContain("Happy Together");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("rolls back grounded rem backfill entries from DREAMS.md", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+      await fs.writeFile(
+        dreamsPath,
+        [
+          "# Dream Diary",
+          "",
+          "<!-- openclaw:dreaming:diary:start -->",
+          "---",
+          "",
+          "*April 5, 2026, 3:00 AM*",
+          "",
+          "Keep this normal dream.",
+          "",
+          "---",
+          "",
+          "*January 1, 2025*",
+          "",
+          "<!-- openclaw:dreaming:backfill-entry day=2025-01-01 source=memory/2025-01-01.md -->",
+          "",
+          "What Happened",
+          "1. Remove this entry.",
+          "",
+          "<!-- openclaw:dreaming:diary:end -->",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--rollback"]);
+
+      const dreams = await fs.readFile(dreamsPath, "utf-8");
+      expect(dreams).toContain("Keep this normal dream.");
+      expect(dreams).not.toContain("Remove this entry.");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("applies top promote candidates into MEMORY.md", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
