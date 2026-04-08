@@ -75,6 +75,38 @@ static void test_plain_text_extraction(void) {
     json_node_unref(n);
 }
 
+static void test_malformed_string_fields(void) {
+    JsonNode *n = parse_json(
+        "["
+        "{\"type\":123,\"text\":\"hi\"},"
+        "{\"type\":\"text\",\"text\":123},"
+        "{\"type\":\"thinking\",\"thinking\":123},"
+        "{\"type\":\"tool_use\",\"name\":123,\"input\":{}}"
+        "]"
+    );
+
+    g_autoptr(GPtrArray) blocks = chat_blocks_extract(n);
+    g_assert_cmpint((gint)blocks->len, ==, 3);
+
+    ChatBlock *b0 = g_ptr_array_index(blocks, 0);
+    ChatBlock *b1 = g_ptr_array_index(blocks, 1);
+    ChatBlock *b2 = g_ptr_array_index(blocks, 2);
+
+    g_assert_cmpint(b0->type, ==, CHAT_BLOCK_TEXT);
+    g_assert_cmpstr(b0->text, ==, "");
+
+    g_assert_cmpint(b1->type, ==, CHAT_BLOCK_THINKING);
+    g_assert_cmpstr(b1->text, ==, "");
+
+    g_assert_cmpint(b2->type, ==, CHAT_BLOCK_TOOL_USE);
+    g_assert_cmpstr(b2->tool_name, ==, "tool");
+    g_assert_nonnull(b2->tool_input);
+    g_assert_true(g_str_has_prefix(b2->text, "tool("));
+    g_assert_true(g_str_has_suffix(b2->text, ")"));
+
+    json_node_unref(n);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -82,6 +114,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/chat_blocks/legacy_string", test_legacy_plain_string);
     g_test_add_func("/chat_blocks/structured", test_structured_blocks);
     g_test_add_func("/chat_blocks/plain_text", test_plain_text_extraction);
+    g_test_add_func("/chat_blocks/malformed_string_fields", test_malformed_string_fields);
 
     return g_test_run();
 }

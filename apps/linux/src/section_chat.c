@@ -160,9 +160,10 @@ static void chat_append_line(const gchar *text, const gchar *css_class) {
 }
 
 static void chat_render_message_object(JsonObject *msg_obj, gboolean is_pending) {
-    const gchar *role = json_object_has_member(msg_obj, "role")
-                            ? json_object_get_string_member(msg_obj, "role")
-                            : "assistant";
+    const gchar *role = chat_json_string_member(msg_obj, "role");
+    if (!role || role[0] == '\0') {
+        role = "assistant";
+    }
 
     g_autofree gchar *role_title = g_strdup_printf("%s%s", role, is_pending ? " (streaming)" : "");
     GtkWidget *role_label = gtk_label_new(role_title);
