@@ -335,6 +335,7 @@ def derive_digest_bucket_ui_layouts(
     digest_bucket_leader: object,
     digest_bucket_rank: object,
     digest_bucket_palette_key: object,
+    digest_bucket_badge_order: object,
 ) -> dict[str, object]:
     badge = (
         dict(digest_bucket_badge_tuple)
@@ -373,6 +374,7 @@ def derive_digest_bucket_ui_layouts(
             if isinstance(digest_bucket_palette_key, str)
             else 'muted'
         ),
+        'order': int(digest_bucket_badge_order) if isinstance(digest_bucket_badge_order, int) else 0,
     }
     return {
         'badge': badge,
@@ -820,6 +822,7 @@ def main() -> int:
                 item.get('digest_bucket_leader'),
                 item.get('digest_bucket_rank'),
                 item.get('digest_bucket_palette_key'),
+                item.get('digest_bucket_badge_order'),
             )
 
     notification_digest_summary.sort(key=derive_digest_order_key)
