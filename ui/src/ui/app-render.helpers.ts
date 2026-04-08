@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
+import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
@@ -516,6 +516,7 @@ export function renderChatMobileToggle(state: AppViewState) {
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
+  void refreshChatAvatar(state);
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
