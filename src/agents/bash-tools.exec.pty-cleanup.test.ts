@@ -91,7 +91,9 @@ test("exec tears down PTY resources on timeout", async () => {
   });
 
   expect(result.details.status).toBe("failed");
-  expect(result.details.timedOut).toBe(true);
+  if (result.details.status === "failed" || result.details.status === "completed") {
+    expect(result.details.timedOut).toBe(true);
+  }
   expect(result.content[0]).toMatchObject({ type: "text" });
   expect((result.content[0] as { text?: string }).text).toMatch(/timed out/i);
   expect(kill).toHaveBeenCalledTimes(1);
