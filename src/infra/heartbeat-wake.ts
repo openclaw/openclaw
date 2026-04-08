@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isHeartbeatActionWakeReason,
   normalizeHeartbeatWakeReason,
@@ -14,6 +15,16 @@ export type HeartbeatWakeHandler = (opts: {
   agentId?: string;
   sessionKey?: string;
 }) => Promise<HeartbeatRunResult>;
+
+let heartbeatsEnabled = true;
+
+export function setHeartbeatsEnabled(enabled: boolean) {
+  heartbeatsEnabled = enabled;
+}
+
+export function areHeartbeatsEnabled(): boolean {
+  return heartbeatsEnabled;
+}
 
 type WakeTimerKind = "normal" | "retry";
 type PendingWakeReason = {
@@ -61,7 +72,7 @@ function normalizeWakeReason(reason?: string): string {
 }
 
 function normalizeWakeTarget(value?: string): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed || undefined;
 }
 

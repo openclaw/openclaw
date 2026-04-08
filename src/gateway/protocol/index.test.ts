@@ -1,6 +1,7 @@
 import type { ErrorObject } from "ajv";
 import { describe, expect, it } from "vitest";
-import { formatValidationErrors } from "./index.js";
+import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
+import { formatValidationErrors, validateTalkConfigResult } from "./index.js";
 
 const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
   keyword: "type",
@@ -60,5 +61,55 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors([err, err])).toBe(
       "at /auth: must have required property 'token'",
     );
+  });
+});
+
+describe("validateTalkConfigResult", () => {
+  it("accepts Talk SecretRef payloads", () => {
+    expect(
+      validateTalkConfigResult({
+        config: {
+          talk: {
+            provider: TALK_TEST_PROVIDER_ID,
+            providers: {
+              [TALK_TEST_PROVIDER_ID]: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "ELEVENLABS_API_KEY",
+                },
+              },
+            },
+            resolved: {
+              provider: TALK_TEST_PROVIDER_ID,
+              config: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "ELEVENLABS_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects normalized talk payloads without talk.resolved", () => {
+    expect(
+      validateTalkConfigResult({
+        config: {
+          talk: {
+            provider: TALK_TEST_PROVIDER_ID,
+            providers: {
+              [TALK_TEST_PROVIDER_ID]: {
+                voiceId: "voice-normalized",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 });

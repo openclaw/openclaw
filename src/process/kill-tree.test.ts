@@ -1,13 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { killProcessTree } from "./kill-tree.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: (...args: unknown[]) => spawnMock(...args),
+    },
+  );
+});
+
+let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
 
 async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -23,6 +30,10 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> 
 
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeAll(async () => {
+    ({ killProcessTree } = await import("./kill-tree.js"));
+  });
 
   beforeEach(() => {
     spawnMock.mockClear();

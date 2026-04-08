@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 const GLOB_REGEX_CACHE_LIMIT = 512;
@@ -7,9 +8,9 @@ const globRegexCache = new Map<string, RegExp>();
 function normalizeMatchTarget(value: string): string {
   if (process.platform === "win32") {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
-    return stripped.replace(/\\/g, "/").toLowerCase();
+    return normalizeLowercaseStringOrEmpty(stripped.replace(/\\/g, "/"));
   }
-  return value.replace(/\\\\/g, "/").toLowerCase();
+  return value.replace(/\\\\/g, "/");
 }
 
 function tryRealpath(value: string): string | null {
@@ -25,7 +26,8 @@ function escapeRegExpLiteral(input: string): string {
 }
 
 function compileGlobRegex(pattern: string): RegExp {
-  const cached = globRegexCache.get(pattern);
+  const cacheKey = `${process.platform}:${pattern}`;
+  const cached = globRegexCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -46,7 +48,7 @@ function compileGlobRegex(pattern: string): RegExp {
       continue;
     }
     if (ch === "?") {
-      regex += ".";
+      regex += "[^/]";
       i += 1;
       continue;
     }
@@ -55,11 +57,11 @@ function compileGlobRegex(pattern: string): RegExp {
   }
   regex += "$";
 
-  const compiled = new RegExp(regex, "i");
+  const compiled = new RegExp(regex, process.platform === "win32" ? "i" : "");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
-  globRegexCache.set(pattern, compiled);
+  globRegexCache.set(cacheKey, compiled);
   return compiled;
 }
 

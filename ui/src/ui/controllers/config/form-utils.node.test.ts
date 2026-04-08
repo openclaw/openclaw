@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../../views/config-form.shared.ts";
 import { coerceFormValues } from "./form-coerce.ts";
-import { cloneConfigObject, serializeConfigForm, setPathValue } from "./form-utils.ts";
+import {
+  cloneConfigObject,
+  removePathValue,
+  serializeConfigForm,
+  setPathValue,
+} from "./form-utils.ts";
 
 /**
  * Minimal model provider schema matching the Zod-generated JSON Schema for
@@ -126,6 +131,39 @@ describe("form-utils preserves numeric types", () => {
     expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
+  });
+});
+
+describe("prototype pollution prevention", () => {
+  it("setPathValue rejects __proto__ in path", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["__proto__", "polluted"], true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(obj.__proto__).toBe(Object.prototype);
+  });
+
+  it("setPathValue rejects constructor in path", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["constructor", "prototype", "polluted"], true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("setPathValue rejects prototype in path", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["prototype", "bad"], true);
+    expect(obj).toEqual({});
+  });
+
+  it("removePathValue rejects __proto__ in path", () => {
+    const obj = { safe: 1 } as Record<string, unknown>;
+    removePathValue(obj, ["__proto__", "toString"]);
+    expect("toString" in {}).toBe(true);
+  });
+
+  it("setPathValue allows normal keys", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["a", "b"], 42);
+    expect((obj.a as Record<string, unknown>).b).toBe(42);
   });
 });
 

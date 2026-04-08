@@ -1,4 +1,6 @@
-export function normalizeNextcloudTalkMessagingTarget(raw: string): string | undefined {
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
+export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
@@ -22,7 +24,12 @@ export function normalizeNextcloudTalkMessagingTarget(raw: string): string | und
     return undefined;
   }
 
-  return `nextcloud-talk:${normalized}`.toLowerCase();
+  return normalized;
+}
+
+export function normalizeNextcloudTalkMessagingTarget(raw: string): string | undefined {
+  const normalized = stripNextcloudTalkTargetPrefix(raw);
+  return normalized ? normalizeLowercaseStringOrEmpty(`nextcloud-talk:${normalized}`) : undefined;
 }
 
 export function looksLikeNextcloudTalkTargetId(raw: string): boolean {

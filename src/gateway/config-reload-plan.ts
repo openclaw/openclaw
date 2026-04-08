@@ -10,7 +10,6 @@ export type GatewayReloadPlan = {
   hotReasons: string[];
   reloadHooks: boolean;
   restartGmailWatcher: boolean;
-  restartBrowserControl: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
@@ -27,7 +26,6 @@ type ReloadRule = {
 type ReloadAction =
   | "reload-hooks"
   | "restart-gmail-watcher"
-  | "restart-browser-control"
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
@@ -41,12 +39,27 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-health-monitor"],
   },
+  {
+    prefix: "gateway.channelStaleEventThresholdMinutes",
+    kind: "hot",
+    actions: ["restart-health-monitor"],
+  },
+  {
+    prefix: "gateway.channelMaxRestartsPerHour",
+    kind: "hot",
+    actions: ["restart-health-monitor"],
+  },
   // Stuck-session warning threshold is read by the diagnostics heartbeat loop.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
     prefix: "agents.defaults.heartbeat",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
+    prefix: "agents.defaults.models",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
@@ -60,13 +73,13 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  {
+    prefix: "agents.list",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
-  {
-    prefix: "browser",
-    kind: "hot",
-    actions: ["restart-browser-control"],
-  },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -120,7 +133,32 @@ function listReloadRules(): ReloadRule[] {
       }),
     ),
   ]);
-  const rules = [...BASE_RELOAD_RULES, ...channelReloadRules, ...BASE_RELOAD_RULES_TAIL];
+  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) => [
+    ...(entry.registration.restartPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "restart",
+      }),
+    ),
+    ...(entry.registration.hotPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "hot",
+      }),
+    ),
+    ...(entry.registration.noopPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "none",
+      }),
+    ),
+  ]);
+  const rules = [
+    ...BASE_RELOAD_RULES,
+    ...pluginReloadRules,
+    ...channelReloadRules,
+    ...BASE_RELOAD_RULES_TAIL,
+  ];
   cachedReloadRules = rules;
   return rules;
 }
@@ -142,7 +180,6 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     hotReasons: [],
     reloadHooks: false,
     restartGmailWatcher: false,
-    restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
     restartHealthMonitor: false,
@@ -162,9 +199,6 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
         break;
       case "restart-gmail-watcher":
         plan.restartGmailWatcher = true;
-        break;
-      case "restart-browser-control":
-        plan.restartBrowserControl = true;
         break;
       case "restart-cron":
         plan.restartCron = true;

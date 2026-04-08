@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
+import { writePluginWithSkill } from "../test-helpers/skill-plugin-fixtures.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 
 const tempDirs: string[] = [];
@@ -20,28 +21,22 @@ async function setupBundledDiffsPlugin() {
   const workspaceDir = await createTempDir("openclaw-workspace-");
   const pluginRoot = path.join(bundledPluginsDir, "diffs");
 
-  await fs.mkdir(path.join(pluginRoot, "skills", "diffs"), { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: "diffs",
-        skills: ["./skills"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  await fs.writeFile(path.join(pluginRoot, "index.ts"), "export {};\n", "utf-8");
-  await fs.writeFile(
-    path.join(pluginRoot, "skills", "diffs", "SKILL.md"),
-    `---\nname: diffs\ndescription: runtime integration test\n---\n`,
-    "utf-8",
-  );
+  await writePluginWithSkill({
+    pluginRoot,
+    pluginId: "diffs",
+    skillId: "diffs",
+    skillDescription: "runtime integration test",
+  });
 
   return { bundledPluginsDir, workspaceDir };
+}
+
+async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
+  const { bundledPluginsDir, workspaceDir } = await setupBundledDiffsPlugin();
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+  clearPluginManifestRegistryCache();
+
+  return resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
 }
 
 afterEach(async () => {
@@ -54,10 +49,6 @@ afterEach(async () => {
 
 describe("resolveEmbeddedRunSkillEntries (integration)", () => {
   it("loads bundled diffs skill when explicitly enabled in config", async () => {
-    const { bundledPluginsDir, workspaceDir } = await setupBundledDiffsPlugin();
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    clearPluginManifestRegistryCache();
-
     const config: OpenClawConfig = {
       plugins: {
         entries: {
@@ -66,23 +57,14 @@ describe("resolveEmbeddedRunSkillEntries (integration)", () => {
       },
     };
 
-    const result = resolveEmbeddedRunSkillEntries({
-      workspaceDir,
-      config,
-    });
+    const result = await resolveBundledDiffsSkillEntries(config);
 
     expect(result.shouldLoadSkillEntries).toBe(true);
     expect(result.skillEntries.map((entry) => entry.skill.name)).toContain("diffs");
   });
 
   it("skips bundled diffs skill when config is missing", async () => {
-    const { bundledPluginsDir, workspaceDir } = await setupBundledDiffsPlugin();
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    clearPluginManifestRegistryCache();
-
-    const result = resolveEmbeddedRunSkillEntries({
-      workspaceDir,
-    });
+    const result = await resolveBundledDiffsSkillEntries();
 
     expect(result.shouldLoadSkillEntries).toBe(true);
     expect(result.skillEntries.map((entry) => entry.skill.name)).not.toContain("diffs");

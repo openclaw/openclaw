@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
@@ -84,6 +85,7 @@ export function stripThoughtSignatures<T>(
 
 export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000;
+export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
 const BOOTSTRAP_TAIL_RATIO = 0.2;
@@ -109,6 +111,16 @@ export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
+export function resolveBootstrapPromptTruncationWarningMode(
+  cfg?: OpenClawConfig,
+): "off" | "once" | "always" {
+  const raw = cfg?.agents?.defaults?.bootstrapPromptTruncationWarning;
+  if (raw === "off" || raw === "once" || raw === "always") {
+    return raw;
+  }
+  return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
 function trimBootstrapContent(
@@ -199,7 +211,7 @@ export function buildBootstrapContextFiles(
     if (remainingTotalChars <= 0) {
       break;
     }
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       opts?.warn?.(
         `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,

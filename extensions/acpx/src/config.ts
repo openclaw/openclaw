@@ -1,46 +1,107 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { z } from "openclaw/plugin-sdk/zod";
+import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
+import type {
+  AcpxPluginConfig,
+  AcpxPermissionMode,
+  AcpxNonInteractivePermissionPolicy,
+  McpServerConfig,
+  AcpxMcpServer,
+  ResolvedAcpxPluginConfig,
+} from "./config-schema.js";
+export {
+  ACPX_NON_INTERACTIVE_POLICIES,
+  ACPX_PERMISSION_MODES,
+  type AcpxMcpServer,
+  type AcpxNonInteractivePermissionPolicy,
+  type AcpxPermissionMode,
+  type AcpxPluginConfig,
+  type McpServerConfig,
+  type ResolvedAcpxPluginConfig,
+  createAcpxPluginConfigSchema,
+} from "./config-schema.js";
 
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
-export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
+export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 
-export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
-export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
-
-export const ACPX_PINNED_VERSION = "0.1.15";
-export const ACPX_VERSION_ANY = "any";
-const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
-export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
-export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
-  return `npm install --omit=dev --no-save acpx@${version}`;
+function isAcpxPluginRoot(dir: string): boolean {
+  return (
+    fs.existsSync(path.join(dir, "openclaw.plugin.json")) &&
+    fs.existsSync(path.join(dir, "package.json"))
+  );
 }
-export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 
-export type AcpxPluginConfig = {
-  command?: string;
-  expectedVersion?: string;
-  cwd?: string;
-  permissionMode?: AcpxPermissionMode;
-  nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
-  strictWindowsCmdWrapper?: boolean;
-  timeoutSeconds?: number;
-  queueOwnerTtlSeconds?: number;
-};
+function resolveNearestAcpxPluginRoot(moduleUrl: string): string {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 3; i += 1) {
+    // Bundled entries live at the plugin root while source files still live under src/.
+    if (isAcpxPluginRoot(cursor)) {
+      return cursor;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..");
+}
 
-export type ResolvedAcpxPluginConfig = {
-  command: string;
-  expectedVersion?: string;
-  allowPluginLocalInstall: boolean;
-  installCommand: string;
-  cwd: string;
-  permissionMode: AcpxPermissionMode;
-  nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
-  strictWindowsCmdWrapper: boolean;
-  timeoutSeconds?: number;
-  queueOwnerTtlSeconds: number;
-};
+function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
+  if (
+    path.basename(currentRoot) !== "acpx" ||
+    path.basename(path.dirname(currentRoot)) !== "extensions" ||
+    path.basename(path.dirname(path.dirname(currentRoot))) !== "dist"
+  ) {
+    return null;
+  }
+  const workspaceRoot = path.resolve(currentRoot, "..", "..", "..", "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+function resolveRepoAcpxPluginRoot(currentRoot: string): string | null {
+  const workspaceRoot = path.join(currentRoot, "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+function resolveAcpxPluginRootFromOpenClawLayout(moduleUrl: string): string | null {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 5; i += 1) {
+    const candidates = [
+      path.join(cursor, "extensions", "acpx"),
+      path.join(cursor, "dist", "extensions", "acpx"),
+      path.join(cursor, "dist-runtime", "extensions", "acpx"),
+    ];
+    for (const candidate of candidates) {
+      if (isAcpxPluginRoot(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return null;
+}
+export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
+  const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
+  // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
+  // Prefer the stable source plugin root when a built extension is running beside it.
+  return (
+    resolveWorkspaceAcpxPluginRoot(resolvedRoot) ??
+    resolveRepoAcpxPluginRoot(resolvedRoot) ??
+    // Shared dist/dist-runtime chunks can load this module outside the plugin tree.
+    // Scan common OpenClaw layouts before falling back to the nearest path guess.
+    resolveAcpxPluginRootFromOpenClawLayout(moduleUrl) ??
+    resolvedRoot
+  );
+}
+
+export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
@@ -51,214 +112,139 @@ type ParseResult =
   | { ok: true; value: AcpxPluginConfig | undefined }
   | { ok: false; message: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isPermissionMode(value: string): value is AcpxPermissionMode {
-  return ACPX_PERMISSION_MODES.includes(value as AcpxPermissionMode);
-}
-
-function isNonInteractivePermissionPolicy(
-  value: string,
-): value is AcpxNonInteractivePermissionPolicy {
-  return ACPX_NON_INTERACTIVE_POLICIES.includes(value as AcpxNonInteractivePermissionPolicy);
+function formatAcpxConfigIssue(issue: z.ZodIssue | undefined): string {
+  if (!issue) {
+    return "invalid config";
+  }
+  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
+    return `unknown config key: ${issue.keys[0]}`;
+  }
+  if (issue.code === "invalid_type" && issue.path.length === 0) {
+    return "expected config object";
+  }
+  return issue.message;
 }
 
 function parseAcpxPluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
   }
-  if (!isRecord(value)) {
-    return { ok: false, message: "expected config object" };
+  const parsed = AcpxPluginConfigSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, message: formatAcpxConfigIssue(parsed.error.issues[0]) };
   }
-  const allowedKeys = new Set([
-    "command",
-    "expectedVersion",
-    "cwd",
-    "permissionMode",
-    "nonInteractivePermissions",
-    "strictWindowsCmdWrapper",
-    "timeoutSeconds",
-    "queueOwnerTtlSeconds",
-  ]);
-  for (const key of Object.keys(value)) {
-    if (!allowedKeys.has(key)) {
-      return { ok: false, message: `unknown config key: ${key}` };
-    }
-  }
-
-  const command = value.command;
-  if (command !== undefined && (typeof command !== "string" || command.trim() === "")) {
-    return { ok: false, message: "command must be a non-empty string" };
-  }
-
-  const expectedVersion = value.expectedVersion;
-  if (
-    expectedVersion !== undefined &&
-    (typeof expectedVersion !== "string" || expectedVersion.trim() === "")
-  ) {
-    return { ok: false, message: "expectedVersion must be a non-empty string" };
-  }
-
-  const cwd = value.cwd;
-  if (cwd !== undefined && (typeof cwd !== "string" || cwd.trim() === "")) {
-    return { ok: false, message: "cwd must be a non-empty string" };
-  }
-
-  const permissionMode = value.permissionMode;
-  if (
-    permissionMode !== undefined &&
-    (typeof permissionMode !== "string" || !isPermissionMode(permissionMode))
-  ) {
-    return {
-      ok: false,
-      message: `permissionMode must be one of: ${ACPX_PERMISSION_MODES.join(", ")}`,
-    };
-  }
-
-  const nonInteractivePermissions = value.nonInteractivePermissions;
-  if (
-    nonInteractivePermissions !== undefined &&
-    (typeof nonInteractivePermissions !== "string" ||
-      !isNonInteractivePermissionPolicy(nonInteractivePermissions))
-  ) {
-    return {
-      ok: false,
-      message: `nonInteractivePermissions must be one of: ${ACPX_NON_INTERACTIVE_POLICIES.join(", ")}`,
-    };
-  }
-
-  const timeoutSeconds = value.timeoutSeconds;
-  if (
-    timeoutSeconds !== undefined &&
-    (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
-  ) {
-    return { ok: false, message: "timeoutSeconds must be a positive number" };
-  }
-
-  const strictWindowsCmdWrapper = value.strictWindowsCmdWrapper;
-  if (strictWindowsCmdWrapper !== undefined && typeof strictWindowsCmdWrapper !== "boolean") {
-    return { ok: false, message: "strictWindowsCmdWrapper must be a boolean" };
-  }
-
-  const queueOwnerTtlSeconds = value.queueOwnerTtlSeconds;
-  if (
-    queueOwnerTtlSeconds !== undefined &&
-    (typeof queueOwnerTtlSeconds !== "number" ||
-      !Number.isFinite(queueOwnerTtlSeconds) ||
-      queueOwnerTtlSeconds < 0)
-  ) {
-    return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
-  }
-
   return {
     ok: true,
-    value: {
-      command: typeof command === "string" ? command.trim() : undefined,
-      expectedVersion: typeof expectedVersion === "string" ? expectedVersion.trim() : undefined,
-      cwd: typeof cwd === "string" ? cwd.trim() : undefined,
-      permissionMode: typeof permissionMode === "string" ? permissionMode : undefined,
-      nonInteractivePermissions:
-        typeof nonInteractivePermissions === "string" ? nonInteractivePermissions : undefined,
-      strictWindowsCmdWrapper:
-        typeof strictWindowsCmdWrapper === "boolean" ? strictWindowsCmdWrapper : undefined,
-      timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
-      queueOwnerTtlSeconds:
-        typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
-    },
+    value: parsed.data as AcpxPluginConfig,
   };
 }
 
-function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: string }): string {
-  const configured = params.configured?.trim();
-  if (!configured) {
-    return ACPX_BUNDLED_BIN;
+function resolveOpenClawRoot(currentRoot: string): string {
+  if (
+    path.basename(currentRoot) === "acpx" &&
+    path.basename(path.dirname(currentRoot)) === "extensions"
+  ) {
+    const parent = path.dirname(path.dirname(currentRoot));
+    if (path.basename(parent) === "dist") {
+      return path.dirname(parent);
+    }
+    return parent;
   }
-  if (path.isAbsolute(configured) || configured.includes(path.sep) || configured.includes("/")) {
-    const baseDir = params.workspaceDir?.trim() || process.cwd();
-    return path.resolve(baseDir, configured);
-  }
-  return configured;
+  return path.resolve(currentRoot, "..");
 }
 
-export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
+export function resolvePluginToolsMcpServerConfig(
+  moduleUrl: string = import.meta.url,
+): McpServerConfig {
+  const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
+  const openClawRoot = resolveOpenClawRoot(pluginRoot);
+  const distEntry = path.join(openClawRoot, "dist", "mcp", "plugin-tools-serve.js");
+  if (fs.existsSync(distEntry)) {
+    return {
+      command: process.execPath,
+      args: [distEntry],
+    };
+  }
+  const sourceEntry = path.join(openClawRoot, "src", "mcp", "plugin-tools-serve.ts");
   return {
-    safeParse(value: unknown):
-      | { success: true; data?: unknown }
-      | {
-          success: false;
-          error: { issues: Array<{ path: Array<string | number>; message: string }> };
-        } {
-      const parsed = parseAcpxPluginConfig(value);
-      if (parsed.ok) {
-        return { success: true, data: parsed.value };
-      }
-      return {
-        success: false,
-        error: {
-          issues: [{ path: [], message: parsed.message }],
-        },
-      };
-    },
-    jsonSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        command: { type: "string" },
-        expectedVersion: { type: "string" },
-        cwd: { type: "string" },
-        permissionMode: {
-          type: "string",
-          enum: [...ACPX_PERMISSION_MODES],
-        },
-        nonInteractivePermissions: {
-          type: "string",
-          enum: [...ACPX_NON_INTERACTIVE_POLICIES],
-        },
-        strictWindowsCmdWrapper: { type: "boolean" },
-        timeoutSeconds: { type: "number", minimum: 0.001 },
-        queueOwnerTtlSeconds: { type: "number", minimum: 0 },
-      },
-    },
+    command: process.execPath,
+    args: ["--import", "tsx", sourceEntry],
   };
+}
+
+function resolveConfiguredMcpServers(params: {
+  mcpServers?: Record<string, McpServerConfig>;
+  pluginToolsMcpBridge: boolean;
+  moduleUrl?: string;
+}): Record<string, McpServerConfig> {
+  const resolved = { ...params.mcpServers };
+  if (!params.pluginToolsMcpBridge) {
+    return resolved;
+  }
+  if (resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME]) {
+    throw new Error(
+      `mcpServers.${ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME} is reserved when pluginToolsMcpBridge=true`,
+    );
+  }
+  resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME] = resolvePluginToolsMcpServerConfig(params.moduleUrl);
+  return resolved;
+}
+
+export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {
+  return Object.entries(mcpServers).map(([name, server]) => ({
+    name,
+    command: server.command,
+    args: [...(server.args ?? [])],
+    env: Object.entries(server.env ?? {}).map(([envName, value]) => ({
+      name: envName,
+      value,
+    })),
+  }));
 }
 
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;
+  moduleUrl?: string;
 }): ResolvedAcpxPluginConfig {
   const parsed = parseAcpxPluginConfig(params.rawConfig);
   if (!parsed.ok) {
     throw new Error(parsed.message);
   }
   const normalized = parsed.value ?? {};
-  const fallbackCwd = params.workspaceDir?.trim() || process.cwd();
+  const workspaceDir = params.workspaceDir?.trim() || process.cwd();
+  const fallbackCwd = workspaceDir;
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
-  const command = resolveConfiguredCommand({
-    configured: normalized.command,
-    workspaceDir: params.workspaceDir,
+  const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
+  const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
+  const mcpServers = resolveConfiguredMcpServers({
+    mcpServers: normalized.mcpServers,
+    pluginToolsMcpBridge,
+    moduleUrl: params.moduleUrl,
   });
-  const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
-  const configuredExpectedVersion = normalized.expectedVersion;
-  const expectedVersion =
-    configuredExpectedVersion === ACPX_VERSION_ANY
-      ? undefined
-      : (configuredExpectedVersion ?? (allowPluginLocalInstall ? ACPX_PINNED_VERSION : undefined));
-  const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
+  const agents = Object.fromEntries(
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
+      normalizeLowercaseStringOrEmpty(name),
+      entry.command.trim(),
+    ]),
+  );
 
   return {
-    command,
-    expectedVersion,
-    allowPluginLocalInstall,
-    installCommand,
     cwd,
+    stateDir,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
+    pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
-    timeoutSeconds: normalized.timeoutSeconds,
+    timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    legacyCompatibilityConfig: {
+      strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
+      queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,
+    },
+    mcpServers,
+    agents,
   };
 }
