@@ -293,6 +293,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           }
 
           validationText = null
+          if (inputMode == ConnectInputMode.SetupCode) {
+            viewModel.resetGatewaySetupAuth()
+          }
           viewModel.setManualEnabled(true)
           viewModel.setManualHost(config.host)
           viewModel.setManualPort(config.port)

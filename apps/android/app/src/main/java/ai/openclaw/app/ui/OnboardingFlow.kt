@@ -580,6 +580,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                       return@addOnSuccessListener
                     }
                     setupCode = scannedSetupCode.setupCode
+                    viewModel.resetGatewaySetupAuth()
                     gatewayInputMode = GatewayInputMode.SetupCode
                     gatewayError = null
                     attemptedConnect = false
@@ -817,6 +818,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                       )
                     return@Button
                   }
+                  viewModel.resetGatewaySetupAuth()
                   gatewayUrl = parsedSetup.url
                   viewModel.setGatewayBootstrapToken(parsedSetup.bootstrapToken.orEmpty())
                   val sharedToken = parsedSetup.token.orEmpty().trim()
@@ -899,6 +901,8 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   viewModel.setManualTls(parsed.config.tls)
                   if (gatewayInputMode == GatewayInputMode.Manual) {
                     viewModel.setGatewayBootstrapToken("")
+                  } else {
+                    viewModel.resetGatewaySetupAuth()
                   }
                   if (token.isNotEmpty()) {
                     viewModel.setGatewayToken(token)
