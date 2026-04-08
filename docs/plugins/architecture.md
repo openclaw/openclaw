@@ -1134,6 +1134,9 @@ authoring plugins:
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/approval-gateway-runtime`,
+  `openclaw/plugin-sdk/approval-handler-adapter-runtime`,
+  `openclaw/plugin-sdk/approval-handler-runtime`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
   `openclaw/plugin-sdk/infra-runtime`,
@@ -1152,9 +1155,9 @@ authoring plugins:
   assistant-visible-text stripping, markdown render/chunking helpers, redaction
   helpers, directive-tag helpers, and safe-text utilities.
 - Approval-specific channel seams should prefer one `approvalCapability`
-  contract on the plugin. Core then reads approval auth, delivery, render, and
-  native-routing behavior through that one capability instead of mixing
-  approval behavior into unrelated plugin fields.
+  contract on the plugin. Core then reads approval auth, delivery, render,
+  native-routing, and lazy native-handler behavior through that one capability
+  instead of mixing approval behavior into unrelated plugin fields.
 - `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
   compatibility shim for older plugins. New code should import the narrower
   generic primitives instead, and repo code should not add new imports of the

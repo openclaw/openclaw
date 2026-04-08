@@ -1,7 +1,10 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
@@ -102,8 +105,8 @@ export function resolveSendPolicy(params: {
     normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
-  const rawSessionKeyNorm = rawSessionKey.toLowerCase();
-  const strippedSessionKeyNorm = strippedSessionKey.toLowerCase();
+  const rawSessionKeyNorm = normalizeLowercaseStringOrEmpty(rawSessionKey);
+  const strippedSessionKeyNorm = normalizeLowercaseStringOrEmpty(strippedSessionKey);
 
   let allowedMatch = false;
   for (const rule of policy.rules ?? []) {

@@ -2,6 +2,7 @@ import {
   getActivePluginChannelRegistryVersion,
   requireActivePluginChannelRegistry,
 } from "../../plugins/runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
@@ -10,7 +11,7 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
   for (const plugin of channels) {
-    const id = String(plugin.id).trim();
+    const id = normalizeOptionalString(plugin.id) ?? "";
     if (!id || seen.has(id)) {
       continue;
     }
@@ -83,7 +84,7 @@ export function listChannelPlugins(): ChannelPlugin[] {
 }
 
 export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
@@ -91,7 +92,7 @@ export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined
 }
 
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }

@@ -25,7 +25,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
@@ -53,6 +56,7 @@ import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./matrix/thread-bindings-shared.js";
+import { matrixResolverAdapter } from "./resolver.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import {
@@ -64,7 +68,6 @@ import { matrixSetupAdapter } from "./setup-core.js";
 import { matrixSetupWizard } from "./setup-surface.js";
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 import type { CoreConfig } from "./types.js";
-
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
@@ -100,7 +103,7 @@ const listMatrixDirectoryPeersFromConfig =
       if (!raw || raw === "*") {
         return null;
       }
-      const lowered = raw.toLowerCase();
+      const lowered = normalizeLowercaseStringOrEmpty(raw);
       const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
       return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
     },
@@ -116,7 +119,7 @@ const listMatrixDirectoryGroupsFromConfig =
       if (!raw || raw === "*") {
         return null;
       }
-      const lowered = raw.toLowerCase();
+      const lowered = normalizeLowercaseStringOrEmpty(raw);
       if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
         return raw;
       }
@@ -389,16 +392,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           listGroupsLive: (runtime) => runtime.listMatrixDirectoryGroupsLive,
         }),
       }),
-      resolver: {
-        resolveTargets: async ({ cfg, accountId, inputs, kind, runtime }) =>
-          (await loadMatrixChannelRuntime()).resolveMatrixTargets({
-            cfg,
-            accountId,
-            inputs,
-            kind,
-            runtime,
-          }),
-      },
+      resolver: matrixResolverAdapter,
       actions: matrixMessageActions,
       secrets: {
         secretTargetRegistryEntries,
@@ -496,6 +490,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
 
           return monitorMatrixProvider({
             runtime: ctx.runtime,
+            channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,
             mediaMaxMb: account.config.mediaMaxMb,
             initialSyncLimit: account.config.initialSyncLimit,

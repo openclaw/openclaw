@@ -563,6 +563,35 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("ignores non-finite mediaMaxMb when loading reference images", async () => {
+    stubEditedImageFlow({ width: 3200, height: 1800 });
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3-pro-image-preview",
+              },
+              mediaMaxMb: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-edit-infinity-cap", {
+      prompt: "Add a dramatic stormy sky but keep everything else identical.",
+      image: "./fixtures/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ maxBytes: undefined }),
+    );
+  });
+
   it("does not treat inferred edit resolution as an OpenAI override", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {

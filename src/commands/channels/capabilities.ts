@@ -224,7 +224,7 @@ export async function channelsCapabilitiesCommand(
   let cfg = loadedCfg;
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
-  const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
+  const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
     runtime.error(danger("--account requires a specific --channel."));

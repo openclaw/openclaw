@@ -1,12 +1,14 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 function extractLegacyWhatsAppGroupId(key: string): string | null {
   const trimmed = key.trim();
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (trimmed.startsWith("group:")) {
     const id = trimmed.slice("group:".length).trim();
-    return id.toLowerCase().includes("@g.us") ? id : null;
+    return normalizeLowercaseStringOrEmpty(id).includes("@g.us") ? id : null;
   }
   if (!lower.includes("@g.us")) {
     return null;
@@ -32,6 +34,6 @@ export function canonicalizeLegacySessionKey(params: {
 }): string | null {
   const legacyGroupId = extractLegacyWhatsAppGroupId(params.key);
   return legacyGroupId
-    ? `agent:${params.agentId}:whatsapp:group:${legacyGroupId}`.toLowerCase()
+    ? `agent:${normalizeLowercaseStringOrEmpty(params.agentId)}:whatsapp:group:${normalizeLowercaseStringOrEmpty(legacyGroupId)}`
     : null;
 }

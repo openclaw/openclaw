@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import {
   clearTokenCache,
@@ -242,10 +243,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       return;
     }
 
-    const contentLower = content.toLowerCase();
+    const contentLower = normalizeLowercaseStringOrEmpty(content);
     const isUrgentCommand = URGENT_COMMANDS.some(
       (cmd) =>
-        contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
+        contentLower === normalizeLowercaseStringOrEmpty(cmd) ||
+        contentLower.startsWith(normalizeLowercaseStringOrEmpty(cmd) + " "),
     );
     if (isUrgentCommand) {
       log?.info(

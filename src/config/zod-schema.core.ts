@@ -6,6 +6,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
@@ -558,7 +559,7 @@ export const CliBackendSchema = z
   .strict();
 
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
-  (values ?? []).map((v) => String(v).trim()).filter(Boolean);
+  normalizeStringEntries(values);
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;

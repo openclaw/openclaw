@@ -387,7 +387,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     },
     resolveTalkOverrides: ({ params }) => {
       const normalize = trimToUndefined(params.normalize);
-      const language = trimToUndefined(params.language)?.toLowerCase();
+      const language = normalizeLowercaseStringOrEmpty(trimToUndefined(params.language));
       const latencyTier = asFiniteNumber(params.latencyTier);
       const voiceSettings = {
         ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),

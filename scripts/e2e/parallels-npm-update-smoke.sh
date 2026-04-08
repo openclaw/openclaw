@@ -323,7 +323,7 @@ function Invoke-CaptureLogged {
 function Wait-GatewayRpcReady {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath,
-    [int]$Attempts = 10,
+    [int]$Attempts = 20,
     [int]$SleepSeconds = 3
   )
 
@@ -339,6 +339,35 @@ function Wait-GatewayRpcReady {
       Write-ProgressLog "update.gateway-status.retry-$attempt"
       Start-Sleep -Seconds $SleepSeconds
     }
+  }
+}
+
+function Restart-GatewayWithRecovery {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath
+  )
+
+  $restartFailed = $false
+  try {
+    Invoke-Logged 'openclaw gateway restart' { & $OpenClawPath gateway restart }
+  } catch {
+    $restartFailed = $true
+    Write-ProgressLog 'update.restart-gateway.soft-fail'
+    ($_ | Out-String) | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  Write-ProgressLog 'update.gateway-status'
+  try {
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+    return
+  } catch {
+    if (-not $restartFailed) {
+      throw
+    }
+    Write-ProgressLog 'update.gateway-start-recover'
+    Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
+    Write-ProgressLog 'update.gateway-status-recover'
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
   }
 }
 
@@ -363,10 +392,11 @@ try {
   Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
+  # Current login-item restarts can report failure before the background service
+  # is fully observable again, so verify readiness separately and fall back to
+  # an explicit start only if the RPC endpoint never returns.
   Write-ProgressLog 'update.restart-gateway'
-  Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
-  Write-ProgressLog 'update.gateway-status'
-  Wait-GatewayRpcReady -OpenClawPath $openclaw
+  Restart-GatewayWithRecovery -OpenClawPath $openclaw
   Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE

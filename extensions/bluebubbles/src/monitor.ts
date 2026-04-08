@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
   asRecord,
@@ -321,6 +321,10 @@ export async function monitorBlueBubblesProvider(
   const { account, config, runtime, abortSignal, statusSink } = options;
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
+  const allowPrivateNetwork = resolveBlueBubblesEffectiveAllowPrivateNetwork({
+    baseUrl: account.baseUrl,
+    config: account.config,
+  });
 
   // Fetch and cache server info (for macOS version detection in action gating)
   const serverInfo = await fetchBlueBubblesServerInfo({
@@ -328,7 +332,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork,
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);

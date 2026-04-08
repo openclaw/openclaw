@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
@@ -110,7 +110,7 @@ function resolveCodexForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
 
   let templateIds: readonly string[];
   let patch: Partial<ProviderRuntimeModel> | undefined;

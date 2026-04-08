@@ -316,9 +316,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-    );
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -336,9 +334,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-    );
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -357,9 +353,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-    );
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -390,27 +384,17 @@ describe("runBrowserProxyCommand", () => {
     );
   });
 
-  it("preserves legacy proxy behavior when allowProfiles is empty", async () => {
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 200,
-      body: { ok: true },
-    });
-
-    await runBrowserProxyCommand(
-      JSON.stringify({
-        method: "POST",
-        path: "/profiles/create",
-        body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
-        timeoutMs: 50,
-      }),
-    );
-
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        path: "/profiles/create",
-        body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
-      }),
-    );
+  it("rejects persistent profile creation when allowProfiles is empty", async () => {
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 });

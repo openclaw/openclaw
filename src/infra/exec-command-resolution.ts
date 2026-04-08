@@ -290,9 +290,7 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
     // that an argPattern built from one style still matches the other.
     // Use the caller-supplied target platform so Linux gateways evaluating
     // Windows node commands also perform the normalization.
-    const effectivePlatform = String(platform ?? process.platform)
-      .trim()
-      .toLowerCase();
+    const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
     if (effectivePlatform.startsWith("win")) {
       const normalized = argsString.replace(/\//g, "\\");
       if (normalized !== argsString && regex.test(normalized)) {

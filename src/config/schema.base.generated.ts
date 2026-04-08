@@ -4240,6 +4240,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
                   },
+                  provider: {
+                    type: "string",
+                    title: "Compaction Provider",
+                    description:
+                      "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
+                  },
                   reserveTokens: {
                     type: "integer",
                     minimum: 0,
@@ -25092,6 +25098,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.mode": {
       label: "Compaction Mode",
       help: 'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.provider": {
+      label: "Compaction Provider",
+      help: "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.reserveTokens": {

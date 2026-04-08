@@ -72,7 +72,7 @@ function resolveActionTarget(
 }
 
 function resolveActionMessageId(params: Record<string, unknown>): string {
-  return typeof params.messageId === "string" ? params.messageId.trim() : "";
+  return normalizeOptionalString(params.messageId) ?? "";
 }
 
 function resolveActionPinnedMessageId(params: Record<string, unknown>): string {
@@ -84,7 +84,7 @@ function resolveActionPinnedMessageId(params: Record<string, unknown>): string {
 }
 
 function resolveActionQuery(params: Record<string, unknown>): string {
-  return typeof params.query === "string" ? params.query.trim() : "";
+  return normalizeOptionalString(params.query) ?? "";
 }
 
 function resolveActionContent(params: Record<string, unknown>): string {
@@ -413,7 +413,7 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
         run: async (target) => {
-          const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
+          const emoji = normalizeOptionalString(ctx.params.emoji) ?? "";
           const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
           if (!emoji) {
             return {
@@ -487,7 +487,7 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
             return actionError("Search requires a target (to) and query.");
           }
           const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : undefined;
-          const from = typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
+          const from = normalizeOptionalString(ctx.params.from);
           const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();
           const result = await searchMessagesMSTeams({
             cfg: ctx.cfg,
@@ -502,7 +502,7 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
     }
 
     if (ctx.action === "member-info") {
-      const userId = typeof ctx.params.userId === "string" ? ctx.params.userId.trim() : "";
+      const userId = normalizeOptionalString(ctx.params.userId) ?? "";
       if (!userId) {
         return actionError("member-info requires a userId.");
       }
@@ -512,7 +512,7 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
     }
 
     if (ctx.action === "channel-list") {
-      const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+      const teamId = normalizeOptionalString(ctx.params.teamId) ?? "";
       if (!teamId) {
         return actionError("channel-list requires a teamId.");
       }
@@ -522,8 +522,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
     }
 
     if (ctx.action === "channel-info") {
-      const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
-      const channelId = typeof ctx.params.channelId === "string" ? ctx.params.channelId.trim() : "";
+      const teamId = normalizeOptionalString(ctx.params.teamId) ?? "";
+      const channelId = normalizeOptionalString(ctx.params.channelId) ?? "";
       if (!teamId || !channelId) {
         return actionError("channel-info requires teamId and channelId.");
       }

@@ -122,6 +122,40 @@ describe("runQaDockerUp", () => {
     }
   });
 
+  it("uses a repo-root-relative default output dir when none is provided", async () => {
+    const calls: string[] = [];
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-root-"));
+
+    try {
+      const result = await runQaDockerUp(
+        {
+          repoRoot,
+          usePrebuiltImage: true,
+          skipUiBuild: true,
+        },
+        {
+          async runCommand(command, args, cwd) {
+            calls.push([command, ...args, `@${cwd}`].join(" "));
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async () => ({ ok: true })),
+          sleepImpl: vi.fn(async () => {}),
+        },
+      );
+
+      expect(result.outputDir).toBe(path.join(repoRoot, ".artifacts/qa-docker"));
+      expect(result.composeFile).toBe(
+        path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml"),
+      );
+      expect(calls).toEqual([
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} down --remove-orphans @${repoRoot}`,
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} up -d @${repoRoot}`,
+      ]);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to free host ports when defaults are already occupied", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
     const gatewayPort = 18789;

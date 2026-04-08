@@ -8,7 +8,10 @@ import {
   type PortUsage,
 } from "../../infra/ports.js";
 import { killProcessTree } from "../../process/kill-tree.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { sleep } from "../../utils.js";
 
 export const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
@@ -56,7 +59,7 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (code !== 1008) {
     return false;
   }
-  const normalized = (reason ?? "").toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(reason);
   return (
     normalized.includes("auth") ||
     normalized.includes("token") ||

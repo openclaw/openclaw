@@ -36,7 +36,7 @@ export function resetLoadConfigMock() {
 
 function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
   if (!store) {
-    const agentId = (opts?.agentId?.trim() || "main").toLowerCase();
+    const agentId = normalizeLowercaseStringOrEmpty(opts?.agentId?.trim() || "main");
     return path.join(
       process.env.HOME ?? "/tmp",
       ".openclaw",
@@ -107,6 +107,7 @@ function resolveChannelContextVisibilityModeMock(params: {
 function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Provider?: string }) {
   const from = ctx.From?.trim() ?? "";
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
+  const normalizedFrom = normalizeLowercaseStringOrEmpty(from);
   if (!from) {
     return null;
   }
@@ -119,9 +120,9 @@ function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Pro
     return null;
   }
   return {
-    key: `whatsapp:group:${from.toLowerCase()}`,
+    key: `whatsapp:group:${normalizedFrom}`,
     channel: normalizeLowercaseStringOrEmpty(ctx.Provider) || "whatsapp",
-    id: from.toLowerCase(),
+    id: normalizedFrom,
     chatType: chatType === "channel" ? "channel" : "group",
   };
 }
