@@ -45,12 +45,18 @@ function withEnvVar(key: string, value: string | undefined, run: () => void) {
   }
 }
 
+function asConfig(config: Partial<FeishuConfig>): FeishuConfig {
+  return config as unknown as FeishuConfig;
+}
+
 function expectUnresolvedEnvSecretRefError(key: string) {
   expect(() =>
-    resolveFeishuCredentials({
-      appId: "cli_123",
-      appSecret: { source: "env", provider: "default", id: key } as never,
-    } satisfies FeishuConfig),
+    resolveFeishuCredentials(
+      asConfig({
+        appId: "cli_123",
+        appSecret: { source: "env", provider: "default", id: key } as never,
+      }),
+    ),
   ).toThrow(/unresolved SecretRef/i);
 }
 
