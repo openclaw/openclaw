@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export DBUS_SESSION_BUS_ADDRESS=/dev/null
+
 dedupe_chrome_args() {
   local -A seen_args=()
   local -a unique_args=()
@@ -45,15 +47,9 @@ else
   CHROME_ARGS=()
 fi
 
-if [[ "${CDP_PORT}" -ge 65535 ]]; then
-  CHROME_CDP_PORT="$((CDP_PORT - 1))"
-else
-  CHROME_CDP_PORT="$((CDP_PORT + 1))"
-fi
-
 CHROME_ARGS+=(
-  "--remote-debugging-address=127.0.0.1"
-  "--remote-debugging-port=${CHROME_CDP_PORT}"
+  "--remote-debugging-address=0.0.0.0"
+  "--remote-debugging-port=${CDP_PORT}"
   "--user-data-dir=${HOME}/.chrome"
   "--no-first-run"
   "--no-default-browser-check"
@@ -62,8 +58,9 @@ CHROME_ARGS+=(
   "--disable-features=TranslateUI"
   "--disable-breakpad"
   "--disable-crash-reporter"
-  "--no-zygote"
   "--metrics-recording-only"
+  "--password-store=basic"
+  "--use-mock-keychain"
 )
 
 DISABLE_GRAPHICS_FLAGS_LOWER="${DISABLE_GRAPHICS_FLAGS,,}"
@@ -71,7 +68,6 @@ if [[ "${DISABLE_GRAPHICS_FLAGS_LOWER}" == "1" || "${DISABLE_GRAPHICS_FLAGS_LOWE
   CHROME_ARGS+=(
     "--disable-3d-apis"
     "--disable-gpu"
-    "--disable-software-rasterizer"
   )
 fi
 
@@ -96,18 +92,19 @@ fi
 dedupe_chrome_args
 chromium "${CHROME_ARGS[@]}" about:blank &
 
+READY=0
 for _ in $(seq 1 50); do
-  if curl -sS --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" >/dev/null; then
+  if curl -sS --max-time 1 "http://127.0.0.1:${CDP_PORT}/json/version" >/dev/null; then
+    READY=1
     break
   fi
   sleep 0.1
 done
 
-SOCAT_LISTEN_ADDR="TCP-LISTEN:${CDP_PORT},fork,reuseaddr,bind=0.0.0.0"
-if [[ -n "${CDP_SOURCE_RANGE}" ]]; then
-  SOCAT_LISTEN_ADDR="${SOCAT_LISTEN_ADDR},range=${CDP_SOURCE_RANGE}"
+if [[ "$READY" != "1" ]]; then
+  echo "ERROR: Chromium CDP not ready within timeout. Killing container."
+  exit 1
 fi
-socat "${SOCAT_LISTEN_ADDR}" "TCP:127.0.0.1:${CHROME_CDP_PORT}" &
 
 if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then
   # VNC auth passwords are max 8 chars; use a random default when not provided.
