@@ -2329,6 +2329,35 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].estimatedCostUsd).toBe(0);
   });
+
+  it("does not overwrite persisted model fields for heartbeat turns", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_000, output: 200 },
+      modelUsed: "openai-codex/gpt-5.1-codex-mini",
+      providerUsed: "openai-codex",
+      contextTokensUsed: 200_000,
+      isHeartbeat: true,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+  });
 });
 
 describe("initSessionState stale threadId fallback", () => {

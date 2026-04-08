@@ -585,6 +585,7 @@ export async function runReplyAgent(params: {
       cliSessionId,
       cliSessionBinding,
       usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
+      isHeartbeat,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

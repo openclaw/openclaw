@@ -301,6 +301,7 @@ export function createFollowupRunner(params: {
             queued.run.config,
           ),
           logLabel: "followup",
+          isHeartbeat: opts?.isHeartbeat === true,
         });
       }
 

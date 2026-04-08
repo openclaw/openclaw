@@ -89,6 +89,7 @@ export async function persistSessionUsageUpdate(params: {
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   logLabel?: string;
+  isHeartbeat?: boolean;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
   if (!storePath || !sessionKey) {
@@ -134,8 +135,11 @@ export async function persistSessionUsageUpdate(params: {
           });
           const existingEstimatedCostUsd = resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0;
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider:
+              params.isHeartbeat === true
+                ? entry.modelProvider
+                : (params.providerUsed ?? entry.modelProvider),
+            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
@@ -174,8 +178,11 @@ export async function persistSessionUsageUpdate(params: {
         sessionKey,
         update: async (entry) => {
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider:
+              params.isHeartbeat === true
+                ? entry.modelProvider
+                : (params.providerUsed ?? entry.modelProvider),
+            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
