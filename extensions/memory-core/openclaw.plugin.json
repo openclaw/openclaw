@@ -21,6 +21,22 @@
           },
           "frequency": {
             "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "minScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minRecallCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minUniqueQueries": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       }

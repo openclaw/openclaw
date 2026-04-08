@@ -399,13 +399,16 @@ export function resolveMemoryDreamingConfig(params: {
         enabled: normalizeBoolean(deep?.enabled, true),
         cron: frequency,
         limit: normalizeNonNegativeInt(deep?.limit, DEFAULT_MEMORY_DEEP_DREAMING_LIMIT),
-        minScore: normalizeScore(deep?.minScore, DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE),
+        minScore: normalizeScore(
+          deep?.minScore ?? dreaming?.minScore,
+          DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
+        ),
         minRecallCount: normalizeNonNegativeInt(
-          deep?.minRecallCount,
+          deep?.minRecallCount ?? dreaming?.minRecallCount,
           DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
         ),
         minUniqueQueries: normalizeNonNegativeInt(
-          deep?.minUniqueQueries,
+          deep?.minUniqueQueries ?? dreaming?.minUniqueQueries,
           DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
         ),
         recencyHalfLifeDays: normalizeNonNegativeInt(
