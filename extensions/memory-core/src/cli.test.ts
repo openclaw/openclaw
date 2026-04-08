@@ -9,7 +9,7 @@ import {
   spyRuntimeJson,
   spyRuntimeLogs,
 } from "../../../src/cli/test-runtime-capture.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -1070,6 +1070,71 @@ describe("memory cli", () => {
       expect(dreams).toContain("What Happened");
       expect(dreams).toContain("Possible Lasting Updates");
       expect(dreams).toContain("Happy Together");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("stages grounded durable candidates into the live short-term store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toContain("Happy Together");
+      expect(entries[0]?.groundedCount).toBe(3);
+      expect(entries[0]?.queryHashes).toHaveLength(2);
+      expect(entries[0]?.recallCount).toBe(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("rolls back grounded staged short-term entries without touching diary rollback", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      await runMemoryCli(["rem-backfill", "--rollback-short-term"]);
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      expect(entries).toHaveLength(0);
       expect(close).toHaveBeenCalled();
     });
   });

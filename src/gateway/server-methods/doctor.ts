@@ -64,6 +64,7 @@ type DoctorMemoryDreamingEntryPayload = {
   snippet: string;
   recallCount: number;
   dailyCount: number;
+  groundedCount: number;
   totalSignalCount: number;
   lightHits: number;
   remHits: number;
@@ -81,6 +82,7 @@ type DoctorMemoryDreamingPayload = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
   phaseSignalCount: number;
   lightPhaseHitCount: number;
@@ -166,6 +168,7 @@ function resolveDreamingConfig(
   | "shortTermCount"
   | "recallSignalCount"
   | "dailySignalCount"
+  | "groundedSignalCount"
   | "totalSignalCount"
   | "phaseSignalCount"
   | "lightPhaseHitCount"
@@ -258,6 +261,7 @@ type DreamingStoreStats = Pick<
   | "shortTermCount"
   | "recallSignalCount"
   | "dailySignalCount"
+  | "groundedSignalCount"
   | "totalSignalCount"
   | "phaseSignalCount"
   | "lightPhaseHitCount"
@@ -370,6 +374,7 @@ async function loadDreamingStoreStats(
     let shortTermCount = 0;
     let recallSignalCount = 0;
     let dailySignalCount = 0;
+    let groundedSignalCount = 0;
     let totalSignalCount = 0;
     let phaseSignalCount = 0;
     let lightPhaseHitCount = 0;
@@ -396,7 +401,8 @@ async function loadDreamingStoreStats(
       const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
       const recallCount = toNonNegativeInt(entry.recallCount);
       const dailyCount = toNonNegativeInt(entry.dailyCount);
-      const totalEntrySignalCount = recallCount + dailyCount;
+      const groundedCount = toNonNegativeInt(entry.groundedCount);
+      const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
       const snippet =
         normalizeTrimmedString(entry.snippet) ??
         normalizeTrimmedString(entry.summary) ??
@@ -410,6 +416,7 @@ async function loadDreamingStoreStats(
         snippet,
         recallCount,
         dailyCount,
+        groundedCount,
         totalSignalCount: totalEntrySignalCount,
         lightHits: 0,
         remHits: 0,
@@ -422,6 +429,7 @@ async function loadDreamingStoreStats(
         activeKeys.add(entryKey);
         recallSignalCount += recallCount;
         dailySignalCount += dailyCount;
+        groundedSignalCount += groundedCount;
         totalSignalCount += totalEntrySignalCount;
         shortTermEntries.push(detail);
         activeEntries.set(entryKey, detail);
@@ -476,6 +484,7 @@ async function loadDreamingStoreStats(
       shortTermCount,
       recallSignalCount,
       dailySignalCount,
+      groundedSignalCount,
       totalSignalCount,
       phaseSignalCount,
       lightPhaseHitCount,

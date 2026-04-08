@@ -40,6 +40,7 @@ export type DreamingEntry = {
   snippet: string;
   recallCount: number;
   dailyCount: number;
+  groundedCount: number;
   totalSignalCount: number;
   lightHits: number;
   remHits: number;
@@ -57,6 +58,7 @@ export type DreamingStatus = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
   phaseSignalCount: number;
   lightPhaseHitCount: number;
@@ -211,6 +213,7 @@ function normalizeDreamingEntry(raw: unknown): DreamingEntry | null {
     snippet,
     recallCount: normalizeFiniteInt(record?.recallCount, 0),
     dailyCount: normalizeFiniteInt(record?.dailyCount, 0),
+    groundedCount: normalizeFiniteInt(record?.groundedCount, 0),
     totalSignalCount: normalizeFiniteInt(record?.totalSignalCount, 0),
     lightHits: normalizeFiniteInt(record?.lightHits, 0),
     remHits: normalizeFiniteInt(record?.remHits, 0),
@@ -252,6 +255,7 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     shortTermCount: normalizeFiniteInt(record.shortTermCount, 0),
     recallSignalCount: normalizeFiniteInt(record.recallSignalCount, 0),
     dailySignalCount: normalizeFiniteInt(record.dailySignalCount, 0),
+    groundedSignalCount: normalizeFiniteInt(record.groundedSignalCount, 0),
     totalSignalCount: normalizeFiniteInt(record.totalSignalCount, 0),
     phaseSignalCount: normalizeFiniteInt(record.phaseSignalCount, 0),
     lightPhaseHitCount: normalizeFiniteInt(record.lightPhaseHitCount, 0),
