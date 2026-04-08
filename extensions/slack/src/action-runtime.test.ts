@@ -244,12 +244,26 @@ describe("handleSlackAction", () => {
 
   it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
-    await handleSlackAction(
-      { action: "downloadFile", fileId: "F123" },
-      slackConfig(),
-    );
+    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
     const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
     expect(opts?.token).toBe("tok");
+  });
+
+  it("keeps resolved userToken for downloadFile reads when configured", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123" },
+      slackConfig({
+        accounts: {
+          default: {
+            botToken: "xoxb-bot",
+            userToken: "xoxp-user",
+          },
+        },
+      }),
+    );
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("xoxp-user");
   });
 
   it.each([
