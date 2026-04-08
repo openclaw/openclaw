@@ -156,6 +156,25 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       expect(bodyStr).not.toContain("\r\nInjected:");
     });
 
+    it("falls back to application/octet-stream when mime is empty after sanitization", async () => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+
+      await transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "clip.ogg",
+        mime: "\r\n",
+        apiKey: "k",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+      });
+
+      const bodyStr = decodeBody(getRequest().init?.body);
+      expect(bodyStr).toContain("Content-Type: application/octet-stream");
+    });
+
     it("omits language and prompt fields when not provided", async () => {
       const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
 

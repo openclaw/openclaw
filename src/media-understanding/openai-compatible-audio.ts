@@ -50,7 +50,9 @@ export async function transcribeOpenAiCompatibleAudio(
   // requests go through the SSRF-guarded undici path, not globalThis.fetch.
   // Constructing the body as a Buffer with an explicit Content-Type sidesteps the
   // incompatibility entirely and works with any fetch implementation.
-  const mime = (params.mime ?? "application/octet-stream").replace(/[\r\n]/g, "");
+  const mime =
+    (params.mime ?? "application/octet-stream").replace(/[\r\n]/g, "") ||
+    "application/octet-stream";
   const boundary = `----FormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
   const enc = new TextEncoder();
   const safeFileName = fileName.replace(/[\r\n"]/g, (c) => (c === '"' ? '\\"' : ""));
