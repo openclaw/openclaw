@@ -56,19 +56,27 @@ export function createProfileSelectionOps({
     // "tab not found" for reachable targets.
     if (candidates.length === 0 && tabs.length > 0 && capabilities.supportsPerTabWs) {
       const deadline = Date.now() + WSURL_DISCOVERY_WINDOW_MS;
+      let fallbackTabs = tabs;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS));
-        const refreshed = await listTabs();
-        const withWs = refreshed.filter((t) => Boolean(t.wsUrl));
-        if (withWs.length > 0) {
-          candidates = withWs;
-          break;
+        try {
+          const refreshed = await listTabs();
+          if (refreshed.length > 0) {
+            fallbackTabs = refreshed;
+          }
+          const withWs = refreshed.filter((t) => Boolean(t.wsUrl));
+          if (withWs.length > 0) {
+            candidates = withWs;
+            break;
+          }
+        } catch {
+          // listTabs can fail transiently while CDP catches up; keep polling.
         }
       }
       // Still empty after polling — use tabs without wsUrl rather than throwing.
       // The persistent Playwright connection can still reach them by targetId.
       if (candidates.length === 0) {
-        candidates = tabs;
+        candidates = fallbackTabs;
       }
     }
 

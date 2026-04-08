@@ -342,10 +342,10 @@ describe("browser server-context tab selection state", () => {
     expect(listCallCount).toBeGreaterThan(3);
   });
 
-  it("ensureTabAvailable falls back to tab without wsUrl after polling exhausts", async () => {
+  it("ensureTabAvailable falls back to latest tab snapshot without wsUrl after polling exhausts", async () => {
     vi.spyOn(chromeModule, "isChromeReachable").mockResolvedValue(true);
     vi.spyOn(chromeModule, "isChromeCdpReady").mockResolvedValue(true);
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NOWSURL" });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "INITIAL" });
 
     let listCallCount = 0;
     const fetchMock = vi.fn(async (url: unknown) => {
@@ -364,23 +364,23 @@ describe("browser server-context tab selection state", () => {
           ok: true,
           json: async () => [
             {
-              id: "NOWSURL",
+              id: "INITIAL",
               title: "Tab",
               url: "about:blank",
-              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NOWSURL",
+              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/INITIAL",
               type: "page",
             },
           ],
         } as unknown as Response;
       }
-      // ALL subsequent calls: tab exists but NO wsUrl (simulates persistent wsUrl absence)
+      // ALL subsequent calls: latest tab snapshot changed, still NO wsUrl.
       return {
         ok: true,
         json: async () => [
           {
-            id: "NOWSURL",
-            title: "Tab",
-            url: "about:blank",
+            id: "LATEST",
+            title: "Latest Tab",
+            url: "https://example.com",
             // NO webSocketDebuggerUrl
             type: "page",
           },
@@ -394,13 +394,86 @@ describe("browser server-context tab selection state", () => {
     const openclaw = ctx.forProfile("openclaw");
 
     const tab = await openclaw.ensureTabAvailable();
-    // Should succeed by falling back to the tab without wsUrl
-    expect(tab.targetId).toBe("NOWSURL");
+    // Should succeed by falling back to the latest tab snapshot without wsUrl.
+    expect(tab.targetId).toBe("LATEST");
     // Confirm fallback used unfiltered tab (no wsUrl)
     expect(tab.wsUrl).toBeUndefined();
     // Many polling calls should have happened before deadline exhausted
     expect(listCallCount).toBeGreaterThanOrEqual(5);
   }, 10000);
+
+  it("ensureTabAvailable keeps polling when listTabs transiently fails for tabs without wsUrl", async () => {
+    vi.spyOn(chromeModule, "isChromeReachable").mockResolvedValue(true);
+    vi.spyOn(chromeModule, "isChromeCdpReady").mockResolvedValue(true);
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "SHOULD_NOT_OPEN" });
+
+    let listCallCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      listCallCount++;
+      // Call 1: tabs already exist but wsUrl missing (non-cold-start path).
+      if (listCallCount === 1) {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "ALREADY",
+              title: "Existing",
+              url: "https://example.com",
+              type: "page",
+            },
+          ],
+        } as unknown as Response;
+      }
+      // Call 2: transient list failure while polling.
+      if (listCallCount === 2) {
+        throw new Error("transient /json/list failure");
+      }
+      // Call 3: still no wsUrl.
+      if (listCallCount === 3) {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "ALREADY",
+              title: "Existing",
+              url: "https://example.com",
+              type: "page",
+            },
+          ],
+        } as unknown as Response;
+      }
+      // Call 4+: wsUrl finally appears.
+      return {
+        ok: true,
+        json: async () => [
+          {
+            id: "ALREADY",
+            title: "Existing",
+            url: "https://example.com",
+            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/ALREADY",
+            type: "page",
+          },
+        ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const tab = await openclaw.ensureTabAvailable();
+    expect(tab.targetId).toBe("ALREADY");
+    expect(tab.wsUrl).toBeDefined();
+    expect(createTargetViaCdp).not.toHaveBeenCalled();
+    expect(listCallCount).toBeGreaterThanOrEqual(4);
+  });
 
   it("ensureTabAvailable uses openTab result directly when listTabs stays empty", async () => {
     vi.spyOn(chromeModule, "isChromeReachable").mockResolvedValue(true);
