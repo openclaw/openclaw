@@ -95,6 +95,21 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
+  it("does not rewrite session state for skipped turns with no active-memory entry to clear", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "support",
+        trigger: "user",
+        sessionKey: "agent:support:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+  });
+
   it("does not run for non-interactive contexts", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order?", messages: [] },
@@ -250,8 +265,10 @@ describe("active-memory plugin", () => {
     );
 
     expect(hoisted.updateSessionStore).toHaveBeenCalledTimes(2);
-    const infoLines = vi.mocked(api.logger.info).mock.calls.map((call) => String(call[0]));
-    expect(infoLines.some((line) => line.includes(" cached "))).toBe(false);
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes(" cached "))).toBe(false);
   });
 
   it("clears stale status on skipped non-interactive turns even when agentId is missing", async () => {
@@ -424,7 +441,7 @@ describe("active-memory plugin", () => {
     expect(
       vi
         .mocked(api.logger.info)
-        .mock.calls.some((call) =>
+        .mock.calls.some((call: unknown[]) =>
           String(call[0]).includes("transcript=/tmp/active-memory-sidecars/"),
         ),
     ).toBe(true);

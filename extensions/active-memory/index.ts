@@ -287,10 +287,19 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
 }
 
 function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
+  sweepExpiredCacheEntries();
   activeRecallCache.set(cacheKey, {
     expiresAt: Date.now() + ttlMs,
     result,
   });
+}
+
+function sweepExpiredCacheEntries(now = Date.now()): void {
+  for (const [cacheKey, cached] of activeRecallCache.entries()) {
+    if (cached.expiresAt <= now) {
+      activeRecallCache.delete(cacheKey);
+    }
+  }
 }
 
 function shouldCacheResult(result: ActiveRecallResult): boolean {
@@ -356,6 +365,7 @@ async function persistPluginStatusLines(params: {
   if (!sessionKey || !params.agentId.trim()) {
     return;
   }
+  const debugLine = buildPluginDebugLine(params.debugMemories ?? []);
   try {
     const storePath = params.api.runtime.agent.session.resolveStorePath(
       params.api.config.session?.store,
@@ -363,6 +373,16 @@ async function persistPluginStatusLines(params: {
         agentId: params.agentId,
       },
     );
+    if (!params.statusLine && !debugLine) {
+      const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+      const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
+        ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
+        : false;
+      if (!hasActiveMemoryEntry) {
+        return;
+      }
+    }
     await updateSessionStore(storePath, (store) => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey });
       const existing = resolved.existing;
@@ -383,7 +403,6 @@ async function persistPluginStatusLines(params: {
       if (params.statusLine) {
         nextLines.push(params.statusLine);
       }
-      const debugLine = buildPluginDebugLine(params.debugMemories ?? []);
       if (debugLine) {
         nextLines.push(debugLine);
       }
@@ -675,21 +694,23 @@ function getModelRef(
 ) {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
+  const agentPrimaryModel = resolveAgentEffectiveModelPrimary(api.config, agentId);
   const configured =
     config.model ||
     currentRunModel ||
-    resolveAgentEffectiveModelPrimary(api.config, agentId) ||
+    agentPrimaryModel ||
     DEFAULT_MODEL_REF;
   const parsed = parseModelRef(configured, DEFAULT_PROVIDER);
   if (parsed) {
     return parsed;
   }
-  return (
-    parseModelRef(resolveAgentEffectiveModelPrimary(api.config, agentId), DEFAULT_PROVIDER) ?? {
-      provider: DEFAULT_PROVIDER,
-      model: configured,
-    }
-  );
+  const parsedAgentPrimary = agentPrimaryModel
+    ? parseModelRef(agentPrimaryModel, DEFAULT_PROVIDER)
+    : undefined;
+  return parsedAgentPrimary ?? {
+    provider: DEFAULT_PROVIDER,
+    model: configured,
+  };
 }
 
 async function runRecallSidecar(params: {
