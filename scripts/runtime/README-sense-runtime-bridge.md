@@ -895,6 +895,8 @@ For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides
 
 `digest_bucket_ui_layouts.meta` also mirrors `digest_bucket_badge_short` as `badge_short`, so UI code can read palette, leader, rank, order, percent, share, dominance band, and compact badge label from one nested metadata object without losing the original top-level fields.
 
+`digest_bucket_ui_layouts.meta` also exposes `leader_label` (`Leader` or `Follower`) so UI code can render the human-readable leader state from the same nested metadata object without re-deriving it from the boolean flag.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`
