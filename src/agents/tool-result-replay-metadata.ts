@@ -148,9 +148,12 @@ export function detectToolResultReplayPolicyMeta(params: {
     if (action !== "config.get") {
       return null;
     }
+    const path = trimString(record?.path);
+    const diagnosticType =
+      path === "plugins.entries" ? "openclaw.plugins_list" : "openclaw.config_snapshot";
     return {
       transient: true,
-      diagnosticType: "openclaw.config_snapshot",
+      diagnosticType,
       taggedAt,
       sourceTool: toolName,
     };
