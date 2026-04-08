@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -910,5 +910,43 @@ describe("device pairing tokens", () => {
     await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(true);
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
     await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
+  });
+
+  test("recovers from array-typed state files in pending.json and paired.json", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const { pendingPath, pairedPath, dir } = resolvePairingPaths(baseDir, "devices");
+    await mkdir(dir, { recursive: true });
+    await writeFile(pendingPath, "[]");
+    await writeFile(pairedPath, "[]");
+
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-array-recovery",
+        publicKey: "public-key-array-recovery",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    expect(request.created).toBe(true);
+
+    const result = await approveDevicePairing(
+      request.request.requestId,
+      { callerScopes: [] },
+      baseDir,
+    );
+    expect(result).toMatchObject({
+      status: "approved",
+      requestId: request.request.requestId,
+    });
+
+    const paired = await getPairedDevice("device-array-recovery", baseDir);
+    expect(paired).toBeDefined();
+    expect(paired?.deviceId).toBe("device-array-recovery");
+
+    const rawPending = JSON.parse(await readFile(pendingPath, "utf8"));
+    const rawPaired = JSON.parse(await readFile(pairedPath, "utf8"));
+    expect(Array.isArray(rawPending)).toBe(false);
+    expect(Array.isArray(rawPaired)).toBe(false);
   });
 });
