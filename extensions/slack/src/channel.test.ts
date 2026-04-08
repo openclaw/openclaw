@@ -92,6 +92,21 @@ function requireSlackListPeers() {
 }
 
 describe("slackPlugin actions", () => {
+  it("treats ACP block text as visible delivered output", () => {
+    expect(
+      slackPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "block",
+        text: "hello",
+      }),
+    ).toBe(true);
+    expect(
+      slackPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "tool",
+        text: "hello",
+      }),
+    ).toBe(false);
+  });
+
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
   });
