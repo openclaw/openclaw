@@ -193,4 +193,15 @@ describe("createAcpVisibleTextAccumulator", () => {
       delta: " is saying",
     });
   });
+
+  it("preserves punctuation-start text that begins with NO_REPLY-like content", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO_REPLY: explanation")).toEqual({
+      text: "NO_REPLY: explanation",
+      delta: "NO_REPLY: explanation",
+    });
+
+    expect(acc.finalize()).toBe("NO_REPLY: explanation");
+  });
 });

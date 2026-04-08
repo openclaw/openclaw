@@ -139,6 +139,16 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("NO_REPLY -- nope");
   });
 
+  it("keeps punctuation-start content after a leading NO_REPLY token", () => {
+    const colonResult = normalizeReplyPayload({ text: "NO_REPLY: explanation" });
+    expect(colonResult).not.toBeNull();
+    expect(colonResult!.text).toBe("NO_REPLY: explanation");
+
+    const dashResult = normalizeReplyPayload({ text: "NO_REPLY—note" });
+    expect(dashResult).not.toBeNull();
+    expect(dashResult!.text).toBe("NO_REPLY—note");
+  });
+
   it("suppresses message when stripping NO_REPLY leaves nothing", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -975,6 +985,22 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(afterReset?.replyToCurrent).toBe(false);
     expect(afterReset?.replyToTag).toBe(false);
     expect(afterReset?.replyToId).toBeUndefined();
+  });
+
+  it("strips a glued leading NO_REPLY token from streamed text", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("NO_REPLYThe user is saying hello");
+
+    expect(result?.text).toBe("The user is saying hello");
+  });
+
+  it("keeps punctuation-start text after a leading NO_REPLY token", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("NO_REPLY: explanation");
+
+    expect(result?.text).toBe("NO_REPLY: explanation");
   });
 });
 

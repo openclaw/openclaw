@@ -58,6 +58,8 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -680,6 +682,9 @@ export async function runAgentTurnWithFallback(params: {
           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
         ) {
           return { skip: true };
+        }
+        if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
+          text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.

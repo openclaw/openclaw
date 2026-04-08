@@ -99,6 +99,8 @@ describe("startsWithSilentToken", () => {
 
   it("rejects separated substantive prefixes and exact-token-only text", () => {
     expect(startsWithSilentToken("NO_REPLY -- nope")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY: explanation")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY—note")).toBe(false);
     expect(startsWithSilentToken("NO_REPLY")).toBe(false);
     expect(startsWithSilentToken("  NO_REPLY  ")).toBe(false);
   });
