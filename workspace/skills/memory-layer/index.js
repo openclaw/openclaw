@@ -4,18 +4,46 @@ import * as os from 'os';
 import * as fs from 'fs';
 
 /**
- * SimpleMemory - 纯JSON版本的记忆系统
- * 无需编译，无需native依赖
+ * MemoryPalace - 基于记忆宫殿的持久化记忆系统
+ * 借鉴MemPalace设计：宫殿结构 + AAAK编码 + 向量搜索
  */
 export class SimpleMemory {
   constructor() {
-    this.dataPath = path.join(os.homedir(), '.openclaw', 'memory.json');
+    // 记忆宫殿路径
+    this.palacePath = path.join(os.homedir(), '.openclaw', 'memory-palace');
+    this.legacyPath = path.join(os.homedir(), '.openclaw', 'memory.json');
+
+    // 向量DB
     this.chroma = new ChromaClient({
       path: path.join(os.homedir(), '.openclaw', 'chroma')
     });
     this.collection = null;
     this.isInitialized = false;
-    this.data = {
+
+    // 宫殿结构
+    this.structure = {
+      wings: {
+        user: path.join(this.palacePath, 'wings', 'user'),
+        projects: path.join(this.palacePath, 'wings', 'projects'),
+        topics: path.join(this.palacePath, 'wings', 'topics')
+      },
+      tunnels: path.join(this.palacePath, 'tunnels'),
+      halls: {
+        decisions: 'decisions',
+        milestones: 'milestones',
+        preferences: 'preferences',
+        advice: 'advice',
+        discoveries: 'discoveries',
+        facts: 'facts',
+        context: 'context'
+      }
+    };
+
+    // AAAK编码器
+    this.aaak = new AAAKEncoder();
+
+    // 兼容旧数据
+    this.legacyData = {
       memories: [],
       profile: {},
       reflections: []
@@ -29,23 +57,174 @@ export class SimpleMemory {
    */
   async init() {
     try {
-      console.log('⏳ 正在初始化记忆系统...');
+      console.log('⏳ 正在初始化记忆宫殿...');
 
-      // 加载现有数据
-      if (fs.existsSync(this.dataPath)) {
-        const content = fs.readFileSync(this.dataPath, 'utf-8');
-        this.data = JSON.parse(content);
-      }
+      // 迁移旧数据
+      await this.migrateLegacyData();
+
+      // 构建宫殿结构
+      await this.buildPalace();
 
       // 初始化向量DB
       await this.initChroma();
 
-      console.log('✅ 记忆系统已就绪');
-      console.log(`   已加载 ${this.data.memories.length} 条记忆`);
-      console.log(`   已加载 ${Object.keys(this.data.profile).length} 条偏好`);
+      console.log('✅ 记忆宫殿已就绪');
+      console.log(`   翼楼数: ${this.countWings()}`);
+      console.log(`   记忆数: ${this.countMemories()}`);
+      console.log(`   向量搜索: ${this.isInitialized ? '启用' : '禁用'}`);
     } catch (error) {
       console.log('⚠️  初始化失败:', error.message);
     }
+  }
+
+  /**
+   * 迁移旧数据
+   */
+  async migrateLegacyData() {
+    if (!fs.existsSync(this.legacyPath)) {
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(this.legacyPath, 'utf-8');
+      this.legacyData = JSON.parse(content);
+
+      console.log(`📦 发现旧数据: ${this.legacyData.memories.length} 条记忆`);
+
+      // 迁移记忆到宫殿
+      for (const memory of this.legacyData.memories) {
+        await this.migrateMemory(memory);
+      }
+
+      // 迁移偏好
+      for (const [key, value] of Object.entries(this.legacyData.profile)) {
+        if (!key.endsWith('_updated')) {
+          await this.storeMemory('user', 'preferences', {
+            key,
+            value,
+            migrated: true
+          });
+        }
+      }
+
+      // 迁移反思
+      for (const reflection of this.legacyData.reflections) {
+        await this.storeMemory('user', 'discoveries', {
+          discovery: reflection.content,
+          significance: reflection.significance,
+          migrated: true
+        });
+      }
+
+      // 备份旧文件
+      const backupPath = this.legacyPath + '.backup';
+      fs.renameSync(this.legacyPath, backupPath);
+      console.log(`✅ 旧数据已迁移并备份到: ${backupPath}`);
+    } catch (error) {
+      console.log('⚠️  迁移失败:', error.message);
+    }
+  }
+
+  /**
+   * 迁移单条记忆
+   */
+  async migrateMemory(memory) {
+    let hallType = 'facts';
+    let wingType = 'topics';
+
+    if (memory.type === 'preference') {
+      hallType = 'preferences';
+      wingType = 'user';
+    } else if (memory.type === 'context') {
+      hallType = 'context';
+      wingType = 'topics';
+    }
+
+    await this.storeMemory(wingType, hallType, {
+      content: memory.content,
+      importance: memory.importance,
+      migrated: true,
+      created_at: memory.created_at
+    });
+  }
+
+  /**
+   * 构建记忆宫殿
+   */
+  async buildPalace() {
+    // 创建主目录
+    if (!fs.existsSync(this.palacePath)) {
+      fs.mkdirSync(this.palacePath, { recursive: true });
+    }
+
+    // 创建翼楼
+    for (const [wingName, wingPath] of Object.entries(this.structure.wings)) {
+      if (!fs.existsSync(wingPath)) {
+        fs.mkdirSync(wingPath, { recursive: true });
+      }
+
+      // 创建走廊（记忆类型分类）
+      for (const [hallType, hallName] of Object.entries(this.structure.halls)) {
+        const hallPath = path.join(wingPath, `hall-${hallName}`);
+        if (!fs.existsSync(hallPath)) {
+          fs.mkdirSync(hallPath, { recursive: true });
+        }
+      }
+    }
+
+    // 创建隧道
+    if (!fs.existsSync(this.structure.tunnels)) {
+      fs.mkdirSync(this.structure.tunnels, { recursive: true });
+    }
+
+    // 创建宫殿入口索引
+    await this.createPalaceIndex();
+  }
+
+  /**
+   * 创建宫殿索引
+   */
+  async createPalaceIndex() {
+    const indexPath = path.join(this.palacePath, 'PALACE.md');
+
+    if (fs.existsSync(indexPath)) {
+      return; // 已存在
+    }
+
+    const content = `# Memory Palace - OpenClaw
+
+🏛️ OpenClaw记忆宫殿
+
+## 结构
+
+- **翼楼**: 按项目/人/主题分类
+- **房间**: 具体的记忆单元
+- **衣柜**: AAAK摘要索引
+- **抽屉**: 完整内容
+- **走廊**: 按记忆类型组织
+- **隧道**: 跨翼楼连接
+
+## 走廊类型
+
+- **facts**: 事实信息
+- **preferences**: 用户偏好
+- **context**: 上下文信息
+- **decisions**: 决策记录
+- **milestones**: 里程碑事件
+- **advice**: 收到的建议
+- **discoveries**: 学到的知识
+
+## 统计
+
+- 翼楼数: ${this.countWings()}
+- 记忆数: ${this.countMemories()}
+
+---
+
+最后更新: ${new Date().toISOString()}
+`;
+
+    fs.writeFileSync(indexPath, content);
   }
 
   /**
@@ -54,7 +233,7 @@ export class SimpleMemory {
   async initChroma() {
     try {
       this.collection = await this.chroma.getOrCreateCollection({
-        name: 'memories',
+        name: 'openclaw-memories',
         metadata: { hnsw: { space: 'cosine' } }
       });
       this.isInitialized = true;
@@ -72,14 +251,84 @@ export class SimpleMemory {
   }
 
   /**
-   * 保存数据
+   * 存储记忆到宫殿
    */
-  save() {
-    try {
-      fs.writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2));
-    } catch (error) {
-      console.log('⚠️  保存失败:', error.message);
+  async storeMemory(wingType, hallType, data) {
+    await this.ensureReady();
+
+    // 确定翼楼路径
+    let wingPath;
+
+    if (wingType === 'user') {
+      wingPath = this.structure.wings.user;
+    } else if (wingType === 'projects') {
+      const projectName = data.project || 'default';
+      wingPath = path.join(this.structure.wings.projects, projectName);
+
+      if (!fs.existsSync(wingPath)) {
+        fs.mkdirSync(wingPath, { recursive: true });
+
+        // 创建走廊
+        for (const hallName of Object.values(this.structure.halls)) {
+          const hallPath = path.join(wingPath, `hall-${hallName}`);
+          if (!fs.existsSync(hallPath)) {
+            fs.mkdirSync(hallPath, { recursive: true });
+          }
+        }
+      }
+    } else {
+      const topicName = data.topic || 'general';
+      wingPath = path.join(this.structure.wings.topics, topicName);
+
+      if (!fs.existsSync(wingPath)) {
+        fs.mkdirSync(wingPath, { recursive: true });
+
+        // 创建走廊
+        for (const hallName of Object.values(this.structure.halls)) {
+          const hallPath = path.join(wingPath, `hall-${hallName}`);
+          if (!fs.existsSync(hallPath)) {
+            fs.mkdirSync(hallPath, { recursive: true });
+          }
+        }
+      }
     }
+
+    // 确定走廊路径
+    const hallPath = path.join(wingPath, `hall-${hallType}`);
+
+    // 创建记忆
+    const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const now = new Date().toISOString();
+
+    const memory = {
+      id,
+      type: hallType,
+      data: data,
+      aaak: this.aaak.encode(data), // AAAK压缩
+      created_at: data.created_at || now,
+      updated_at: now,
+      access_count: 0
+    };
+
+    // 保存到文件
+    const filename = `${id}.${hallType}.json`;
+    const filePath = path.join(hallPath, filename);
+    fs.writeFileSync(filePath, JSON.stringify(memory, null, 2));
+
+    // 添加到向量DB
+    if (this.isInitialized && this.collection && data.content) {
+      try {
+        await this.collection.add({
+          ids: [id],
+          documents: [data.content],
+          metadatas: [{ type: hallType, created: now }]
+        });
+      } catch (e) {
+        // 静默失败
+      }
+    }
+
+    return memory;
   }
 
   /**
@@ -88,35 +337,27 @@ export class SimpleMemory {
   async remember(content, type = 'fact', importance = 0.5) {
     await this.ensureReady();
 
-    const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const now = new Date().toISOString();
+    // 映射类型到走廊
+    const hallMap = {
+      'fact': 'facts',
+      'preference': 'preferences',
+      'context': 'context'
+    };
 
-    // 添加到内存
-    this.data.memories.push({
-      id,
+    const hallType = hallMap[type] || 'facts';
+    const wingMap = {
+      'fact': 'topics',
+      'preference': 'user',
+      'context': 'topics'
+    };
+
+    const wingType = wingMap[type] || 'topics';
+
+    const memory = await this.storeMemory(wingType, hallType, {
       content,
-      type,
       importance,
-      created_at: now,
-      updated_at: now,
-      access_count: 0
+      type
     });
-
-    // 保存
-    this.save();
-
-    // 添加到向量DB
-    if (this.isInitialized && this.collection) {
-      try {
-        await this.collection.add({
-          ids: [id],
-          documents: [content],
-          metadatas: [{ type, importance, created: now }]
-        });
-      } catch (e) {
-        // 静默失败
-      }
-    }
 
     return `✅ 已记住: ${content.substring(0, 50)}${content.length > 50 ? '...' : ''}`;
   }
@@ -137,21 +378,16 @@ export class SimpleMemory {
 
         if (results.documents[0]?.length > 0) {
           const memories = results.documents[0].map((doc, i) => {
-            const mem = this.data.memories.find(m => m.content === doc);
             return {
               content: doc,
-              score: mem ? 1 - (results.distances[0][i] || 0) : 0.5
+              score: 1 - (results.distances[0][i] || 0)
             };
-          }).filter(m => m !== undefined);
+          });
 
           // 更新访问计数
-          memories.forEach(m => {
-            const mem = this.data.memories.find(item => item.content === m.content);
-            if (mem) {
-              mem.access_count++;
-            }
-          });
-          this.save();
+          for (const mem of memories) {
+            await this.updateAccessCount(mem.content);
+          }
 
           return memories.slice(0, limit);
         }
@@ -160,19 +396,127 @@ export class SimpleMemory {
       }
     }
 
-    // 文本搜索
-    const queryLower = query.toLowerCase();
-    const memories = this.data.memories
-      .filter(m => m.importance >= minImportance)
-      .filter(m => m.content.toLowerCase().includes(queryLower))
-      .sort((a, b) => b.importance - a.importance)
-      .slice(0, limit)
-      .map(m => ({
-        content: m.content,
-        score: m.importance
-      }));
+    // 宫殿结构搜索
+    return await this.searchPalace(query, limit);
+  }
 
-    return memories;
+  /**
+   * 在宫殿中搜索
+   */
+  async searchPalace(query, limit = 5) {
+    const results = [];
+    const queryLower = query.toLowerCase();
+
+    // 搜索所有翼楼
+    for (const [wingName, wingPath] of Object.entries(this.structure.wings)) {
+      if (!fs.existsSync(wingPath)) continue;
+
+      const files = this.findMemoryFiles(wingPath);
+
+      for (const file of files) {
+        try {
+          const content = fs.readFileSync(file, 'utf-8');
+          const memory = JSON.parse(content);
+
+          // 搜索AAAK编码和数据
+          const aaakText = JSON.stringify(memory.aaak).toLowerCase();
+          const dataText = JSON.stringify(memory.data).toLowerCase();
+
+          if (aaakText.includes(queryLower) || dataText.includes(queryLower)) {
+            results.push({
+              content: memory.data.content || memory.data,
+              score: this.calculateRelevance(query, memory)
+            });
+          }
+        } catch (e) {
+          // 忽略损坏的文件
+        }
+      }
+    }
+
+    // 按相关性排序
+    results.sort((a, b) => b.score - a.score);
+
+    return results.slice(0, limit);
+  }
+
+  /**
+   * 查找记忆文件
+   */
+  findMemoryFiles(searchPath) {
+    const files = [];
+
+    if (!fs.existsSync(searchPath)) {
+      return files;
+    }
+
+    const walk = (dir) => {
+      const items = fs.readdirSync(dir);
+
+      for (const item of items) {
+        const itemPath = path.join(dir, item);
+        const stat = fs.statSync(itemPath);
+
+        if (stat.isDirectory()) {
+          walk(itemPath);
+        } else if (item.endsWith('.json')) {
+          files.push(itemPath);
+        }
+      }
+    };
+
+    walk(searchPath);
+    return files;
+  }
+
+  /**
+   * 计算相关性
+   */
+  calculateRelevance(query, memory) {
+    let score = 0;
+    const queryLower = query.toLowerCase();
+
+    // 检查AAAK编码（更高权重）
+    const aaakText = JSON.stringify(memory.aaak).toLowerCase();
+    if (aaakText.includes(queryLower)) {
+      score += 2;
+    }
+
+    // 检查数据
+    const dataText = JSON.stringify(memory.data).toLowerCase();
+    if (dataText.includes(queryLower)) {
+      score += 1;
+    }
+
+    // 检查重要性
+    if (memory.data.importance) {
+      score += memory.data.importance;
+    }
+
+    // 检查访问次数（热记忆）
+    score += Math.min(memory.access_count || 0, 5) * 0.1;
+
+    return score;
+  }
+
+  /**
+   * 更新访问计数
+   */
+  async updateAccessCount(content) {
+    const files = this.findMemoryFiles(this.palacePath);
+
+    for (const file of files) {
+      try {
+        const memory = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        if (memory.data.content === content) {
+          memory.access_count++;
+          fs.writeFileSync(file, JSON.stringify(memory, null, 2));
+          break;
+        }
+      } catch (e) {
+        // 忽略
+      }
+    }
   }
 
   /**
@@ -181,9 +525,10 @@ export class SimpleMemory {
   async updatePreference(key, value) {
     await this.ensureReady();
 
-    this.data.profile[key] = value;
-    this.data.profile[`${key}_updated`] = new Date().toISOString();
-    this.save();
+    await this.storeMemory('user', 'preferences', {
+      key,
+      value
+    });
 
     return `✅ 已更新: ${key} = ${value}`;
   }
@@ -193,7 +538,27 @@ export class SimpleMemory {
    */
   async getPreference(key) {
     await this.ensureReady();
-    return this.data.profile[key] || null;
+
+    const hallPath = path.join(this.structure.wings.user, 'hall-preferences');
+
+    if (!fs.existsSync(hallPath)) {
+      return null;
+    }
+
+    const files = fs.readdirSync(hallPath);
+
+    for (const file of files) {
+      try {
+        const memory = JSON.parse(fs.readFileSync(path.join(hallPath, file), 'utf-8'));
+        if (memory.data.key === key) {
+          return memory.data.value;
+        }
+      } catch (e) {
+        // 忽略
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -202,10 +567,23 @@ export class SimpleMemory {
   async getAllPreferences() {
     await this.ensureReady();
 
+    const hallPath = path.join(this.structure.wings.user, 'hall-preferences');
     const prefs = {};
-    for (const [key, value] of Object.entries(this.data.profile)) {
-      if (!key.endsWith('_updated')) {
-        prefs[key] = value;
+
+    if (!fs.existsSync(hallPath)) {
+      return prefs;
+    }
+
+    const files = fs.readdirSync(hallPath);
+
+    for (const file of files) {
+      try {
+        const memory = JSON.parse(fs.readFileSync(path.join(hallPath, file), 'utf-8'));
+        if (memory.data.key) {
+          prefs[memory.data.key] = memory.data.value;
+        }
+      } catch (e) {
+        // 忽略
       }
     }
 
@@ -218,40 +596,12 @@ export class SimpleMemory {
   async addReflection(content, significance = 0.5) {
     await this.ensureReady();
 
-    const id = `ref-${Date.now()}`;
-    this.data.reflections.push({
-      id,
+    await this.storeMemory('user', 'discoveries', {
       content,
-      created_at: new Date().toISOString(),
       significance
     });
-    this.save();
-
-    // 提取新记忆
-    await this.extractMemoriesFromReflection(content);
 
     return `✅ 反思已记录`;
-  }
-
-  /**
-   * 从反思提取记忆
-   */
-  async extractMemoriesFromReflection(reflection) {
-    const patterns = [
-      { regex: /用户喜欢(.{5,30})/g, type: 'preference' },
-      { regex: /用户重视(.{5,30})/g, type: 'preference' },
-      { regex: /记住(.{5,30})/g, type: 'fact' },
-      { regex: /偏好(.{5,30})/g, type: 'preference' }
-    ];
-
-    for (const pattern of patterns) {
-      const matches = reflection.matchAll(pattern.regex);
-      for (const match of matches) {
-        if (match[1]) {
-          await this.remember(match[1].trim(), pattern.type, 0.7);
-        }
-      }
-    }
   }
 
   /**
@@ -260,7 +610,29 @@ export class SimpleMemory {
   async getRecentReflections(limit = 5) {
     await this.ensureReady();
 
-    return this.data.reflections
+    const hallPath = path.join(this.structure.wings.user, 'hall-discoveries');
+
+    if (!fs.existsSync(hallPath)) {
+      return [];
+    }
+
+    const files = fs.readdirSync(hallPath);
+    const reflections = [];
+
+    for (const file of files) {
+      try {
+        const memory = JSON.parse(fs.readFileSync(path.join(hallPath, file), 'utf-8'));
+        reflections.push({
+          content: memory.data.content,
+          created_at: memory.created_at,
+          significance: memory.data.significance
+        });
+      } catch (e) {
+        // 忽略
+      }
+    }
+
+    return reflections
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       .slice(0, limit);
   }
@@ -272,23 +644,24 @@ export class SimpleMemory {
     await this.ensureReady();
 
     const byType = {};
-    this.data.memories.forEach(m => {
-      byType[m.type] = (byType[m.type] || 0) + 1;
-    });
+    const files = this.findMemoryFiles(this.palacePath);
 
-    const totalImportance = this.data.memories.reduce((sum, m) => sum + m.importance, 0);
-    const avgImportance = this.data.memories.length > 0
-      ? totalImportance / this.data.memories.length
-      : 0;
+    for (const file of files) {
+      try {
+        const memory = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        const type = memory.type || 'unknown';
+        byType[type] = (byType[type] || 0) + 1;
+      } catch (e) {
+        // 忽略
+      }
+    }
 
     return {
       memories: {
-        total: this.data.memories.length,
-        byType,
-        avgImportance: avgImportance.toFixed(2)
+        total: files.length,
+        byType
       },
-      reflections: this.data.reflections.length,
-      preferences: Object.keys(this.data.profile).filter(k => !k.endsWith('_updated')).length,
+      wings: this.countWings(),
       vectorSearch: this.isInitialized
     };
   }
@@ -302,14 +675,24 @@ export class SimpleMemory {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
 
-    const beforeLength = this.data.memories.length;
-    this.data.memories = this.data.memories.filter(m => {
-      const created = new Date(m.created_at);
-      return !(created < cutoffDate && m.importance < minImportance && m.access_count < 5);
-    });
+    const files = this.findMemoryFiles(this.palacePath);
+    let cleaned = 0;
 
-    const cleaned = beforeLength - this.data.memories.length;
-    this.save();
+    for (const file of files) {
+      try {
+        const memory = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        const created = new Date(memory.created_at);
+
+        if (created < cutoffDate &&
+            (memory.data.importance || 0) < minImportance &&
+            (memory.access_count || 0) < 5) {
+          fs.unlinkSync(file);
+          cleaned++;
+        }
+      } catch (e) {
+        // 忽略
+      }
+    }
 
     return `✅ 清理了 ${cleaned} 条旧记忆`;
   }
@@ -321,9 +704,178 @@ export class SimpleMemory {
     await this.ensureReady();
 
     return {
-      ...this.data,
+      palace_path: this.palacePath,
+      wings: this.countWings(),
+      memories: this.countMemories(),
       exported_at: new Date().toISOString()
     };
+  }
+
+  /**
+   * 统计翼楼数
+   */
+  countWings() {
+    let count = 0;
+
+    for (const wingPath of Object.values(this.structure.wings)) {
+      if (fs.existsSync(wingPath)) {
+        const items = fs.readdirSync(wingPath);
+        count += items.filter(item => {
+          const itemPath = path.join(wingPath, item);
+          return fs.statSync(itemPath).isDirectory();
+        }).length;
+      }
+    }
+
+    return count;
+  }
+
+  /**
+   * 统计记忆数
+   */
+  countMemories() {
+    const files = this.findMemoryFiles(this.palacePath);
+    return files.length;
+  }
+}
+
+/**
+ * AAAK编码器 - AI友好的压缩格式
+ */
+class AAAKEncoder {
+  constructor() {
+    this.abbreviations = {
+      'DEV': 'development',
+      'PROD': 'production',
+      'AUTH': 'authentication',
+      'DB': 'database',
+      'API': 'application programming interface',
+      'FE': 'frontend',
+      'BE': 'backend',
+      'INFRA': 'infrastructure',
+      'UX': 'user experience',
+      'UI': 'user interface',
+      'SaaS': 'software as a service',
+      'REC': 'recommended',
+      'PRI': 'primary',
+      'SEC': 'secondary',
+      'JR': 'junior',
+      'SR': 'senior',
+      'YR': 'year'
+    };
+  }
+
+  /**
+   * 编码为AAAK格式
+   */
+  encode(data) {
+    if (typeof data === 'string') {
+      return this.encodeString(data);
+    } else if (typeof data === 'object') {
+      return this.encodeObject(data);
+    }
+
+    return data;
+  }
+
+  /**
+   * 编码字符串
+   */
+  encodeString(text) {
+    if (!text) return text;
+
+    let encoded = text;
+
+    // 替换常用词
+    for (const [abbr, full] of Object.entries(this.abbreviations)) {
+      const regex = new RegExp(`\\b${full}\\b`, 'gi');
+      encoded = encoded.replace(regex, abbr);
+    }
+
+    // 压缩空格和换行
+    encoded = encoded.replace(/\s+/g, ' ');
+
+    return encoded;
+  }
+
+  /**
+   * 编码对象
+   */
+  encodeObject(obj) {
+    if (!obj) return obj;
+
+    const encoded = {};
+
+    for (const [key, value] of Object.entries(obj)) {
+      // 压缩键名
+      const compressedKey = this.compressKey(key);
+      encoded[compressedKey] = this.encode(value);
+    }
+
+    return encoded;
+  }
+
+  /**
+   * 压缩键名
+   */
+  compressKey(key) {
+    if (key.length <= 3) return key;
+
+    // 去除元音（保留首字母）
+    return key[0] + key.substring(1).replace(/[aeiou]/gi, '');
+  }
+
+  /**
+   * 解码AAAK格式
+   */
+  decode(aaak) {
+    if (typeof aaak === 'string') {
+      return this.decodeString(aaak);
+    } else if (typeof aaak === 'object') {
+      return this.decodeObject(aaak);
+    }
+
+    return aaak;
+  }
+
+  /**
+   * 解码字符串
+   */
+  decodeString(text) {
+    if (!text) return text;
+
+    let decoded = text;
+
+    // 恢复常用词
+    for (const [abbr, full] of Object.entries(this.abbreviations)) {
+      const regex = new RegExp(`\\b${abbr}\\b`, 'gi');
+      decoded = decoded.replace(regex, full);
+    }
+
+    return decoded;
+  }
+
+  /**
+   * 解码对象
+   */
+  decodeObject(obj) {
+    if (!obj) return obj;
+
+    const decoded = {};
+
+    for (const [key, value] of Object.entries(obj)) {
+      const expandedKey = this.expandKey(key);
+      decoded[expandedKey] = this.decode(value);
+    }
+
+    return decoded;
+  }
+
+  /**
+   * 扩展键名
+   */
+  expandKey(key) {
+    return key; // 暂时保持原样
   }
 }
 
