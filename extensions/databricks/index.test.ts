@@ -72,6 +72,46 @@ describe("Databricks plugin", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "text_delta", delta: "How can I help?" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "done", reason: "stop" }));
     });
+
+    it("handles streamed tool calls", async () => {
+      const api = {
+        registerProvider: vi.fn(),
+      } as any;
+      plugin.register(api);
+      
+      const providerReg = api.registerProvider.mock.calls[0][0];
+      const wrapStreamFn = providerReg.wrapStreamFn;
+
+      const model = { id: "test-model", baseUrl: "https://my-databricks.cloud.databricks.com", api: "openai-completions" } as any;
+      const context = { messages: [{ role: "user", content: "use a tool" }] } as any;
+      const options = { apiKey: "test-token" } as any;
+
+      vi.stubGlobal("fetch", vi.fn(async () => {
+        const stream = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"get_weather","arguments":"{\\"city\\":"}}]},"finish_reason":null}]}\n'));
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\\"London\\"}"}}]},"finish_reason":"tool_calls"}]}\n'));
+            controller.enqueue(encoder.encode('data: [DONE]\n'));
+            controller.close();
+          }
+        });
+        return new Response(stream, { status: 200 });
+      }));
+
+      const streamFn = wrapStreamFn({} as ProviderWrapStreamFnContext);
+      const eventStream = await streamFn(model, context, options);
+      
+      const events: any[] = [];
+      for await (const event of (eventStream as any)) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual(expect.objectContaining({ type: "toolcall_start" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "toolcall_delta", delta: '{"city":' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "toolcall_delta", delta: '"London"}' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "done", reason: "toolUse" }));
+    });
   });
 
   describe("catalog", () => {

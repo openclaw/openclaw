@@ -15,6 +15,26 @@ interface BaseAgentMessage {
   toolCallId?: string;
 }
 
+function mapDatabricksStopReason(reason: string | null | undefined): string {
+  if (!reason) {
+    return "stop";
+  }
+  switch (reason) {
+    case "stop":
+    case "end":
+      return "stop";
+    case "length":
+      return "length";
+    case "function_call":
+    case "tool_calls":
+      return "toolUse";
+    case "content_filter":
+      return "error";
+    default:
+      return "stop";
+  }
+}
+
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Databricks Provider",
@@ -241,10 +261,11 @@ export default definePluginEntry({
 
               const decoder = new TextDecoder();
               let buffer = "";
+              let doneSent = false;
 
               while (true) {
                 const { done, value } = await reader.read();
-                if (done) {
+                if (done || doneSent) {
                   break;
                 }
 
@@ -259,20 +280,60 @@ export default definePluginEntry({
                   }
                   const data = trimmed.slice(6);
                   if (data === "[DONE]") {
+                    doneSent = true;
                     break;
                   }
 
                   const json = JSON.parse(data);
-                  const delta = json.choices?.[0]?.delta;
+                  const choice = json.choices?.[0];
+                  const delta = choice?.delta;
+                  const blockIndex = () => (output.content as Array<unknown>).length - 1;
+
                   if (delta?.content) {
                     const contentList = output.content as Array<{ type: string; text: string }>;
                     if (contentList.length === 0 || contentList[contentList.length - 1].type !== "text") {
                       contentList.push({ type: "text", text: "" });
-                      stream.push({ type: "text_start", contentIndex: contentList.length - 1, partial: output });
+                      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
                     }
-                    const textBlock = contentList[contentList.length - 1];
+                    const textBlock = contentList[contentList.length - 1] as { text: string };
                     textBlock.text += delta.content;
-                    stream.push({ type: "text_delta", contentIndex: contentList.length - 1, delta: delta.content, partial: output });
+                    stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: delta.content, partial: output });
+                  }
+
+                  if (delta?.tool_calls) {
+                    for (const toolCall of delta.tool_calls) {
+                      const contentList = output.content as Array<Record<string, unknown>>;
+                      let currentBlock = contentList.length > 0 ? contentList[contentList.length - 1] : null;
+                      
+                      if (!currentBlock || currentBlock.type !== "toolCall" || (toolCall.id && currentBlock.id !== toolCall.id)) {
+                        currentBlock = {
+                          type: "toolCall",
+                          id: toolCall.id || "",
+                          name: toolCall.function?.name || "",
+                          arguments: {},
+                          partialArgs: "",
+                        };
+                        contentList.push(currentBlock);
+                        stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+                      }
+
+                      if (toolCall.id) {
+                        currentBlock.id = toolCall.id;
+                      }
+                      if (toolCall.function?.name) {
+                        currentBlock.name = toolCall.function.name;
+                      }
+                      if (toolCall.function?.arguments) {
+                        currentBlock.partialArgs = (currentBlock.partialArgs as string) + toolCall.function.arguments;
+                        // Use try-catch for partial JSON parsing if needed, but here we just emit delta.
+                        stream.push({
+                          type: "toolcall_delta",
+                          contentIndex: blockIndex(),
+                          delta: toolCall.function.arguments,
+                          partial: output,
+                        });
+                      }
+                    }
                   }
                   
                   if (json.usage) {
@@ -282,8 +343,8 @@ export default definePluginEntry({
                     usage.totalTokens = json.usage.total_tokens;
                   }
                   
-                  if (json.choices?.[0]?.finish_reason) {
-                    output.stopReason = json.choices[0].finish_reason;
+                  if (choice?.finish_reason) {
+                    output.stopReason = mapDatabricksStopReason(choice.finish_reason);
                   }
                 }
               }
