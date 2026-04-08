@@ -855,6 +855,20 @@ describe("control command parsing", () => {
     });
   });
 
+  it("supports /activate alias (not just /activation)", () => {
+    expect(parseActivationCommand("/activate mention")).toEqual({
+      hasCommand: true,
+      mode: "mention",
+    });
+    expect(parseActivationCommand("/activate always")).toEqual({
+      hasCommand: true,
+      mode: "always",
+    });
+    expect(parseActivationCommand("/activate")).toEqual({
+      hasCommand: true,
+    });
+  });
+
   it("treats bare commands as non-control", () => {
     expect(hasControlCommand("send")).toBe(false);
     expect(hasControlCommand("help")).toBe(false);

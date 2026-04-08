@@ -28,10 +28,10 @@ export function parseActivationCommand(raw?: string): {
     const trimmedRest = rest.trimStart();
     return trimmedRest ? `/${cmd} ${trimmedRest}` : `/${cmd}`;
   });
-  const match = normalized.match(/^\/activation(?:\s+([a-zA-Z]+))?\s*$/i);
+  const match = normalized.match(/^\/activat(e|ion)(?:\s+([a-zA-Z]+))?\s*$/i);
   if (!match) {
     return { hasCommand: false };
   }
-  const mode = normalizeGroupActivation(match[1]);
+  const mode = normalizeGroupActivation(match[2]);
   return { hasCommand: true, mode };
 }
