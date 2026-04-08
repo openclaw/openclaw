@@ -61,7 +61,7 @@ describe("resolveUnusableProfileHint", () => {
           "OAuth token refresh failed for openai-codex`\nrm -rf /: invalid_grant. Please try again or re-authenticate.",
       }),
     ).toBe(
-      "- openai-codex:default: re-auth required [invalid_grant] — Run `openclaw models auth login`.",
+      "- openai-codex:default: re-auth required [invalid_grant] — Run `openclaw models auth login --provider openai-codex`.",
     );
   });
 });
