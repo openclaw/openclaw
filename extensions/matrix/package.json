@@ -47,13 +47,6 @@
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.9",
       "allowInvalidConfigRecovery": true
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@matrix-org/matrix-sdk-crypto-wasm",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk"
-      ]
     }
   }
 }

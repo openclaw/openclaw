@@ -207,15 +207,8 @@ function isConfigError(err: unknown): boolean {
   return code !== undefined && CONFIG_ERROR_CODES.has(code);
 }
 
-/**
- * Checks if an error is a transient network error that shouldn't crash the gateway.
- * These are typically temporary connectivity issues that will resolve on their own.
- */
-export function isTransientNetworkError(err: unknown): boolean {
-  if (!err) {
-    return false;
-  }
-  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+function collectNestedUnhandledErrorCandidates(err: unknown): unknown[] {
+  return collectErrorGraphCandidates(err, (current) => {
     const nested: Array<unknown> = [
       current.cause,
       current.reason,
@@ -227,7 +220,18 @@ export function isTransientNetworkError(err: unknown): boolean {
       nested.push(...current.errors);
     }
     return nested;
-  })) {
+  });
+}
+
+/**
+ * Checks if an error is a transient network error that shouldn't crash the gateway.
+ * These are typically temporary connectivity issues that will resolve on their own.
+ */
+export function isTransientNetworkError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;
@@ -265,19 +269,7 @@ export function isTransientSqliteError(err: unknown): boolean {
     return false;
   }
 
-  for (const candidate of collectErrorGraphCandidates(err, (current) => {
-    const nested: Array<unknown> = [
-      current.cause,
-      current.reason,
-      current.original,
-      current.error,
-      current.data,
-    ];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
-    }
-    return nested;
-  })) {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_SQLITE_CODES.has(code)) {
       return true;

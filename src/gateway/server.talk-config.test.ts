@@ -6,11 +6,10 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
+import { withSpeechProviders } from "./talk.test-helpers.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -134,22 +133,6 @@ async function withTalkConfigConnection<T>(
     return await run(ws);
   } finally {
     ws.close();
-  }
-}
-
-async function withSpeechProviders<T>(
-  speechProviders: NonNullable<ReturnType<typeof createEmptyPluginRegistry>["speechProviders"]>,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-  setActivePluginRegistry({
-    ...createEmptyPluginRegistry(),
-    speechProviders,
-  });
-  try {
-    return await run();
-  } finally {
-    setActivePluginRegistry(previousRegistry);
   }
 }
 

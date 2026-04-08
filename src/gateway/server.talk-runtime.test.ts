@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { talkHandlers } from "./server-methods/talk.js";
+import {
+  invokeTalkSpeakDirect,
+  type TalkSpeakTestPayload,
+  withSpeechProviders,
+} from "./talk.test-helpers.js";
 
 const synthesizeSpeechMock = vi.hoisted(() =>
   vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(async () => ({
@@ -18,49 +20,43 @@ vi.mock("../tts/tts.js", () => ({
   synthesizeSpeech: synthesizeSpeechMock,
 }));
 
-type TalkSpeakPayload = {
-  audioBase64?: string;
-  provider?: string;
-  outputFormat?: string;
-};
+type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provider"];
 
 const ALIAS_STUB_VOICE_ID = "VoiceAlias1234567890";
 
-async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
-  let response:
-    | {
-        ok: boolean;
-        payload?: unknown;
-        error?: { code?: string; message?: string; details?: unknown };
-      }
-    | undefined;
-  await talkHandlers["talk.speak"]({
-    req: { type: "req", id: "test", method: "talk.speak", params },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond: (ok, payload, error) => {
-      response = { ok, payload, error };
+async function writeAcmeTalkConfig() {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    talk: {
+      provider: "acme",
+      providers: {
+        acme: {
+          voiceId: "plugin-voice",
+        },
+      },
     },
-    context: {} as never,
   });
-  return response;
 }
 
-async function withSpeechProviders<T>(
-  speechProviders: NonNullable<ReturnType<typeof createEmptyPluginRegistry>["speechProviders"]>,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-  setActivePluginRegistry({
-    ...createEmptyPluginRegistry(),
-    speechProviders,
-  });
-  try {
-    return await run();
-  } finally {
-    setActivePluginRegistry(previousRegistry);
-  }
+async function withAcmeSpeechProvider(
+  synthesize: SpeechProvider["synthesize"],
+  run: () => Promise<void>,
+) {
+  await withSpeechProviders(
+    [
+      {
+        pluginId: "acme-plugin",
+        source: "test",
+        provider: {
+          id: "acme",
+          label: "Acme Speech",
+          isConfigured: () => true,
+          synthesize,
+        },
+      },
+    ],
+    run,
+  );
 }
 
 describe("gateway talk runtime", () => {
@@ -138,43 +134,22 @@ describe("gateway talk runtime", () => {
   });
 
   it("allows extension speech providers through talk.speak", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "acme",
-        providers: {
-          acme: {
-            voiceId: "plugin-voice",
-          },
-        },
-      },
-    });
+    await writeAcmeTalkConfig();
 
-    await withSpeechProviders(
-      [
-        {
-          pluginId: "acme-plugin",
-          source: "test",
-          provider: {
-            id: "acme",
-            label: "Acme Speech",
-            isConfigured: () => true,
-            synthesize: async () => ({
-              audioBuffer: Buffer.from([7, 8, 9]),
-              outputFormat: "mp3",
-              fileExtension: ".mp3",
-              voiceCompatible: false,
-            }),
-          },
-        },
-      ],
+    await withAcmeSpeechProvider(
+      async () => ({
+        audioBuffer: Buffer.from([7, 8, 9]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      }),
       async () => {
         const res = await invokeTalkSpeakDirect({
           text: "Hello from talk mode.",
         });
         expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-        expect((res?.payload as TalkSpeakPayload | undefined)?.provider).toBe("acme");
-        expect((res?.payload as TalkSpeakPayload | undefined)?.audioBase64).toBe(
+        expect((res?.payload as TalkSpeakTestPayload | undefined)?.provider).toBe("acme");
+        expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([7, 8, 9]).toString("base64"),
         );
       },
@@ -241,9 +216,9 @@ describe("gateway talk runtime", () => {
         });
 
         expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-        expect((res?.payload as TalkSpeakPayload | undefined)?.provider).toBe("elevenlabs");
-        expect((res?.payload as TalkSpeakPayload | undefined)?.outputFormat).toBe("pcm_44100");
-        expect((res?.payload as TalkSpeakPayload | undefined)?.audioBase64).toBe(
+        expect((res?.payload as TalkSpeakTestPayload | undefined)?.provider).toBe("elevenlabs");
+        expect((res?.payload as TalkSpeakTestPayload | undefined)?.outputFormat).toBe("pcm_44100");
+        expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([4, 5, 6]).toString("base64"),
         );
         expect(synthesizeSpeechMock).toHaveBeenCalledWith(
@@ -280,31 +255,10 @@ describe("gateway talk runtime", () => {
   });
 
   it("returns synthesis_failed details when the provider rejects synthesis", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "acme",
-        providers: {
-          acme: {
-            voiceId: "plugin-voice",
-          },
-        },
-      },
-    });
+    await writeAcmeTalkConfig();
 
-    await withSpeechProviders(
-      [
-        {
-          pluginId: "acme-plugin",
-          source: "test",
-          provider: {
-            id: "acme",
-            label: "Acme Speech",
-            isConfigured: () => true,
-            synthesize: async () => ({}) as never,
-          },
-        },
-      ],
+    await withAcmeSpeechProvider(
+      async () => ({}) as never,
       async () => {
         synthesizeSpeechMock.mockResolvedValue({
           success: false,
@@ -321,31 +275,10 @@ describe("gateway talk runtime", () => {
   });
 
   it("rejects empty audio results as invalid_audio_result", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "acme",
-        providers: {
-          acme: {
-            voiceId: "plugin-voice",
-          },
-        },
-      },
-    });
+    await writeAcmeTalkConfig();
 
-    await withSpeechProviders(
-      [
-        {
-          pluginId: "acme-plugin",
-          source: "test",
-          provider: {
-            id: "acme",
-            label: "Acme Speech",
-            isConfigured: () => true,
-            synthesize: async () => ({}) as never,
-          },
-        },
-      ],
+    await withAcmeSpeechProvider(
+      async () => ({}) as never,
       async () => {
         synthesizeSpeechMock.mockResolvedValue({
           success: true,

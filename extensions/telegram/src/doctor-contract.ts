@@ -97,8 +97,8 @@ export function normalizeCompatibilityConfig({
     entry: updated,
     pathPrefix: "channels.telegram",
     changes,
-    resolvedMode: resolveTelegramPreviewStreamMode(updated),
     includePreviewChunk: true,
+    resolvedMode: resolveTelegramPreviewStreamMode(updated),
   });
   updated = streaming.entry;
   changed = changed || streaming.changed;
@@ -116,8 +116,8 @@ export function normalizeCompatibilityConfig({
         entry: account,
         pathPrefix: `channels.telegram.accounts.${accountId}`,
         changes,
-        resolvedMode: resolveTelegramPreviewStreamMode(account),
         includePreviewChunk: true,
+        resolvedMode: resolveTelegramPreviewStreamMode(account),
       });
       if (accountStreaming.changed) {
         accounts[accountId] = accountStreaming.entry;
