@@ -2,6 +2,7 @@ import { ChannelType, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
@@ -245,7 +246,7 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId.replace(/^(channel:|user:)/i, '')))) as {
+    const channel = (await rest.get(Routes.channel(resolveDiscordChannelId(params.threadId)))) as {
       id?: string;
       type?: number;
       parent_id?: string;
