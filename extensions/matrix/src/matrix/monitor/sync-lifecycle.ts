@@ -42,6 +42,9 @@ export function createMatrixMonitorSyncLifecycle(params: {
       settleFatal(fatalError);
       return;
     }
+    if (isMatrixTerminalSyncState(state) && fatalError) {
+      return;
+    }
     params.statusController.noteSyncState(state, error);
   };
 

@@ -114,6 +114,38 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     );
   });
 
+  it("does not downgrade a fatal error to stopped during shutdown", async () => {
+    const client = createClientEmitter();
+    const setStatus = vi.fn();
+    let stopping = false;
+    const statusController = createMatrixMonitorStatusController({
+      accountId: "default",
+      statusSink: setStatus,
+    });
+    const lifecycle = createMatrixMonitorSyncLifecycle({
+      client: client as never,
+      statusController,
+      isStopping: () => stopping,
+    });
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    client.emit("sync.unexpected_error", new Error("sync exploded"));
+    await expect(waitPromise).rejects.toThrow("sync exploded");
+
+    stopping = true;
+    client.emit("sync.state", "STOPPED", "SYNCING", undefined);
+    lifecycle.dispose();
+    statusController.markStopped();
+
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        healthState: "error",
+        lastError: "sync exploded",
+      }),
+    );
+  });
+
   it("rejects a second concurrent fatal-stop waiter", async () => {
     const client = createClientEmitter();
     const lifecycle = createMatrixMonitorSyncLifecycle({
