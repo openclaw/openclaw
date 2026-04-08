@@ -382,15 +382,21 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
   }
 }
 
-async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
+/**
+ * Synthesize TTS for `ttsText` and send a QQ voice message (c2c/group) or text fallback (dm/channel).
+ * @returns true when a message was delivered (voice or fallback text), false otherwise.
+ */
+export async function synthesizeAndDeliverTtsVoice(
+  ctx: ReplyContext,
+  ttsText: string,
+): Promise<boolean> {
   const { target, account, cfg, log } = ctx;
-  try {
-    const ttsText = payload.caption || payload.path;
-    if (!ttsText?.trim()) {
-      log?.error(`[qqbot:${account.accountId}] Voice missing text`);
-      return;
-    }
+  const trimmed = ttsText.trim();
+  if (!trimmed) {
+    return false;
+  }
 
+  try {
     let silkBase64: string | undefined;
     let silkPath: string | undefined;
     let duration: number | undefined;
@@ -400,10 +406,10 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
     const ttsCfg = resolveTTSConfig(cfg as Record<string, unknown>);
     if (ttsCfg) {
       log?.info(
-        `[qqbot:${account.accountId}] TTS (plugin): "${ttsText.slice(0, 50)}..." via ${ttsCfg.model}`,
+        `[qqbot:${account.accountId}] TTS (plugin): "${trimmed.slice(0, 50)}..." via ${ttsCfg.model}`,
       );
       const ttsDir = getQQBotDataDir("tts");
-      const result = await textToSilk(ttsText, ttsCfg, ttsDir);
+      const result = await textToSilk(trimmed, ttsCfg, ttsDir);
       silkBase64 = result.silkBase64;
       silkPath = result.silkPath;
       duration = result.duration;
@@ -414,11 +420,11 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
         log?.error(
           `[qqbot:${account.accountId}] TTS not configured (neither plugin channels.qqbot.tts nor global messages.tts)`,
         );
-        return;
+        return false;
       }
-      log?.info(`[qqbot:${account.accountId}] TTS (global fallback): "${ttsText.slice(0, 50)}..."`);
+      log?.info(`[qqbot:${account.accountId}] TTS (global fallback): "${trimmed.slice(0, 50)}..."`);
       const globalResult = await getQQBotRuntime().tts.textToSpeech({
-        text: ttsText,
+        text: trimmed,
         cfg: cfg as OpenClawConfig,
         channel: "qqbot",
       });
@@ -426,7 +432,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
         log?.error(
           `[qqbot:${account.accountId}] Global TTS failed: ${globalResult.error ?? "unknown"}`,
         );
-        return;
+        return false;
       }
       log?.info(
         `[qqbot:${account.accountId}] Global TTS returned: provider=${globalResult.provider}, format=${globalResult.outputFormat}, path=${globalResult.audioPath}`,
@@ -437,7 +443,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       const base64 = await audioFileToSilkBase64(globalResult.audioPath);
       if (!base64) {
         log?.error(`[qqbot:${account.accountId}] Failed to convert global TTS audio to SILK`);
-        return;
+        return false;
       }
       silkBase64 = base64;
       silkPath = globalResult.audioPath;
@@ -446,7 +452,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 
     if (!silkBase64) {
       log?.error(`[qqbot:${account.accountId}] TTS produced no audio output`);
-      return;
+      return false;
     }
 
     log?.info(
@@ -465,7 +471,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             silkBase64,
             undefined,
             target.messageId,
-            ttsText,
+            trimmed,
             silkPath,
           );
         } else if (target.type === "group" && target.groupOpenid) {
@@ -481,25 +487,37 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
           log?.error(
             `[qqbot:${account.accountId}] Voice not supported in DM, sending text fallback`,
           );
-          await sendDmMessage(token, target.guildId, ttsText, target.messageId);
+          await sendDmMessage(token, target.guildId, trimmed, target.messageId);
         } else if (target.channelId) {
           log?.error(
             `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
           );
-          await sendChannelMessage(token, target.channelId, ttsText, target.messageId);
+          await sendChannelMessage(token, target.channelId, trimmed, target.messageId);
         }
       },
       log,
       account.accountId,
     );
     log?.info(`[qqbot:${account.accountId}] Voice message sent`);
+    return true;
   } catch (err) {
     log?.error(
       `[qqbot:${account.accountId}] TTS/voice send failed: ${
         err instanceof Error ? err.message : JSON.stringify(err)
       }`,
     );
+    return false;
   }
+}
+
+async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
+  const { account, log } = ctx;
+  const ttsText = payload.caption || payload.path;
+  if (!ttsText?.trim()) {
+    log?.error(`[qqbot:${account.accountId}] Voice missing text`);
+    return;
+  }
+  await synthesizeAndDeliverTtsVoice(ctx, ttsText);
 }
 
 async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {

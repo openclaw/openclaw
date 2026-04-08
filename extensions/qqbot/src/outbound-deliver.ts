@@ -26,6 +26,7 @@ import {
   sendMedia as sendMediaAuto,
   type MediaTargetContext,
 } from "./outbound.js";
+import { synthesizeAndDeliverTtsVoice, type ReplyContext } from "./reply-dispatcher.js";
 import { getQQBotRuntime } from "./runtime.js";
 import { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
@@ -49,6 +50,8 @@ export interface DeliverEventContext {
 export interface DeliverAccountContext {
   account: ResolvedQQBotAccount;
   qualifiedTarget: string;
+  /** OpenClaw config root; required for `audioAsVoice` TTS synthesis. */
+  cfg?: unknown;
   log?: {
     info: (msg: string) => void;
     error: (msg: string) => void;
@@ -61,6 +64,27 @@ export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Prom
 
 /** Consume a quote ref exactly once. */
 export type ConsumeQuoteRefFn = () => string | undefined;
+
+function deliverEventToReplyContext(
+  event: DeliverEventContext,
+  account: ResolvedQQBotAccount,
+  cfg: unknown,
+  log: DeliverAccountContext["log"],
+): ReplyContext {
+  return {
+    target: {
+      type: event.type,
+      senderId: event.senderId,
+      messageId: event.messageId,
+      channelId: event.channelId,
+      guildId: event.guildId,
+      groupOpenid: event.groupOpenid,
+    },
+    account,
+    cfg,
+    log,
+  };
+}
 
 function resolveQQBotMediaTargetContext(
   event: DeliverEventContext,
@@ -269,6 +293,7 @@ export interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  audioAsVoice?: boolean;
 }
 
 /**
@@ -368,6 +393,33 @@ export async function sendPlainReply(
     }
   }
 
+  let speechText = textWithoutImages;
+  for (const m of mdMatches) {
+    speechText = speechText.replace(m[0], "").trim();
+  }
+  for (const m of bareUrlMatches) {
+    speechText = speechText.replace(m[0], "").trim();
+  }
+  if (speechText && event.type !== "c2c") {
+    speechText = speechText.replace(/([a-zA-Z0-9])\.([a-zA-Z0-9])/g, "$1_$2");
+  }
+
+  let voiceHandled = false;
+  if (
+    payload.audioAsVoice === true &&
+    speechText.trim() &&
+    actx.cfg !== undefined &&
+    actx.cfg !== null
+  ) {
+    const replyCtx = deliverEventToReplyContext(event, account, actx.cfg, log);
+    voiceHandled = await synthesizeAndDeliverTtsVoice(replyCtx, speechText.trim());
+    if (voiceHandled) {
+      log?.info(
+        `${prefix} audioAsVoice: TTS voice delivered, suppressing duplicate speakable text`,
+      );
+    }
+  }
+
   if (useMarkdown) {
     await sendMarkdownReply(
       textWithoutImages,
@@ -378,6 +430,7 @@ export async function sendPlainReply(
       actx,
       sendWithRetry,
       consumeQuoteRef,
+      voiceHandled,
     );
   } else {
     await sendPlainTextReply(
@@ -389,6 +442,7 @@ export async function sendPlainReply(
       actx,
       sendWithRetry,
       consumeQuoteRef,
+      voiceHandled,
     );
   }
 
@@ -645,6 +699,7 @@ async function sendMarkdownReply(
   actx: DeliverAccountContext,
   sendWithRetry: SendWithRetryFn,
   consumeQuoteRef: ConsumeQuoteRefFn,
+  voiceHandled: boolean,
 ): Promise<void> {
   const { account, log } = actx;
   const prefix = `[qqbot:${account.accountId}]`;
@@ -752,21 +807,24 @@ async function sendMarkdownReply(
     result = result ? result + "\n\n" + imagesToAppend.join("\n") : imagesToAppend.join("\n");
   }
 
-  // Send markdown text.
+  // Send markdown text (skip speakable body when TTS already delivered, unless images remain in markdown).
   if (result.trim()) {
-    const mdChunks = chunkText(result, TEXT_CHUNK_LIMIT);
-    await sendQQBotTextChunksWithRetry({
-      account,
-      event,
-      chunks: mdChunks,
-      sendWithRetry,
-      consumeQuoteRef,
-      allowDm: true,
-      log,
-      onSuccess: (chunk) =>
-        `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
-      onError: (err) => `${prefix} Failed to send markdown message chunk: ${String(err)}`,
-    });
+    const skipSpeakableText = voiceHandled && !/!\[/.test(result);
+    if (!skipSpeakableText) {
+      const mdChunks = chunkText(result, TEXT_CHUNK_LIMIT);
+      await sendQQBotTextChunksWithRetry({
+        account,
+        event,
+        chunks: mdChunks,
+        sendWithRetry,
+        consumeQuoteRef,
+        allowDm: true,
+        log,
+        onSuccess: (chunk) =>
+          `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
+        onError: (err) => `${prefix} Failed to send markdown message chunk: ${String(err)}`,
+      });
+    }
   }
 }
 
@@ -780,6 +838,7 @@ async function sendPlainTextReply(
   actx: DeliverAccountContext,
   sendWithRetry: SendWithRetryFn,
   consumeQuoteRef: ConsumeQuoteRefFn,
+  voiceHandled: boolean,
 ): Promise<void> {
   const { account, log } = actx;
   const prefix = `[qqbot:${account.accountId}]`;
@@ -811,7 +870,7 @@ async function sendPlainTextReply(
       });
     }
 
-    if (result.trim()) {
+    if (result.trim() && !voiceHandled) {
       const plainChunks = chunkText(result, TEXT_CHUNK_LIMIT);
       await sendQQBotTextChunksWithRetry({
         account,

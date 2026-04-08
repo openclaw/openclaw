@@ -21,6 +21,14 @@ const runtimeMocks = vi.hoisted(() => ({
   chunkMarkdownText: vi.fn((text: string) => [text]),
 }));
 
+const ttsMocks = vi.hoisted(() => ({
+  synthesizeAndDeliverTtsVoice: vi.fn(async () => false),
+}));
+
+vi.mock("./reply-dispatcher.js", () => ({
+  synthesizeAndDeliverTtsVoice: ttsMocks.synthesizeAndDeliverTtsVoice,
+}));
+
 vi.mock("./api.js", () => ({
   sendC2CMessage: apiMocks.sendC2CMessage,
   sendDmMessage: apiMocks.sendDmMessage,
@@ -71,7 +79,7 @@ function buildEvent(): DeliverEventContext {
   };
 }
 
-function buildAccountContext(markdownSupport: boolean): DeliverAccountContext {
+function buildAccountContext(markdownSupport: boolean, cfg?: unknown): DeliverAccountContext {
   return {
     qualifiedTarget: "qqbot:c2c:user-1",
     account: {
@@ -81,6 +89,7 @@ function buildAccountContext(markdownSupport: boolean): DeliverAccountContext {
       markdownSupport,
       config: {},
     } as DeliverAccountContext["account"],
+    ...(cfg !== undefined ? { cfg } : {}),
     log: {
       info: vi.fn(),
       error: vi.fn(),
@@ -95,6 +104,7 @@ describe("qqbot outbound deliver", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtimeMocks.chunkMarkdownText.mockImplementation((text: string) => [text]);
+    ttsMocks.synthesizeAndDeliverTtsVoice.mockResolvedValue(false);
   });
 
   it("sends plain replies through the shared text chunk sender", async () => {
@@ -167,5 +177,66 @@ describe("qqbot outbound deliver", () => {
       undefined,
     );
     expect(outboundMocks.sendPhoto).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips plain text when audioAsVoice TTS succeeds and cfg is present", async () => {
+    ttsMocks.synthesizeAndDeliverTtsVoice.mockResolvedValueOnce(true);
+    await sendPlainReply(
+      { audioAsVoice: true },
+      "spoken reply",
+      buildEvent(),
+      buildAccountContext(false, {}),
+      sendWithRetry,
+      consumeQuoteRef,
+      [],
+    );
+
+    expect(ttsMocks.synthesizeAndDeliverTtsVoice).toHaveBeenCalledTimes(1);
+    expect(apiMocks.sendC2CMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain text when audioAsVoice TTS does not send", async () => {
+    ttsMocks.synthesizeAndDeliverTtsVoice.mockResolvedValueOnce(false);
+    await sendPlainReply(
+      { audioAsVoice: true },
+      "still text",
+      buildEvent(),
+      buildAccountContext(false, {}),
+      sendWithRetry,
+      consumeQuoteRef,
+      [],
+    );
+
+    expect(ttsMocks.synthesizeAndDeliverTtsVoice).toHaveBeenCalledTimes(1);
+    expect(apiMocks.sendC2CMessage).toHaveBeenCalledWith(
+      "app-id",
+      "token",
+      "user-1",
+      "still text",
+      "msg-1",
+      undefined,
+    );
+  });
+
+  it("does not synthesize TTS when audioAsVoice is set but cfg is missing", async () => {
+    await sendPlainReply(
+      { audioAsVoice: true },
+      "no cfg",
+      buildEvent(),
+      buildAccountContext(false),
+      sendWithRetry,
+      consumeQuoteRef,
+      [],
+    );
+
+    expect(ttsMocks.synthesizeAndDeliverTtsVoice).not.toHaveBeenCalled();
+    expect(apiMocks.sendC2CMessage).toHaveBeenCalledWith(
+      "app-id",
+      "token",
+      "user-1",
+      "no cfg",
+      "msg-1",
+      undefined,
+    );
   });
 });

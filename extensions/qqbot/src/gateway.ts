@@ -945,7 +945,12 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               dispatcherOptions: {
                 responsePrefix: messagesConfig.responsePrefix,
                 deliver: async (
-                  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+                  payload: {
+                    text?: string;
+                    mediaUrls?: string[];
+                    mediaUrl?: string;
+                    audioAsVoice?: boolean;
+                  },
                   info: { kind: string },
                 ) => {
                   hasResponse = true;
@@ -1080,7 +1085,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                     groupOpenid: event.groupOpenid,
                     msgIdx: event.msgIdx,
                   };
-                  const deliverActx: DeliverAccountContext = { account, qualifiedTarget, log };
+                  const deliverActx: DeliverAccountContext = { account, qualifiedTarget, cfg, log };
 
                   const mediaResult = await parseAndSendMediaTags(
                     replyText,
