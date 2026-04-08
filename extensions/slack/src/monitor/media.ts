@@ -1,6 +1,7 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
@@ -265,7 +266,12 @@ export async function resolveSlackMedia(params: {
           ...(contentType ? { contentType } : {}),
           placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
         };
-      } catch {
+      } catch (err) {
+        logVerbose(
+          `resolveSlackMedia: failed to fetch file ${file.id ?? "unknown"}: ${
+            err instanceof Error ? `${err.message} ${err.cause instanceof Error ? err.cause.message : ""}`.trim() : String(err)
+          }`,
+        );
         return null;
       }
     },
