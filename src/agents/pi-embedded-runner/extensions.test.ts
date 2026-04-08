@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
+import improvementsIntegrationExtension from "../pi-hooks/improvements-integration.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 function buildSafeguardFactories(cfg: OpenClawConfig) {
@@ -36,6 +37,18 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it("always includes improvements integration extension", () => {
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: {} as SessionManager,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: { id: "gpt-5.4", contextWindow: 128_000 } as Model<Api>,
+    });
+
+    expect(factories).toContain(improvementsIntegrationExtension);
+  });
+
   it("does not opt safeguard mode into quality-guard retries", () => {
     const cfg = {
       agents: {
