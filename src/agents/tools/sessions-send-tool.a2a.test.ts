@@ -13,11 +13,14 @@ vi.mock("./agent-step.js", () => ({
 }));
 
 describe("runSessionsSendA2AFlow announce delivery", () => {
-  let mockCallGateway: ReturnType<typeof vi.fn>;
+  type CallGatewayDep = NonNullable<
+    NonNullable<Parameters<typeof __testing.setDepsForTest>[0]>["callGateway"]
+  >;
+  let mockCallGateway: ReturnType<typeof vi.fn> & CallGatewayDep;
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    mockCallGateway = vi.fn().mockResolvedValue({});
+    mockCallGateway = vi.fn().mockResolvedValue({}) as ReturnType<typeof vi.fn> & CallGatewayDep;
     __testing.setDepsForTest({ callGateway: mockCallGateway });
   });
 
