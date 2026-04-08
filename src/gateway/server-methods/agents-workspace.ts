@@ -304,13 +304,16 @@ async function workspaceMove(
   // Check source exists
   await fs.access(fromFullPath);
 
-  // Check destination doesn't exist (unless overwrite)
+  // Check destination doesn't exist (unless overwrite) using lstat
+  // to detect dangling symlinks and permission-denied entries
   let destExists = false;
   try {
-    await fs.access(toFullPath);
+    await fs.lstat(toFullPath);
     destExists = true;
-  } catch {
-    // Destination doesn't exist, ok to proceed
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
   }
   if (destExists && !overwrite) {
     throw new Error("Destination already exists");

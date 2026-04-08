@@ -2473,6 +2473,8 @@ export function renderApp(state: AppViewState) {
                   if (!resolvedAgentId || !files.length) {
                     return;
                   }
+                  const uploadAgentId = resolvedAgentId;
+                  const uploadListPath = state.workspacePath;
                   for (const file of files) {
                     try {
                       const filePath = state.workspacePath
@@ -2491,7 +2493,7 @@ export function renderApp(state: AppViewState) {
                       await state.client?.request<import("./types.js").AgentsWorkspaceSetResult>(
                         "agents.workspace.set",
                         {
-                          agentId: resolvedAgentId,
+                          agentId: uploadAgentId,
                           path: filePath,
                           content: base64,
                           encoding: "base64",
@@ -2501,17 +2503,27 @@ export function renderApp(state: AppViewState) {
                       state.workspaceError = String(err);
                     }
                   }
-                  // Refresh file list
-                  if (state.agentsPanel === "workspace") {
+                  // Refresh file list only if still on the same agent/path
+                  if (
+                    state.agentsPanel === "workspace" &&
+                    state.agentsSelectedId === uploadAgentId &&
+                    state.workspacePath === uploadListPath
+                  ) {
                     void state.client
                       ?.request<import("./types.js").AgentsWorkspaceListResult>(
                         "agents.workspace.list",
                         {
-                          agentId: resolvedAgentId,
-                          path: state.workspacePath,
+                          agentId: uploadAgentId,
+                          path: uploadListPath,
                         },
                       )
                       .then((result) => {
+                        if (
+                          state.agentsSelectedId !== uploadAgentId ||
+                          state.workspacePath !== uploadListPath
+                        ) {
+                          return;
+                        }
                         state.workspaceEntries = result?.entries ?? null;
                       })
                       .catch((err) => {
