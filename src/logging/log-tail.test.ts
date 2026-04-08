@@ -6,11 +6,11 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 
 const resolvedRedaction = { mode: "tools" as const, patterns: [/custom-secret-[a-z]+/g] };
 
-const { redactSensitiveTextMock, resolveRedactOptionsMock } = vi.hoisted(() => ({
-  redactSensitiveTextMock: vi.fn((line: string, options?: unknown) =>
+const { redactSensitiveLinesMock, resolveRedactOptionsMock } = vi.hoisted(() => ({
+  redactSensitiveLinesMock: vi.fn((lines: string[], options?: unknown) =>
     options === resolvedRedaction
-      ? line.replace("custom-secret-abcdefghijklmnopqrstuvwxyz", "custom…wxyz")
-      : line,
+      ? lines.map((line) => line.replace("custom-secret-abcdefghijklmnopqrstuvwxyz", "custom…wxyz"))
+      : lines,
   ),
   resolveRedactOptionsMock: vi.fn(() => resolvedRedaction),
 }));
@@ -19,8 +19,8 @@ vi.mock("./redact.js", async () => {
   const actual = await vi.importActual<typeof import("./redact.js")>("./redact.js");
   return {
     ...actual,
-    redactSensitiveText: (text: string, options?: unknown) =>
-      redactSensitiveTextMock(text, options),
+    redactSensitiveLines: (lines: string[], options?: unknown) =>
+      redactSensitiveLinesMock(lines, options),
     resolveRedactOptions: () => resolveRedactOptionsMock(),
   };
 });
@@ -28,12 +28,12 @@ vi.mock("./redact.js", async () => {
 describe("readConfiguredLogTail", () => {
   afterEach(() => {
     resolveRedactOptionsMock.mockClear();
-    redactSensitiveTextMock.mockClear();
+    redactSensitiveLinesMock.mockClear();
     resetLogger();
     setLoggerOverride(null);
   });
 
-  it("reuses resolved redaction settings for returned lines", async () => {
+  it("applies redaction once per request across all returned lines", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-log-tail-"));
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
@@ -44,12 +44,11 @@ describe("readConfiguredLogTail", () => {
     const result = await readConfiguredLogTail();
 
     expect(resolveRedactOptionsMock).toHaveBeenCalledTimes(1);
-    expect(redactSensitiveTextMock).toHaveBeenNthCalledWith(
-      1,
-      "custom-secret-abcdefghijklmnopqrstuvwxyz",
+    expect(redactSensitiveLinesMock).toHaveBeenCalledTimes(1);
+    expect(redactSensitiveLinesMock).toHaveBeenCalledWith(
+      ["custom-secret-abcdefghijklmnopqrstuvwxyz", "second line"],
       resolvedRedaction,
     );
-    expect(redactSensitiveTextMock).toHaveBeenNthCalledWith(2, "second line", resolvedRedaction);
     expect(result.lines).toEqual(["custom…wxyz", "second line"]);
 
     await fs.rm(tempDir, { recursive: true, force: true });

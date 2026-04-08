@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText, resolveRedactOptions } from "./redact.js";
+import {
+  getDefaultRedactPatterns,
+  redactSensitiveLines,
+  redactSensitiveText,
+  resolveRedactOptions,
+} from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -155,5 +160,29 @@ describe("redactSensitiveText", () => {
 
     expect(resolved.patterns).toHaveLength(1);
     expect(resolved.patterns[0]).toBe(pattern);
+  });
+});
+
+describe("redactSensitiveLines", () => {
+  it("redacts matching content across all lines", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: defaults });
+    const lines = ["curl --token abcdef1234567890ghij https://api.test", "normal log line"];
+    const result = redactSensitiveLines(lines, resolved);
+    expect(result[0]).toBe("curl --token abcdef…ghij https://api.test");
+    expect(result[1]).toBe("normal log line");
+  });
+
+  it("returns lines unmodified when mode is off", () => {
+    const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
+    const lines = ["TOKEN=abcdef1234567890ghij"];
+    expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
+  });
+
+  it("returns lines unmodified when resolved patterns is empty — does not fall back to defaults", () => {
+    // Simulates the case where all user-configured patterns fail to compile.
+    // The pre-resolved empty array must be honored, not silently replaced with defaults.
+    const resolved = { mode: "tools" as const, patterns: [] };
+    const lines = ["TOKEN=abcdef1234567890ghij"];
+    expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 });

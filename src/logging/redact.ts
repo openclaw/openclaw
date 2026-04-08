@@ -45,7 +45,7 @@ type RedactOptions = {
   patterns?: RedactPattern[];
 };
 
-type ResolvedRedactOptions = {
+export type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: RegExp[];
 };
@@ -174,4 +174,13 @@ export function redactToolDetail(detail: string): string {
 
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
+}
+
+// Applies already-resolved redaction to a batch of lines without re-resolving options.
+// Use this instead of mapping redactSensitiveText when options are resolved once per request.
+export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
+  if (resolved.mode === "off" || !resolved.patterns.length) {
+    return lines;
+  }
+  return lines.map((line) => (line ? redactText(line, resolved.patterns) : line));
 }
