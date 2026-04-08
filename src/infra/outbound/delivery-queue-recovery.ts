@@ -73,6 +73,17 @@ function getErrnoCode(err: unknown): string | null {
     : null;
 }
 
+// Errors that mean "the channel listener is not yet ready, try again later".
+// Recovery treats these as deferrals so retryCount is preserved across gateway
+// restarts. Without this list a slow-to-start listener (e.g. WhatsApp Web takes
+// ~2 minutes to come up after launchctl kickstart) burns through MAX_RETRIES
+// across normal restart cycles and the queued deliveries get permanently failed.
+const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /no active .* listener/i,
+  /listener.*not.*(ready|active|available|started)/i,
+  /channel.*not.*(ready|connected|available|started)/i,
+];
+
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
     recovered: 0,
@@ -192,6 +203,10 @@ export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
 
+export function isTransientListenerDeliveryError(error: string): boolean {
+  return TRANSIENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
 async function drainQueuedEntry(opts: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
@@ -199,7 +214,7 @@ async function drainQueuedEntry(opts: {
   stateDir?: string;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "deferred" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
   try {
     await opts.deliver(buildRecoveryDeliverParams(entry, opts.cfg));
@@ -208,8 +223,8 @@ async function drainQueuedEntry(opts: {
     return "recovered";
   } catch (err) {
     const errMsg = formatErrorMessage(err);
-    opts.onFailed?.(entry, errMsg);
     if (isPermanentDeliveryError(errMsg)) {
+      opts.onFailed?.(entry, errMsg);
       try {
         await moveToFailed(entry.id, opts.stateDir);
         return "moved-to-failed";
@@ -218,14 +233,17 @@ async function drainQueuedEntry(opts: {
           return "already-gone";
         }
       }
-    } else {
-      try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
-        return "failed";
-      } catch (failErr) {
-        if (getErrnoCode(failErr) === "ENOENT") {
-          return "already-gone";
-        }
+    }
+    if (isTransientListenerDeliveryError(errMsg)) {
+      return "deferred";
+    }
+    opts.onFailed?.(entry, errMsg);
+    try {
+      await failDelivery(entry.id, errMsg, opts.stateDir);
+      return "failed";
+    } catch (failErr) {
+      if (getErrnoCode(failErr) === "ENOENT") {
+        return "already-gone";
       }
     }
     return "failed";
@@ -329,6 +347,10 @@ export async function drainPendingDeliveries(opts: {
           opts.log.info(
             `${opts.logLabel}: drained delivery ${currentEntry.id} on ${currentEntry.channel}`,
           );
+        } else if (result === "deferred") {
+          opts.log.info(
+            `${opts.logLabel}: entry ${currentEntry.id} deferred; channel listener not ready yet`,
+          );
         }
       } finally {
         releaseRecoveryEntry(entry.id);
@@ -382,7 +404,6 @@ export async function recoverPendingDeliveries(opts: {
         opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
         continue;
       }
-
       if (currentEntry.retryCount >= MAX_RETRIES) {
         opts.log.warn(
           `Delivery ${currentEntry.id} exceeded max retries (${currentEntry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
@@ -421,6 +442,13 @@ export async function recoverPendingDeliveries(opts: {
           opts.log.warn(`Retry failed for delivery ${failedEntry.id}: ${errMsg}`);
         },
       });
+      if (result === "deferred") {
+        summary.deferredBackoff += 1;
+        opts.log.info(
+          `Delivery ${currentEntry.id} deferred; channel listener not ready yet`,
+        );
+        continue;
+      }
       if (result === "moved-to-failed") {
         continue;
       }

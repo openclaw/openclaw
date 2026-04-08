@@ -138,6 +138,33 @@ describe("delivery-queue recovery", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
+  it("defers without bumping retryCount when channel listener is not yet ready", async () => {
+    const id = await enqueueDelivery(
+      { channel: "whatsapp", to: "120363400000000000@g.us", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("No active WhatsApp Web listener (account: default). Start the gateway, ..."),
+      );
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.deferredBackoff).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.recovered).toBe(0);
+    const remaining = await loadPendingDeliveries(tmpDir());
+    expect(remaining).toHaveLength(1);
+    // retryCount must NOT be bumped on transient listener errors so the entry
+    // survives many gateway restarts while the listener is still warming up.
+    expect(remaining[0]?.retryCount).toBe(0);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("listener not ready"));
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(
+      false,
+    );
+  });
+
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
     await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
