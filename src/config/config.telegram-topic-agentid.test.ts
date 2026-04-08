@@ -134,6 +134,38 @@ describe("telegram topic agentId schema", () => {
   });
 });
 
+describe("telegram account agentId schema", () => {
+  it("accepts agentId in telegram account config (multi-account routing)", () => {
+    const res = OpenClawSchema.safeParse({
+      channels: {
+        telegram: {
+          accounts: {
+            main: {
+              botToken: "123:AAA",
+              dmPolicy: "pairing",
+              agentId: "main",
+            },
+            builder: {
+              botToken: "456:BBB",
+              dmPolicy: "pairing",
+              agentId: "builder",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      console.error(res.error.format());
+      return;
+    }
+    expect(res.data.channels?.telegram?.accounts?.main?.agentId).toBe("main");
+    expect(res.data.channels?.telegram?.accounts?.builder?.agentId).toBe("builder");
+    expect(res.data.channels?.telegram?.accounts?.main?.botToken).toBe("123:AAA");
+  });
+});
+
 describe("telegram disableAudioPreflight schema", () => {
   it("accepts disableAudioPreflight for groups and topics", () => {
     const res = OpenClawSchema.safeParse({
