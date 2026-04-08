@@ -112,14 +112,54 @@ function acquireSharedEclawHttpRoute(params: {
     res.end(JSON.stringify(result.body));
   };
 
-  sharedRouteUnregister = registerPluginHttpRoute({
+  // registerPluginHttpRoute returns a no-op unregister function if the
+  // path is already claimed by another plugin (route conflict) or the
+  // path is invalid / missing — it signals this via a log message
+  // containing "route conflict", "route overlap denied", or "webhook path
+  // missing" and never adds an entry to the registry. We MUST detect
+  // that case here, because otherwise startAccount happily proceeds to
+  // register/bind with the E-Claw backend and reports success while
+  // inbound webhooks go nowhere.
+  //
+  // Sentinel pattern: wrap the log callback with a detector that sets
+  // `conflict` when a known failure message flies through. Any other
+  // messages (e.g. successful registration, stale-entry replacement) are
+  // forwarded verbatim.
+  // TypeScript's control-flow analysis doesn't track closure-mutated
+  // primitives, so we use a ref-style holder to preserve the mutation
+  // type without reading back as `never` after the lambda runs.
+  const conflictRef: { message: string | null } = { message: null };
+  const wrappedLog = (msg: string): void => {
+    if (
+      msg.includes("route conflict") ||
+      msg.includes("route overlap denied") ||
+      msg.includes("webhook path missing")
+    ) {
+      conflictRef.message = msg;
+    }
+    params.log?.info?.(msg);
+  };
+
+  const unregisterFn = registerPluginHttpRoute({
     path: WEBHOOK_ROUTE_PATH,
     auth: "plugin",
     pluginId: CHANNEL_ID,
     replaceExisting: false,
-    log: (msg: string) => params.log?.info?.(msg),
+    log: wrappedLog,
     handler,
   });
+
+  if (conflictRef.message !== null) {
+    // Route registration failed. Don't keep the no-op unregister around —
+    // throw so the caller (startAccount) can surface this as a real
+    // startup failure, clean up its local state, and let the channel
+    // manager retry or report it to the operator.
+    throw new Error(
+      `E-Claw: failed to register shared HTTP route ${WEBHOOK_ROUTE_PATH} — ${conflictRef.message}`,
+    );
+  }
+
+  sharedRouteUnregister = unregisterFn;
   sharedRouteRefCount = 1;
   params.log?.info?.(`E-Claw: registered shared HTTP route ${WEBHOOK_ROUTE_PATH}`);
   return makeRouteRelease();

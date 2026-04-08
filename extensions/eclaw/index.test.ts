@@ -650,3 +650,95 @@ describe("eclaw active-event suppression is async-local, not global", () => {
     expect(getActiveEclawEvent("default")).toBe("message");
   });
 });
+
+describe("eclaw shared HTTP route conflict detection", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    const mod = await import("./src/gateway.js");
+    mod.__resetEclawSharedRouteForTests();
+    vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
+    vi.restoreAllMocks();
+  });
+
+  it("throws when registerPluginHttpRoute reports a route conflict", async () => {
+    // Override the module-level mock to simulate a conflict log.
+    // registerPluginHttpRoute returns a no-op AND logs a conflict message
+    // when the path is already taken by another plugin.
+    vi.doMock("openclaw/plugin-sdk/webhook-ingress", () => ({
+      readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+      registerPluginHttpRoute: (p: {
+        log?: (msg: string) => void;
+      }) => {
+        p.log?.(
+          "plugin: route conflict at /eclaw-webhook (exact) for account \"default\"; owned by other-plugin (other-source)",
+        );
+        return () => {};
+      },
+    }));
+    vi.doMock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+      waitUntilAbort: async () => undefined,
+    }));
+
+    // Force fresh module graph so the new mock takes effect
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "env-key";
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+
+    const logs: string[] = [];
+    const abortCtrl = new AbortController();
+    // Route-conflict path must re-throw, not silently return — a no-op
+    // route means inbound webhooks never arrive, and the manager needs
+    // to see the failure so it can alert operators / retry.
+    await expect(
+      startEclawAccount({
+        cfg: {} as never,
+        accountId: "default",
+        abortSignal: abortCtrl.signal,
+        log: {
+          info: (m) => logs.push(`info:${m}`),
+          warn: (m) => logs.push(`warn:${m}`),
+          error: (m) => logs.push(`error:${m}`),
+        },
+      }),
+    ).rejects.toThrow(/failed to register shared HTTP route \/eclaw-webhook.*route conflict/);
+
+    // Sanity: the conflict message from the registry was forwarded to
+    // the info log before the throw.
+    expect(
+      logs.some((l) => l.startsWith("info:") && l.includes("route conflict")),
+    ).toBe(true);
+  });
+
+  it("throws when registerPluginHttpRoute reports an overlap denial", async () => {
+    vi.doMock("openclaw/plugin-sdk/webhook-ingress", () => ({
+      readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+      registerPluginHttpRoute: (p: {
+        log?: (msg: string) => void;
+      }) => {
+        p.log?.(
+          "plugin: route overlap denied at /eclaw-webhook (exact, plugin) for account \"default\"; overlaps /eclaw-* (prefix, plugin)",
+        );
+        return () => {};
+      },
+    }));
+    vi.doMock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+      waitUntilAbort: async () => undefined,
+    }));
+
+    vi.resetModules();
+    process.env.ECLAW_API_KEY = "env-key";
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+    const abortCtrl = new AbortController();
+    await expect(
+      startEclawAccount({
+        cfg: {} as never,
+        accountId: "default",
+        abortSignal: abortCtrl.signal,
+      }),
+    ).rejects.toThrow(/route overlap denied/);
+  });
+});
