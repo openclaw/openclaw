@@ -124,6 +124,8 @@ export function buildQaRuntimeEnv(params: {
 
 function isRetryableGatewayCallError(details: string): boolean {
   return (
+    details.includes("handshake timeout") ||
+    details.includes("gateway closed (1000") ||
     details.includes("gateway closed (1012)") ||
     details.includes("gateway closed (1006") ||
     details.includes("abnormal closure") ||
@@ -166,6 +168,16 @@ async function waitForGatewayReady(params: {
     await sleep(250);
   }
   throw new Error(`gateway failed to become healthy:\n${params.logs()}`);
+}
+
+function isRetryableRpcStartupError(error: unknown) {
+  const details = formatErrorMessage(error);
+  return (
+    details.includes("handshake timeout") ||
+    details.includes("gateway closed (1000") ||
+    details.includes("gateway closed (1006") ||
+    details.includes("gateway closed (1012)")
+  );
 }
 
 export function resolveQaControlUiRoot(params: { repoRoot: string; controlUiEnabled?: boolean }) {
@@ -277,12 +289,34 @@ export async function startQaGatewayChild(params: {
       baseUrl,
       logs,
       child,
+      timeoutMs: 120_000,
     });
-    rpcClient = await startQaGatewayRpcClient({
-      wsUrl,
-      token: gatewayToken,
-      logs,
-    });
+    let lastRpcError: unknown = null;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        rpcClient = await startQaGatewayRpcClient({
+          wsUrl,
+          token: gatewayToken,
+          logs,
+        });
+        break;
+      } catch (error) {
+        lastRpcError = error;
+        if (attempt >= 4 || !isRetryableRpcStartupError(error)) {
+          throw error;
+        }
+        await sleep(500 * attempt);
+        await waitForGatewayReady({
+          baseUrl,
+          logs,
+          child,
+          timeoutMs: 15_000,
+        });
+      }
+    }
+    if (!rpcClient) {
+      throw lastRpcError ?? new Error("qa gateway rpc client failed to start");
+    }
   } catch (error) {
     child.kill("SIGTERM");
     throw error;

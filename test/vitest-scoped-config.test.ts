@@ -656,6 +656,7 @@ describe("scoped vitest configs", () => {
   it("normalizes plugins include patterns relative to the scoped dir", () => {
     expect(defaultPluginsConfig.test?.dir).toBe("src/plugins");
     expect(defaultPluginsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultPluginsConfig.test?.exclude).toContain("contracts/**");
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {
