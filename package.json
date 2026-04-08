@@ -1064,6 +1064,7 @@
     "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
     "android:assemble:third-party": "cd apps/android && ./gradlew :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
+    "android:export-upload-cert": "bash apps/android/scripts/export-upload-cert.sh",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
     "android:install": "cd apps/android && ./gradlew :app:installPlayDebug",
     "android:install:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug",
