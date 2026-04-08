@@ -56,7 +56,7 @@ vi.mock("express", () => {
   const factory = () => ({
     use: vi.fn(),
     post: vi.fn(),
-    listen: vi.fn((_port: number) => {
+    listen: vi.fn((_port: number, _host?: string) => {
       const server = new EventEmitter() as FakeServer;
       server.setTimeout = vi.fn((_msecs: number) => server);
       server.requestTimeout = 0;

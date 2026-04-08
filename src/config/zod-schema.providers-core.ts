@@ -1544,6 +1544,7 @@ export const MSTeamsConfigSchema = z
         path: z.string().optional(),
         host: z
           .string()
+          .min(1)
           .optional()
           .describe(
             "Local bind host for the Microsoft Teams webhook listener. Defaults to 0.0.0.0 for backwards compatibility; set 127.0.0.1 when serving through a local tunnel or reverse proxy.",

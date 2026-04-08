@@ -39,4 +39,13 @@ describe("config msteams", () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it("rejects empty webhook host", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      webhook: {
+        host: "",
+      },
+    });
+    expect(res.success).toBe(false);
+  });
 });
