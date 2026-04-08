@@ -26,11 +26,10 @@ export function createChannelOutboundRuntimeSend(params: {
       if (!outbound?.sendText) {
         throw new Error(params.unavailableMessage);
       }
-      return await outbound.sendText({
+      const sharedCtx = {
         cfg: opts.cfg ?? loadConfig(),
         to,
         text,
-        mediaUrl: opts.mediaUrl,
         mediaLocalRoots: opts.mediaLocalRoots,
         accountId: opts.accountId,
         threadId: opts.messageThreadId,
@@ -42,7 +41,11 @@ export function createChannelOutboundRuntimeSend(params: {
         forceDocument: opts.forceDocument,
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
-      });
+      };
+      if (opts.mediaUrl && outbound.sendMedia) {
+        return await outbound.sendMedia({ ...sharedCtx, mediaUrl: opts.mediaUrl });
+      }
+      return await outbound.sendText({ ...sharedCtx, mediaUrl: opts.mediaUrl });
     },
   };
 }
