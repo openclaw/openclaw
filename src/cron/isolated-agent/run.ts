@@ -379,11 +379,6 @@ export async function runCronIsolatedAgentTurn(params: {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
   }
-  if (deliveryRequested) {
-    commandBody =
-      `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
-  }
-
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
     workspaceDir,
@@ -523,7 +518,7 @@ export async function runCronIsolatedAgentTurn(params: {
           // was successfully resolved. When resolution fails the agent should not
           // be blocked by a target it cannot satisfy (#27898).
           requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
-          disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
+          disableMessageTool: deliveryPlan.mode === "none",
           abortSignal,
         });
       },
