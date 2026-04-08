@@ -23,7 +23,7 @@ export {
   normalizeExecSecurity,
   normalizeExecTarget,
 } from "../infra/exec-approvals.js";
-import { logWarn } from "../logger.js";
+import { logDebug, logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -580,26 +580,46 @@ export async function runExecProcess(opts: {
   };
   addSession(session);
 
+  // Tracks whether the exec run's promise has settled (process exited or
+  // spawn failed).  Once settled the agent-loop no longer expects
+  // tool_execution_update events, so emitUpdate must become a no-op to
+  // prevent calling into a disposed agent run (the "Agent listener invoked
+  // outside active run" crash — see #62520).
+  let updatesDisabled = false;
+
   const emitUpdate = () => {
     if (!opts.onUpdate) {
       return;
     }
-    if (session.backgrounded || session.exited) {
+    if (session.backgrounded || session.exited || updatesDisabled) {
       return;
     }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
-      details: {
-        status: "running",
-        sessionId,
-        pid: session.pid ?? undefined,
-        startedAt,
-        cwd: session.cwd,
-        tail: session.tail,
-      },
-    });
+    try {
+      opts.onUpdate({
+        content: [{ type: "text", text: warningText + (tailText || "") }],
+        details: {
+          status: "running",
+          sessionId,
+          pid: session.pid ?? undefined,
+          startedAt,
+          cwd: session.cwd,
+          tail: session.tail,
+        },
+      });
+    } catch {
+      // The agent run may have ended (e.g. subagent abort/timeout) while
+      // the exec process is still producing output.  In that case
+      // pi-agent-core's processEvents() throws because activeRun is
+      // already cleared.  Suppress all further updates for this session
+      // rather than propagating the error as an unhandled rejection that
+      // would crash the gateway.
+      updatesDisabled = true;
+      logDebug(
+        `[exec] onUpdate suppressed for session ${sessionId}: agent run is no longer active`,
+      );
+    }
   };
 
   const handleStdout = (data: string) => {
@@ -776,6 +796,11 @@ export async function runExecProcess(opts: {
   const promise = managedRun
     .wait()
     .then(async (exit): Promise<ExecProcessOutcome> => {
+      // Disable updates *before* markExited so that any late stdout/stderr
+      // data events queued in the same event-loop tick cannot sneak through
+      // the `session.exited` guard before it flips to true.
+      updatesDisabled = true;
+
       const durationMs = Date.now() - startedAt;
       const outcome = buildExecExitOutcome({
         exit,
@@ -800,6 +825,7 @@ export async function runExecProcess(opts: {
       return outcome;
     })
     .catch((err): ExecProcessOutcome => {
+      updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
       return buildExecRuntimeErrorOutcome({

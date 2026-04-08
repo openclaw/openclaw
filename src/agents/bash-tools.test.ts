@@ -732,4 +732,51 @@ describe("exec backgrounded onUpdate suppression", () => {
     },
     isWin ? 15_000 : 5_000,
   );
+
+  it(
+    "does not invoke onUpdate after the foreground exec process exits",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      // Run a foreground command that produces output then exits.
+      const command = joinCommands([shellEcho("line1"), shellEcho("line2")]);
+      await execTool.execute(nextCallId(), { command }, undefined, onUpdateSpy);
+      const callsAtExit = onUpdateSpy.mock.calls.length;
+      // Allow a tick for any straggling stdout data events.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(onUpdateSpy.mock.calls.length).toBe(callsAtExit);
+    },
+    isWin ? 10_000 : 5_000,
+  );
+
+  it(
+    "does not crash when onUpdate throws (simulates agent run ended)",
+    async () => {
+      let callCount = 0;
+      const throwingOnUpdate = () => {
+        callCount++;
+        if (callCount > 1) {
+          throw new Error("Agent listener invoked outside active run");
+        }
+      };
+      // Run a command that produces multiple output chunks.
+      const command = joinCommands([
+        shellEcho("chunk1"),
+        shortDelayCmd,
+        shellEcho("chunk2"),
+        shortDelayCmd,
+        shellEcho("chunk3"),
+      ]);
+      // Must not throw — the error should be caught internally and
+      // subsequent updates suppressed.
+      const result = await execTool.execute(
+        nextCallId(),
+        { command },
+        undefined,
+        throwingOnUpdate as never,
+      );
+      expect(result).toBeDefined();
+      expect(result.details).toBeDefined();
+    },
+    isWin ? 10_000 : 5_000,
+  );
 });
