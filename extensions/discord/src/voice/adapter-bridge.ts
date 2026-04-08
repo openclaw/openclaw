@@ -20,8 +20,8 @@ export class DiscordVoiceServerUpdateBridge extends VoiceServerUpdateListener {
     if (!adapter) {return;}
     adapter.onVoiceServerUpdate({
       guild_id: guildId,
-      token: data.token,
-      endpoint: data.endpoint ?? null,
+      token: typeof data.token === "string" ? data.token : "",
+      endpoint: typeof data.endpoint === "string" ? data.endpoint : null,
     } as GatewayVoiceServerUpdateDispatchData);
   }
 }
