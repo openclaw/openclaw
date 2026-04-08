@@ -45,7 +45,7 @@ const {
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
     sendToolResult: () => true,
-    sendBlockReply: () => Promise.resolve(),
+    sendBlockReply: () => Promise.resolve(true),
     sendFinalReply: () => true,
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
@@ -63,7 +63,7 @@ describe("withReplyDispatcher", () => {
     const order: string[] = [];
     const dispatcher = {
       sendToolResult: () => true,
-      sendBlockReply: () => Promise.resolve(),
+      sendBlockReply: () => Promise.resolve(true),
       sendFinalReply: () => {
         order.push("sendFinalReply");
         return true;
@@ -137,7 +137,7 @@ describe("withReplyDispatcher", () => {
     const order: string[] = [];
     const dispatcher = {
       sendToolResult: () => true,
-      sendBlockReply: () => Promise.resolve(),
+      sendBlockReply: () => Promise.resolve(true),
       sendFinalReply: () => {
         order.push("sendFinalReply");
         return true;

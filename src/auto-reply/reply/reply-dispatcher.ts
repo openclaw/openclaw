@@ -95,7 +95,7 @@ export type ReplyDispatcher = {
    * Because a fulfilled `Promise` is truthy, existing boolean-style checks
    * (`if (delivered)`) remain correct without changes.
    */
-  sendBlockReply: (payload: ReplyPayload) => false | Promise<void>;
+  sendBlockReply: (payload: ReplyPayload) => false | Promise<true>;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
@@ -240,7 +240,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         return false;
       }
       // Return the delivery chain so same-channel callers can await delivery.
-      return sendChain;
+      // Resolve to true to preserve backward compatibility for await-and-branch patterns.
+      return sendChain.then(() => true);
     },
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
