@@ -247,7 +247,10 @@ export default definePluginEntry({
         // Resolve the provider API key so the Ollama stream function receives
         // it via options.apiKey. The pi-ai runtime does not inject apiKey for
         // custom API stream functions, so the plugin must do it here.
-        const rawApiKey = config?.models?.providers?.ollama?.apiKey;
+        const rawApiKey = resolveConfiguredOllamaProviderConfig({
+          config,
+          providerId: provider,
+        })?.apiKey;
         const configApiKey = typeof rawApiKey === "string" ? rawApiKey : undefined;
         let resolvedKey: string | undefined;
         if (configApiKey && configApiKey !== DEFAULT_API_KEY && configApiKey !== "custom-local") {

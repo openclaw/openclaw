@@ -358,6 +358,38 @@ describe("ollama plugin", () => {
     expect(resolveEnvApiKeyMock).not.toHaveBeenCalled();
   });
 
+  it("injects the selected provider's API key instead of hardcoded ollama", () => {
+    resolveEnvApiKeyMock.mockReturnValue(null);
+    const provider = registerProvider();
+    const streamFn = provider.createStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              apiKey: "sk-wrong-provider",
+            },
+            ollama2: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11435",
+              apiKey: "sk-right-provider",
+            },
+          },
+        },
+      },
+      model: { id: "llama3.2", provider: "ollama2", api: "ollama" },
+      provider: "ollama2",
+    } as never);
+
+    expect(streamFn).not.toBe(innerStreamFnMock);
+    innerStreamFnMock.mockClear();
+    void streamFn?.({} as never, {} as never, {});
+    expect(innerStreamFnMock).toHaveBeenCalledTimes(1);
+    const passedOpts = innerStreamFnMock.mock.calls[0]?.[2];
+    expect(passedOpts?.apiKey).toBe("sk-right-provider");
+  });
+
   it("uses ollama provider baseUrl when provider is ollama (backward compat)", () => {
     const provider = registerProvider();
     const config = {
@@ -653,6 +685,7 @@ describe("ollama plugin", () => {
           },
         },
         model: { id: "test", provider: "ollama", api: "ollama" },
+        provider: "ollama",
       });
       expect(streamFn).not.toBe(innerStreamFnMock);
 
@@ -675,6 +708,7 @@ describe("ollama plugin", () => {
           },
         },
         model: { id: "test", provider: "ollama", api: "ollama" },
+        provider: "ollama",
       });
       expect(streamFn).not.toBe(innerStreamFnMock);
 
@@ -697,6 +731,7 @@ describe("ollama plugin", () => {
           },
         },
         model: { id: "test", provider: "ollama", api: "ollama" },
+        provider: "ollama",
       });
       // Env var unset + config is a known marker → should NOT inject the marker string
       expect(streamFn).toBe(innerStreamFnMock);
@@ -714,6 +749,7 @@ describe("ollama plugin", () => {
           },
         },
         model: { id: "test", provider: "ollama", api: "ollama" },
+        provider: "ollama",
       });
 
       innerStreamFnMock.mockClear();
