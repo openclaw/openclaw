@@ -79,6 +79,10 @@ describe("isolated cron resolveSessionAuthProfileOverride isNewSession (#62783)"
     });
 
     const openRouterCall = spy.mock.calls.find((c) => c[0]?.provider === "openrouter");
+    expect(
+      openRouterCall,
+      "resolveSessionAuthProfileOverride was not called with provider openrouter",
+    ).toBeDefined();
     expect(openRouterCall?.[0]?.isNewSession).toBe(false);
   });
 });
