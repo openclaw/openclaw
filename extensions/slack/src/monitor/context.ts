@@ -6,13 +6,16 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/core";
+import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
@@ -162,7 +165,7 @@ export function createSlackMonitorContext(params: {
     channelType?: string | null;
     senderId?: string | null;
   }) => {
-    const channelId = p.channelId?.trim() ?? "";
+    const channelId = normalizeOptionalString(p.channelId) ?? "";
     if (!channelId) {
       return params.mainKey;
     }
@@ -175,7 +178,7 @@ export function createSlackMonitorContext(params: {
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-    const senderId = p.senderId?.trim() ?? "";
+    const senderId = normalizeOptionalString(p.senderId) ?? "";
 
     // Resolve through shared channel/account bindings so system events route to
     // the same agent session as regular inbound messages.

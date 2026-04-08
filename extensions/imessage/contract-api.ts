@@ -1,4 +1,3 @@
-export { createIMessageTestPlugin } from "./src/test-plugin.js";
 export {
   resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots,

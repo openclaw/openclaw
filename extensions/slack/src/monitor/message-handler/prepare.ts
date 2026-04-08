@@ -65,7 +65,7 @@ function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
   agentId: string | undefined,
 ): RegExp[] {
-  const key = agentId?.trim() || "__default__";
+  const key = normalizeOptionalString(agentId) ?? "__default__";
   let byAgent = mentionRegexCache.get(ctx);
   if (!byAgent) {
     byAgent = new Map<string, RegExp[]>();

@@ -38,7 +38,7 @@ function pushUniqueCatalogEntry(params: {
   fallbackNameToId: boolean;
 }) {
   const provider = normalizeProviderId(params.provider);
-  const id = String(params.id ?? "").trim();
+  const id = normalizeOptionalString(params.id) ?? "";
   if (!provider || !id) {
     return;
   }
@@ -83,7 +83,7 @@ function buildModelPickerCatalog(params: {
     };
 
     const pushRaw = (raw?: string) => {
-      const value = String(raw ?? "").trim();
+      const value = normalizeOptionalString(raw) ?? "";
       if (!value) {
         return;
       }

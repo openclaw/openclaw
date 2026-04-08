@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildQaScenarioPlanMarkdown, QA_AGENT_IDENTITY_MARKDOWN } from "./qa-agent-bootstrap.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { buildQaScenarioPlanMarkdown, readQaAgentIdentityMarkdown } from "./qa-agent-bootstrap.js";
+import { readQaBootstrapScenarioCatalog, readQaScenarioPackMarkdown } from "./scenario-catalog.js";
 
 export async function seedQaAgentWorkspace(params: { workspaceDir: string; repoRoot?: string }) {
   const catalog = readQaBootstrapScenarioCatalog();
@@ -9,9 +9,10 @@ export async function seedQaAgentWorkspace(params: { workspaceDir: string; repoR
 
   const kickoffTask = catalog.kickoffTask || "QA mission unavailable.";
   const files = new Map<string, string>([
-    ["IDENTITY.md", QA_AGENT_IDENTITY_MARKDOWN],
+    ["IDENTITY.md", readQaAgentIdentityMarkdown()],
     ["QA_KICKOFF_TASK.md", kickoffTask],
     ["QA_SCENARIO_PLAN.md", buildQaScenarioPlanMarkdown()],
+    ["QA_SCENARIOS.md", readQaScenarioPackMarkdown()],
   ]);
 
   if (params.repoRoot) {
@@ -22,6 +23,7 @@ export async function seedQaAgentWorkspace(params: { workspaceDir: string; repoR
 - repo: ./repo/
 - kickoff: ./QA_KICKOFF_TASK.md
 - scenario plan: ./QA_SCENARIO_PLAN.md
+- scenario pack: ./QA_SCENARIOS.md
 - identity: ./IDENTITY.md
 
 The mounted repo source should be available read-only under \`./repo/\`.

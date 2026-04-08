@@ -35,6 +35,7 @@ export {
   normalizeNullableString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeStringifiedOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
 export {

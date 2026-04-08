@@ -1,7 +1,5 @@
 import {
-  enablePluginInConfig,
-  getScopedCredentialValue,
-  setScopedCredentialValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 
@@ -17,11 +15,11 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 100,
     credentialPath: "",
-    inactiveSecretPaths: [],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "duckduckgo"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "duckduckgo", value),
-    applySelectionConfig: (config) => enablePluginInConfig(config, "duckduckgo").config,
+    ...createWebSearchProviderContractFields({
+      credentialPath: "",
+      searchCredential: { type: "scoped", scopeId: "duckduckgo" },
+      selectionPluginId: "duckduckgo",
+    }),
     createTool: () => null,
   };
 }

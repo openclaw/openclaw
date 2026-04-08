@@ -1,6 +1,9 @@
 import * as path from "path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   getAccessToken,
   sendC2CFileMessage,
@@ -889,7 +892,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
       const tagName = normalizeLowercaseStringOrEmpty(match[1]);
 
-      let mediaPath = match[2]?.trim() ?? "";
+      let mediaPath = normalizeOptionalString(match[2]) ?? "";
       if (mediaPath.startsWith("MEDIA:")) {
         mediaPath = mediaPath.slice("MEDIA:".length);
       }

@@ -424,7 +424,7 @@ export class GatewayClient {
     if (this.connectSent) {
       return;
     }
-    const nonce = this.connectNonce?.trim() ?? "";
+    const nonce = normalizeOptionalString(this.connectNonce) ?? "";
     if (!nonce) {
       this.opts.onConnectError?.(new Error("gateway connect challenge missing nonce"));
       this.ws?.close(1008, "connect challenge missing nonce");

@@ -6,7 +6,10 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -50,7 +53,9 @@ const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
 function resolveRunwayBaseUrl(req: VideoGenerationRequest): string {
-  return req.cfg?.models?.providers?.runway?.baseUrl?.trim() || DEFAULT_RUNWAY_BASE_URL;
+  return (
+    normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ?? DEFAULT_RUNWAY_BASE_URL
+  );
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -64,14 +69,14 @@ function resolveSourceUri(
   if (!asset) {
     return undefined;
   }
-  const url = asset.url?.trim();
+  const url = normalizeOptionalString(asset.url);
   if (url) {
     return url;
   }
   if (!asset.buffer) {
     return undefined;
   }
-  return toDataUrl(asset.buffer, asset.mimeType?.trim() || fallbackMimeType);
+  return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? fallbackMimeType);
 }
 
 function resolveDurationSeconds(value: number | undefined): number {
@@ -84,9 +89,9 @@ function resolveDurationSeconds(value: number | undefined): number {
 function resolveRunwayRatio(req: VideoGenerationRequest): string {
   const hasImageInput = (req.inputImages?.length ?? 0) > 0;
   const requested =
-    req.size?.trim() ||
+    normalizeOptionalString(req.size) ||
     (() => {
-      switch (req.aspectRatio?.trim()) {
+      switch (normalizeOptionalString(req.aspectRatio)) {
         case "9:16":
           return "720:1280";
         case "16:9":
@@ -136,7 +141,7 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
   const endpoint = resolveEndpoint(req);
   const duration = resolveDurationSeconds(req.durationSeconds);
   const ratio = resolveRunwayRatio(req);
-  const model = req.model?.trim() || DEFAULT_RUNWAY_MODEL;
+  const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   if (endpoint === "/v1/text_to_video") {
     if (!TEXT_ONLY_MODELS.has(model)) {
       throw new Error(
@@ -210,10 +215,9 @@ async function pollRunwayTask(params: {
       case "FAILED":
       case "CANCELLED":
         throw new Error(
-          (typeof payload.failure === "string"
-            ? payload.failure
-            : payload.failure?.message
-          )?.trim() || `Runway video generation ${normalizeLowercaseStringOrEmpty(payload.status)}`,
+          normalizeOptionalString(
+            typeof payload.failure === "string" ? payload.failure : payload.failure?.message,
+          ) || `Runway video generation ${normalizeLowercaseStringOrEmpty(payload.status)}`,
         );
       case "PENDING":
       case "RUNNING":
@@ -240,7 +244,7 @@ async function downloadRunwayVideos(params: {
       params.fetchFn,
     );
     await assertOkOrThrowHttpError(response, "Runway generated video download failed");
-    const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const arrayBuffer = await response.arrayBuffer();
     videos.push({
       buffer: Buffer.from(arrayBuffer),
@@ -325,7 +329,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "Runway video generation failed");
         const submitted = (await response.json()) as RunwayTaskCreateResponse;
-        const taskId = submitted.id?.trim();
+        const taskId = normalizeOptionalString(submitted.id);
         if (!taskId) {
           throw new Error("Runway video generation response missing task id");
         }
@@ -336,9 +340,9 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           baseUrl,
           fetchFn,
         });
-        const outputUrls = completed.output?.filter(
-          (value) => typeof value === "string" && value.trim(),
-        );
+        const outputUrls = completed.output
+          ?.map((value) => normalizeOptionalString(value))
+          .filter((value): value is string => Boolean(value));
         if (!outputUrls?.length) {
           throw new Error("Runway video generation completed without output URLs");
         }
@@ -349,7 +353,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         });
         return {
           videos,
-          model: req.model?.trim() || DEFAULT_RUNWAY_MODEL,
+          model: normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL,
           metadata: {
             taskId,
             status: completed.status,

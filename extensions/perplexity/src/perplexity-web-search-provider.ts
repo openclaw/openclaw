@@ -32,7 +32,10 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
@@ -123,7 +126,7 @@ function resolvePerplexityBaseUrl(
   authSource: "config" | "perplexity_env" | "openrouter_env" | "none" = "none",
   configuredKey?: string,
 ): string {
-  const fromConfig = typeof perplexity?.baseUrl === "string" ? perplexity.baseUrl.trim() : "";
+  const fromConfig = normalizeOptionalString(perplexity?.baseUrl) ?? "";
   if (fromConfig) {
     return fromConfig;
   }
@@ -142,7 +145,7 @@ function resolvePerplexityBaseUrl(
 }
 
 function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
-  const model = typeof perplexity?.model === "string" ? perplexity.model.trim() : "";
+  const model = normalizeOptionalString(perplexity?.model) ?? "";
   return model || DEFAULT_PERPLEXITY_MODEL;
 }
 
@@ -174,8 +177,7 @@ function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   const baseUrl = resolvePerplexityBaseUrl(perplexity, auth.source, auth.apiKey);
   const model = resolvePerplexityModel(perplexity);
   const hasLegacyOverride = Boolean(
-    (perplexity?.baseUrl && perplexity.baseUrl.trim()) ||
-    (perplexity?.model && perplexity.model.trim()),
+    normalizeOptionalString(perplexity?.baseUrl) || normalizeOptionalString(perplexity?.model),
   );
   return {
     ...auth,
@@ -187,8 +189,8 @@ function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
 }
 
 function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
-  const topLevel = (data.citations ?? []).filter(
-    (url): url is string => typeof url === "string" && Boolean(url.trim()),
+  const topLevel = (data.citations ?? []).filter((url): url is string =>
+    Boolean(normalizeOptionalString(url)),
   );
   if (topLevel.length > 0) {
     return [...new Set(topLevel)];
@@ -205,8 +207,9 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
           : typeof annotation.url === "string"
             ? annotation.url
             : undefined;
-      if (url?.trim()) {
-        citations.push(url.trim());
+      const normalizedUrl = normalizeOptionalString(url);
+      if (normalizedUrl) {
+        citations.push(normalizedUrl);
       }
     }
   }
@@ -344,8 +347,8 @@ function resolveRuntimeTransport(params: {
     perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
       ? (perplexity as { baseUrl?: string; model?: string })
       : undefined;
-  const configuredBaseUrl = typeof scoped?.baseUrl === "string" ? scoped.baseUrl.trim() : "";
-  const configuredModel = typeof scoped?.model === "string" ? scoped.model.trim() : "";
+  const configuredBaseUrl = normalizeOptionalString(scoped?.baseUrl) ?? "";
+  const configuredModel = normalizeOptionalString(scoped?.model) ?? "";
   const baseUrl = (() => {
     if (configuredBaseUrl) {
       return configuredBaseUrl;

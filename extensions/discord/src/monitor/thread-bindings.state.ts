@@ -5,6 +5,7 @@ import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugi
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -143,26 +144,22 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
   }
   const value = raw as Partial<PersistedThreadBindingRecord>;
   const threadId = normalizeThreadId(value.threadId ?? threadIdKey);
-  const channelId = typeof value.channelId === "string" ? value.channelId.trim() : "";
+  const channelId = normalizeOptionalString(value.channelId) ?? "";
   const targetSessionKey =
-    typeof value.targetSessionKey === "string"
-      ? value.targetSessionKey.trim()
-      : typeof value.sessionKey === "string"
-        ? value.sessionKey.trim()
-        : "";
+    normalizeOptionalString(value.targetSessionKey) ??
+    normalizeOptionalString(value.sessionKey) ??
+    "";
   if (!threadId || !channelId || !targetSessionKey) {
     return null;
   }
   const accountId = normalizeAccountId(value.accountId);
   const targetKind = normalizeTargetKind(value.targetKind, targetSessionKey);
-  const agentIdRaw = typeof value.agentId === "string" ? value.agentId.trim() : "";
+  const agentIdRaw = normalizeOptionalString(value.agentId) ?? "";
   const agentId = agentIdRaw || resolveAgentIdFromSessionKey(targetSessionKey);
-  const label = typeof value.label === "string" ? value.label.trim() || undefined : undefined;
-  const webhookId =
-    typeof value.webhookId === "string" ? value.webhookId.trim() || undefined : undefined;
-  const webhookToken =
-    typeof value.webhookToken === "string" ? value.webhookToken.trim() || undefined : undefined;
-  const boundBy = typeof value.boundBy === "string" ? value.boundBy.trim() || "system" : "system";
+  const label = normalizeOptionalString(value.label);
+  const webhookId = normalizeOptionalString(value.webhookId);
+  const webhookToken = normalizeOptionalString(value.webhookToken);
+  const boundBy = normalizeOptionalString(value.boundBy) ?? "system";
   const boundAt =
     typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
       ? Math.floor(value.boundAt)
@@ -395,7 +392,7 @@ export function isRecentlyUnboundThreadWebhookMessage(params: {
   threadId: string;
   webhookId?: string | null;
 }): boolean {
-  const webhookId = params.webhookId?.trim() || "";
+  const webhookId = normalizeOptionalString(params.webhookId) ?? "";
   if (!webhookId) {
     return false;
   }

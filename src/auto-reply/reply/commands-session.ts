@@ -81,7 +81,7 @@ function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): num
 
 function resolveSessionBindingBoundBy(binding: SessionBindingRecord): string {
   const raw = binding.metadata?.boundBy;
-  return typeof raw === "string" ? raw.trim() : "";
+  return normalizeOptionalString(raw) ?? "";
 }
 
 type UpdatedLifecycleBinding = {

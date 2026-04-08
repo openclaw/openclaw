@@ -5,6 +5,7 @@ import type { CronConfig } from "../config/types.cron.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./types.js";
 
@@ -93,7 +94,10 @@ export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
   let maxBytes = DEFAULT_CRON_RUN_LOG_MAX_BYTES;
   if (cfg?.maxBytes !== undefined) {
     try {
-      maxBytes = parseByteSize(String(cfg.maxBytes).trim(), { defaultUnit: "b" });
+      const configuredMaxBytes = normalizeStringifiedOptionalString(cfg.maxBytes);
+      if (configuredMaxBytes) {
+        maxBytes = parseByteSize(configuredMaxBytes, { defaultUnit: "b" });
+      }
     } catch {
       maxBytes = DEFAULT_CRON_RUN_LOG_MAX_BYTES;
     }

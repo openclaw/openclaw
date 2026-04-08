@@ -65,7 +65,7 @@ const runtimeStub = {
 
 type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
 type DownloadGraphMediaOverrides = Partial<
-  Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider" | "maxBytes">
+  Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider">
 >;
 type FetchFn = typeof fetch;
 type LabeledCase = { label: string };

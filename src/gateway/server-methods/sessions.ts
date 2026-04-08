@@ -1536,7 +1536,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
       const resolvedModel = resolveSessionModelRef(cfg, entry, target.agentId);
       const workspaceDir =
-        entry?.spawnedWorkspaceDir?.trim() || resolveAgentWorkspaceDir(cfg, target.agentId);
+        normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
+        resolveAgentWorkspaceDir(cfg, target.agentId);
       const result = await compactEmbeddedPiSession({
         sessionId,
         sessionKey: target.canonicalKey,

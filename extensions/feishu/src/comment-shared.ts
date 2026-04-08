@@ -32,36 +32,32 @@ export function extractCommentElementText(element: unknown): string | undefined 
   if (!isRecord(element)) {
     return undefined;
   }
-  const type = readString(element.type)?.trim();
+  const type = normalizeString(element.type);
   if (type === "text_run" && isRecord(element.text_run)) {
-    return (
-      readString(element.text_run.content)?.trim() ||
-      readString(element.text_run.text)?.trim() ||
-      undefined
-    );
+    return normalizeString(element.text_run.content) || normalizeString(element.text_run.text);
   }
   if (type === "mention") {
     const mention = isRecord(element.mention) ? element.mention : undefined;
     const mentionName =
-      readString(mention?.name)?.trim() ||
-      readString(mention?.display_name)?.trim() ||
-      readString(element.name)?.trim();
+      normalizeString(mention?.name) ||
+      normalizeString(mention?.display_name) ||
+      normalizeString(element.name);
     return mentionName ? `@${mentionName}` : "@mention";
   }
   if (type === "docs_link") {
     const docsLink = isRecord(element.docs_link) ? element.docs_link : undefined;
     return (
-      readString(docsLink?.text)?.trim() ||
-      readString(docsLink?.url)?.trim() ||
-      readString(element.text)?.trim() ||
-      readString(element.url)?.trim() ||
+      normalizeString(docsLink?.text) ||
+      normalizeString(docsLink?.url) ||
+      normalizeString(element.text) ||
+      normalizeString(element.url) ||
       undefined
     );
   }
   return (
-    readString(element.text)?.trim() ||
-    readString(element.content)?.trim() ||
-    readString(element.name)?.trim() ||
+    normalizeString(element.text) ||
+    normalizeString(element.content) ||
+    normalizeString(element.name) ||
     undefined
   );
 }

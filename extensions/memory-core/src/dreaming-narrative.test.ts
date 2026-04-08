@@ -3,12 +3,16 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
+  buildBackfillDiaryEntry,
   buildDiaryEntry,
   buildNarrativePrompt,
   extractNarrativeText,
   formatNarrativeDate,
+  formatBackfillDiaryDate,
   generateAndAppendDreamNarrative,
+  removeBackfillDiaryEntries,
   type NarrativePhaseData,
+  writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -114,6 +118,115 @@ describe("buildDiaryEntry", () => {
     expect(entry).toContain("---");
     expect(entry).toContain("*April 5, 2026, 3:00 AM*");
     expect(entry).toContain("The code drifted gently.");
+  });
+});
+
+describe("backfill diary entries", () => {
+  it("formats a backfill date without time", () => {
+    expect(formatBackfillDiaryDate("2026-01-01", "UTC")).toBe("January 1, 2026");
+  });
+
+  it("preserves the iso day label in high-positive-offset timezones", () => {
+    expect(formatBackfillDiaryDate("2026-01-01", "Pacific/Kiritimati")).toBe("January 1, 2026");
+  });
+
+  it("builds a marked backfill diary entry", () => {
+    const entry = buildBackfillDiaryEntry({
+      isoDay: "2026-01-01",
+      sourcePath: "memory/2026-01-01.md",
+      bodyLines: ["What Happened", "1. A durable preference appeared."],
+      timezone: "UTC",
+    });
+    expect(entry).toContain("*January 1, 2026*");
+    expect(entry).toContain("openclaw:dreaming:backfill-entry");
+    expect(entry).toContain("What Happened");
+  });
+
+  it("writes and replaces backfill diary entries", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-backfill-");
+    const first = await writeBackfillDiaryEntries({
+      workspaceDir,
+      timezone: "UTC",
+      entries: [
+        {
+          isoDay: "2026-01-01",
+          sourcePath: "memory/2026-01-01.md",
+          bodyLines: ["What Happened", "1. First pass."],
+        },
+      ],
+    });
+    expect(first.written).toBe(1);
+    expect(first.replaced).toBe(0);
+
+    const second = await writeBackfillDiaryEntries({
+      workspaceDir,
+      timezone: "UTC",
+      entries: [
+        {
+          isoDay: "2026-01-02",
+          sourcePath: "memory/2026-01-02.md",
+          bodyLines: ["Reflections", "1. Second pass."],
+        },
+      ],
+    });
+    expect(second.written).toBe(1);
+    expect(second.replaced).toBe(1);
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).not.toContain("First pass.");
+    expect(content).toContain("Second pass.");
+    expect(content.match(/openclaw:dreaming:backfill-entry/g)?.length).toBe(1);
+  });
+
+  it("removes only backfill diary entries", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-backfill-");
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Keep this real dream.",
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+    });
+    await writeBackfillDiaryEntries({
+      workspaceDir,
+      timezone: "UTC",
+      entries: [
+        {
+          isoDay: "2026-01-01",
+          sourcePath: "memory/2026-01-01.md",
+          bodyLines: ["What Happened", "1. Remove this backfill."],
+        },
+      ],
+    });
+
+    const removed = await removeBackfillDiaryEntries({ workspaceDir });
+    expect(removed.removed).toBe(1);
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("Keep this real dream.");
+    expect(content).not.toContain("Remove this backfill.");
+  });
+
+  it("refuses to overwrite a symlinked DREAMS.md during backfill writes", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-backfill-");
+    const targetPath = path.join(workspaceDir, "outside.txt");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(targetPath, "outside\n", "utf-8");
+    await fs.symlink(targetPath, dreamsPath);
+
+    await expect(
+      writeBackfillDiaryEntries({
+        workspaceDir,
+        timezone: "UTC",
+        entries: [
+          {
+            isoDay: "2026-01-01",
+            sourcePath: "memory/2026-01-01.md",
+            bodyLines: ["What Happened", "1. First pass."],
+          },
+        ],
+      }),
+    ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
+    await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
   });
 });
 

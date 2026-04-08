@@ -314,7 +314,7 @@ async function uploadInputImage(params: {
   form.set(
     "image",
     new Blob([toBlobBytes(params.image.buffer)], { type: params.image.mimeType }),
-    params.image.fileName?.trim() ||
+    normalizeOptionalString(params.image.fileName) ||
       `input.${inferFileExtension({ mimeType: params.image.mimeType })}`,
   );
   form.set("type", "input");
@@ -337,7 +337,8 @@ async function uploadInputImage(params: {
     errorPrefix: "Comfy image upload failed",
   });
 
-  const uploadedName = payload.filename?.trim() || payload.name?.trim();
+  const uploadedName =
+    normalizeOptionalString(payload.filename) || normalizeOptionalString(payload.name);
   if (!uploadedName) {
     throw new Error("Comfy image upload response missing filename");
   }
@@ -473,15 +474,16 @@ async function downloadOutputFile(params: {
   mode: ComfyMode;
   capability: ComfyCapability;
 }): Promise<{ buffer: Buffer; mimeType: string }> {
-  const fileName = params.file.filename?.trim() || params.file.name?.trim();
+  const fileName =
+    normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
   if (!fileName) {
     throw new Error("Comfy output entry missing filename");
   }
 
   const query = new URLSearchParams({
     filename: fileName,
-    subfolder: params.file.subfolder?.trim() ?? "",
-    type: params.file.type?.trim() ?? "output",
+    subfolder: normalizeOptionalString(params.file.subfolder) ?? "",
+    type: normalizeOptionalString(params.file.type) ?? "output",
   });
   const viewPath = params.mode === "cloud" ? "/api/view" : "/view";
   const auditContext = `comfy-${params.capability}-download`;
@@ -504,7 +506,7 @@ async function downloadOutputFile(params: {
       params.mode === "cloud" &&
       [301, 302, 303, 307, 308].includes(firstResponse.response.status)
     ) {
-      const redirectUrl = firstResponse.response.headers.get("location")?.trim();
+      const redirectUrl = normalizeOptionalString(firstResponse.response.headers.get("location"));
       if (!redirectUrl) {
         throw new Error("Comfy cloud output redirect missing location header");
       }
@@ -520,7 +522,8 @@ async function downloadOutputFile(params: {
       try {
         await assertOkOrThrowHttpError(redirected.response, "Comfy output download failed");
         const mimeType =
-          redirected.response.headers.get("content-type")?.trim() || "application/octet-stream";
+          normalizeOptionalString(redirected.response.headers.get("content-type")) ||
+          "application/octet-stream";
         return {
           buffer: Buffer.from(await redirected.response.arrayBuffer()),
           mimeType,
@@ -532,7 +535,8 @@ async function downloadOutputFile(params: {
 
     await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed");
     const mimeType =
-      firstResponse.response.headers.get("content-type")?.trim() || "application/octet-stream";
+      normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
+      "application/octet-stream";
     return {
       buffer: Buffer.from(await firstResponse.response.arrayBuffer()),
       mimeType,
@@ -592,7 +596,7 @@ export async function runComfyWorkflow(params: {
     readConfigInteger(capabilityConfig, "pollIntervalMs") ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs =
     readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const providerModel = params.model?.trim() || DEFAULT_COMFY_MODEL;
+  const providerModel = normalizeOptionalString(params.model) || DEFAULT_COMFY_MODEL;
 
   setWorkflowInput({
     workflow,
@@ -687,7 +691,7 @@ export async function runComfyWorkflow(params: {
     errorPrefix: "Comfy workflow submit failed",
   });
 
-  const promptId = promptResponse.prompt_id?.trim();
+  const promptId = normalizeOptionalString(promptResponse.prompt_id);
   if (!promptId) {
     throw new Error("Comfy workflow submit response missing prompt_id");
   }
@@ -755,7 +759,8 @@ export async function runComfyWorkflow(params: {
       capability: params.capability,
     });
     assetIndex += 1;
-    const originalName = output.file.filename?.trim() || output.file.name?.trim();
+    const originalName =
+      normalizeOptionalString(output.file.filename) || normalizeOptionalString(output.file.name);
     assets.push({
       buffer: downloaded.buffer,
       mimeType: downloaded.mimeType,

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.unmock("../plugins/provider-runtime.js");
+vi.unmock("../plugins/provider-runtime.runtime.js");
+
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 
 beforeEach(async () => {

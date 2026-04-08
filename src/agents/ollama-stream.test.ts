@@ -210,7 +210,7 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
-  it("drops thinking-only output when content is empty", () => {
+  it("keeps thinking-only output when content is empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -223,10 +223,10 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([]);
+    expect(result.content).toEqual([{ type: "thinking", thinking: "Thinking output" }]);
   });
 
-  it("drops reasoning-only output when content and thinking are empty", () => {
+  it("keeps reasoning-only output when content and thinking are empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -239,7 +239,7 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([]);
+    expect(result.content).toEqual([{ type: "thinking", thinking: "Reasoning output" }]);
   });
 
   it("builds response with tool calls", () => {
@@ -923,18 +923,18 @@ describe("createOllamaStreamFn", () => {
     }
   });
 
-  it("drops thinking chunks when no final content is emitted", async () => {
+  it("keeps thinking chunks when no final content is emitted", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [],
+      [{ type: "thinking", thinking: "reasoned output" }],
     );
   });
 
-  it("prefers streamed content over earlier thinking chunks", async () => {
+  it("keeps streamed content after earlier thinking chunks", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"internal"},"done":false}',
@@ -942,22 +942,25 @@ describe("createOllamaStreamFn", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [{ type: "text", text: "final answer" }],
+      [
+        { type: "thinking", thinking: "internal" },
+        { type: "text", text: "final answer" },
+      ],
     );
   });
 
-  it("drops reasoning chunks when no final content is emitted", async () => {
+  it("keeps reasoning chunks when no final content is emitted", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [],
+      [{ type: "thinking", thinking: "reasoned output" }],
     );
   });
 
-  it("prefers streamed content over earlier reasoning chunks", async () => {
+  it("keeps streamed content after earlier reasoning chunks", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"internal"},"done":false}',
@@ -965,7 +968,10 @@ describe("createOllamaStreamFn", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [{ type: "text", text: "final answer" }],
+      [
+        { type: "thinking", thinking: "internal" },
+        { type: "text", text: "final answer" },
+      ],
     );
   });
 });

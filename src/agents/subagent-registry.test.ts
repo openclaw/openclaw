@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(() => noop),
   loadConfig: vi.fn(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-    session: { mainKey: "main", scope: "per-sender" },
+    session: { mainKey: "main", scope: "per-sender" as const },
   })),
   loadSessionStore: vi.fn(() => ({})),
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
@@ -21,7 +21,9 @@ const mocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
   persistSubagentRunsToDisk: vi.fn(),
   restoreSubagentRunsFromDisk: vi.fn(() => 0),
-  getSubagentRunsSnapshotForRead: vi.fn((runs: Map<string, unknown>) => new Map(runs)),
+  getSubagentRunsSnapshotForRead: vi.fn(
+    (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
+  ),
   resetAnnounceQueuesForTests: vi.fn(),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   runSubagentAnnounceFlow: vi.fn(async () => true),
@@ -110,7 +112,7 @@ describe("subagent registry seam flow", () => {
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.loadConfig.mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-      session: { mainKey: "main", scope: "per-sender" },
+      session: { mainKey: "main", scope: "per-sender" as const },
     });
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
@@ -139,8 +141,6 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-      getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-      loadConfig: mocks.loadConfig,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,

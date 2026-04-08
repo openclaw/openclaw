@@ -6,6 +6,7 @@ import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -42,7 +43,7 @@ export function createGatewayCloseHandler(params: {
 }) {
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     try {
-      const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
+      const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
       const restartExpectedMs =
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)

@@ -1,5 +1,4 @@
 import { Command } from "commander";
-import { readSecretFromFile } from "../acp/secret-file.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import {
   listConfiguredMcpServers,
@@ -8,8 +7,11 @@ import {
 } from "../config/mcp-config.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 
 function fail(message: string): never {
   defaultRuntime.error(message);
@@ -19,30 +21,6 @@ function fail(message: string): never {
 
 function printJson(value: unknown): void {
   defaultRuntime.writeJson(value);
-}
-
-function resolveSecretOption(params: {
-  direct?: string;
-  file?: string;
-  directFlag: string;
-  fileFlag: string;
-  label: string;
-}) {
-  const direct = normalizeOptionalString(params.direct);
-  const file = normalizeOptionalString(params.file);
-  if (direct && file) {
-    throw new Error(`Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`);
-  }
-  if (file) {
-    return readSecretFromFile(file, params.label);
-  }
-  return direct || undefined;
-}
-
-function warnSecretCliFlag(flag: "--token" | "--password") {
-  defaultRuntime.error(
-    `Warning: ${flag} can be exposed via process listings. Prefer ${flag}-file or environment variables.`,
-  );
 }
 
 export function registerMcpCli(program: Command) {
@@ -64,28 +42,9 @@ export function registerMcpCli(program: Command) {
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .action(async (opts) => {
       try {
-        const gatewayToken = resolveSecretOption({
-          direct: opts.token as string | undefined,
-          file: opts.tokenFile as string | undefined,
-          directFlag: "--token",
-          fileFlag: "--token-file",
-          label: "Gateway token",
-        });
-        const gatewayPassword = resolveSecretOption({
-          direct: opts.password as string | undefined,
-          file: opts.passwordFile as string | undefined,
-          directFlag: "--password",
-          fileFlag: "--password-file",
-          label: "Gateway password",
-        });
-        if (opts.token) {
-          warnSecretCliFlag("--token");
-        }
-        if (opts.password) {
-          warnSecretCliFlag("--password");
-        }
+        const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
         const claudeChannelMode = normalizeLowercaseStringOrEmpty(
-          String(opts.claudeChannelMode ?? "auto").trim(),
+          normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
         );
         if (
           claudeChannelMode !== "auto" &&

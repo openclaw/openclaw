@@ -535,6 +535,49 @@ export async function startQaLabServer(params?: {
     })();
     return runnerModelCatalogPromise;
   };
+
+  async function runSelfCheck(): Promise<QaSelfCheckResult> {
+    latestScenarioRun = withQaLabRunCounts({
+      kind: "self-check",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      scenarios: [
+        {
+          id: "qa-self-check",
+          name: "Synthetic Slack-class roundtrip",
+          status: "running",
+        },
+      ],
+    });
+    const result = await runQaSelfCheckAgainstState({
+      state,
+      cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
+      outputPath: params?.outputPath,
+      repoRoot,
+    });
+    latestScenarioRun = withQaLabRunCounts({
+      kind: "self-check",
+      status: "completed",
+      startedAt: latestScenarioRun.startedAt,
+      finishedAt: new Date().toISOString(),
+      scenarios: [
+        {
+          id: "qa-self-check",
+          name: result.scenarioResult.name,
+          status: result.scenarioResult.status,
+          details: result.scenarioResult.details,
+          steps: result.scenarioResult.steps,
+        },
+      ],
+    });
+    latestReport = {
+      outputPath: result.outputPath,
+      markdown: result.report,
+      generatedAt: new Date().toISOString(),
+    };
+    return result;
+  }
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -644,44 +687,7 @@ export async function startQaLabServer(params?: {
           writeError(res, 409, "QA suite run already in progress");
           return;
         }
-        latestScenarioRun = withQaLabRunCounts({
-          kind: "self-check",
-          status: "running",
-          startedAt: new Date().toISOString(),
-          scenarios: [
-            {
-              id: "qa-self-check",
-              name: "Synthetic Slack-class roundtrip",
-              status: "running",
-            },
-          ],
-        });
-        const result = await runQaSelfCheckAgainstState({
-          state,
-          cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
-          outputPath: params?.outputPath,
-          repoRoot,
-        });
-        latestScenarioRun = withQaLabRunCounts({
-          kind: "self-check",
-          status: "completed",
-          startedAt: latestScenarioRun.startedAt,
-          finishedAt: new Date().toISOString(),
-          scenarios: [
-            {
-              id: "qa-self-check",
-              name: result.scenarioResult.name,
-              status: result.scenarioResult.status,
-              details: result.scenarioResult.details,
-              steps: result.scenarioResult.steps,
-            },
-          ],
-        });
-        latestReport = {
-          outputPath: result.outputPath,
-          markdown: result.report,
-          generatedAt: new Date().toISOString(),
-        };
+        const result = await runSelfCheck();
         writeJson(res, 200, serializeSelfCheck(result));
         return;
       }
@@ -846,47 +852,7 @@ export async function startQaLabServer(params?: {
     setLatestReport(next: QaLabLatestReport | null) {
       latestReport = next;
     },
-    async runSelfCheck() {
-      latestScenarioRun = withQaLabRunCounts({
-        kind: "self-check",
-        status: "running",
-        startedAt: new Date().toISOString(),
-        scenarios: [
-          {
-            id: "qa-self-check",
-            name: "Synthetic Slack-class roundtrip",
-            status: "running",
-          },
-        ],
-      });
-      const result = await runQaSelfCheckAgainstState({
-        state,
-        cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
-        outputPath: params?.outputPath,
-        repoRoot,
-      });
-      latestScenarioRun = withQaLabRunCounts({
-        kind: "self-check",
-        status: "completed",
-        startedAt: latestScenarioRun.startedAt,
-        finishedAt: new Date().toISOString(),
-        scenarios: [
-          {
-            id: "qa-self-check",
-            name: result.scenarioResult.name,
-            status: result.scenarioResult.status,
-            details: result.scenarioResult.details,
-            steps: result.scenarioResult.steps,
-          },
-        ],
-      });
-      latestReport = {
-        outputPath: result.outputPath,
-        markdown: result.report,
-        generatedAt: new Date().toISOString(),
-      };
-      return result;
-    },
+    runSelfCheck,
     async stop() {
       await gateway?.stop();
       await new Promise<void>((resolve, reject) =>

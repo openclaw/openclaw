@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.js";
 
@@ -30,11 +33,11 @@ function normalizeDirectoryIds(params: {
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
   return params.rawIds
-    .map((entry) => entry.trim())
+    .map((entry) => normalizeOptionalString(entry) ?? "")
     .filter((entry) => Boolean(entry) && entry !== "*")
     .map((entry) => {
       const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
-      return typeof normalized === "string" ? normalized.trim() : "";
+      return normalizeOptionalString(normalized) ?? "";
     })
     .filter(Boolean);
 }
@@ -70,12 +73,12 @@ export function collectNormalizedDirectoryIds(params: {
   const ids = new Set<string>();
   for (const source of params.sources) {
     for (const value of source) {
-      const raw = String(value).trim();
+      const raw = normalizeOptionalString(value) ?? "";
       if (!raw || raw === "*") {
         continue;
       }
       const normalized = params.normalizeId(raw);
-      const trimmed = typeof normalized === "string" ? normalized.trim() : "";
+      const trimmed = normalizeOptionalString(normalized) ?? "";
       if (trimmed) {
         ids.add(trimmed);
       }

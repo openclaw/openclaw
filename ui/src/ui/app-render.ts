@@ -66,8 +66,11 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices.ts";
 import {
+  backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  resetGroundedShortTerm,
+  resetDreamDiary,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
 } from "./controllers/dreaming.ts";
@@ -101,15 +104,14 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import { icons } from "./icons.ts";
 import "./components/dashboard-header.ts";
+import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -121,6 +123,7 @@ import {
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderConfig } from "./views/config.ts";
+import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
@@ -158,7 +161,6 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
-const lazyDreamingView = createLazy(() => import("./views/dreaming.ts"));
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -219,7 +221,7 @@ function uniquePreserveOrder(values: string[]): string[] {
     if (!normalized) {
       continue;
     }
-    const key = normalizeLowercaseStringOrEmpty(normalized);
+    const key = normalized.toLowerCase();
     if (seen.has(key)) {
       continue;
     }
@@ -2114,29 +2116,35 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "dreams"
-          ? lazyRender(lazyDreamingView, (m) =>
-              m.renderDreaming({
-                active: dreamingOn,
-                shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
-                totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
-                phaseSignalCount: state.dreamingStatus?.phaseSignalCount ?? 0,
-                promotedCount: state.dreamingStatus?.promotedToday ?? 0,
-                dreamingOf: null,
-                nextCycle: dreamingNextCycle,
-                timezone: state.dreamingStatus?.timezone ?? null,
-                statusLoading: state.dreamingStatusLoading,
-                statusError: state.dreamingStatusError,
-                modeSaving: state.dreamingModeSaving,
-                dreamDiaryLoading: state.dreamDiaryLoading,
-                dreamDiaryError: state.dreamDiaryError,
-                dreamDiaryPath: state.dreamDiaryPath,
-                dreamDiaryContent: state.dreamDiaryContent,
-                onRefresh: refreshDreaming,
-                onRefreshDiary: () => loadDreamDiary(state),
-                onToggleEnabled: applyDreamingEnabled,
-                onRequestUpdate: requestHostUpdate,
-              }),
-            )
+          ? renderDreaming({
+              active: dreamingOn,
+              shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
+              groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
+              totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
+              promotedCount: state.dreamingStatus?.promotedToday ?? 0,
+              phaseSignalCount: state.dreamingStatus?.phaseSignalCount ?? 0,
+              shortTermEntries: state.dreamingStatus?.shortTermEntries ?? [],
+              signalEntries: state.dreamingStatus?.signalEntries ?? [],
+              promotedEntries: state.dreamingStatus?.promotedEntries ?? [],
+              dreamingOf: null,
+              nextCycle: dreamingNextCycle,
+              timezone: state.dreamingStatus?.timezone ?? null,
+              statusLoading: state.dreamingStatusLoading,
+              statusError: state.dreamingStatusError,
+              modeSaving: state.dreamingModeSaving,
+              dreamDiaryLoading: state.dreamDiaryLoading,
+              dreamDiaryActionLoading: state.dreamDiaryActionLoading,
+              dreamDiaryError: state.dreamDiaryError,
+              dreamDiaryPath: state.dreamDiaryPath,
+              dreamDiaryContent: state.dreamDiaryContent,
+              onRefresh: refreshDreaming,
+              onRefreshDiary: () => loadDreamDiary(state),
+              onBackfillDiary: () => backfillDreamDiary(state),
+              onResetDiary: () => resetDreamDiary(state),
+              onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
+              onToggleEnabled: applyDreamingEnabled,
+              onRequestUpdate: requestHostUpdate,
+            })
           : nothing}
       </main>
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}

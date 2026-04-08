@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
@@ -56,7 +57,7 @@ export function createProfileSelectionOps({
     };
 
     const pickDefault = () => {
-      const last = profileState.lastTargetId?.trim() || "";
+      const last = normalizeOptionalString(profileState.lastTargetId) ?? "";
       const lastResolved = last ? resolveById(last) : null;
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;

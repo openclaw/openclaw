@@ -18,7 +18,10 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -243,11 +246,11 @@ type ActiveTurnContext = {
 function parseImageUrlToSource(url: string): InputImageSource {
   const dataUriMatch = /^data:([^,]*?),(.*)$/is.exec(url);
   if (dataUriMatch) {
-    const metadata = dataUriMatch[1]?.trim() ?? "";
+    const metadata = normalizeOptionalString(dataUriMatch[1]) ?? "";
     const data = dataUriMatch[2] ?? "";
     const metadataParts = metadata
       .split(";")
-      .map((part) => part.trim())
+      .map((part) => normalizeOptionalString(part) ?? "")
       .filter(Boolean);
     const isBase64 = metadataParts.some(
       (part) => normalizeLowercaseStringOrEmpty(part) === "base64",
@@ -255,7 +258,7 @@ function parseImageUrlToSource(url: string): InputImageSource {
     if (!isBase64) {
       throw new Error("image_url data URI must be base64 encoded");
     }
-    if (!data.trim()) {
+    if (!(normalizeOptionalString(data) ?? "")) {
       throw new Error("image_url data URI is missing payload data");
     }
     const mediaTypeRaw = metadataParts.find((part) => part.includes("/"));
@@ -275,7 +278,7 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     if (!msg || typeof msg !== "object") {
       continue;
     }
-    const role = typeof msg.role === "string" ? msg.role.trim() : "";
+    const role = normalizeOptionalString(msg.role) ?? "";
     const normalizedRole = role === "function" ? "tool" : role;
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
@@ -347,7 +350,7 @@ function buildAgentPrompt(
     if (!msg || typeof msg !== "object") {
       continue;
     }
-    const role = typeof msg.role === "string" ? msg.role.trim() : "";
+    const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
     const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
@@ -375,7 +378,7 @@ function buildAgentPrompt(
       continue;
     }
 
-    const name = typeof msg.name === "string" ? msg.name.trim() : "";
+    const name = normalizeOptionalString(msg.name) ?? "";
     const sender =
       normalizedRole === "assistant"
         ? "Assistant"

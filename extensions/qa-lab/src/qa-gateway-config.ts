@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
@@ -8,34 +8,41 @@ import {
   type QaProviderMode,
 } from "./model-selection.js";
 
-const DISABLED_BUNDLED_CHANNELS = Object.freeze({
-  bluebubbles: { enabled: false },
-  discord: { enabled: false },
-  feishu: { enabled: false },
-  googlechat: { enabled: false },
-  imessage: { enabled: false },
-  irc: { enabled: false },
-  line: { enabled: false },
-  mattermost: { enabled: false },
-  matrix: { enabled: false },
-  msteams: { enabled: false },
-  qqbot: { enabled: false },
-  signal: { enabled: false },
-  slack: { enabled: false },
-  "synology-chat": { enabled: false },
-  telegram: { enabled: false },
-  tlon: { enabled: false },
-  whatsapp: { enabled: false },
-  zalo: { enabled: false },
-  zalouser: { enabled: false },
-} satisfies Record<string, { enabled: false }>);
-
 export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
   "http://localhost:18789",
   "http://127.0.0.1:43124",
   "http://localhost:43124",
 ]);
+
+export type QaThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+
+export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | undefined {
+  const value = typeof input === "string" ? input.trim().toLowerCase() : "";
+  const collapsed = value.replace(/[\s_-]+/g, "");
+  if (collapsed === "off") {
+    return "off";
+  }
+  if (collapsed === "minimal" || collapsed === "min") {
+    return "minimal";
+  }
+  if (collapsed === "low") {
+    return "low";
+  }
+  if (collapsed === "medium" || collapsed === "med") {
+    return "medium";
+  }
+  if (collapsed === "high") {
+    return "high";
+  }
+  if (collapsed === "xhigh" || collapsed === "extrahigh") {
+    return "xhigh";
+  }
+  if (collapsed === "adaptive" || collapsed === "auto") {
+    return "adaptive";
+  }
+  return undefined;
+}
 
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
@@ -59,7 +66,10 @@ export function buildQaGatewayConfig(params: {
   alternateModel?: string;
   imageGenerationModel?: string | null;
   enabledProviderIds?: string[];
+  enabledPluginIds?: string[];
+  liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockOpenAiProvider: ModelProviderConfig = {
@@ -141,13 +151,23 @@ export function buildQaGatewayConfig(params: {
           ),
         ]
       : [];
+  const selectedPluginIds =
+    providerMode === "live-frontier"
+      ? [
+          ...new Set(
+            (params.enabledPluginIds?.length ?? 0) > 0
+              ? params.enabledPluginIds
+              : selectedProviderIds,
+          ),
+        ]
+      : [];
   const pluginEntries =
     providerMode === "live-frontier"
-      ? Object.fromEntries(selectedProviderIds.map((providerId) => [providerId, { enabled: true }]))
+      ? Object.fromEntries(selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]))
       : {};
   const allowedPlugins =
     providerMode === "live-frontier"
-      ? ["memory-core", ...selectedProviderIds, "qa-channel"]
+      ? ["memory-core", ...selectedPluginIds, "qa-channel"]
       : ["memory-core", "qa-channel"];
   const liveModelParams =
     providerMode === "live-frontier"
@@ -155,12 +175,16 @@ export function buildQaGatewayConfig(params: {
           transport: "sse",
           openaiWsWarmup: false,
           ...(params.fastMode === true || isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
+          ...(params.thinkingDefault ? { thinking: params.thinkingDefault } : {}),
         })
       : (_modelRef: string) => ({
           transport: "sse",
           openaiWsWarmup: false,
         });
   const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
+  const liveProviderConfigs =
+    providerMode === "live-frontier" ? (params.liveProviderConfigs ?? {}) : {};
+  const hasLiveProviderConfigs = Object.keys(liveProviderConfigs).length > 0;
 
   return {
     plugins: {
@@ -188,6 +212,7 @@ export function buildQaGatewayConfig(params: {
               },
             }
           : {}),
+        ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
         memorySearch: {
           sync: {
             watch: true,
@@ -240,7 +265,14 @@ export function buildQaGatewayConfig(params: {
             },
           },
         }
-      : {}),
+      : hasLiveProviderConfigs
+        ? {
+            models: {
+              mode: "merge",
+              providers: liveProviderConfigs,
+            },
+          }
+        : {}),
     gateway: {
       mode: "local",
       bind: params.bind,
@@ -273,7 +305,6 @@ export function buildQaGatewayConfig(params: {
       },
     },
     channels: {
-      ...DISABLED_BUNDLED_CHANNELS,
       "qa-channel": {
         enabled: true,
         baseUrl: params.qaBusBaseUrl,

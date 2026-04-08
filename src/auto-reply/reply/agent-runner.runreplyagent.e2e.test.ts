@@ -452,6 +452,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expectedForwarded: ["No", "No, that is valid"],
         shouldType: true,
       },
+      {
+        partials: ["NO_REPLYThe user is saying hello"],
+        finalText: "NO_REPLYThe user is saying hello",
+        expectedForwarded: ["The user is saying hello"],
+        shouldType: true,
+      },
     ] as const;
 
     for (const testCase of cases) {

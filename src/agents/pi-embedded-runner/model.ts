@@ -10,6 +10,7 @@ import {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
+  shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -51,6 +52,9 @@ type ProviderRuntimeHooks = {
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
   runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
+  shouldPreferProviderRuntimeResolvedModel?: (
+    params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
+  ) => boolean;
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
@@ -66,6 +70,7 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
+  shouldPreferProviderRuntimeResolvedModel,
   normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
@@ -415,14 +420,16 @@ function resolvePluginDynamicModelWithRegistry(params: {
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
+  const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
     provider,
     config: cfg,
+    workspaceDir,
     context: {
       config: cfg,
       agentDir,
@@ -526,6 +533,43 @@ function resolveConfiguredFallbackModel(params: {
   });
 }
 
+function shouldCompareProviderRuntimeResolvedModel(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  runtimeHooks: ProviderRuntimeHooks;
+}): boolean {
+  return (
+    params.runtimeHooks.shouldPreferProviderRuntimeResolvedModel?.({
+      provider: params.provider,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      context: {
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      },
+    }) ?? false
+  );
+}
+
+function preferProviderRuntimeResolvedModel(params: {
+  explicitModel: Model<Api>;
+  runtimeResolvedModel?: Model<Api>;
+}): Model<Api> {
+  if (
+    params.runtimeResolvedModel &&
+    params.runtimeResolvedModel.contextWindow > params.explicitModel.contextWindow
+  ) {
+    return params.runtimeResolvedModel;
+  }
+  return params.explicitModel;
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -543,14 +587,34 @@ export function resolveModelWithRegistry(params: {
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,
   };
+  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  const workspaceDir = normalizedParams.cfg?.agents?.defaults?.workspace;
   const explicitModel = resolveExplicitModelWithRegistry(normalizedParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
   if (explicitModel?.kind === "resolved") {
-    return explicitModel.model;
+    if (
+      !shouldCompareProviderRuntimeResolvedModel({
+        provider: normalizedParams.provider,
+        modelId: normalizedParams.modelId,
+        cfg: normalizedParams.cfg,
+        agentDir: normalizedParams.agentDir,
+        workspaceDir,
+        runtimeHooks,
+      })
+    ) {
+      return explicitModel.model;
+    }
+    const pluginDynamicModel = resolvePluginDynamicModelWithRegistry({
+      ...normalizedParams,
+      workspaceDir,
+    });
+    return preferProviderRuntimeResolvedModel({
+      explicitModel: explicitModel.model,
+      runtimeResolvedModel: pluginDynamicModel,
+    });
   }
-
   const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
@@ -683,7 +747,16 @@ export async function resolveModelAsync(
     });
   };
   let model =
-    explicitModel?.kind === "resolved" ? explicitModel.model : await resolveDynamicAttempt();
+    explicitModel?.kind === "resolved" &&
+    !shouldCompareProviderRuntimeResolvedModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      agentDir: resolvedAgentDir,
+      runtimeHooks,
+    })
+      ? explicitModel.model
+      : await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once with a cleared hook cache before surfacing a

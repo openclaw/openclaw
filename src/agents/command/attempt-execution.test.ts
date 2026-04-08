@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFallbackRetryPrompt, sessionFileHasContent } from "./attempt-execution.js";
+import {
+  createAcpVisibleTextAccumulator,
+  resolveFallbackRetryPrompt,
+  sessionFileHasContent,
+} from "./attempt-execution.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -155,5 +159,49 @@ describe("sessionFileHasContent", () => {
     const link = path.join(tmpDir, "link.jsonl");
     await fs.symlink(realFile, link);
     expect(await sessionFileHasContent(link)).toBe(false);
+  });
+});
+
+describe("createAcpVisibleTextAccumulator", () => {
+  it("preserves cumulative raw snapshots after stripping a glued NO_REPLY prefix", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO_REPLYThe user")).toEqual({
+      text: "The user",
+      delta: "The user",
+    });
+
+    expect(acc.consume("NO_REPLYThe user is saying")).toEqual({
+      text: "The user is saying",
+      delta: " is saying",
+    });
+
+    expect(acc.finalize()).toBe("The user is saying");
+    expect(acc.finalizeRaw()).toBe("The user is saying");
+  });
+
+  it("keeps append-only deltas working after stripping a glued NO_REPLY prefix", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO_REPLYThe user")).toEqual({
+      text: "The user",
+      delta: "The user",
+    });
+
+    expect(acc.consume(" is saying")).toEqual({
+      text: "The user is saying",
+      delta: " is saying",
+    });
+  });
+
+  it("preserves punctuation-start text that begins with NO_REPLY-like content", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO_REPLY: explanation")).toEqual({
+      text: "NO_REPLY: explanation",
+      delta: "NO_REPLY: explanation",
+    });
+
+    expect(acc.finalize()).toBe("NO_REPLY: explanation");
   });
 });

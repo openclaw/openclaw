@@ -110,7 +110,7 @@ async function resolveOAuthToken(params: {
         // Reuse the already-resolved config snapshot for token/ref resolution so
         // usage snapshots don't trigger a second ambient loadConfig() call.
         cfg: params.state.cfg,
-        store: resolveUsageAuthStore(params.state),
+        store,
         profileId,
         agentDir: params.state.agentDir,
       });

@@ -6,6 +6,7 @@ import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
@@ -158,10 +159,11 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
   }
@@ -176,10 +178,11 @@ function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return undefined;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return undefined;
   }
@@ -207,10 +210,11 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num) || num < 0 || num > 1) {
     return fallback;
   }

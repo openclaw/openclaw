@@ -15,6 +15,7 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 // We spell out job/patch properties so that LLMs know what fields to send.
@@ -182,26 +183,7 @@ const CronPatchObjectSchema = Type.Optional(
   Type.Object(
     {
       name: Type.Optional(Type.String({ description: "Job name" })),
-      schedule: Type.Optional(
-        Type.Object(
-          {
-            kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule type" }),
-            at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
-            everyMs: Type.Optional(
-              Type.Number({ description: "Interval in milliseconds (kind=every)" }),
-            ),
-            anchorMs: Type.Optional(
-              Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
-            ),
-            expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
-            tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
-            staggerMs: Type.Optional(
-              Type.Number({ description: "Random jitter in ms (kind=cron)" }),
-            ),
-          },
-          { additionalProperties: true },
-        ),
-      ),
+      schedule: CronScheduleSchema,
       sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
       wakeMode: optionalStringEnum(CRON_WAKE_MODES),
       payload: Type.Optional(
@@ -209,29 +191,7 @@ const CronPatchObjectSchema = Type.Optional(
           toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
         }),
       ),
-      delivery: Type.Optional(
-        Type.Object(
-          {
-            mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
-            channel: Type.Optional(Type.String({ description: "Delivery channel" })),
-            to: Type.Optional(Type.String({ description: "Delivery target" })),
-            bestEffort: Type.Optional(Type.Boolean()),
-            accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
-            failureDestination: Type.Optional(
-              Type.Object(
-                {
-                  channel: Type.Optional(Type.String()),
-                  to: Type.Optional(Type.String()),
-                  accountId: Type.Optional(Type.String()),
-                  mode: optionalStringEnum(["announce", "webhook"] as const),
-                },
-                { additionalProperties: true },
-              ),
-            ),
-          },
-          { additionalProperties: true },
-        ),
-      ),
+      delivery: CronDeliverySchema,
       description: Type.Optional(Type.String()),
       enabled: Type.Optional(Type.Boolean()),
       deleteAfterRun: Type.Optional(Type.Boolean()),
@@ -428,7 +388,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
   return {
     label: "Cron",
     name: "cron",
-    ownerOnly: true,
+    ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 

@@ -5,7 +5,11 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { mergeAbortSignals } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
@@ -118,13 +122,7 @@ export function __resetDiscordChannelInfoCacheForTest() {
 }
 
 function normalizeDiscordChannelId(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value).trim();
-  }
-  return "";
+  return normalizeOptionalStringifiedId(value) ?? "";
 }
 
 export function resolveDiscordMessageChannelId(params: {
@@ -608,8 +606,8 @@ function buildDiscordMediaPlaceholder(params: {
 export function resolveDiscordEmbedText(
   embed?: { title?: string | null; description?: string | null } | null,
 ): string {
-  const title = embed?.title?.trim() || "";
-  const description = embed?.description?.trim() || "";
+  const title = normalizeOptionalString(embed?.title) ?? "";
+  const description = normalizeOptionalString(embed?.description) ?? "";
   if (title && description) {
     return `${title}\n${description}`;
   }
@@ -625,13 +623,13 @@ export function resolveDiscordMessageText(
       null,
   );
   const rawText =
-    message.content?.trim() ||
+    normalizeOptionalString(message.content) ||
     buildDiscordMediaPlaceholder({
       attachments: message.attachments ?? undefined,
       stickers: resolveDiscordMessageStickers(message),
     }) ||
     embedText ||
-    options?.fallbackText?.trim() ||
+    normalizeOptionalString(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
@@ -732,7 +730,7 @@ function resolveDiscordReferencedForwardMessage(message: Message): Message | nul
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
-  const content = snapshot.content?.trim() ?? "";
+  const content = normalizeOptionalString(snapshot.content) ?? "";
   const attachmentText = buildDiscordMediaPlaceholder({
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),

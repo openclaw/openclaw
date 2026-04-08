@@ -15,7 +15,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { lowercasePreservingWhitespace } from "../shared/string-coerce.js";
+import { lowercasePreservingWhitespace, normalizeOptionalString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import {
   CANVAS_HOST_PATH,
@@ -463,7 +463,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
-  const bindHost = opts.listenHost?.trim() || "127.0.0.1";
+  const bindHost = normalizeOptionalString(opts.listenHost) || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
     if (lowercasePreservingWhitespace(String(req.headers.upgrade ?? "")) === "websocket") {
       return;

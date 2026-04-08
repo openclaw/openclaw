@@ -11,6 +11,7 @@ import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.r
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
@@ -276,7 +277,9 @@ export function buildModelAliasIndex(params: {
     if (!parsed) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias =
+      normalizeOptionalString(String((entryRaw as { alias?: string } | undefined)?.alias ?? "")) ??
+      "";
     if (!alias) {
       continue;
     }
@@ -603,11 +606,11 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       continue;
     }
     for (const model of provider.models) {
-      const id = typeof model?.id === "string" ? model.id.trim() : "";
+      const id = normalizeOptionalString(model?.id) ?? "";
       if (!id) {
         continue;
       }
-      const name = typeof model?.name === "string" && model.name.trim() ? model.name.trim() : id;
+      const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
           ? model.contextWindow

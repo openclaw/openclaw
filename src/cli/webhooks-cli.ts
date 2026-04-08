@@ -107,7 +107,7 @@ export function registerWebhooksCli(program: Command) {
 
 function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
-  const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
+  const account = normalizeOptionalString(accountRaw) ?? "";
   if (!account) {
     throw new Error("--account is required");
   }

@@ -92,8 +92,7 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  const value =
-    typeof raw === "string" ? raw.trim() : typeof raw === "number" ? String(raw).trim() : null;
+  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
   if (value === null) {
     defaultRuntime.error(`${label}: invalid duration value`);
     defaultRuntime.exit(1);

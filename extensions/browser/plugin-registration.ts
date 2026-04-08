@@ -1,5 +1,6 @@
 import type {
   OpenClawPluginApi,
+  OpenClawPluginNodeHostCommand,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -14,7 +15,7 @@ import {
 
 export const browserPluginReload = { restartPrefixes: ["browser"] };
 
-export const browserPluginNodeHostCommands = [
+export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "browser.proxy",
     cap: "browser",
@@ -22,7 +23,7 @@ export const browserPluginNodeHostCommands = [
   },
 ];
 
-export const browserSecurityAuditCollectors = [collectBrowserSecurityAuditFindings] as const;
+export const browserSecurityAuditCollectors = [collectBrowserSecurityAuditFindings];
 
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(((ctx: OpenClawPluginToolContext) =>

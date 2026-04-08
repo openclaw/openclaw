@@ -4,7 +4,7 @@ import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export type EnvApiKeyResult = {
   apiKey: string;
@@ -15,8 +15,8 @@ export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderIdForAuth(provider);
-  const candidateMap = resolveProviderEnvApiKeyCandidates();
+  const normalized = resolveProviderIdForAuth(provider, { env });
+  const candidateMap = resolveProviderEnvApiKeyCandidates({ env });
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
