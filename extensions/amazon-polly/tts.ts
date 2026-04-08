@@ -7,7 +7,17 @@ import {
   SynthesizeSpeechCommand,
   type TextType,
   type VoiceId,
+  DescribeVoicesCommand,
 } from "@aws-sdk/client-polly";
+
+export type PollyVoiceEntry = {
+  id: string;
+  name: string;
+  gender?: string;
+  languageCode?: string;
+  languageName?: string;
+  supportedEngines: string[];
+};
 
 /** Lazy-initialized client cache keyed by region. */
 const clients = new Map<string, PollyClient>();
@@ -78,4 +88,30 @@ export async function pollySynthesize(params: PollySynthesizeParams): Promise<Bu
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * List available voices from Amazon Polly.
+ */
+export async function pollyListVoices(params: {
+  region: string;
+  languageCode?: string;
+  engine?: string;
+}): Promise<PollyVoiceEntry[]> {
+  const client = getClient(params.region);
+  const command = new DescribeVoicesCommand({
+    ...(params.languageCode ? { LanguageCode: params.languageCode as LanguageCode } : {}),
+    ...(params.engine ? { Engine: params.engine as Engine } : {}),
+  });
+  const response = await client.send(command);
+  return (response.Voices ?? [])
+    .map((v) => ({
+      id: v.Id ?? "",
+      name: v.Name ?? v.Id ?? "",
+      gender: v.Gender,
+      languageCode: v.LanguageCode,
+      languageName: v.LanguageName,
+      supportedEngines: (v.SupportedEngines ?? []) as string[],
+    }))
+    .filter((v) => v.id.length > 0);
 }
