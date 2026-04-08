@@ -39,6 +39,9 @@ describe("sandbox explain command", () => {
     const parsed = JSON.parse(out);
     expect(parsed).toHaveProperty("docsUrl", "https://docs.openclaw.ai/sandbox");
     expect(parsed).toHaveProperty("sandbox.mode", "all");
+    expect(parsed).toHaveProperty("sandbox.mounts");
+    expect(Array.isArray(parsed.sandbox.mounts)).toBe(true);
+    expect(parsed.sandbox.mounts.length).toBeGreaterThan(0);
     expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
     expect(Array.isArray(parsed.fixIt)).toBe(true);
     expect(parsed.fixIt).toContain("agents.defaults.sandbox.mode=off");
@@ -91,5 +94,43 @@ describe("sandbox explain command", () => {
       source: "agent",
       key: "agents.list[].tools.sandbox.tools.alsoAllow",
     });
+  });
+
+  it("includes custom docker bind mounts in JSON output", async () => {
+    mockCfg = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+            workspaceAccess: "none",
+            docker: {
+              binds: ["/tmp/override:/workspace:ro"],
+            },
+          },
+        },
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed).toHaveProperty("sandbox.mounts");
+    expect(parsed.sandbox.mounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "bind",
+          containerRoot: "/workspace",
+          writable: false,
+          hostRoot: expect.stringContaining("override"),
+        }),
+      ]),
+    );
   });
 });
