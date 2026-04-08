@@ -776,8 +776,6 @@ export function buildOpenAIResponsesParams(
         summary: options?.reasoningSummary || "auto",
       };
       params.include = ["reasoning.encrypted_content"];
-    } else if (model.provider !== "github-copilot") {
-      params.reasoning = { effort: "none" };
     }
   }
   applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
@@ -1216,12 +1214,10 @@ type OpenAIResponsesRequestParams = {
   temperature?: number;
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
   tools?: FunctionTool[];
-  reasoning?:
-    | { effort: "none" }
-    | {
-        effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
-        summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
-      };
+  reasoning?: {
+    effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
+    summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
+  };
   include?: string[];
 };
 
