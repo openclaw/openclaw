@@ -29,7 +29,7 @@ const MAX_POLL_ATTEMPTS = 90;
 
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-  return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
+  return configured ? normalizeGoogleApiBaseUrl(configured).replace(/\/v1beta$/i, "") : undefined;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
