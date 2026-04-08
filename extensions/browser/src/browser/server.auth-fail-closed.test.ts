@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     throw new Error("read-only config");
   }),
   resolveBrowserControlAuth: vi.fn(() => ({})),
+  shouldAutoGenerateBrowserAuth: vi.fn(() => true),
   ensureExtensionRelayForProfiles: vi.fn(async () => {}),
 }));
 
@@ -38,6 +39,7 @@ vi.mock("./config.js", async () => {
 vi.mock("./control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
+  shouldAutoGenerateBrowserAuth: mocks.shouldAutoGenerateBrowserAuth,
 }));
 
 vi.mock("./routes/index.js", () => ({
@@ -62,6 +64,7 @@ describe("browser control auth bootstrap failures", () => {
     mocks.controlPort = await getFreePort();
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.resolveBrowserControlAuth.mockClear();
+    mocks.shouldAutoGenerateBrowserAuth.mockClear();
     mocks.ensureExtensionRelayForProfiles.mockClear();
   });
 
@@ -70,6 +73,19 @@ describe("browser control auth bootstrap failures", () => {
   });
 
   it("fails closed when auth bootstrap throws and no auth is configured", async () => {
+    const started = await startBrowserControlServerFromConfig();
+
+    expect(started).toBeNull();
+    expect(mocks.ensureBrowserControlAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveBrowserControlAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when auth bootstrap resolves empty auth in production-like mode", async () => {
+    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: {} });
+    mocks.resolveBrowserControlAuth.mockReturnValueOnce({});
+    mocks.shouldAutoGenerateBrowserAuth.mockReturnValueOnce(true);
+
     const started = await startBrowserControlServerFromConfig();
 
     expect(started).toBeNull();

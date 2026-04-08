@@ -1,9 +1,10 @@
+import crypto from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 
@@ -13,7 +14,7 @@ export type BrowserControlAuth = {
 };
 
 export function resolveBrowserControlAuth(
-  cfg: OpenClawConfig | undefined,
+  cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): BrowserControlAuth {
   const auth = resolveGatewayAuth({
@@ -29,7 +30,7 @@ export function resolveBrowserControlAuth(
   };
 }
 
-function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
+export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
   const nodeEnv = normalizeLowercaseStringOrEmpty(env.NODE_ENV);
   if (nodeEnv === "test") {
     return false;
@@ -39,6 +40,38 @@ function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   return true;
+}
+
+async function generateAndPersistBrowserControlToken(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<{
+  auth: BrowserControlAuth;
+  generatedToken?: string;
+}> {
+  const token = crypto.randomBytes(24).toString("hex");
+  const nextCfg: OpenClawConfig = {
+    ...params.cfg,
+    gateway: {
+      ...params.cfg.gateway,
+      auth: {
+        ...params.cfg.gateway?.auth,
+        token,
+      },
+    },
+  };
+  await writeConfigFile(nextCfg);
+
+  // Re-read to stay consistent with any concurrent config writer.
+  const persistedAuth = resolveBrowserControlAuth(loadConfig(), params.env);
+  if (persistedAuth.token || persistedAuth.password) {
+    return {
+      auth: persistedAuth,
+      generatedToken: persistedAuth.token === token ? token : undefined,
+    };
+  }
+
+  return { auth: { token }, generatedToken: token };
 }
 
 export async function ensureBrowserControlAuth(params: {
@@ -62,14 +95,6 @@ export async function ensureBrowserControlAuth(params: {
     return { auth };
   }
 
-  if (params.cfg.gateway?.auth?.mode === "none") {
-    return { auth };
-  }
-
-  if (params.cfg.gateway?.auth?.mode === "trusted-proxy") {
-    return { auth };
-  }
-
   // Re-read latest config to avoid racing with concurrent config writers.
   const latestCfg = loadConfig();
   const latestAuth = resolveBrowserControlAuth(latestCfg, env);
@@ -79,11 +104,11 @@ export async function ensureBrowserControlAuth(params: {
   if (latestCfg.gateway?.auth?.mode === "password") {
     return { auth: latestAuth };
   }
-  if (latestCfg.gateway?.auth?.mode === "none") {
-    return { auth: latestAuth };
-  }
-  if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
-    return { auth: latestAuth };
+  if (
+    latestCfg.gateway?.auth?.mode === "none" ||
+    latestCfg.gateway?.auth?.mode === "trusted-proxy"
+  ) {
+    return await generateAndPersistBrowserControlToken({ cfg: latestCfg, env });
   }
 
   const ensured = await ensureGatewayStartupAuth({

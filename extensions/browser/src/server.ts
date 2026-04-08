@@ -1,7 +1,11 @@
 import type { Server } from "node:http";
 import express from "express";
 import { resolveBrowserConfig } from "./browser/config.js";
-import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./browser/control-auth.js";
+import {
+  ensureBrowserControlAuth,
+  resolveBrowserControlAuth,
+  shouldAutoGenerateBrowserAuth,
+} from "./browser/control-auth.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
 import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
@@ -45,12 +49,17 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     browserAuthBootstrapFailed = true;
   }
 
-  // Fail closed: if auth bootstrap failed and no explicit auth is available,
-  // do not start the browser control HTTP server.
-  if (browserAuthBootstrapFailed && !browserAuth.token && !browserAuth.password) {
-    logServer.error(
-      "browser control startup aborted: authentication bootstrap failed and no fallback auth is configured.",
-    );
+  const browserAuthRequired =
+    browserAuthBootstrapFailed || shouldAutoGenerateBrowserAuth(process.env);
+  if (browserAuthRequired && !browserAuth.token && !browserAuth.password) {
+    if (browserAuthBootstrapFailed) {
+      logServer.error(
+        "browser control startup aborted: authentication bootstrap failed " +
+          "and no fallback auth is configured.",
+      );
+    } else {
+      logServer.error("browser control startup aborted: no authentication configured.");
+    }
     return null;
   }
 

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => OpenClawConfig>(),
+  writeConfigFile: vi.fn(async () => {}),
   resolveGatewayAuth: vi.fn(
     ({
       authConfig,
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
+  writeConfigFile: mocks.writeConfigFile,
 }));
 
 vi.mock("../gateway/startup-auth.js", () => ({
@@ -59,7 +61,7 @@ vi.mock("../gateway/auth.js", () => ({
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
-  const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
+  const expectExplicitModeSkipsAutoAuth = async (mode: "password") => {
     const cfg: OpenClawConfig = {
       gateway: {
         auth: { mode },
@@ -72,6 +74,7 @@ describe("ensureBrowserControlAuth", () => {
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
     expect(result).toEqual({ auth: {} });
     expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   };
 
@@ -95,6 +98,7 @@ describe("ensureBrowserControlAuth", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
+    mocks.writeConfigFile.mockClear();
     mocks.resolveGatewayAuth.mockClear();
     mocks.ensureGatewayStartupAuth.mockClear();
   });
@@ -112,6 +116,7 @@ describe("ensureBrowserControlAuth", () => {
 
     expect(result).toEqual({ auth: { token: "already-set" } });
     expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
@@ -129,6 +134,7 @@ describe("ensureBrowserControlAuth", () => {
 
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
     await expectGeneratedTokenPersisted(result);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("skips auto-generation in test env", async () => {
@@ -145,6 +151,7 @@ describe("ensureBrowserControlAuth", () => {
 
     expect(result).toEqual({ auth: {} });
     expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
@@ -152,9 +159,34 @@ describe("ensureBrowserControlAuth", () => {
     await expectExplicitModeSkipsAutoAuth("password");
   });
 
-  it("respects explicit none mode", async () => {
-    await expectExplicitModeSkipsAutoAuth("none");
-  });
+  it.each(["none", "trusted-proxy"] as const)(
+    "auto-generates and persists browser auth token in %s mode",
+    async (mode) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          auth:
+            mode === "trusted-proxy"
+              ? { mode, trustedProxy: { userHeader: "x-forwarded-user" } }
+              : { mode },
+        },
+        browser: {
+          enabled: true,
+        },
+      };
+      mocks.loadConfig.mockReturnValue(cfg);
+
+      const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+      expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
+      expect(result.auth.token).toBe(result.generatedToken);
+      expect(result.auth.password).toBeUndefined();
+      expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+      const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+      expect(persistedCfg?.gateway?.auth?.mode).toBe(mode);
+      expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
+      expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses auth from latest config snapshot", async () => {
     const cfg: OpenClawConfig = {
@@ -176,6 +208,7 @@ describe("ensureBrowserControlAuth", () => {
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
     expect(result).toEqual({ auth: { token: "latest-token" } });
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
