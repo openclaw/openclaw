@@ -12,6 +12,7 @@ import {
   updateLastRouteMock,
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
+import { __resetDiscordInboundDedupeForTest } from "./monitor/message-handler.js";
 import { createDiscordMessageHandler } from "./monitor/message-handler.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
@@ -47,6 +48,7 @@ export const CATEGORY_GUILD_CFG = {
 } satisfies Config;
 
 export function resetDiscordToolResultHarness() {
+  __resetDiscordInboundDedupeForTest();
   installDiscordToolResultHarnessSpies();
   __resetDiscordChannelInfoCacheForTest();
   sendMock.mockClear().mockResolvedValue(undefined);

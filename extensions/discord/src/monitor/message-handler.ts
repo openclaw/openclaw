@@ -4,7 +4,7 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import {
@@ -34,6 +34,7 @@ type DiscordMessageHandlerParams = Omit<
 
 type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
   preflightDiscordMessage?: typeof preflightDiscordMessage;
+  inboundDedupeCache?: ReturnType<typeof resolveGlobalDedupeCache>;
 };
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
@@ -42,6 +43,12 @@ export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
 
 const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_DISCORD_MESSAGE_MAX = 5000;
+const RECENT_DISCORD_MESSAGE_CACHE_KEY = Symbol.for("openclaw.discord.recentInboundMessages");
+
+const recentDiscordInboundMessages = resolveGlobalDedupeCache(RECENT_DISCORD_MESSAGE_CACHE_KEY, {
+  ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
+  maxSize: RECENT_DISCORD_MESSAGE_MAX,
+});
 
 function buildDiscordInboundDedupeKey(params: {
   accountId: string;
@@ -51,14 +58,14 @@ function buildDiscordInboundDedupeKey(params: {
   if (!messageId) {
     return null;
   }
-  const channelId = resolveDiscordMessageChannelId({
-    message: params.data.message,
-    eventChannelId: params.data.channel_id,
-  });
-  if (!channelId) {
-    return null;
-  }
-  return `${params.accountId}:${channelId}:${messageId}`;
+  // Discord message ids are globally unique snowflakes, so account + message id
+  // is enough to reject duplicate deliveries even when the same inbound message
+  // is observed by multiple handler instances or under different channel aliases.
+  return `${params.accountId}:${messageId}`;
+}
+
+export function __resetDiscordInboundDedupeForTest(): void {
+  recentDiscordInboundMessages.clear();
 }
 
 export function createDiscordMessageHandler(
@@ -82,10 +89,8 @@ export function createDiscordMessageHandler(
     runTimeoutMs: params.workerRunTimeoutMs,
     __testing: params.__testing,
   });
-  const recentInboundMessages = createDedupeCache({
-    ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
-    maxSize: RECENT_DISCORD_MESSAGE_MAX,
-  });
+  const recentInboundMessages =
+    params.__testing?.inboundDedupeCache ?? recentDiscordInboundMessages;
 
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;

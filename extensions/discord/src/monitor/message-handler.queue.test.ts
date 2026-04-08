@@ -252,6 +252,23 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
+  it("drops duplicate inbound deliveries across distinct handler instances", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const handlerA = createHandlerWithDefaultPreflight();
+    const handlerB = createHandlerWithDefaultPreflight();
+    const duplicate = createMessageData("m-shared");
+
+    await expect(handlerA(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await expect(handlerB(duplicate as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+  });
+
   it("applies explicit inbound worker timeout to queued runs so stalled runs do not block the queue", async () => {
     vi.useFakeTimers();
     try {
