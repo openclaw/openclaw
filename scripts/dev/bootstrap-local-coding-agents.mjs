@@ -60,7 +60,9 @@ async function readConfig() {
   try {
     config = JSON.parse(rawConfig);
   } catch (error) {
-    throw new Error(`OpenClaw config must be valid JSON at ${configPath}: ${String(error)}`);
+    throw new Error(`OpenClaw config must be valid JSON at ${configPath}: ${String(error)}`, {
+      cause: error,
+    });
   }
   if (!config || typeof config !== "object") {
     throw new Error(`Invalid OpenClaw config object at ${configPath}`);
@@ -132,8 +134,8 @@ function upsertAgent(list, nextAgent) {
     ...list[index],
     ...nextAgent,
     identity: {
-      ...(list[index].identity ?? {}),
-      ...(nextAgent.identity ?? {}),
+      ...list[index].identity,
+      ...nextAgent.identity,
     },
   };
 }
