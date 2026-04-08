@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 export type ChatModelOverride =
