@@ -7,6 +7,8 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 
 describe("bundled plugin build entries", () => {
+  const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
+
   it("includes manifest-less runtime core support packages in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
 
@@ -52,7 +54,6 @@ describe("bundled plugin build entries", () => {
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
-    const sourceEntries = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
     const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
 
@@ -61,7 +62,7 @@ describe("bundled plugin build entries", () => {
         continue;
       }
 
-      for (const sourceEntry of sourceEntries) {
+      for (const sourceEntry of bundledChannelEntrySources) {
         const entryPath = path.join("extensions", dirent.name, sourceEntry);
         if (!fs.existsSync(entryPath)) {
           continue;
@@ -85,5 +86,34 @@ describe("bundled plugin build entries", () => {
       expect(fs.readFileSync(secretApiPath, "utf8")).toContain("channelSecrets");
       expect(artifacts).toContain(`dist/extensions/${pluginId}/secret-contract-api.js`);
     }
+  });
+
+  it("keeps bundled channel entry metadata on packed top-level sidecars", () => {
+    const offenders: string[] = [];
+
+    for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
+      if (!dirent.isDirectory()) {
+        continue;
+      }
+
+      for (const sourceEntry of bundledChannelEntrySources) {
+        const entryPath = path.join("extensions", dirent.name, sourceEntry);
+        if (!fs.existsSync(entryPath)) {
+          continue;
+        }
+        const entry = fs.readFileSync(entryPath, "utf8");
+        if (
+          !entry.includes("defineBundledChannelEntry") &&
+          !entry.includes("defineBundledChannelSetupEntry")
+        ) {
+          continue;
+        }
+        if (/specifier:\s*["']\.\/src\//u.test(entry)) {
+          offenders.push(entryPath);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 });

@@ -106,30 +106,6 @@ function addBundledEntryCandidates(
   }
 }
 
-function resolveBundledEntryFallbackSpecifiers(specifier: string): string[] {
-  const sourceRelativeSpecifier = specifier.replace(/^\.\/src\//u, "./");
-  const fallbackSpecifiers: string[] = [];
-  if (sourceRelativeSpecifier !== specifier) {
-    fallbackSpecifiers.push(sourceRelativeSpecifier);
-  }
-
-  switch (sourceRelativeSpecifier) {
-    case "./channel.js":
-      fallbackSpecifiers.push("./channel-plugin-api.js", "./api.js");
-      break;
-    case "./channel.setup.js":
-      fallbackSpecifiers.push("./setup-plugin-api.js", "./channel-plugin-api.js", "./api.js");
-      break;
-    case "./secret-contract.js":
-      fallbackSpecifiers.push("./secret-contract-api.js", "./contract-api.js", "./api.js");
-      break;
-    default:
-      break;
-  }
-
-  return [...new Set(fallbackSpecifiers)];
-}
-
 function resolveBundledEntryModuleCandidates(
   importMetaUrl: string,
   specifier: string,
@@ -141,10 +117,11 @@ function resolveBundledEntryModuleCandidates(
   const primaryResolved = path.resolve(importerDir, specifier);
   addBundledEntryCandidates(candidates, primaryResolved, boundaryRoot);
 
-  for (const fallbackSpecifier of resolveBundledEntryFallbackSpecifiers(specifier)) {
+  const sourceRelativeSpecifier = specifier.replace(/^\.\/src\//u, "./");
+  if (sourceRelativeSpecifier !== specifier) {
     addBundledEntryCandidates(
       candidates,
-      path.resolve(importerDir, fallbackSpecifier),
+      path.resolve(importerDir, sourceRelativeSpecifier),
       boundaryRoot,
     );
   }
@@ -175,31 +152,14 @@ function resolveBundledEntryModuleCandidates(
     path.resolve(sourcePluginRoot, specifier),
     sourcePluginRoot,
   );
-  for (const fallbackSpecifier of resolveBundledEntryFallbackSpecifiers(specifier)) {
+  if (sourceRelativeSpecifier !== specifier) {
     addBundledEntryCandidates(
       candidates,
-      path.resolve(sourcePluginRoot, fallbackSpecifier),
+      path.resolve(sourcePluginRoot, sourceRelativeSpecifier),
       sourcePluginRoot,
     );
   }
   return candidates;
-}
-
-function resolveBundledEntryCompatExport<T>(
-  loaded: unknown,
-  reference: BundledEntryModuleRef,
-): T | undefined {
-  if (reference.exportName !== "channelSecrets" || !loaded || typeof loaded !== "object") {
-    return undefined;
-  }
-  const record = loaded as Record<string, unknown>;
-  if ("collectRuntimeConfigAssignments" in record && "secretTargetRegistryEntries" in record) {
-    return {
-      collectRuntimeConfigAssignments: record.collectRuntimeConfigAssignments,
-      secretTargetRegistryEntries: record.secretTargetRegistryEntries,
-    } as T;
-  }
-  return undefined;
 }
 
 function formatBundledEntryUnknownError(error: unknown): string {
@@ -348,10 +308,6 @@ export function loadBundledEntryExportSync<T>(
   }
   const record = (resolved ?? loaded) as Record<string, unknown> | undefined;
   if (!record || !(reference.exportName in record)) {
-    const compatResolved = resolveBundledEntryCompatExport<T>(record ?? loaded, reference);
-    if (compatResolved !== undefined) {
-      return compatResolved;
-    }
     throw new Error(
       `missing export "${reference.exportName}" from bundled entry module ${reference.specifier}`,
     );
