@@ -233,7 +233,12 @@ describe("matrix doctor", () => {
     );
   });
 
-  it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'allowlist'", () => {
+  it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'pairing' (allowFrom preserved)", () => {
+    // Always map "trusted" to "pairing": both policies accept the explicit
+    // allowFrom list AND any pairing-store entries via the merged
+    // effectiveAllowFrom in resolveMatrixMonitorAccessState. "pairing" also
+    // preserves the ability for new senders to request access, which most
+    // closely matches the intent of an operator who chose "trusted".
     const normalize = matrixDoctor.normalizeCompatibilityConfig;
     expect(normalize).toBeDefined();
     if (!normalize) {
@@ -258,11 +263,12 @@ describe("matrix doctor", () => {
       result.config.channels?.matrix as { dm?: { policy?: string; allowFrom?: string[] } }
     )?.dm;
 
-    expect(matrixDm?.policy).toBe("allowlist");
+    expect(matrixDm?.policy).toBe("pairing");
     expect(matrixDm?.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
     expect(result.changes).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "allowlist"'),
+        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "pairing"'),
+        expect.stringContaining("preserved 2 channels.matrix.dm.allowFrom entries"),
       ]),
     );
   });
@@ -367,13 +373,13 @@ describe("matrix doctor", () => {
       }
     )?.accounts;
 
-    expect(accounts?.work?.dm?.policy).toBe("allowlist");
+    expect(accounts?.work?.dm?.policy).toBe("pairing");
     expect(accounts?.work?.dm?.allowFrom).toEqual(["@boss:example.org"]);
     expect(accounts?.personal?.dm?.policy).toBe("pairing");
     expect(result.changes).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'Migrated channels.matrix.accounts.work.dm.policy "trusted" → "allowlist"',
+          'Migrated channels.matrix.accounts.work.dm.policy "trusted" → "pairing"',
         ),
         expect.stringContaining(
           'Migrated channels.matrix.accounts.personal.dm.policy "trusted" → "pairing"',
