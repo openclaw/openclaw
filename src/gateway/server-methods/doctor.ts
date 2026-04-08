@@ -1,10 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  removeBackfillDiaryEntries,
-  previewGroundedRemMarkdown,
-  writeBackfillDiaryEntries,
-} from "../../../extensions/memory-core/api.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,6 +14,11 @@ import {
 } from "../../memory-host-sdk/dreaming.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
+import {
+  removeBackfillDiaryEntries,
+  previewGroundedRemMarkdown,
+  writeBackfillDiaryEntries,
+} from "./doctor.memory-core-runtime.js";
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

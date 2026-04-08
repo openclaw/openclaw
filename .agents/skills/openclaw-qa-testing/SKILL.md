@@ -68,6 +68,8 @@ pnpm openclaw qa character-eval \
   --model codex-cli/<codex-model>,thinking=high \
   --judge-model openai/gpt-5.4,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-6,thinking=high \
+  --concurrency 8 \
+  --judge-concurrency 8 \
   --output-dir .artifacts/qa-e2e/character-eval-<tag>
 ```
 
@@ -79,6 +81,7 @@ pnpm openclaw qa character-eval \
 - OpenAI candidate refs default to fast mode so priority processing is used where supported. Use inline `,fast`, `,no-fast`, or `,fast=false` for one model; use `--fast` only to force fast mode for every candidate.
 - Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
 - Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
+- Candidate and judge concurrency default to 8. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
 - Scenario source should stay markdown-driven under `qa/scenarios/`.
 - For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
 - Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.

@@ -85,6 +85,16 @@ function parseQaBooleanModelOption(label: string, value: string) {
   }
 }
 
+function parseQaPositiveIntegerOption(label: string, value: number | undefined) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return Math.floor(value);
+}
+
 function parseQaModelSpecs(label: string, entries: readonly string[] | undefined) {
   const models: string[] = [];
   const optionsByModel: Record<string, QaCharacterModelOptions> = {};
@@ -215,6 +225,8 @@ export async function runQaCharacterEvalCommand(opts: {
   modelThinking?: string[];
   judgeModel?: string[];
   judgeTimeoutMs?: number;
+  concurrency?: number;
+  judgeConcurrency?: number;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const candidates = parseQaModelSpecs("--model", opts.model);
@@ -231,6 +243,8 @@ export async function runQaCharacterEvalCommand(opts: {
     judgeModels: judges.models.length > 0 ? judges.models : undefined,
     judgeModelOptions: judges.optionsByModel,
     judgeTimeoutMs: opts.judgeTimeoutMs,
+    candidateConcurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency),
+    judgeConcurrency: parseQaPositiveIntegerOption("--judge-concurrency", opts.judgeConcurrency),
   });
   process.stdout.write(`QA character eval report: ${result.reportPath}\n`);
   process.stdout.write(`QA character eval summary: ${result.summaryPath}\n`);
