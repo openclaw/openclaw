@@ -43,22 +43,18 @@ export function resolveLiveSessionModelSelection(params: {
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
   });
-  const normalizedOverride =
-    normalizedSelection?.providerOverride && normalizedSelection.modelOverride
-      ? {
-          provider: normalizedSelection.providerOverride,
-          model: normalizedSelection.modelOverride,
-        }
-      : null;
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: defaultModelRef.provider,
     runtimeProvider: entry?.modelProvider,
     runtimeModel: entry?.model,
-    overrideProvider: normalizedOverride?.provider,
-    overrideModel: normalizedOverride?.model,
+    overrideProvider: normalizedSelection.providerOverride,
+    overrideModel: normalizedSelection.modelOverride,
   });
   const provider =
-    persisted?.provider ?? normalizedOverride?.provider ?? entry?.providerOverride?.trim() ?? defaultModelRef.provider;
+    persisted?.provider ??
+    normalizedSelection.providerOverride ??
+    entry?.providerOverride?.trim() ??
+    defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
   return {
