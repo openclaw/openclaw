@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import * as imageGenerationRuntime from "../image-generation/runtime.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+
+const hoisted = vi.hoisted(() => ({
+  createImageGenerateTool: vi.fn(),
+}));
 
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: () => [],
@@ -9,48 +12,34 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
 }));
 
+vi.mock("./tools/image-generate-tool.js", () => ({
+  createImageGenerateTool: (...args: unknown[]) => hoisted.createImageGenerateTool(...args),
+}));
+
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function stubImageGenerationProviders() {
-  vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-    {
-      id: "openai",
-      defaultModel: "gpt-image-1",
-      models: ["gpt-image-1"],
-      capabilities: {
-        generate: {
-          supportsSize: true,
-        },
-        edit: {
-          enabled: false,
-        },
-        geometry: {
-          sizes: ["1024x1024"],
-        },
-      },
-      generateImage: vi.fn(async () => {
-        throw new Error("not used");
-      }),
-    },
-  ]);
-}
-
 describe("openclaw tools image generation registration", () => {
-  beforeEach(() => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEYS", "");
-    vi.stubEnv("GEMINI_API_KEY", "");
-    vi.stubEnv("GEMINI_API_KEYS", "");
-  });
-
   afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
+    hoisted.createImageGenerateTool.mockReset();
   });
 
   it("registers image_generate when image-generation config is present", () => {
+    hoisted.createImageGenerateTool.mockReturnValue({
+      name: "image_generate",
+      description: "image fixture tool",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+      async execute() {
+        return {
+          content: [{ type: "text", text: "ok" }],
+        };
+      },
+    });
+
     const tools = createOpenClawTools({
       config: asConfig({
         agents: {
@@ -68,8 +57,19 @@ describe("openclaw tools image generation registration", () => {
   });
 
   it("registers image_generate when a compatible provider has env-backed auth", () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    hoisted.createImageGenerateTool.mockReturnValue({
+      name: "image_generate",
+      description: "image fixture tool",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+      async execute() {
+        return {
+          content: [{ type: "text", text: "ok" }],
+        };
+      },
+    });
 
     const tools = createOpenClawTools({
       config: asConfig({}),
@@ -80,7 +80,7 @@ describe("openclaw tools image generation registration", () => {
   });
 
   it("omits image_generate when config is absent and no compatible provider auth exists", () => {
-    stubImageGenerationProviders();
+    hoisted.createImageGenerateTool.mockReturnValue(null);
 
     const tools = createOpenClawTools({
       config: asConfig({}),

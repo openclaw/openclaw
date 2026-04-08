@@ -4,6 +4,7 @@ import { isCronJobActive } from "../cron/active-jobs.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -81,9 +82,9 @@ function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: strin
   if (direct) {
     return direct;
   }
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   for (const [key, entry] of Object.entries(store)) {
-    if (key.toLowerCase() === normalized) {
+    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
       return entry;
     }
   }

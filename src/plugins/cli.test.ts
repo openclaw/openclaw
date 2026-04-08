@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -117,8 +117,16 @@ function expectAutoEnabledCliLoad(params: {
 }
 
 describe("registerPluginCliCommands", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({
+      getPluginCliCommandDescriptors,
+      loadValidatedConfigForPluginRegistration,
+      registerPluginCliCommands,
+      registerPluginCliCommandsFromValidatedConfig,
+    } = await import("./cli.js"));
+  });
+
+  beforeEach(() => {
     mocks.memoryRegister.mockReset();
     mocks.memoryRegister.mockImplementation(({ program }: { program: Command }) => {
       const memory = program.command("memory").description("Memory commands");
@@ -149,12 +157,6 @@ describe("registerPluginCliCommands", () => {
       valid: true,
       config: {},
     });
-    ({
-      getPluginCliCommandDescriptors,
-      loadValidatedConfigForPluginRegistration,
-      registerPluginCliCommands,
-      registerPluginCliCommandsFromValidatedConfig,
-    } = await import("./cli.js"));
   });
 
   it("skips plugin CLI registrars when commands already exist", async () => {

@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";
 import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
 import { icons, type IconName } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 type PaletteItem = {
   id: string;
@@ -97,11 +98,11 @@ function filteredItems(query: string): PaletteItem[] {
   if (!query) {
     return PALETTE_ITEMS;
   }
-  const q = query.toLowerCase();
+  const q = normalizeLowercaseStringOrEmpty(query);
   return PALETTE_ITEMS.filter(
     (item) =>
-      item.label.toLowerCase().includes(q) ||
-      (item.description?.toLowerCase().includes(q) ?? false),
+      normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
+      normalizeLowercaseStringOrEmpty(item.description).includes(q),
   );
 }
 

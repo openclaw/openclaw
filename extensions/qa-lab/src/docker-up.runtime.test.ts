@@ -5,6 +5,31 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 
+async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => Promise<void> }> {
+  const server = createServer();
+  const listening = await new Promise<boolean>((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        resolve(false);
+        return;
+      }
+      reject(error);
+    });
+    server.listen(port, "127.0.0.1", () => resolve(true));
+  });
+
+  return {
+    close: async () => {
+      if (!listening) {
+        return;
+      }
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    },
+  };
+}
+
 describe("runQaDockerUp", () => {
   it("builds the QA UI, writes the harness, starts compose, and waits for health", async () => {
     const calls: string[] = [];
@@ -97,19 +122,63 @@ describe("runQaDockerUp", () => {
     }
   });
 
-  it("falls back to free host ports when defaults are already occupied", async () => {
-    const gatewayServer = createServer();
-    const labServer = createServer();
-    const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
+  it("uses a repo-root-relative default output dir when none is provided", async () => {
+    const calls: string[] = [];
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-root-"));
 
-    await new Promise<void>((resolve) => gatewayServer.listen(18789, "127.0.0.1", () => resolve()));
-    await new Promise<void>((resolve) => labServer.listen(43124, "127.0.0.1", () => resolve()));
+    try {
+      const result = await runQaDockerUp(
+        {
+          repoRoot,
+          usePrebuiltImage: true,
+          skipUiBuild: true,
+        },
+        {
+          async runCommand(command, args, cwd) {
+            calls.push([command, ...args, `@${cwd}`].join(" "));
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async () => ({ ok: true })),
+          sleepImpl: vi.fn(async () => {}),
+        },
+      );
+
+      expect(result.outputDir).toBe(path.join(repoRoot, ".artifacts/qa-docker"));
+      expect(result.composeFile).toBe(
+        path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml"),
+      );
+      expect(calls).toEqual([
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} down --remove-orphans @${repoRoot}`,
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} up -d @${repoRoot}`,
+      ]);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to free host ports when defaults are already occupied", async () => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
+    const gatewayPort = 18789;
+    const qaLabPort = 43124;
+    const resolveHostPort = vi.fn(async (preferredPort: number) => {
+      if (preferredPort === gatewayPort) {
+        return 28001;
+      }
+      if (preferredPort === qaLabPort) {
+        return 28002;
+      }
+      return preferredPort;
+    });
+    const gatewayPortReservation = await occupyPortOrAcceptExisting(18789);
+    const qaLabPortReservation = await occupyPortOrAcceptExisting(43124);
 
     try {
       const result = await runQaDockerUp(
         {
           repoRoot: "/repo/openclaw",
           outputDir,
+          gatewayPort,
+          qaLabPort,
           skipUiBuild: true,
           usePrebuiltImage: true,
         },
@@ -122,18 +191,17 @@ describe("runQaDockerUp", () => {
           },
           fetchImpl: vi.fn(async () => ({ ok: true })),
           sleepImpl: vi.fn(async () => {}),
+          resolveHostPortImpl: resolveHostPort,
         },
       );
 
-      expect(result.gatewayUrl).not.toBe("http://127.0.0.1:18789/");
-      expect(result.qaLabUrl).not.toBe("http://127.0.0.1:43124");
+      expect(result.gatewayUrl).not.toBe(`http://127.0.0.1:${gatewayPort}/`);
+      expect(result.qaLabUrl).not.toBe(`http://127.0.0.1:${qaLabPort}`);
+      expect(result.gatewayUrl).toBe("http://127.0.0.1:28001/");
+      expect(result.qaLabUrl).toBe("http://127.0.0.1:28002");
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        gatewayServer.close((error) => (error ? reject(error) : resolve())),
-      );
-      await new Promise<void>((resolve, reject) =>
-        labServer.close((error) => (error ? reject(error) : resolve())),
-      );
+      await gatewayPortReservation.close();
+      await qaLabPortReservation.close();
       await rm(outputDir, { recursive: true, force: true });
     }
   });

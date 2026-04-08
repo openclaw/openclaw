@@ -70,9 +70,13 @@ export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "../plugins/provider-model-helpers.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export function getModelProviderHint(modelId: string): string | null {
-  const trimmed = modelId.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(modelId);
+  if (!trimmed) {
+    return null;
+  }
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex <= 0) {
     return null;

@@ -1,19 +1,32 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ORIGINAL_MODELSTUDIO_API_KEY = process.env.MODELSTUDIO_API_KEY;
 const ORIGINAL_XAI_API_KEY = process.env.XAI_API_KEY;
+let collectProviderApiKeys: typeof import("./live-auth-keys.js").collectProviderApiKeys;
+let clearPluginManifestRegistryCache: typeof import("../plugins/manifest-registry.js").clearPluginManifestRegistryCache;
+
+async function loadModulesForTest(): Promise<void> {
+  ({ clearPluginManifestRegistryCache } = await import("../plugins/manifest-registry.js"));
+  ({ collectProviderApiKeys } = await import("./live-auth-keys.js"));
+}
+
+function clearManifestRegistryCache(): void {
+  clearPluginManifestRegistryCache();
+}
 
 describe("collectProviderApiKeys", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
     vi.doUnmock("../plugins/manifest-registry.js");
     vi.doUnmock("../secrets/provider-env-vars.js");
-    clearPluginManifestRegistryCache();
+    await loadModulesForTest();
+  });
+
+  beforeEach(() => {
+    clearManifestRegistryCache();
   });
 
   afterEach(() => {
-    vi.resetModules();
-    clearPluginManifestRegistryCache();
+    clearManifestRegistryCache();
     if (ORIGINAL_MODELSTUDIO_API_KEY === undefined) {
       delete process.env.MODELSTUDIO_API_KEY;
     } else {
@@ -28,16 +41,12 @@ describe("collectProviderApiKeys", () => {
 
   it("honors manifest-declared provider auth env vars for nonstandard provider ids", async () => {
     process.env.MODELSTUDIO_API_KEY = "modelstudio-live-key";
-    vi.resetModules();
-    const { collectProviderApiKeys } = await import("./live-auth-keys.js");
 
     expect(collectProviderApiKeys("alibaba")).toContain("modelstudio-live-key");
   });
 
   it("dedupes manifest env vars against direct provider env naming", async () => {
     process.env.XAI_API_KEY = "xai-live-key";
-    vi.resetModules();
-    const { collectProviderApiKeys } = await import("./live-auth-keys.js");
 
     expect(collectProviderApiKeys("xai")).toEqual(["xai-live-key"]);
   });

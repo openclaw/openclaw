@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * Security utilities for handling untrusted external content.
@@ -109,7 +110,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 export function resolveHookExternalContentSource(
   sessionKey: string,
 ): HookExternalContentSource | undefined {
-  const normalized = sessionKey.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   if (normalized.startsWith("hook:gmail:")) {
     return "gmail";
   }

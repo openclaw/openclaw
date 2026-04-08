@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import type {
   ZaloAuthStatus,
@@ -93,7 +97,7 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function credentialsFilename(profile: string): string {
-  const trimmed = profile.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(profile);
   if (!trimmed || trimmed === "default") {
     return "credentials.json";
   }
@@ -495,7 +499,7 @@ function resolveUploadedVoiceAsset(
     if (!item || typeof item !== "object") {
       continue;
     }
-    const fileType = item.fileType?.toLowerCase();
+    const fileType = normalizeOptionalLowercaseString(item.fileType);
     const fileUrl = item.fileUrl?.trim();
     if (!fileUrl) {
       continue;
@@ -880,14 +884,14 @@ export async function listZaloFriendsMatching(
   query?: string | null,
 ): Promise<ZcaFriend[]> {
   const friends = await listZaloFriends(profileInput);
-  const q = query?.trim().toLowerCase();
+  const q = normalizeOptionalLowercaseString(query);
   if (!q) {
     return friends;
   }
   const scored = friends
     .map((friend) => {
-      const id = friend.userId.toLowerCase();
-      const name = friend.displayName.toLowerCase();
+      const id = normalizeLowercaseStringOrEmpty(friend.userId);
+      const name = normalizeLowercaseStringOrEmpty(friend.displayName);
       const exact = id === q || name === q;
       const includes = id.includes(q) || name.includes(q);
       return { friend, exact, includes };
@@ -923,13 +927,13 @@ export async function listZaloGroupsMatching(
   query?: string | null,
 ): Promise<ZaloGroup[]> {
   const groups = await listZaloGroups(profileInput);
-  const q = query?.trim().toLowerCase();
+  const q = normalizeOptionalLowercaseString(query);
   if (!q) {
     return groups;
   }
   return groups.filter((group) => {
-    const id = group.groupId.toLowerCase();
-    const name = group.name.toLowerCase();
+    const id = normalizeLowercaseStringOrEmpty(group.groupId);
+    const name = normalizeLowercaseStringOrEmpty(group.name);
     return id.includes(q) || name.includes(q);
   });
 }
@@ -1629,7 +1633,7 @@ export async function resolveZaloGroupsByEntries(params: {
   const groups = await listZaloGroups(params.profile);
   const byName = new Map<string, ZaloGroup[]>();
   for (const group of groups) {
-    const key = group.name.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(group.name);
     if (!key) {
       continue;
     }
@@ -1646,7 +1650,7 @@ export async function resolveZaloGroupsByEntries(params: {
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const candidates = byName.get(trimmed.toLowerCase()) ?? [];
+    const candidates = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = candidates[0];
     return match ? { input, resolved: true, id: match.groupId } : { input, resolved: false };
   });
@@ -1659,7 +1663,7 @@ export async function resolveZaloAllowFromEntries(params: {
   const friends = await listZaloFriends(params.profile);
   const byName = new Map<string, ZcaFriend[]>();
   for (const friend of friends) {
-    const key = friend.displayName.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(friend.displayName);
     if (!key) {
       continue;
     }
@@ -1676,7 +1680,7 @@ export async function resolveZaloAllowFromEntries(params: {
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const matches = byName.get(trimmed.toLowerCase()) ?? [];
+    const matches = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = matches[0];
     if (!match) {
       return { input, resolved: false };

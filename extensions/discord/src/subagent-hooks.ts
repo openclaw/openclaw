@@ -1,4 +1,8 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
@@ -49,7 +53,7 @@ type DiscordSubagentDeliveryTargetEvent = {
 };
 
 function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
-  const normalized = raw?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "subagent" || normalized === "acp") {
     return normalized;
   }
@@ -84,7 +88,7 @@ export async function handleDiscordSubagentSpawning(
   if (!event.threadRequested) {
     return;
   }
-  const channel = event.requester?.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(event.requester?.channel);
   if (channel !== "discord") {
     return;
   }
@@ -145,14 +149,14 @@ export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDelive
   if (!event.expectsCompletionMessage) {
     return;
   }
-  const requesterChannel = event.requesterOrigin?.channel?.trim().toLowerCase();
+  const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
   if (requesterChannel !== "discord") {
     return;
   }
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadId =
     event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
-      ? String(event.requesterOrigin.threadId).trim()
+      ? (normalizeOptionalStringifiedId(event.requesterOrigin.threadId) ?? "")
       : "";
   const bindings = listThreadBindingsBySessionKey({
     targetSessionKey: event.childSessionKey,

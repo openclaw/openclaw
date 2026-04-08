@@ -235,14 +235,9 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
 };
 
-function normalizeRuntimeField(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  return trimmed ? trimmed : undefined;
-}
-
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
-  const normalizedModel = normalizeRuntimeField(entry.model);
-  const normalizedProvider = normalizeRuntimeField(entry.modelProvider);
+  const normalizedModel = normalizeOptionalString(entry.model);
+  const normalizedProvider = normalizeOptionalString(entry.modelProvider);
   let next = entry;
 
   if (!normalizedModel) {
@@ -327,8 +322,8 @@ export function mergeSessionEntryWithPolicy(
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
-    const patchedModel = normalizeRuntimeField(patch.model);
-    const existingModel = normalizeRuntimeField(existing.model);
+    const patchedModel = normalizeOptionalString(patch.model);
+    const existingModel = normalizeOptionalString(existing.model);
     if (patchedModel && patchedModel !== existingModel) {
       delete next.modelProvider;
     }

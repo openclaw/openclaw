@@ -5,14 +5,15 @@ import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   isSameMemoryDreamingDay,
-  resolveMemoryCorePluginConfig,
-  resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryLightDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { formatError } from "../server-utils.js";
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -116,19 +117,19 @@ function resolveDreamingConfig(
   | "phaseSignalError"
 > {
   const resolved = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   const light = resolveMemoryLightDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   const deep = resolveMemoryDeepDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   const rem = resolveMemoryRemDreamingConfig({
-    pluginConfig: resolveMemoryCorePluginConfig(cfg),
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
   });
   return {
@@ -437,7 +438,7 @@ function isManagedDreamingJob(
     return true;
   }
   const name = normalizeTrimmedString(job.name);
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
+  const payloadKind = normalizeOptionalLowercaseString(job.payload?.kind);
   const payloadText = normalizeTrimmedString(job.payload?.text);
   return (
     name === params.name && payloadKind === "systemevent" && payloadText === params.payloadText

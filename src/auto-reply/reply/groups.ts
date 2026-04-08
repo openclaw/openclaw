@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
@@ -15,7 +18,7 @@ function loadGroupsRuntime() {
 }
 
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return null;
   }
@@ -80,7 +83,7 @@ export function defaultGroupActivation(requireMention: boolean): "always" | "men
 }
 
 function resolveProviderLabel(rawProvider: string | undefined): string {
-  const providerKey = normalizeOptionalString(rawProvider)?.toLowerCase() ?? "";
+  const providerKey = normalizeOptionalLowercaseString(rawProvider) ?? "";
   if (!providerKey) {
     return "chat";
   }

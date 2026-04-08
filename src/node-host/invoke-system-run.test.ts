@@ -383,6 +383,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     sendExecFinishedEvent?: HandleSystemRunInvokeOptions["sendExecFinishedEvent"];
     sendNodeEvent?: HandleSystemRunInvokeOptions["sendNodeEvent"];
     skillBinsCurrent?: () => Promise<Array<{ name: string; resolvedPath: string }>>;
+    isCmdExeInvocation?: HandleSystemRunInvokeOptions["isCmdExeInvocation"];
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -441,7 +442,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       execHostFallbackAllowed: true,
       resolveExecSecurity: () => params.security ?? "full",
       resolveExecAsk: () => params.ask ?? "off",
-      isCmdExeInvocation: () => false,
+      isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
       sanitizeEnv: () => undefined,
       runCommand,
       runViaMacAppExecHost,
@@ -1509,6 +1510,151 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       });
     } finally {
       clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "auto-runs allowlisted inner scripts through transport shell wrappers",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-wrapper-inner-"));
+      try {
+        const scriptsDir = path.join(tempDir, "scripts");
+        fs.mkdirSync(scriptsDir, { recursive: true });
+        const scriptPath = path.join(scriptsDir, "check_mail.sh");
+        fs.writeFileSync(scriptPath, "#!/bin/sh\necho ok\n");
+        fs.chmodSync(scriptPath, 0o755);
+
+        await withTempApprovalsHome({
+          approvals: createAllowlistOnMissApprovals({
+            agents: {
+              main: {
+                allowlist: [{ pattern: scriptPath }],
+              },
+            },
+          }),
+          run: async () => {
+            const invoke = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: ["/bin/sh", "-lc", "./scripts/check_mail.sh --limit 5"],
+              rawCommand: '/bin/sh -lc "./scripts/check_mail.sh --limit 5"',
+              cwd: tempDir,
+              security: "allowlist",
+              ask: "on-miss",
+              runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-inner-ok")),
+            });
+
+            expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+            expectInvokeOk(invoke.sendInvokeResult, {
+              payloadContains: "shell-wrapper-inner-ok",
+            });
+          },
+        });
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps cmd.exe transport wrappers approval-gated on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cmd-wrapper-allow-"));
+    try {
+      const scriptPath = path.join(tempDir, "check_mail.cmd");
+      fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
+
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals({
+          agents: {
+            main: {
+              allowlist: [{ pattern: scriptPath }],
+            },
+          },
+        }),
+        run: async () => {
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: ["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            isCmdExeInvocation: (argv) => {
+              const token = argv[0]?.trim();
+              if (!token) {
+                return false;
+              }
+              const base = path.win32.basename(token).toLowerCase();
+              return base === "cmd.exe" || base === "cmd";
+            },
+          });
+
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expectApprovalRequiredDenied({
+            sendNodeEvent: invoke.sendNodeEvent,
+            sendInvokeResult: invoke.sendInvokeResult,
+          });
+        },
+      });
+    } finally {
+      platformSpy.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "keeps env cmd.exe transport wrappers approval-gated on Windows",
+      command: ["env", "cmd.exe", "/d", "/s", "/c"],
+    },
+    {
+      name: "keeps env-assignment cmd.exe transport wrappers approval-gated on Windows",
+      command: ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c"],
+    },
+  ])("$name", async ({ command }) => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-cmd-wrapper-allow-"));
+    try {
+      const scriptPath = path.join(tempDir, "check_mail.cmd");
+      fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
+      const wrappedCommand = [...command, `${scriptPath} --limit 5`];
+
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals({
+          agents: {
+            main: {
+              allowlist: [{ pattern: scriptPath }],
+            },
+          },
+        }),
+        run: async () => {
+          const seenArgv: string[][] = [];
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: wrappedCommand,
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            isCmdExeInvocation: (argv) => {
+              seenArgv.push([...argv]);
+              const token = argv[0]?.trim();
+              if (!token) {
+                return false;
+              }
+              const base = path.win32.basename(token).toLowerCase();
+              return base === "cmd.exe" || base === "cmd";
+            },
+          });
+
+          expect(seenArgv).toContainEqual(["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`]);
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expectApprovalRequiredDenied({
+            sendNodeEvent: invoke.sendNodeEvent,
+            sendInvokeResult: invoke.sendInvokeResult,
+          });
+        },
+      });
+    } finally {
+      platformSpy.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

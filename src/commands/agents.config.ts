@@ -13,7 +13,7 @@ import {
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 
 export type AgentSummary = {
   id: string;
@@ -41,33 +41,15 @@ export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number
   return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
 }
 
-function resolveAgentName(cfg: OpenClawConfig, agentId: string) {
-  const entry = listAgentEntries(cfg).find(
-    (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
-  );
-  return normalizeOptionalString(entry?.name);
-}
-
 function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
   const entry = listAgentEntries(cfg).find(
     (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
   );
-  if (entry?.model) {
-    if (typeof entry.model === "string" && entry.model.trim()) {
-      return entry.model.trim();
-    }
-    if (typeof entry.model === "object") {
-      const primary = normalizeOptionalString(entry.model.primary);
-      if (primary) {
-        return primary;
-      }
-    }
+  const entryPrimary = resolvePrimaryStringValue(entry?.model);
+  if (entryPrimary) {
+    return entryPrimary;
   }
-  const raw = cfg.agents?.defaults?.model;
-  if (typeof raw === "string") {
-    return raw;
-  }
-  return normalizeOptionalString(raw?.primary);
+  return resolvePrimaryStringValue(cfg.agents?.defaults?.model);
 }
 
 export function parseIdentityMarkdown(content: string): AgentIdentity {
@@ -112,7 +94,9 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
         : undefined;
     return {
       id,
-      name: resolveAgentName(cfg, id),
+      name: normalizeOptionalString(
+        configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
+      ),
       identityName,
       identityEmoji,
       identitySource,

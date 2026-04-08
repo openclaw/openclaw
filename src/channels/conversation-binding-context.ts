@@ -1,7 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
 import type { ChannelPlugin } from "./plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "./registry.js";
@@ -75,7 +79,7 @@ function resolveChannelTargetId(params: {
     return undefined;
   }
 
-  const lower = target.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(target);
   const channelPrefix = `${params.channel}:`;
   if (lower.startsWith(channelPrefix)) {
     return resolveChannelTargetId({
@@ -128,7 +132,7 @@ export function resolveConversationBindingContext(
   const channel =
     normalizeAnyChannelId(params.channel) ??
     normalizeChannelId(params.channel) ??
-    normalizeOptionalString(params.channel)?.toLowerCase();
+    normalizeOptionalLowercaseString(params.channel);
   if (!channel) {
     return null;
   }
@@ -149,6 +153,8 @@ export function resolveConversationBindingContext(
     senderId: normalizeOptionalString(params.senderId),
     sessionKey: normalizeOptionalString(params.sessionKey),
     parentSessionKey: normalizeOptionalString(params.parentSessionKey),
+    from: normalizeOptionalString(params.from),
+    chatType: normalizeOptionalString(params.chatType),
     originatingTo: params.originatingTo ?? undefined,
     commandTo: params.commandTo ?? undefined,
     fallbackTo: params.fallbackTo ?? undefined,

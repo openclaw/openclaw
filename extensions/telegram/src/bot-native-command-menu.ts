@@ -6,7 +6,7 @@ import type { Bot } from "grammy";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
@@ -154,7 +154,7 @@ export function buildPluginTelegramMenuCommands(params: {
       );
       continue;
     }
-    const description = typeof spec.description === "string" ? spec.description.trim() : "";
+    const description = normalizeOptionalString(spec.description) ?? "";
     if (!description) {
       issues.push(`Plugin command "/${normalized}" is missing a description.`);
       continue;

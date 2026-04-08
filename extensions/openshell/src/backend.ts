@@ -19,6 +19,7 @@ import {
   runSshSandboxCommand,
   sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
@@ -504,8 +505,7 @@ function resolveOpenShellPluginConfigFromConfig(
 
 function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
-  const safe = trimmed
-    .toLowerCase()
+  const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

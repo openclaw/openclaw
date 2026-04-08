@@ -1,5 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -54,7 +58,7 @@ function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<str
     }
     const trimmed = name.trim();
     if (trimmed) {
-      normalized.add(trimmed.toLowerCase());
+      normalized.add(normalizeLowercaseStringOrEmpty(trimmed));
     }
   }
   return normalized.size > 0 ? normalized : null;
@@ -74,7 +78,7 @@ function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> 
   if (!allowedToolNames) {
     return true;
   }
-  return allowedToolNames.has(trimmed.toLowerCase());
+  return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
 }
 
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
@@ -107,7 +111,7 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   const normalizedName = hasTrimmedName ? trimmedName : undefined;
   const nameChanged = hasTrimmedName && rawName !== trimmedName;
 
-  const isSessionsSpawn = normalizedName?.toLowerCase() === "sessions_spawn";
+  const isSessionsSpawn = normalizeLowercaseStringOrEmpty(normalizedName) === "sessions_spawn";
 
   if (!isSessionsSpawn) {
     if (!nameChanged) {
@@ -268,7 +272,7 @@ export function repairToolCallInputs(
             typeof (block as { name?: unknown }).name === "string"
               ? (block as { name: string }).name.trim()
               : undefined;
-          if (blockName?.toLowerCase() === "sessions_spawn") {
+          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
             const sanitized = sanitizeToolCallBlock(block);
             if (sanitized !== block) {
               changed = true;

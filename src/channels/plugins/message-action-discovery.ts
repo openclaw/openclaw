@@ -32,11 +32,7 @@ type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin
 const loggedMessageActionErrors = new Set<string>();
 
 export function resolveMessageActionDiscoveryChannelId(raw?: string | null): string | undefined {
-  const normalized = normalizeAnyChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  return normalizeOptionalString(raw);
+  return normalizeAnyChannelId(raw) ?? normalizeOptionalString(raw);
 }
 
 export function createMessageActionDiscoveryContext(

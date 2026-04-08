@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
@@ -106,7 +107,7 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
   try {
     const parsed = new URL(url);
     const hasAuthHeader = Object.keys(mergedHeaders).some(
-      (key) => key.toLowerCase() === "authorization",
+      (key) => normalizeLowercaseStringOrEmpty(key) === "authorization",
     );
     if (hasAuthHeader) {
       return mergedHeaders;

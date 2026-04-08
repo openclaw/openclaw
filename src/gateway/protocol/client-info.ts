@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",
@@ -55,7 +55,7 @@ const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(GATEWAY_CLI
 const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY_CLIENT_MODES));
 
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }
@@ -69,7 +69,7 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 }
 
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
-  const normalized = normalizeOptionalString(raw)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }

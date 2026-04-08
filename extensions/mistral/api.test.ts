@@ -5,7 +5,7 @@ import {
   MISTRAL_SMALL_LATEST_ID,
   resolveMistralCompatPatch,
 } from "./api.js";
-import { default as mistralPlugin } from "./index.js";
+import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 
 function readCompat<T>(model: unknown): T | undefined {
   return (model as { compat?: T }).compat;
@@ -109,22 +109,8 @@ describe("applyMistralModelCompat", () => {
   });
 
   it("contributes Mistral transport compat for native, provider-family, and hinted custom routes", () => {
-    const registerProvider = (mistralPlugin as { register?: (api: unknown) => void }).register;
-    let contributeResolvedModelCompat:
-      | ((params: { modelId: string; model: Record<string, unknown> }) => unknown)
-      | undefined;
-
-    registerProvider?.({
-      registerProvider: (provider: {
-        contributeResolvedModelCompat?: typeof contributeResolvedModelCompat;
-      }) => {
-        contributeResolvedModelCompat = provider.contributeResolvedModelCompat;
-      },
-      registerMediaUnderstandingProvider: () => {},
-    });
-
     expect(
-      contributeResolvedModelCompat?.({
+      contributeMistralResolvedModelCompat({
         modelId: "mistral-large-latest",
         model: {
           provider: "mistral",
@@ -135,7 +121,7 @@ describe("applyMistralModelCompat", () => {
     ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
 
     expect(
-      contributeResolvedModelCompat?.({
+      contributeMistralResolvedModelCompat({
         modelId: "custom-model",
         model: {
           provider: "custom-mistral-host",
@@ -146,7 +132,7 @@ describe("applyMistralModelCompat", () => {
     ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
 
     expect(
-      contributeResolvedModelCompat?.({
+      contributeMistralResolvedModelCompat({
         modelId: "mistralai/mistral-small-3.2",
         model: {
           provider: "openrouter",

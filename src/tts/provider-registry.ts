@@ -1,14 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { buildCapabilityProviderMaps } from "../plugins/provider-registry-shared.js";
+import {
+  buildCapabilityProviderMaps,
+  normalizeCapabilityProviderId,
+} from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { SpeechProviderId } from "./provider-types.js";
 
 export function normalizeSpeechProviderId(
   providerId: string | undefined,
 ): SpeechProviderId | undefined {
-  return normalizeOptionalString(providerId)?.toLowerCase();
+  return normalizeCapabilityProviderId(providerId);
 }
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {

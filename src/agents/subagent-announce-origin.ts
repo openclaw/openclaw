@@ -1,4 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 
 export type DeliveryContext = {
@@ -22,27 +26,16 @@ type DeliveryContextSource = {
   deliveryContext?: DeliveryContext;
 };
 
-function normalizeThreadId(raw?: string | number): string | number | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.trunc(raw);
-  }
-  if (typeof raw === "string") {
-    const value = raw.trim();
-    return value || undefined;
-  }
-  return undefined;
-}
-
 function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {
     return undefined;
   }
   const normalized: DeliveryContext = {
-    channel: normalizeOptionalString(context.channel)?.toLowerCase(),
+    channel: normalizeOptionalLowercaseString(context.channel),
     to: normalizeOptionalString(context.to),
     accountId: normalizeOptionalString(context.accountId),
   };
-  const threadId = normalizeThreadId(context.threadId);
+  const threadId = normalizeOptionalThreadValue(context.threadId);
   if (threadId != null) {
     normalized.threadId = threadId;
   }
@@ -127,7 +120,7 @@ function shouldStripThreadFromAnnounceEntry(
   ) {
     return false;
   }
-  const requesterChannel = normalizeOptionalString(normalizedRequester.channel)?.toLowerCase();
+  const requesterChannel = normalizeOptionalLowercaseString(normalizedRequester.channel);
   if (requesterChannel === "telegram") {
     const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
     const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
