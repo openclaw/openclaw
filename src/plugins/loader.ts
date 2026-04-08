@@ -1049,7 +1049,13 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
+  const previousRuntimeSubagentMode = getActivePluginRuntimeSubagentMode();
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+  // Keep live gateway hooks wired to the gateway-bindable registry even if a later
+  // default-mode plugin load refreshes other global plugin surfaces.
+  if (previousRuntimeSubagentMode === "gateway-bindable" && runtimeSubagentMode === "default") {
+    return;
+  }
   initializeGlobalHookRunner(registry);
 }
 
