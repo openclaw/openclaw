@@ -135,6 +135,19 @@ export function shouldUseOptimisticNewSessionFallback(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(error.message).includes("unknown method");
 }
 
+export function resolveNewSessionAgentId(params: {
+  sessionKey: string;
+  sessionsResult: OpenClawApp["sessionsResult"];
+  assistantAgentId: string | null;
+}): string {
+  const activeSessionExists =
+    params.sessionsResult?.sessions?.some((row) => row.key === params.sessionKey) ?? false;
+  const sessionAgentId = activeSessionExists
+    ? parseAgentSessionKey(params.sessionKey)?.agentId
+    : null;
+  return sessionAgentId ?? params.assistantAgentId ?? "main";
+}
+
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
     return false;
@@ -806,8 +819,11 @@ export class OpenClawApp extends LitElement {
     }
     this.newSessionModalOpen = false;
     this.newSessionName = "";
-    const sessionAgentId = parseAgentSessionKey(this.sessionKey)?.agentId;
-    const agentId = sessionAgentId ?? this.assistantAgentId ?? "main";
+    const agentId = resolveNewSessionAgentId({
+      sessionKey: this.sessionKey,
+      sessionsResult: this.sessionsResult,
+      assistantAgentId: this.assistantAgentId,
+    });
     const newKey = buildAgentMainSessionKey({
       agentId,
       mainKey: buildDashboardSessionMainKey({
@@ -819,6 +835,7 @@ export class OpenClawApp extends LitElement {
       try {
         const result = (await this.client.request("sessions.create", {
           key: newKey,
+          agentId,
           label: name,
         })) as {
           ok: boolean;
