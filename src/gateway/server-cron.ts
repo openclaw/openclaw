@@ -48,6 +48,11 @@ export type GatewayCronState = {
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
+/** Runs that complete faster than this threshold on a main-session systemEvent job
+ * are flagged as potential ghost runs: the gateway may have been unhealthy and the
+ * cron job did not actually execute any agent turn. */
+const GHOST_RUN_THRESHOLD_MS = 50;
+
 function redactWebhookUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -498,6 +503,32 @@ export function buildGatewayCronService(params: {
               }
             }
           }
+        }
+
+        // Ghost-run detection: main-session systemEvent jobs return almost
+        // instantly because executeMainSessionCronJob only enqueues a system
+        // event and returns without waiting for the agent to process it.
+        // If the gateway or agent session is unhealthy the event is silently
+        // dropped, yet the run is recorded as ok.  Warn when durationMs is
+        // suspiciously low so operators can identify silent failures.
+        if (
+          evt.status === "ok" &&
+          typeof evt.durationMs === "number" &&
+          evt.durationMs < GHOST_RUN_THRESHOLD_MS &&
+          job &&
+          job.sessionTarget !== "none" &&
+          job.payload.kind === "systemEvent"
+        ) {
+          cronLogger.warn(
+            {
+              jobId: evt.jobId,
+              durationMs: evt.durationMs,
+              sessionTarget: job.sessionTarget,
+              payloadKind: job.payload.kind,
+              ghostRunThresholdMs: GHOST_RUN_THRESHOLD_MS,
+            },
+            "cron: possible ghost run detected — job completed suspiciously fast; gateway may be unhealthy",
+          );
         }
 
         const logPath = resolveCronRunLogPath({
