@@ -672,7 +672,7 @@ describe("stopLaunchAgent", () => {
     expect(output).not.toContain("degraded");
   });
 
-  it("warns when disable fails but still attempts bootstrap", async () => {
+  it("skips bootstrap when disable fails to keep service fully unregistered", async () => {
     const env = createDefaultLaunchdEnv();
     state.disableError = "Operation not permitted";
     state.disableCode = 1;
@@ -686,10 +686,9 @@ describe("stopLaunchAgent", () => {
     await stopLaunchAgent({ env, stdout: out });
 
     expect(output).toContain("launchctl disable failed");
-    expect(output).toContain("KeepAlive may restart");
-    expect(state.launchctlCalls.some((c) => c[0] === "bootstrap")).toBe(true);
+    expect(output).toContain("skipping bootstrap");
+    expect(state.launchctlCalls.some((c) => c[0] === "bootstrap")).toBe(false);
     expect(output).toContain("Stopped LaunchAgent");
-    expect(output).not.toContain("degraded");
   });
 
   it("reports degraded stop when bootstrap fails with a genuine error", async () => {
@@ -746,7 +745,7 @@ describe("stopLaunchAgent", () => {
     expect(output).not.toContain("degraded");
   });
 
-  it("warns on both disable and bootstrap failure", async () => {
+  it("does not call bootstrap when disable fails even if bootstrap would also fail", async () => {
     const env = createDefaultLaunchdEnv();
     state.disableError = "Permission denied";
     state.disableCode = 1;
@@ -762,7 +761,10 @@ describe("stopLaunchAgent", () => {
     await stopLaunchAgent({ env, stdout: out });
 
     expect(output).toContain("launchctl disable failed");
-    expect(output).toContain("launchctl bootstrap failed");
-    expect(output).toContain("Stopped LaunchAgent (degraded)");
+    // bootstrap should never be attempted when disable failed
+    expect(state.launchctlCalls.some((c) => c[0] === "bootstrap")).toBe(false);
+    expect(output).not.toContain("launchctl bootstrap failed");
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
   });
 });

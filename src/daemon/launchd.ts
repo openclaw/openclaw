@@ -474,18 +474,23 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
   }
-  // Re-bootstrap the plist so the service stays registered with launchd after
-  // bootout.  Without this, the LaunchAgent is fully deregistered and neither
-  // `launchctl kickstart` nor KeepAlive can revive it — `openclaw gateway
-  // restart` would find a dead service.  Disable the service first so that
-  // KeepAlive / RunAtLoad do not immediately relaunch it.  (#63128)
+  // Disable the service so KeepAlive / RunAtLoad do not immediately relaunch
+  // it.  If disable fails, do NOT proceed to bootstrap — the service was
+  // already bootout'd, so without bootstrap it stays fully unregistered,
+  // which is the safer failure mode for a stop operation.  (#63128, #63164)
   const disable = await execLaunchctl(["disable", serviceTarget]);
   if (disable.code !== 0) {
     const detail = (disable.stderr || disable.stdout).trim();
     stdout.write(
-      `${formatLine("Warning", `launchctl disable failed (KeepAlive may restart the service): ${detail}`)}\n`,
+      `${formatLine("Warning", `launchctl disable failed — skipping bootstrap to keep service unregistered: ${detail}`)}\n`,
     );
+    stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+    return;
   }
+  // Re-bootstrap the plist so the service stays registered (but disabled) with
+  // launchd after bootout.  Without this, the LaunchAgent is fully deregistered
+  // and neither `launchctl kickstart` nor KeepAlive can revive it — `openclaw
+  // gateway restart` would find a dead service.
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
