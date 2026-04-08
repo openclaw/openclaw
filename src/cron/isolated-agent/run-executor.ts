@@ -119,6 +119,7 @@ export function createCronPromptExecutor(params: {
             skillsSnapshot: params.skillsSnapshot,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

@@ -124,7 +124,10 @@ describe("matrixMessageActions account propagation", () => {
           },
         }),
       ),
-    ).rejects.toThrow("Matrix profile updates require owner access.");
+    ).rejects.toMatchObject({
+      name: "ToolAuthorizationError",
+      message: "Matrix profile updates require owner access.",
+    });
 
     expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
   });
@@ -140,7 +143,10 @@ describe("matrixMessageActions account propagation", () => {
           },
         }),
       ),
-    ).rejects.toThrow("Matrix profile updates require owner access.");
+    ).rejects.toMatchObject({
+      name: "ToolAuthorizationError",
+      message: "Matrix profile updates require owner access.",
+    });
 
     expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
   });
