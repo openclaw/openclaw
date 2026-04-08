@@ -340,6 +340,32 @@ describe("web search runtime", () => {
     });
   });
 
+  it("falls back when an auto-selected provider returns a structured error payload", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => ({
+            error: "missing_google_api_key",
+            message: "google key missing",
+          }),
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback-structured-error" },
+      }),
+    ).resolves.toEqual({
+      provider: "duckduckgo",
+      result: { query: "fallback-structured-error", provider: "duckduckgo" },
+    });
+  });
+
   it("does not prebuild fallback provider tools before attempting the selected provider", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider(),

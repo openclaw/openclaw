@@ -124,6 +124,7 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
       "openai",
       "anthropic",
+      "openai-codex",
       "google",
       "minimax",
       "minimax-portal",
