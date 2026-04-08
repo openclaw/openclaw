@@ -29,6 +29,7 @@ import {
   emit,
   executeJobCoreWithTimeout,
   normalizeCronRunErrorText,
+  jobExists,
   runMissedJobs,
   stopTimer,
   wake,
@@ -622,6 +623,13 @@ async function finishPreparedManualRun(
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    if (await jobExists(state, jobId).then((exists) => !exists)) {
+      state.deps.log.info(
+        { jobId, jobName: executionJob.name },
+        "cron: dropping completed manual run for job removed during execution",
+      );
+      coreResult = { status: "skipped" };
+    }
   } catch (err) {
     coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
