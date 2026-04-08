@@ -82,7 +82,7 @@ export async function executeJobCoreWithTimeout(
   }
 
   const runAbortController = new AbortController();
-  let timeoutId: NodeJS.Timeout | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       executeJobCore(state, job, runAbortController.signal),
@@ -91,6 +91,7 @@ export async function executeJobCoreWithTimeout(
           runAbortController.abort(timeoutErrorMessage());
           reject(new Error(timeoutErrorMessage()));
         }, jobTimeoutMs);
+        timeoutId.unref?.();
       }),
     ]);
   } finally {
@@ -1245,11 +1246,39 @@ async function executeDetachedCronJob(
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
-  if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+  if (job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    return {
+      status: "skipped",
+      error: 'isolated job requires payload.kind="agentTurn" or "command"',
+    };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+
+  if (job.payload.kind === "command") {
+    const res = await state.deps.runCommandJob({
+      job,
+      command: job.payload.command,
+      args: job.payload.args,
+      timeoutSeconds: job.payload.timeoutSeconds,
+      abortSignal,
+    });
+
+    if (abortSignal?.aborted) {
+      return { status: "error", error: timeoutErrorMessage() };
+    }
+
+    return {
+      status: res.status,
+      error: res.error,
+      summary: res.summary,
+      sessionId: res.sessionId,
+      sessionKey: res.sessionKey,
+      model: res.model,
+      provider: res.provider,
+      usage: res.usage,
+    };
   }
 
   const res = await state.deps.runIsolatedAgentJob({

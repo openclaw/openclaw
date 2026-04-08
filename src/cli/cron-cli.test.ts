@@ -57,6 +57,9 @@ type CronUpdatePatch = {
     payload?: {
       kind?: string;
       message?: string;
+      command?: string;
+      args?: string[] | null;
+      timeoutSeconds?: number;
       model?: string;
       thinking?: string;
       lightContext?: boolean;
@@ -73,7 +76,15 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string; lightContext?: boolean };
+  payload?: {
+    kind?: string;
+    command?: string;
+    args?: string[];
+    timeoutSeconds?: number;
+    model?: string;
+    thinking?: string;
+    lightContext?: boolean;
+  };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -338,6 +349,31 @@ describe("cron cli", () => {
     expect(params?.deleteAfterRun).toBe(false);
   });
 
+  it("authors command payloads on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Podman validate",
+      "--cron",
+      "*/5 * * * *",
+      "--command",
+      "podman",
+      "--arg",
+      "run",
+      "--arg",
+      "--rm",
+      "--arg",
+      "busybox",
+      "--timeout-seconds",
+      "45",
+    ]);
+
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload?.kind).toBe("command");
+    expect(params?.payload?.command).toBe("podman");
+    expect(params?.payload?.args).toEqual(["run", "--rm", "busybox"]);
+    expect(params?.payload?.timeoutSeconds).toBe(45);
+  });
+
   it("includes --account on isolated cron add delivery", async () => {
     const params = await runCronAddAndGetParams([
       "--name",
@@ -467,7 +503,31 @@ describe("cron cli", () => {
     expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
   });
 
-  it("updates delivery settings without requiring --message", async () => {
+  it("patches command payloads on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--command",
+      "podman",
+      "--arg",
+      "run",
+      "--arg",
+      "--rm",
+      "--timeout-seconds",
+      "30",
+    ]);
+
+    expect(patch?.patch?.payload?.kind).toBe("command");
+    expect(patch?.patch?.payload?.command).toBe("podman");
+    expect(patch?.patch?.payload?.args).toEqual(["run", "--rm"]);
+    expect(patch?.patch?.payload?.timeoutSeconds).toBe(30);
+  });
+
+  it("clears command args on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--command", "podman", "--clear-args"]);
+    expect(patch?.patch?.payload?.kind).toBe("command");
+    expect(patch?.patch?.payload?.args).toBeNull();
+  });
+
+  it("updates delivery settings without forcing a payload patch", async () => {
     await runCronCommand([
       "cron",
       "edit",
@@ -486,27 +546,26 @@ describe("cron cli", () => {
       };
     }>("cron.update");
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
-    expect(patch?.patch?.payload?.message).toBeUndefined();
   });
 
-  it("supports --no-deliver on cron edit", async () => {
+  it("supports --no-deliver on cron edit without forcing a payload patch", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--no-deliver"]);
 
     const patch = getGatewayCallParams<{
       patch?: { payload?: { kind?: string }; delivery?: { mode?: string } };
     }>("cron.update");
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("none");
   });
 
-  it("updates delivery account without requiring --message on cron edit", async () => {
+  it("updates delivery account without forcing a payload patch on cron edit", async () => {
     const patch = await runCronEditAndGetPatch(["--account", "  coordinator  "]);
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.accountId).toBe("coordinator");
     expect(patch?.patch?.delivery?.mode).toBeUndefined();
   });

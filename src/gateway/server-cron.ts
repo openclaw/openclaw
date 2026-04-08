@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -83,6 +84,8 @@ function resolveCronWebhookTarget(params: {
   return null;
 }
 
+const CRON_COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024;
+
 function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -141,6 +144,133 @@ async function postCronWebhook(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function runCronCommandJob(params: {
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+  abortSignal?: AbortSignal;
+}): Promise<{
+  status: "ok" | "error";
+  summary?: string;
+  outputText?: string;
+  error?: string;
+}> {
+  const command = params.command.trim();
+  const args = Array.isArray(params.args) ? params.args.filter((entry) => entry.length > 0) : [];
+  if (!command) {
+    return { status: "error" as const, error: "cron command payload requires a non-empty command" };
+  }
+
+  return await new Promise<{
+    status: "ok" | "error";
+    summary?: string;
+    outputText?: string;
+    error?: string;
+  }>((resolve) => {
+    const child = spawn(command, args, {
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let timedOut = false;
+
+    const appendLimited = (current: string, chunk: Buffer, used: number) => {
+      if (used >= CRON_COMMAND_OUTPUT_LIMIT_BYTES) {
+        return { text: current, bytes: used };
+      }
+      const remaining = CRON_COMMAND_OUTPUT_LIMIT_BYTES - used;
+      const slice = chunk.subarray(0, remaining);
+      return { text: current + slice.toString("utf8"), bytes: used + slice.byteLength };
+    };
+
+    const finish = (result: {
+      status: "ok" | "error";
+      summary?: string;
+      outputText?: string;
+      error?: string;
+    }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+
+    const onAbort = () => {
+      child.kill("SIGTERM");
+      finish({ status: "error", error: "aborted" });
+    };
+
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const next = appendLimited(stdout, chunk, stdoutBytes);
+      stdout = next.text;
+      stdoutBytes = next.bytes;
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const next = appendLimited(stderr, chunk, stderrBytes);
+      stderr = next.text;
+      stderrBytes = next.bytes;
+    });
+
+    child.once("error", (err) => {
+      finish({ status: "error", error: formatErrorMessage(err) });
+    });
+
+    child.once("close", (code, signal) => {
+      const outputText = stdout.trim() || undefined;
+      const errorText = stderr.trim() || undefined;
+      if (timedOut) {
+        finish({
+          status: "error",
+          error: `command timed out after ${params.timeoutSeconds ?? 0}s`,
+          summary: errorText ?? outputText,
+          outputText,
+        });
+        return;
+      }
+      if (code === 0) {
+        finish({
+          status: "ok",
+          summary: outputText ?? errorText ?? `Command completed: ${command}`,
+          outputText,
+        });
+        return;
+      }
+      finish({
+        status: "error",
+        error:
+          errorText ??
+          `command exited with code ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`,
+        summary: errorText ?? outputText,
+        outputText,
+      });
+    });
+
+    const timeoutMs =
+      typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+        ? Math.max(0, params.timeoutSeconds) * 1000
+        : 0;
+    const timeout: ReturnType<typeof setTimeout> | undefined =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+          }, timeoutMs)
+        : undefined;
+    timeout?.unref?.();
+  });
 }
 
 export function buildGatewayCronService(params: {
@@ -308,6 +438,8 @@ export function buildGatewayCronService(params: {
         });
       }
     },
+    runCommandJob: async ({ command, args, timeoutSeconds, abortSignal }) =>
+      await runCronCommandJob({ command, args, timeoutSeconds, abortSignal }),
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const webhookToken = normalizeOptionalString(params.cfg.cron?.webhookToken);

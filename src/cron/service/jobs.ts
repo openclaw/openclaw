@@ -149,8 +149,10 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "command"',
+    );
   }
 }
 
@@ -662,6 +664,25 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "command") {
+    if (existing.kind !== "command") {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: "command" }> = { ...existing };
+    if (typeof patch.command === "string") {
+      next.command = patch.command;
+    }
+    if (Array.isArray(patch.args)) {
+      next.args = patch.args;
+    } else if (patch.args === null) {
+      delete next.args;
+    }
+    if (typeof patch.timeoutSeconds === "number") {
+      next.timeoutSeconds = patch.timeoutSeconds;
+    }
+    return next;
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -702,6 +723,18 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "command") {
+    if (typeof patch.command !== "string" || patch.command.length === 0) {
+      throw new Error('cron.update payload.kind="command" requires command');
+    }
+    return {
+      kind: "command",
+      command: patch.command,
+      args: patch.args,
+      timeoutSeconds: patch.timeoutSeconds,
+    };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

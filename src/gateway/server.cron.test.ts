@@ -197,6 +197,23 @@ async function addWebhookCronJob(params: {
   return expectCronJobIdFromResponse(response);
 }
 
+function buildCommandJob(params?: { command?: string; args?: string[]; timeoutSeconds?: number }) {
+  return {
+    name: "command job",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    payload: {
+      kind: "command",
+      command: params?.command ?? process.execPath,
+      args: params?.args ?? ["-e", 'process.stdout.write("cron command ok")'],
+      ...(typeof params?.timeoutSeconds === "number"
+        ? { timeoutSeconds: params.timeoutSeconds }
+        : {}),
+    },
+  };
+}
+
 async function writeCronConfig(config: unknown) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   expect(typeof configPath).toBe("string");
@@ -441,6 +458,49 @@ describe("gateway server cron", () => {
       expect(deliveryPatched?.delivery?.channel).toBe("signal");
       expect(deliveryPatched?.delivery?.to).toBe("+15550001111");
       expect(deliveryPatched?.delivery?.bestEffort).toBe(true);
+
+      const commandPatchRes = await rpcReq(ws, "cron.add", {
+        name: "command patch merge",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          command: "echo",
+          args: ["hello", "world"],
+          timeoutSeconds: 30,
+        },
+      });
+      expect(commandPatchRes.ok).toBe(true);
+      const commandJobIdValue = (commandPatchRes.payload as { id?: unknown } | null)?.id;
+      const commandJobId = typeof commandJobIdValue === "string" ? commandJobIdValue : "";
+      expect(commandJobId.length > 0).toBe(true);
+
+      const clearCommandArgsRes = await rpcReq(ws, "cron.update", {
+        id: commandJobId,
+        patch: {
+          payload: {
+            kind: "command",
+            args: null,
+          },
+        },
+      });
+      expect(clearCommandArgsRes.ok).toBe(true);
+      const clearedCommand = clearCommandArgsRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              command?: unknown;
+              args?: unknown;
+              timeoutSeconds?: unknown;
+            };
+          }
+        | undefined;
+      expect(clearedCommand?.payload?.kind).toBe("command");
+      expect(clearedCommand?.payload?.command).toBe("echo");
+      expect(clearedCommand?.payload?.args).toBeUndefined();
+      expect(clearedCommand?.payload?.timeoutSeconds).toBe(30);
 
       const rejectJobId = await addMainSystemEventCronJob({ ws, name: "patch reject" });
 
@@ -716,6 +776,46 @@ describe("gateway server cron", () => {
         status: "ok",
         summary: "background finished",
       });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("runs command payloads without shell wrapping", async () => {
+    const { prevSkipCron } = await setupCronTestRun({ tempPrefix: "openclaw-gw-cron-command-" });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", buildCommandJob());
+      expect(addRes.ok).toBe(true);
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const finishedRun = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
+      expect(runRes.ok).toBe(true);
+      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+      const finishedPayload = await finishedRun;
+      expect(finishedPayload).toMatchObject({
+        jobId,
+        action: "finished",
+        status: "ok",
+        summary: "cron command ok",
+      });
+
+      const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 5 });
+      const entries = ((runsRes.payload as { entries?: unknown } | null)?.entries ?? []) as Array<{
+        status?: unknown;
+        outputText?: unknown;
+        summary?: unknown;
+      }>;
+      expect(entries[0]?.status).toBe("ok");
+      expect(entries[0]?.summary).toBe("cron command ok");
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

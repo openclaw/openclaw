@@ -252,6 +252,7 @@ export function createMockCronStateForJobs(params: {
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
+      runCommandJob: async () => ({ status: "ok", summary: "ok" }),
       log: {
         debug: () => {},
         info: () => {},

@@ -45,6 +45,13 @@ function hasAgentTurnPayloadHint(payload: UnknownRecord) {
   );
 }
 
+function hasCommandPayloadHint(payload: UnknownRecord) {
+  return (
+    hasTrimmedStringValue(payload.command) ||
+    normalizeTrimmedStringArray(payload.args) !== undefined
+  );
+}
+
 function normalizeTrimmedStringArray(
   value: unknown,
   options?: { allowNull?: boolean },
@@ -151,6 +158,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "command") {
+    next.kind = "command";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -161,6 +170,8 @@ function coercePayload(payload: UnknownRecord) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
+    } else if (hasCommandPayloadHint(next)) {
+      next.kind = "command";
     } else if (hasAgentTurnPayloadHint(next)) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
@@ -210,6 +221,22 @@ function coercePayload(payload: UnknownRecord) {
       delete next.fallbacks;
     }
   }
+  if ("args" in next) {
+    const args = normalizeTrimmedStringArray(next.args, { allowNull: true });
+    if (args !== undefined) {
+      next.args = args;
+    } else {
+      delete next.args;
+    }
+  }
+  if ("command" in next) {
+    const command = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.command);
+    if (command !== undefined) {
+      next.command = command;
+    } else {
+      delete next.command;
+    }
+  }
   if ("toolsAllow" in next) {
     const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
     if (toolsAllow !== undefined) {
@@ -233,8 +260,21 @@ function coercePayload(payload: UnknownRecord) {
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
+    delete next.command;
+    delete next.args;
   } else if (next.kind === "agentTurn") {
     delete next.text;
+    delete next.command;
+    delete next.args;
+  } else if (next.kind === "command") {
+    delete next.text;
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
   }
   if ("deliver" in next) {
     delete next.deliver;
@@ -297,6 +337,11 @@ function inferTopLevelPayload(next: UnknownRecord) {
   const text = normalizeOptionalString(next.text) ?? "";
   if (text) {
     return { kind: "systemEvent", text } satisfies UnknownRecord;
+  }
+
+  const command = typeof next.command === "string" ? next.command.trim() : "";
+  if (command || hasCommandPayloadHint(next)) {
+    return { kind: "command", ...(command ? { command } : {}) } satisfies UnknownRecord;
   }
 
   if (hasAgentTurnPayloadHint(next)) {
