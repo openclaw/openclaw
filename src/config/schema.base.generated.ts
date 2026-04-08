@@ -7142,6 +7142,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Search provider id. Auto-detected from available API keys if omitted.",
                   },
+                  fallbacks: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    description:
+                      "Ordered list of provider ids to try when the primary provider fails with rate_limit or billing error.",
+                  },
                   maxResults: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -26502,6 +26510,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Marketplace Plugin",
       help: "Plugin entry name inside the source marketplace, used for later updates.",
       tags: ["advanced"],
+    },
+    "tools.web.search.fallbacks": {
+      help: "Ordered list of provider ids to try when the primary provider fails with rate_limit or billing error.",
+      tags: ["reliability", "tools"],
     },
     "models.providers.*.headers.*": {
       sensitive: true,

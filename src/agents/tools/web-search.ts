@@ -1,11 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/manifest-registry.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import {
-  resolveWebSearchDefinition,
-  resolveWebSearchProviderId,
-  runWebSearch,
-} from "../../web-search/runtime.js";
+import { resolveWebSearchDefinition, resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { SEARCH_CACHE } from "./web-search-provider-common.js";
@@ -33,17 +29,31 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
+  // Use the same preferRuntimeProviders logic for runWebSearch
+  const shouldPreferRuntimeProviders =
+    Boolean(runtimeProviderId) &&
+    !resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: runtimeProviderId,
+      origin: "bundled",
+      config: options?.config,
+    });
+
   return {
     label: "Web Search",
     name: "web_search",
     description: resolved.definition.description,
     parameters: resolved.definition.parameters,
     execute: async (_toolCallId, args) => {
+      // Delegate to runWebSearch for proper fallback support.
+      // Do NOT pass providerId here — runWebSearch auto-detects the primary
+      // from config/runtime when providerId is undefined, which allows
+      // tools.web.search.fallbacks to be applied on rate_limit/billing failures.
       const result = await runWebSearch({
         config: options?.config,
         sandboxed: options?.sandboxed,
         runtimeWebSearch: options?.runtimeWebSearch,
-        preferRuntimeProviders,
+        preferRuntimeProviders: shouldPreferRuntimeProviders,
         args,
       });
       return jsonResult({
