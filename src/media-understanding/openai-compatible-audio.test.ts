@@ -118,6 +118,24 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       expect(bodyStr).toContain("test prompt");
     });
 
+    it("sanitizes quotes and CRLF in the filename", async () => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+
+      await transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: 'bad"name\r\nInjected: header',
+        apiKey: "k",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+      });
+
+      const bodyStr = decodeBody(getRequest().init?.body);
+      expect(bodyStr).toContain('filename="bad\\"nameInjected: header"');
+    });
+
     it("omits language and prompt fields when not provided", async () => {
       const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
 
