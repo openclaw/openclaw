@@ -7,9 +7,15 @@
  * up the correct accountId by matching the bearer token so multiple
  * E-Claw accounts can share the single `/eclaw-webhook` HTTP route.
  *
- * Unauthenticated requests are always rejected — we do not fall back to
- * routing to a lone registered account, because that would accept any
- * POST from the public internet.
+ * Authentication is strict and uniform for every webhook request:
+ *
+ *   - Header absent / empty / non-Bearer   -> 401, no fallback.
+ *   - Bearer header present but token does not match an entry -> 401.
+ *   - Bearer header present and token matches                 -> accountId.
+ *
+ * There is no "single registered account" fallback. A present-but-wrong
+ * token is an active (failed) authentication attempt, not a missing
+ * header, so accepting it would let any bogus token hit the dispatcher.
  */
 
 type EclawTokenEntry = {

@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
+  readJsonWebhookBodyOrReject: async () => ({ ok: true, value: {} }),
+  registerPluginHttpRoute: () => () => {},
+}));
+vi.mock("openclaw/plugin-sdk/channel-lifecycle", () => ({
+  waitUntilAbort: async () => undefined,
+}));
+
 import { listAccountIds, resolveAccount } from "./src/accounts.js";
 import {
   clearEclawClient,
@@ -82,6 +91,96 @@ describe("eclaw webhook registry", () => {
     } finally {
       unregisterEclawWebhookToken("t-0");
     }
+  });
+
+  it("handleEclawWebhookRequest returns 401 for a present-but-wrong Bearer token (no single-account fallback)", async () => {
+    // Exactly one account registered — this is the scenario where an
+    // earlier fallback path would have mis-routed a bogus token.
+    registerEclawWebhookToken("t-0", "default");
+    try {
+      const result = await handleEclawWebhookRequest({
+        cfg: {},
+        authHeader: "Bearer totally-bogus",
+        body: {
+          event: "message",
+          deviceId: "dev",
+          entityId: 1,
+          from: "user",
+          text: "hi",
+        } as EclawInboundMessage,
+      });
+      expect(result.status).toBe(401);
+      expect(result.body).toEqual({ error: "Unauthorized" });
+    } finally {
+      unregisterEclawWebhookToken("t-0");
+    }
+  });
+});
+
+describe("eclaw gateway bind-failure cleanup", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    const mod = await import("./src/gateway.js");
+    mod.__resetEclawSharedRouteForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("unregisters the remote callback when bindEntity fails after registerCallback succeeded", async () => {
+    process.env.ECLAW_API_KEY = "env-key";
+
+    const registerCallback = vi
+      .spyOn(EclawClient.prototype, "registerCallback")
+      .mockImplementation(async function (this: EclawClient) {
+        // Mimic a successful register: set internal state as the real
+        // client would. We only need deviceId to be non-null so that a
+        // later unregister call is a real HTTP attempt (stubbed below).
+        (this as unknown as { "#state"?: unknown }); // keep TS happy
+        return {
+          success: true,
+          deviceId: "dev-1",
+          entities: [],
+        } as never;
+      });
+    const bindEntity = vi
+      .spyOn(EclawClient.prototype, "bindEntity")
+      .mockImplementation(async () => {
+        throw new Error("bind exploded");
+      });
+    const unregisterCallback = vi
+      .spyOn(EclawClient.prototype, "unregisterCallback")
+      .mockImplementation(async () => {
+        /* no-op */
+      });
+
+    const { startEclawAccount } = await import("./src/gateway.js");
+
+    const logs: string[] = [];
+    const abortCtrl = new AbortController();
+    await startEclawAccount({
+      cfg: {} as never,
+      accountId: "default",
+      abortSignal: abortCtrl.signal,
+      log: {
+        info: (m) => logs.push(`info:${m}`),
+        warn: (m) => logs.push(`warn:${m}`),
+        error: (m) => logs.push(`error:${m}`),
+      },
+    });
+
+    expect(registerCallback).toHaveBeenCalledTimes(1);
+    expect(bindEntity).toHaveBeenCalledTimes(1);
+    // The critical assertion: we must have issued a best-effort
+    // unregisterCallback so the E-Claw backend doesn't keep pushing
+    // to a route we've already torn down locally.
+    expect(unregisterCallback).toHaveBeenCalledTimes(1);
+    expect(
+      logs.some(
+        (l) =>
+          l.startsWith("error:") && l.includes("bind exploded"),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -219,5 +318,131 @@ describe("eclaw webhook media-only delivery", () => {
     });
 
     expect(sentMessages).toEqual([]);
+  });
+
+  it("delivers text AND media in a single sendMessage when both are present", async () => {
+    installRuntimeWithPayload({
+      text: "caption here",
+      mediaType: "image",
+      mediaUrl: "https://cdn.example/img.png",
+    });
+
+    await dispatchEclawWebhookMessage({
+      accountId: "default",
+      cfg: {},
+      msg: {
+        event: "message",
+        deviceId: "dev-1",
+        entityId: 2,
+        from: "user-1",
+        text: "hi",
+      } as EclawInboundMessage,
+    });
+
+    expect(sentMessages).toEqual([
+      {
+        text: "caption here",
+        state: "IDLE",
+        mediaType: "photo",
+        mediaUrl: "https://cdn.example/img.png",
+      },
+    ]);
+  });
+
+  it("for entity_message replies, includes media on the wallpaper sendMessage and text-only on speakTo", async () => {
+    installRuntimeWithPayload({
+      text: "hello bot",
+      mediaType: "image",
+      mediaUrl: "https://cdn.example/img.png",
+    });
+
+    await dispatchEclawWebhookMessage({
+      accountId: "default",
+      cfg: {},
+      msg: {
+        event: "entity_message",
+        deviceId: "dev-1",
+        entityId: 2,
+        fromEntityId: 3,
+        from: "user-1",
+        text: "hi",
+      } as EclawInboundMessage,
+    });
+
+    expect(sentMessages).toEqual([
+      {
+        text: "hello bot",
+        state: "IDLE",
+        mediaType: "photo",
+        mediaUrl: "https://cdn.example/img.png",
+      },
+    ]);
+    expect(sentSpeakTo).toEqual([{ entityId: 3, text: "hello bot" }]);
+  });
+});
+
+describe("eclaw onError logging", () => {
+  beforeEach(() => {
+    const client = new (class extends EclawClient {
+      constructor() {
+        super({ apiBase: "https://example.test", apiKey: "test" });
+      }
+      sendMessage = vi.fn(async () => {
+        throw new Error("boom");
+      }) as unknown as EclawClient["sendMessage"];
+    })();
+    setEclawClient("default", client as unknown as EclawClient);
+  });
+
+  afterEach(() => {
+    clearEclawClient("default");
+  });
+
+  it("invokes the installed onError callback when delivery throws (no silent swallow)", async () => {
+    const errorsSeen: Array<{ err: unknown; kind?: string }> = [];
+    setEclawRuntime({
+      // Surface delivery failures via the runtime error sink so the
+      // handler's onError has somewhere to log.
+      error: (msg: string) => {
+        errorsSeen.push({ err: msg });
+      },
+      channel: {
+        reply: {
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async (args: {
+            dispatcherOptions: {
+              deliver: (p: {
+                text?: string;
+                mediaType?: string;
+                mediaUrl?: string;
+              }) => Promise<void>;
+              onError?: (err: unknown, info?: { kind?: string }) => void;
+            };
+          }) => {
+            try {
+              await args.dispatcherOptions.deliver({ text: "hello" });
+            } catch (err) {
+              args.dispatcherOptions.onError?.(err, { kind: "text" });
+            }
+          },
+        },
+      },
+    } as never);
+
+    await dispatchEclawWebhookMessage({
+      accountId: "default",
+      cfg: {},
+      msg: {
+        event: "message",
+        deviceId: "dev-1",
+        entityId: 2,
+        from: "user-1",
+        text: "hi",
+      } as EclawInboundMessage,
+    });
+
+    expect(errorsSeen).toHaveLength(1);
+    expect(String(errorsSeen[0]?.err)).toContain("boom");
+    expect(String(errorsSeen[0]?.err)).toContain("eclaw:");
   });
 });

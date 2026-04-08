@@ -165,8 +165,10 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
   const releaseRoute = acquireSharedEclawHttpRoute({ cfg, log });
   log?.info?.(`E-Claw webhook registered at: ${callbackUrl} (account: ${accountId})`);
 
+  let callbackRegistered = false;
   try {
     const reg = await client.registerCallback(callbackUrl, callbackToken);
+    callbackRegistered = true;
     log?.info?.(
       `E-Claw registered: deviceId=${reg.deviceId} entities=${reg.entities.length}`,
     );
@@ -179,6 +181,14 @@ export async function startEclawAccount(ctx: EclawGatewayContext): Promise<unkno
     log?.error?.(
       `E-Claw setup failed for account ${accountId}: ${(err as Error).message}`,
     );
+    // If registerCallback succeeded but a later step (e.g. bindEntity)
+    // failed, the E-Claw backend still holds a stale callback for this
+    // deviceId. Best-effort unregister so we don't leak server state.
+    if (callbackRegistered) {
+      await client.unregisterCallback().catch(() => {
+        /* best-effort */
+      });
+    }
     unregisterEclawWebhookToken(callbackToken);
     releaseRoute();
     clearEclawClient(accountId);

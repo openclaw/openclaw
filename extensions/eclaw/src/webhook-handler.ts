@@ -126,39 +126,73 @@ export async function dispatchEclawWebhookMessage(params: {
         }) => {
           if (!client) return;
           const text = typeof payload.text === "string" ? payload.text.trim() : "";
+          const mediaUrl = payload.mediaUrl;
+          const outboundMediaType = mediaUrl
+            ? mapMediaTypeOutbound(payload.mediaType)
+            : undefined;
 
           // Silent-token: hard stop, regardless of media.
           if (text === silentToken) {
             return;
           }
 
-          // Empty text: still allow media-only delivery through.
-          if (!text) {
-            if (payload.mediaUrl) {
-              await client.sendMessage(
-                "",
-                "IDLE",
-                mapMediaTypeOutbound(payload.mediaType),
-                payload.mediaUrl,
-              );
-            }
+          // Nothing to send.
+          if (!text && !mediaUrl) {
             return;
           }
 
+          // Media-only (no text) goes straight through as a single call.
+          if (!text) {
+            await client.sendMessage(
+              "",
+              "IDLE",
+              outboundMediaType,
+              mediaUrl,
+            );
+            return;
+          }
+
+          // Text + (optional) media delivery.
+          //
+          // The E-Claw /api/channel/message endpoint accepts text and
+          // media in a single call, so when both are present we ship
+          // them together rather than dropping one or splitting them.
           if (
             (event === "entity_message" || event === "broadcast") &&
             fromEntityId !== undefined
           ) {
-            // Update own wallpaper and reply to the sender.
-            await client.sendMessage(text, "IDLE");
+            // Update own wallpaper (with media if any) and reply to
+            // the sender with the text. speakTo is text-only, so any
+            // media is attached to the wallpaper sendMessage call.
+            await client.sendMessage(text, "IDLE", outboundMediaType, mediaUrl);
             await client.speakTo(fromEntityId, text, false);
             return;
           }
 
-          await client.sendMessage(text, "IDLE");
+          await client.sendMessage(text, "IDLE", outboundMediaType, mediaUrl);
         },
-        onError: () => {
-          /* swallow — logged upstream */
+        onError: (err: unknown, info?: { kind?: string }) => {
+          // Don't silently drop delivery failures — surface them via
+          // the plugin runtime logger so operators can see partial
+          // failures in the OpenClaw logs. Best-effort: if the runtime
+          // has no error sink, fall back to console.error with a
+          // stable "eclaw:" prefix.
+          const message = err instanceof Error ? err.message : String(err);
+          const kind = info?.kind ? ` ${info.kind}` : "";
+          const line = `eclaw: reply${kind} delivery failed: ${message}`;
+          try {
+            const runtime = getEclawRuntime() as unknown as {
+              error?: (msg: string) => void;
+            };
+            if (typeof runtime?.error === "function") {
+              runtime.error(line);
+              return;
+            }
+          } catch {
+            /* runtime not initialised — fall through */
+          }
+          // eslint-disable-next-line no-console
+          console.error(line);
         },
       },
     });
