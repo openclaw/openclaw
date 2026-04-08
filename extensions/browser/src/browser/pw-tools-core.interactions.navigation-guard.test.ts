@@ -118,6 +118,73 @@ describe("pw-tools-core interaction navigation guard", () => {
     }
   });
 
+  it("ignores subframe framenavigated events before the main frame navigates", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<(frame: object) => void>();
+      const mainFrame = {};
+      const subframe = {};
+      let currentUrl = "http://127.0.0.1:9222/json/version";
+      const click = vi.fn(async () => {
+        setTimeout(() => {
+          for (const listener of listeners) {
+            listener(subframe);
+          }
+        }, 10);
+        setTimeout(() => {
+          currentUrl = "http://127.0.0.1:9222/json/list";
+          for (const listener of listeners) {
+            listener(mainFrame);
+          }
+        }, 20);
+      });
+      const page = {
+        mainFrame: vi.fn(() => mainFrame),
+        on: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentRefLocator({ click });
+      setPwToolsCoreCurrentPage(page);
+
+      const task = mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(listeners.size).toBe(1);
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
+      await task;
+
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("deduplicates delayed navigation guards across repeated successful interactions", async () => {
     vi.useFakeTimers();
     try {
@@ -201,6 +268,52 @@ describe("pw-tools-core interaction navigation guard", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
       targetId: "T1",
     });
+  });
+
+  it("skips interaction navigation guards when no explicit SSRF policy is provided", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<(frame: object) => void>();
+      const mainFrame = {};
+      let currentUrl = "http://127.0.0.1:9222/json/version";
+      const click = vi.fn(async () => {
+        currentUrl = "http://127.0.0.1:9222/json/list";
+        for (const listener of listeners) {
+          listener(mainFrame);
+        }
+      });
+      const page = {
+        mainFrame: vi.fn(() => mainFrame),
+        on: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentRefLocator({ click });
+      setPwToolsCoreCurrentPage(page);
+
+      await mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+      });
+      await vi.runAllTimersAsync();
+
+      expect(page.on).not.toHaveBeenCalled();
+      expect(page.off).not.toHaveBeenCalled();
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs the post-evaluate navigation guard after page evaluation", async () => {

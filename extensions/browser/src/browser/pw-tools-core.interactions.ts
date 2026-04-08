@@ -32,6 +32,7 @@ const MAX_BATCH_ACTIONS = 100;
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
 
 type NavigationObservablePage = Pick<Page, "url"> & {
+  mainFrame?: () => Frame;
   on?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
   off?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
 };
@@ -108,6 +109,13 @@ function isHashOnlyNavigation(currentUrl: string, previousUrl: string): boolean 
   }
 }
 
+function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): boolean {
+  if (typeof page.mainFrame !== "function") {
+    return true;
+  }
+  return frame === page.mainFrame();
+}
+
 function observeDelayedInteractionNavigation(
   page: NavigationObservablePage,
   previousUrl: string,
@@ -120,7 +128,10 @@ function observeDelayedInteractionNavigation(
   }
 
   return new Promise<boolean>((resolve) => {
-    const onFrameNavigated = (_frame: Frame) => {
+    const onFrameNavigated = (frame: Frame) => {
+      if (!isMainFrameNavigation(page, frame)) {
+        return;
+      }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
       // event firing is itself the navigation signal, so a same-URL reload must
       // not be treated as "no navigation" the way URL polling would.
@@ -154,6 +165,9 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   ssrfPolicy?: SsrFPolicy;
   targetId?: string;
 }): void {
+  if (!opts.ssrfPolicy) {
+    return;
+  }
   const page = opts.page as unknown as NavigationObservablePage;
   if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
     void assertPageNavigationCompletedSafely({
@@ -171,7 +185,10 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
 
   pendingInteractionNavigationGuardCleanup.get(opts.page)?.();
 
-  const onFrameNavigated = (_frame: Frame) => {
+  const onFrameNavigated = (frame: Frame) => {
+    if (!isMainFrameNavigation(page, frame)) {
+      return;
+    }
     // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
     // event firing is itself the navigation signal, so a same-URL reload must
     // not be treated as "no navigation" the way URL polling would.
@@ -210,13 +227,19 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   ssrfPolicy?: SsrFPolicy;
   targetId?: string;
 }): Promise<T> {
+  if (!opts.ssrfPolicy) {
+    return await opts.action();
+  }
   // Phase 1: keep a framenavigated listener alive for the entire duration of the
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
-  const onFrameNavigated = (_frame: Frame) => {
+  const onFrameNavigated = (frame: Frame) => {
+    if (!isMainFrameNavigation(navPage, frame)) {
+      return;
+    }
     // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
     // firing is the navigation signal, so a same-URL reload must not be skipped
     // the way it would be by URL-equality polling.
