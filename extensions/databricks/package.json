@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/databricks-provider",
+  "name": "@openclaw/databricks",
   "version": "2026.4.7",
   "private": true,
   "description": "OpenClaw Databricks provider plugin",

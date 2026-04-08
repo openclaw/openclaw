@@ -6,11 +6,15 @@ const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
 const resolveTelegramFetchMock = vi.hoisted(() => vi.fn(() => fetchWithTimeoutMock));
 const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
-  fetchWithTimeout: fetchWithTimeoutMock,
-  isRecord: (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null,
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithTimeout: fetchWithTimeoutMock,
+  };
+});
 
 function mockGetChatMemberStatus(status: string) {
   fetchWithTimeoutMock.mockResolvedValueOnce(

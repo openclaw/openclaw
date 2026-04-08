@@ -8,9 +8,15 @@ vi.mock("./client.js", () => ({
   createSlackWebClient: createSlackWebClientMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
-  withTimeout: withTimeoutMock,
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
+  return {
+    ...actual,
+    withTimeout: withTimeoutMock,
+  };
+});
 
 let probeSlack: typeof import("./probe.js").probeSlack;
 

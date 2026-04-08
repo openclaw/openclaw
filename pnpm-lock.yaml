@@ -310,6 +310,8 @@ importers:
 
   extensions/copilot-proxy: {}
 
+  extensions/databricks: {}
+
   extensions/deepgram: {}
 
   extensions/deepseek: {}
