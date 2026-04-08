@@ -901,6 +901,8 @@ For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides
 
 `digest_bucket_ui_layouts.meta` also exposes `leader_compact` (`Leader ★` or `Follower`) so UI code can render the final leader/follower label from the same nested metadata object without re-assembling text and symbol fragments.
 
+`digest_bucket_ui_layouts.meta` also exposes `leader_tokens` (`["Leader", "★"]` or `["Follower"]`) so UI code can render or rearrange the final leader/follower display tokens from the same nested metadata object without reparsing the compact label.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

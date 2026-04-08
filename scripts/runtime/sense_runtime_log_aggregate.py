@@ -375,6 +375,7 @@ def derive_digest_bucket_ui_layouts(
         'leader_label': 'Leader' if digest_bucket_leader is True else 'Follower',
         'leader_symbol': '★' if digest_bucket_leader is True else '',
         'leader_compact': 'Leader ★' if digest_bucket_leader is True else 'Follower',
+        'leader_tokens': ['Leader', '★'] if digest_bucket_leader is True else ['Follower'],
         'rank': int(digest_bucket_rank) if isinstance(digest_bucket_rank, int) else 0,
         'palette': (
             digest_bucket_palette_key
