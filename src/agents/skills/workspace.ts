@@ -162,7 +162,7 @@ function tryRealpath(filePath: string): string | null {
   }
 }
 
-function warnEscapedSkillPath(params: {
+function debugEscapedSkillPath(params: {
   source: string;
   rootDir: string;
   candidatePath: string;
@@ -189,7 +189,7 @@ function resolveContainedSkillPath(params: {
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
     return candidateRealPath;
   }
-  warnEscapedSkillPath({
+  debugEscapedSkillPath({
     source: params.source,
     rootDir: params.rootDir,
     candidatePath: path.resolve(params.candidatePath),
