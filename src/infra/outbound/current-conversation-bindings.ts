@@ -89,7 +89,10 @@ async function persistBindingsToDisk(): Promise<void> {
 
 function enqueuePersist(): Promise<void> {
   persistPromise = persistPromise
-    .catch(() => {})
+    .catch((e: unknown) => {
+      // Previous persist failed — log and continue so the queue doesn't stall
+      console.warn("[current-conversation-bindings] persist error (retrying):", e);
+    })
     .then(async () => {
       await persistBindingsToDisk();
     });
