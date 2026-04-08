@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
-import { isTrustedWorkspaceChannelCatalogEntry } from "./workspace-trust.js";
+import {
+  isTrustedWorkspaceChannelCatalogEntry,
+  isTrustedWorkspacePlugin,
+} from "./workspace-trust.js";
 
 type ChannelCatalogEntry = {
   id: ChannelChoice;
@@ -50,7 +53,15 @@ export function listManifestInstalledChannelIds(params: {
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
-    }).plugins.flatMap((plugin) => plugin.channels as ChannelChoice[]),
+    }).plugins.flatMap((plugin) =>
+      isTrustedWorkspacePlugin({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        cfg: resolvedConfig,
+      })
+        ? (plugin.channels as ChannelChoice[])
+        : [],
+    ),
   );
 }
 
@@ -111,10 +122,13 @@ export function resolveChannelSetupEntries(params: {
       }
     }
   }
+  const setupInstalledCatalogIds = new Set(
+    installedCatalogEntries.map((entry) => entry.id as ChannelChoice),
+  );
   const installableCatalogEntries = nonWorkspaceCatalogEntries.filter(
     (entry) =>
       !installedPluginIds.has(entry.id) &&
-      !manifestInstalledIds.has(entry.id as ChannelChoice) &&
+      !setupInstalledCatalogIds.has(entry.id as ChannelChoice) &&
       shouldShowChannelInSetup(entry.meta),
   );
 
