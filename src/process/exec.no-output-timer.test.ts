@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -54,9 +54,12 @@ function emitProcessExit(
 }
 
 describe("runCommandWithTimeout no-output timer", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ runCommandWithTimeout } = await import("./exec.js"));
+  });
+
+  beforeEach(() => {
     spawnMock.mockClear();
   });
 

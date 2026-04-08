@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../../../src/plugins/bundled-capability-runtime.js";
-import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "../../../src/plugins/bundled-web-search-ids.js";
-import { resolveBundledWebSearchPluginId } from "../../../src/plugins/bundled-web-search-provider-ids.js";
-import { listBundledWebSearchProviders } from "../../../src/plugins/bundled-web-search.js";
+import {
+  resolveManifestContractOwnerPluginId,
+  resolveManifestContractPluginIds,
+} from "../../../src/plugins/manifest-registry.js";
+import { resolvePluginWebSearchProviders } from "../../../src/plugins/web-search-providers.runtime.js";
 
 type ComparableProvider = {
   pluginId: string;
@@ -79,21 +81,31 @@ function sortComparableEntries(entries: ComparableProvider[]): ComparableProvide
 export function describeBundledWebSearchFastPathContract(pluginId: string) {
   describe(`${pluginId} bundled web search fast-path contract`, () => {
     it("keeps provider-to-plugin ids aligned with bundled contracts", () => {
-      const providers = listBundledWebSearchProviders().filter(
-        (provider) => provider.pluginId === pluginId,
-      );
+      const providers = resolvePluginWebSearchProviders({
+        origin: "bundled",
+      }).filter((provider) => provider.pluginId === pluginId);
       expect(providers.length).toBeGreaterThan(0);
       for (const provider of providers) {
-        expect(resolveBundledWebSearchPluginId(provider.id)).toBe(pluginId);
+        expect(
+          resolveManifestContractOwnerPluginId({
+            contract: "webSearchProviders",
+            value: provider.id,
+            origin: "bundled",
+          }),
+        ).toBe(pluginId);
       }
     });
 
     it("keeps fast-path provider metadata aligned with the bundled runtime registry", async () => {
-      const fastPathProviders = listBundledWebSearchProviders().filter(
-        (provider) => provider.pluginId === pluginId,
-      );
+      const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
+        contract: "webSearchProviders",
+        origin: "bundled",
+      });
+      const fastPathProviders = resolvePluginWebSearchProviders({
+        origin: "bundled",
+      }).filter((provider) => provider.pluginId === pluginId);
       const bundledProviderEntries = loadBundledCapabilityRuntimeRegistry({
-        pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+        pluginIds: bundledWebSearchPluginIds,
         pluginSdkResolution: "dist",
       })
         .webSearchProviders.filter((entry) => entry.pluginId === pluginId)

@@ -2,6 +2,7 @@ import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -10,6 +11,26 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const chatHistoryRequestVersions = new WeakMap<object, number>();
+
+function beginChatHistoryRequest(state: ChatState): number {
+  const key = state as object;
+  const nextVersion = (chatHistoryRequestVersions.get(key) ?? 0) + 1;
+  chatHistoryRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function isLatestChatHistoryRequest(state: ChatState, version: number): boolean {
+  return chatHistoryRequestVersions.get(state as object) === version;
+}
+
+function shouldApplyChatHistoryResult(
+  state: ChatState,
+  version: number,
+  sessionKey: string,
+): boolean {
+  return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
+}
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
@@ -20,7 +41,7 @@ function isAssistantSilentReply(message: unknown): boolean {
     return false;
   }
   const entry = message as Record<string, unknown>;
-  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
   if (role !== "assistant") {
     return false;
   }
@@ -72,16 +93,21 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const sessionKey = state.sessionKey;
+  const requestVersion = beginChatHistoryRequest(state);
   state.chatLoading = true;
   state.lastError = null;
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey,
         limit: 200,
       },
     );
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+      return;
+    }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -91,6 +117,9 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+      return;
+    }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
@@ -99,7 +128,9 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = String(err);
     }
   } finally {
-    state.chatLoading = false;
+    if (isLatestChatHistoryRequest(state, requestVersion)) {
+      state.chatLoading = false;
+    }
   }
 }
 
@@ -128,7 +159,7 @@ function normalizeAssistantMessage(
   const candidate = message as Record<string, unknown>;
   const roleValue = candidate.role;
   if (typeof roleValue === "string") {
-    const role = options.roleCaseSensitive ? roleValue : roleValue.toLowerCase();
+    const role = options.roleCaseSensitive ? roleValue : normalizeLowercaseStringOrEmpty(roleValue);
     if (role !== "assistant") {
       return null;
     }

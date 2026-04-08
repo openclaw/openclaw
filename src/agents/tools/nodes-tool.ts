@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { NODE_SYSTEM_RUN_COMMANDS } from "../../infra/node-commands.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -43,18 +45,7 @@ const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
 function resolveApproveScopes(commands: unknown): OperatorScope[] {
-  const normalized = Array.isArray(commands)
-    ? commands.filter((value): value is string => typeof value === "string")
-    : [];
-  if (
-    normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
-  ) {
-    return ["operator.admin"];
-  }
-  if (normalized.length > 0) {
-    return ["operator.write"];
-  }
-  return ["operator.write"];
+  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
 }
 
 async function resolveNodePairApproveScopes(
@@ -62,15 +53,28 @@ async function resolveNodePairApproveScopes(
   requestId: string,
 ): Promise<OperatorScope[]> {
   const pairing = await callGatewayTool<{
-    pending?: Array<{ requestId?: string; commands?: unknown }>;
-  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing", "operator.write"] });
+    pending?: Array<{
+      requestId?: string;
+      commands?: unknown;
+      requiredApproveScopes?: unknown;
+    }>;
+  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
+  if (Array.isArray(match?.requiredApproveScopes)) {
+    const scopes = match.requiredApproveScopes.filter(
+      (scope): scope is OperatorScope =>
+        scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin",
+    );
+    if (scopes.length > 0) {
+      return scopes;
+    }
+  }
   return resolveApproveScopes(match?.commands);
 }
 
 function isPairingRequiredMessage(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return lower.includes("pairing required") || lower.includes("not_paired");
 }
 
@@ -301,7 +305,7 @@ export function createNodesTool(options?: {
             ? gatewayOpts.gatewayUrl.trim()
             : "default";
         const agentLabel = agentId ?? "unknown";
-        let message = err instanceof Error ? err.message : String(err);
+        let message = formatErrorMessage(err);
         if (action === "invoke" && isPairingRequiredMessage(message)) {
           const requestId = extractPairingRequestId(message);
           const approveHint = requestId

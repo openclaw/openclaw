@@ -8,12 +8,18 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -118,7 +124,7 @@ function formatTransportErrorCopy(raw: string): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
 
   if (
     /\beconnrefused\b/i.test(raw) ||
@@ -165,11 +171,29 @@ function formatTransportErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
-function isReasoningConstraintErrorMessage(raw: string): boolean {
+function formatDiskSpaceErrorCopy(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  if (
+    /\benospc\b/i.test(raw) ||
+    lower.includes("no space left on device") ||
+    lower.includes("disk full")
+  ) {
+    return (
+      "OpenClaw could not write local session data because the disk is full. " +
+      "Free some disk space and try again."
+    );
+  }
+  return undefined;
+}
+
+export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return (
     lower.includes("reasoning is mandatory") ||
     lower.includes("reasoning is required") ||
@@ -182,7 +206,7 @@ function isInvalidStreamingEventOrderError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return (
     lower.includes("unexpected event order") &&
     lower.includes("message_start") &&
@@ -191,7 +215,7 @@ function isInvalidStreamingEventOrderError(raw: string): boolean {
 }
 
 function hasRateLimitTpmHint(raw: string): boolean {
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
@@ -199,7 +223,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  const lower = errorMessage.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(errorMessage);
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
   if (hasRateLimitTpmHint(errorMessage)) {
@@ -217,6 +241,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length");
   return (
     lower.includes("request_too_large") ||
+    (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
@@ -224,6 +249,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("prompt too long") ||
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
+    (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
@@ -294,7 +320,7 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  const lower = errorMessage.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(errorMessage);
   const hasCompactionTerm =
     lower.includes("summarization failed") ||
     lower.includes("auto-compaction") ||
@@ -368,6 +394,7 @@ export type FailoverSignal = {
   status?: number;
   code?: string;
   message?: string;
+  provider?: string;
 };
 
 export type FailoverClassification =
@@ -460,7 +487,7 @@ function hasRetryable402TransientSignal(text: string): boolean {
 }
 
 function normalize402Message(raw: string): string {
-  return raw.trim().toLowerCase().replace(LEADING_402_WRAPPER_RE, "").trim();
+  return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
 }
 
 function classify402Message(message: string): PaymentRequiredFailoverReason {
@@ -520,8 +547,11 @@ export function isTransientHttpError(raw: string): boolean {
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
+  opts?: { provider?: string },
 ): FailoverReason | null {
-  const messageClassification = message ? classifyFailoverClassificationFromMessage(message) : null;
+  const messageClassification = message
+    ? classifyFailoverClassificationFromMessage(message, opts?.provider)
+    : null;
   return failoverReasonFromClassification(
     classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
   );
@@ -547,16 +577,18 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
     }
+    // billing message on 401/403 takes precedence over generic auth (e.g. OpenRouter
+    // "Key limit exceeded" 401/403 should trigger model fallback, not auth)
+    if (messageReason === "billing") {
+      return toReasonClassification("billing");
+    }
     return toReasonClassification("auth");
   }
   if (status === 408) {
     return toReasonClassification("timeout");
   }
   if (status === 410) {
-    // HTTP 410 is only a true session-expiry signal when the payload says the
-    // remote session/conversation is gone. Generic 410/no-body responses from
-    // OpenAI-compatible proxies are better treated as retryable transport-path
-    // failures so we do not clear session state or poison auth-profile health.
+    // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||
@@ -566,6 +598,20 @@ function classifyFailoverClassificationFromHttpStatus(
       return messageClassification;
     }
     return toReasonClassification("timeout");
+  }
+  if (status === 404) {
+    if (messageClassification?.kind === "context_overflow") {
+      return messageClassification;
+    }
+    if (
+      messageReason === "session_expired" ||
+      messageReason === "billing" ||
+      messageReason === "auth_permanent" ||
+      messageReason === "auth"
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification("model_not_found");
   }
   if (status === 503) {
     if (messageReason === "overloaded") {
@@ -621,7 +667,35 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
-function classifyFailoverClassificationFromMessage(raw: string): FailoverClassification | null {
+function isProvider(provider: string | undefined, match: string): boolean {
+  const normalized = normalizeOptionalLowercaseString(provider);
+  return Boolean(normalized && normalized.includes(match));
+}
+
+function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "anthropic") &&
+    (normalizeOptionalLowercaseString(raw)?.includes("an unknown error occurred") ?? false)
+  );
+}
+
+function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") &&
+    (normalizeOptionalLowercaseString(raw)?.includes("provider returned error") ?? false)
+  );
+}
+
+function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
+  );
+}
+
+function classifyFailoverClassificationFromMessage(
+  raw: string,
+  provider?: string,
+): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
@@ -640,6 +714,9 @@ function classifyFailoverClassificationFromMessage(raw: string): FailoverClassif
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
+  }
+  if (isOpenRouterKeyLimitExceededError(raw, provider)) {
+    return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
@@ -669,6 +746,12 @@ function classifyFailoverClassificationFromMessage(raw: string): FailoverClassif
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
+  if (isAnthropicGenericUnknownError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
+  if (isOpenRouterProviderReturnedError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
   if (isServerErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
@@ -695,7 +778,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
       ? signal.status
       : extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
   const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message)
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
@@ -785,7 +868,7 @@ function isLikelyHttpErrorText(raw: string): boolean {
   if (status.code < 400) {
     return false;
   }
-  const message = status.rest.toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(status.rest);
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
@@ -817,7 +900,7 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 }
 
 function isLikelyProviderErrorType(type?: string): boolean {
-  const normalized = type?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(type);
   if (!normalized) {
     return false;
   }
@@ -875,6 +958,11 @@ export function formatAssistantErrorText(
     if (rewritten) {
       return rewritten;
     }
+  }
+
+  const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
+  if (diskSpaceCopy) {
+    return diskSpaceCopy;
   }
 
   if (isContextOverflowError(raw)) {
@@ -955,7 +1043,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(raw);
+  const stripped = stripInternalRuntimeContext(stripFinalTagsFromText(raw));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
@@ -970,6 +1058,16 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
+    const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
+    if (execDeniedMessage) {
+      return execDeniedMessage;
+    }
+
+    const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
+    if (diskSpaceCopy) {
+      return diskSpaceCopy;
+    }
+
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +
@@ -1060,7 +1158,7 @@ function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const value = raw.toLowerCase();
+  const value = normalizeLowercaseStringOrEmpty(raw);
   // Providers wrap transient 5xx errors in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
   // Non-standard providers (e.g. MiniMax) may use different message text:
@@ -1088,7 +1186,7 @@ export function parseImageDimensionError(raw: string): {
   if (!raw) {
     return null;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   if (!lower.includes("image dimensions exceed max allowed size")) {
     return null;
   }
@@ -1113,7 +1211,7 @@ export function parseImageSizeError(raw: string): {
   if (!raw) {
     return null;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   if (!lower.includes("image exceeds") || !lower.includes("mb")) {
     return null;
   }
@@ -1146,7 +1244,7 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
 
   // Direct pattern matches from OpenClaw internals and common providers.
   if (
@@ -1177,7 +1275,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return (
     lower.includes("session not found") ||
     lower.includes("session does not exist") ||
@@ -1194,24 +1292,28 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
   );
 }
 
-export function classifyFailoverReason(raw: string): FailoverReason | null {
+export function classifyFailoverReason(
+  raw: string,
+  opts?: { provider?: string },
+): FailoverReason | null {
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   return failoverReasonFromClassification(
     classifyFailoverSignal({
       status: leadingStatus?.code,
       message: raw,
+      provider: opts?.provider,
     }),
   );
 }
 
-export function isFailoverErrorMessage(raw: string): boolean {
-  return classifyFailoverReason(raw) !== null;
+export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }): boolean {
+  return classifyFailoverReason(raw, opts) !== null;
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
-  return isFailoverErrorMessage(msg.errorMessage ?? "");
+  return isFailoverErrorMessage(msg.errorMessage ?? "", { provider: msg.provider });
 }

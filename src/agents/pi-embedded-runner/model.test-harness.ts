@@ -14,15 +14,16 @@ export const makeModel = (id: string): ModelDefinitionConfig => ({
 });
 
 export const OPENAI_CODEX_TEMPLATE_MODEL = {
-  id: "gpt-5.2-codex",
-  name: "GPT-5.2 Codex",
+  id: "gpt-5.3-codex",
+  name: "GPT-5.3 Codex",
   provider: "openai-codex",
   api: "openai-codex-responses",
   baseUrl: "https://chatgpt.com/backend-api",
   reasoning: true,
   input: ["text", "image"] as const,
-  cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-  contextWindow: 272000,
+  cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+  contextWindow: 1_050_000,
+  contextTokens: 272_000,
   maxTokens: 128000,
 };
 
@@ -43,7 +44,7 @@ export function mockOpenAICodexTemplateModel(discoverModelsMock: DiscoverModelsM
   mockTemplateModel(
     discoverModelsMock,
     "openai-codex",
-    "gpt-5.2-codex",
+    OPENAI_CODEX_TEMPLATE_MODEL.id,
     OPENAI_CODEX_TEMPLATE_MODEL,
   );
 }
@@ -57,6 +58,7 @@ export function buildOpenAICodexForwardCompatExpectation(
   baseUrl: string;
 } {
   const isGpt54 = id === "gpt-5.4";
+  const isGpt54Mini = id === "gpt-5.4-mini";
   const isSpark = id === "gpt-5.3-codex-spark";
   return {
     provider: "openai-codex",
@@ -69,8 +71,11 @@ export function buildOpenAICodexForwardCompatExpectation(
       ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
       : isGpt54
         ? { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }
-        : OPENAI_CODEX_TEMPLATE_MODEL.cost,
-    contextWindow: isGpt54 ? 272_000 : isSpark ? 128_000 : 272000,
+        : isGpt54Mini
+          ? { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }
+          : OPENAI_CODEX_TEMPLATE_MODEL.cost,
+    contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
+    ...(isGpt54 ? { contextTokens: 272_000 } : {}),
     maxTokens: 128000,
   };
 }

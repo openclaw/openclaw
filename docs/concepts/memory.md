@@ -14,12 +14,14 @@ hidden state.
 
 ## How it works
 
-Your agent has two places to store memories:
+Your agent has three memory-related files:
 
 - **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
 - **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
+- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
+  summaries for human review.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
 
@@ -37,6 +39,26 @@ The agent has two tools for working with memory:
 - **`memory_get`** -- reads a specific memory file or line range.
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
+
+## Memory Wiki companion plugin
+
+If you want durable memory to behave more like a maintained knowledge base than
+just raw notes, use the bundled `memory-wiki` plugin.
+
+`memory-wiki` compiles durable knowledge into a wiki vault with:
+
+- deterministic page structure
+- structured claims and evidence
+- contradiction and freshness tracking
+- generated dashboards
+- compiled digests for agent/runtime consumers
+- wiki-native tools like `wiki_search`, `wiki_get`, `wiki_apply`, and `wiki_lint`
+
+It does not replace the active memory plugin. The active memory plugin still
+owns recall, promotion, and dreaming. `memory-wiki` adds a provenance-rich
+knowledge layer beside it.
+
+See [Memory Wiki](/plugins/memory-wiki).
 
 ## Memory search
 
@@ -71,6 +93,15 @@ multi-agent awareness. Plugin install.
 </Card>
 </CardGroup>
 
+## Knowledge wiki layer
+
+<CardGroup cols={1}>
+<Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">
+Compiles durable memory into a provenance-rich wiki vault with claims,
+dashboards, bridge mode, and Obsidian-friendly workflows.
+</Card>
+</CardGroup>
+
 ## Automatic memory flush
 
 Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
@@ -82,6 +113,25 @@ The memory flush prevents context loss during compaction. If your agent has
 important facts in the conversation that are not yet written to a file, they
 will be saved automatically before the summary happens.
 </Tip>
+
+## Dreaming (experimental)
+
+Dreaming is an optional background consolidation pass for memory. It collects
+short-term signals, scores candidates, and promotes only qualified items into
+long-term memory (`MEMORY.md`).
+
+It is designed to keep long-term memory high signal:
+
+- **Opt-in**: disabled by default.
+- **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron job
+  for a full dreaming sweep.
+- **Thresholded**: promotions must pass score, recall frequency, and query
+  diversity gates.
+- **Reviewable**: phase summaries and diary entries are written to `DREAMS.md`
+  for human review.
+
+For phase behavior, scoring signals, and Dream Diary details, see
+[Dreaming (experimental)](/concepts/dreaming).
 
 ## CLI
 
@@ -96,7 +146,10 @@ openclaw memory index --force   # Rebuild the index
 - [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
 - [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
+- [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
+- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
+  from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory

@@ -5,16 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  maybeRemoveDeprecatedCliAuthProfiles,
-  maybeRepairLegacyOAuthProfileIds,
-} from "./doctor-auth.js";
+import { maybeRepairLegacyOAuthProfileIds } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const resolvePluginProvidersMock = vi.fn<() => ProviderPlugin[]>(() => []);
+const isPluginProvidersLoadInFlightMock = vi.fn(() => false);
 
 vi.mock("../plugins/providers.runtime.js", () => ({
+  isPluginProvidersLoadInFlight: () => isPluginProvidersLoadInFlightMock(),
   resolvePluginProviders: () => resolvePluginProvidersMock(),
 }));
 
@@ -48,6 +47,8 @@ beforeEach(() => {
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
   resolvePluginProvidersMock.mockReset();
   resolvePluginProvidersMock.mockReturnValue([]);
+  isPluginProvidersLoadInFlightMock.mockReset();
+  isPluginProvidersLoadInFlightMock.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -56,96 +57,6 @@ afterEach(() => {
     fs.rmSync(tempAgentDir, { recursive: true, force: true });
     tempAgentDir = undefined;
   }
-});
-
-describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
-  it("removes deprecated CLI auth profiles from store + config", async () => {
-    if (!tempAgentDir) {
-      throw new Error("Missing temp agent dir");
-    }
-    const authPath = path.join(tempAgentDir, "auth-profiles.json");
-    fs.writeFileSync(
-      authPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "anthropic:claude-cli": {
-              type: "oauth",
-              provider: "anthropic",
-              access: "token-a",
-              refresh: "token-r",
-              expires: Date.now() + 60_000,
-            },
-            "openai-codex:codex-cli": {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "token-b",
-              refresh: "token-r2",
-              expires: Date.now() + 60_000,
-            },
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "token-c",
-              refresh: "token-r3",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        deprecatedProfileIds: ["anthropic:claude-cli"],
-      },
-      {
-        id: "openai-codex",
-        label: "OpenAI Codex",
-        auth: [],
-        deprecatedProfileIds: ["openai-codex:codex-cli"],
-      },
-    ]);
-
-    const cfg = {
-      auth: {
-        profiles: {
-          "anthropic:claude-cli": { provider: "anthropic", mode: "oauth" },
-          "openai-codex:codex-cli": { provider: "openai-codex", mode: "oauth" },
-          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
-        },
-        order: {
-          anthropic: ["anthropic:claude-cli"],
-          "openai-codex": ["openai-codex:codex-cli", "openai-codex:default"],
-        },
-      },
-    } as const;
-
-    const next = await maybeRemoveDeprecatedCliAuthProfiles(
-      cfg as unknown as OpenClawConfig,
-      makePrompter(true),
-    );
-
-    const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
-      profiles?: Record<string, unknown>;
-    };
-    expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();
-    expect(raw.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
-    expect(raw.profiles?.["openai-codex:default"]).toBeDefined();
-
-    expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
-    expect(next.auth?.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
-    expect(next.auth?.profiles?.["openai-codex:default"]).toBeDefined();
-    expect(next.auth?.order?.anthropic).toBeUndefined();
-    expect(next.auth?.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
-  });
 });
 
 describe("maybeRepairLegacyOAuthProfileIds", () => {

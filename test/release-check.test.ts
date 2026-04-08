@@ -243,6 +243,25 @@ describe("collectForbiddenPackPaths", () => {
       ]),
     ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
   });
+
+  it("blocks generated docs artifacts from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "docs/.generated/config-baseline.json",
+        "docs/.generated/config-baseline.core.json",
+      ]),
+    ).toEqual([
+      "docs/.generated/config-baseline.core.json",
+      "docs/.generated/config-baseline.json",
+    ]);
+  });
+
+  it("blocks plugin SDK TypeScript build info from npm pack output", () => {
+    expect(collectForbiddenPackPaths(["dist/index.js", "dist/plugin-sdk/.tsbuildinfo"])).toEqual([
+      "dist/plugin-sdk/.tsbuildinfo",
+    ]);
+  });
 });
 
 describe("collectMissingPackPaths", () => {

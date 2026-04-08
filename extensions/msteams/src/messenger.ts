@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   type ChunkMode,
   isSilentReplyText,
@@ -305,7 +306,9 @@ export async function buildActivity(
 
       // Determine conversation type and file type
       // Teams only accepts base64 data URLs for images
-      const conversationType = conversationRef.conversation?.conversationType?.toLowerCase();
+      const conversationType = normalizeOptionalLowercaseString(
+        conversationRef.conversation?.conversationType,
+      );
       const isPersonal = conversationType === "personal";
       const isImage = media.kind === "image";
 
@@ -494,11 +497,21 @@ export async function sendMSTeamsMessages(params: {
   const sendProactively = async (
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
+    threadActivityId?: string,
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
+    const isChannel = params.conversationRef.conversation?.conversationType === "channel";
+    // For Teams channels, reconstruct the threaded conversation ID so the
+    // proactive message lands in the correct thread instead of creating a
+    // new top-level post in the channel.
+    const conversationId =
+      isChannel && threadActivityId
+        ? `${baseRef.conversation.id};messageid=${threadActivityId}`
+        : baseRef.conversation.id;
     const proactiveRef: MSTeamsConversationReference = {
       ...baseRef,
       activityId: undefined,
+      conversation: { ...baseRef.conversation, id: conversationId },
     };
 
     const messageIds: string[] = [];
@@ -513,6 +526,7 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
+    const threadActivityId = params.conversationRef.activityId;
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({
@@ -521,9 +535,13 @@ export async function sendMSTeamsMessages(params: {
           fellBack: false,
         }),
         onRevoked: async () => {
+          // When the live turn context is revoked (e.g. debounced messages),
+          // reconstruct the threaded conversation ID so the proactive
+          // fallback delivers the reply into the correct channel thread.
           const remaining = messages.slice(idx);
           return {
-            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            ids:
+              remaining.length > 0 ? await sendProactively(remaining, idx, threadActivityId) : [],
             fellBack: true,
           };
         },

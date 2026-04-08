@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 /**
@@ -40,7 +41,7 @@ export function checkTwitchAccessControl(params: {
 
   if (account.requireMention ?? true) {
     const mentions = extractMentions(message.message);
-    if (!mentions.includes(botUsername.toLowerCase())) {
+    if (!mentions.includes(normalizeLowercaseStringOrEmpty(botUsername))) {
       return {
         allowed: false,
         reason: "message does not mention the bot (requireMention is enabled)",
@@ -164,7 +165,7 @@ export function extractMentions(message: string): string[] {
   while ((match = mentionRegex.exec(message)) !== null) {
     const username = match[1];
     if (username) {
-      mentions.push(username.toLowerCase());
+      mentions.push(normalizeLowercaseStringOrEmpty(username));
     }
   }
 

@@ -51,6 +51,11 @@ describe("stripReasoningTagsFromText", () => {
         expected: "X  Y",
       },
       {
+        name: "strips antml namespaced thinking tags",
+        input: "Before <antml:thinking>secret</antml:thinking> after",
+        expected: "Before  after",
+      },
+      {
         name: "strips multiple reasoning blocks",
         input: "<think>first</think>A<think>second</think>B",
         expected: "AB",
@@ -193,6 +198,10 @@ describe("stripReasoningTagsFromText", () => {
       {
         input: "A <THINK>hidden</THINK> <Thinking>also hidden</Thinking> B",
         expected: "A   B",
+      },
+      {
+        input: "A <ANTML:THINKING hidden='1'>secret</ANTML:THINKING> B",
+        expected: "A  B",
       },
     ] as const)("handles unicode/attributes/case-insensitive names: %j", (testCase) => {
       expectStrippedCase(testCase);

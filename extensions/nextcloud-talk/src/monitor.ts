@@ -4,6 +4,7 @@ import {
   resolveLoggerBackedRuntime,
   safeParseJsonWithSchema,
 } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "zod";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -30,7 +31,6 @@ const DEFAULT_WEBHOOK_PORT = 8788;
 const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
@@ -73,7 +73,7 @@ function formatError(err: unknown): string {
 
 function normalizeOrigin(value: string): string | null {
   try {
-    return new URL(value).origin.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(new URL(value).origin);
   } catch {
     return null;
   }

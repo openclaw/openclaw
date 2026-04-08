@@ -2,6 +2,9 @@
   "id": "openai",
   "enabledByDefault": true,
   "providers": ["openai", "openai-codex"],
+  "modelSupport": {
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
+  },
   "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
@@ -34,12 +37,22 @@
   ],
   "contracts": {
     "speechProviders": ["openai"],
+    "realtimeTranscriptionProviders": ["openai"],
+    "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
-    "imageGenerationProviders": ["openai"]
+    "imageGenerationProviders": ["openai"],
+    "videoGenerationProviders": ["openai"]
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "personality": {
+        "type": "string",
+        "enum": ["friendly", "on", "off"],
+        "default": "friendly",
+        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs. `friendly` and `on` enable the overlay; `off` disables it."
+      }
+    }
   }
 }

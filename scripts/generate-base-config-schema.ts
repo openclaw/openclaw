@@ -34,7 +34,7 @@ export function renderBaseConfigSchemaModule(params?: { generatedAt?: string }):
 
 import type { BaseConfigSchemaResponse } from "./schema-base.js";
 
-export const GENERATED_BASE_CONFIG_SCHEMA = ${JSON.stringify(payload, null, 2)} as const satisfies BaseConfigSchemaResponse;
+export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = ${JSON.stringify(payload, null, 2)};
 `,
     DEFAULT_OUTPUT_PATH,
   );

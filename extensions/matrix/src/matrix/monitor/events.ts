@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -127,12 +128,13 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
-    const invitee = typeof event?.state_key === "string" ? event.state_key.trim() : "";
+    const invitee = normalizeOptionalString(event?.state_key) ?? "";
     const senderIsInvitee =
-      typeof event?.sender === "string" && invitee && event.sender.trim() === invitee;
+      Boolean(invitee) && (normalizeOptionalString(event?.sender) ?? "") === invitee;
     const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
-    if (typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
-      directTracker?.rememberInvite?.(roomId, event.sender);
+    const rememberedSender = normalizeOptionalString(event?.sender);
+    if (rememberedSender && !senderIsInvitee) {
+      directTracker?.rememberInvite?.(roomId, rememberedSender);
     }
     logVerboseMessage(
       `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,

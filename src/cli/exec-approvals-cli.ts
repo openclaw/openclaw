@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
   type ExecPolicyScopeSnapshot,
@@ -14,10 +15,10 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { describeUnknownError } from "./gateway-cli/shared.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -58,7 +59,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (opts.gateway) {
     return null;
   }
-  const raw = opts.node?.trim() ?? "";
+  const raw = normalizeOptionalString(opts.node) ?? "";
   if (!raw) {
     return null;
   }
@@ -157,7 +158,7 @@ async function saveSnapshotTargeted(params: {
 }
 
 function formatCliError(err: unknown): string {
-  const msg = describeUnknownError(err);
+  const msg = formatErrorMessage(err);
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
@@ -184,6 +185,7 @@ function buildEffectivePolicyReport(params: {
   cfg: OpenClawConfig | null;
   source: ApprovalsTargetSource;
   approvals: ExecApprovalsFile;
+  hostPath: string;
 }): EffectivePolicyReport {
   if (params.source === "node") {
     if (!params.cfg) {
@@ -196,6 +198,7 @@ function buildEffectivePolicyReport(params: {
       scopes: collectExecPolicyScopeSnapshots({
         cfg: params.cfg,
         approvals: params.approvals,
+        hostPath: params.hostPath,
       }),
       note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     };
@@ -210,6 +213,7 @@ function buildEffectivePolicyReport(params: {
     scopes: collectExecPolicyScopeSnapshots({
       cfg: params.cfg,
       approvals: params.approvals,
+      hostPath: params.hostPath,
     }),
     note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
   };
@@ -275,7 +279,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
     for (const entry of allowlist) {
-      const pattern = entry?.pattern?.trim() ?? "";
+      const pattern = normalizeOptionalString(entry?.pattern) ?? "";
       if (!pattern) {
         continue;
       }
@@ -348,12 +352,12 @@ async function saveSnapshot(
 }
 
 function resolveAgentKey(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? trimmed : "*";
 }
 
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
-  const pattern = entry?.pattern?.trim() ?? "";
+  const pattern = normalizeOptionalString(entry?.pattern) ?? "";
   return pattern ? pattern : null;
 }
 
@@ -474,6 +478,7 @@ export function registerExecApprovalsCli(program: Command) {
           cfg,
           source,
           approvals: snapshot.file,
+          hostPath: snapshot.path,
         });
         if (opts.json) {
           defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
