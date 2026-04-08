@@ -71,7 +71,7 @@ export async function agentsImportCommand(
     return;
   }
 
-  // 3. Extract to temp dir, read agent.json, and copy workspace in a single pass
+  // 3. Extract to temp dir and read agent.json
   const extractResult = await withTempDir(async (tmpDir) => {
     await extractArchive({
       archivePath: filePath,
@@ -103,19 +103,18 @@ export async function agentsImportCommand(
       return null;
     }
 
-    // Determine target paths (workspace path is needed for copying)
+    // Validate workspace type if provided
+    if (parsed.workspace !== undefined && typeof parsed.workspace !== "string") {
+      runtime.error("agent.json field 'workspace' must be a string");
+      runtime.exit(1);
+      return null;
+    }
+
     const resolvedAgentId = normalizeAgentId(parsed.id);
     const targetAgentDir = resolveAgentDir(cfg, resolvedAgentId);
     const targetWorkspace = parsed.workspace
       ? resolveUserPath(parsed.workspace)
       : resolveAgentWorkspaceDir(cfg, resolvedAgentId);
-
-    // Copy workspace in the same temp dir before returning
-    const sourceWorkspace = path.join(tmpDir, "workspace");
-    const workspaceExists = await fileExists(sourceWorkspace);
-    if (workspaceExists) {
-      await fs.cp(sourceWorkspace, targetWorkspace, { recursive: true });
-    }
 
     return { parsed, resolvedAgentId, targetAgentDir, targetWorkspace };
   });
@@ -160,7 +159,22 @@ export async function agentsImportCommand(
     }
   }
 
-  // 6. Apply config
+  // 6. Copy workspace files (after all checks passed)
+  await withTempDir(async (tmpDir) => {
+    await extractArchive({
+      archivePath: filePath,
+      destDir: tmpDir,
+      timeoutMs: 60_000,
+    });
+
+    const sourceWorkspace = path.join(tmpDir, "workspace");
+    const workspaceExists = await fileExists(sourceWorkspace);
+    if (workspaceExists) {
+      await fs.cp(sourceWorkspace, targetWorkspace, { recursive: true });
+    }
+  });
+
+  // 7. Apply config
   const nextConfig = applyAgentConfig(cfg, {
     agentId,
     name: agentConfig.name,
@@ -178,14 +192,14 @@ export async function agentsImportCommand(
     logConfigUpdated(runtime);
   }
 
-  // 9. Ensure workspace and sessions
+  // 8. Ensure workspace and sessions
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await ensureWorkspaceAndSessions(targetWorkspace, quietRuntime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     agentId,
   });
 
-  // 10. Output result
+  // 9. Output result
   const payload = {
     agentId,
     name: agentConfig.name,
