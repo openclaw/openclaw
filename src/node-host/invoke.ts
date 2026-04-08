@@ -177,18 +177,11 @@ export function decodeCapturedOutputBuffer(params: {
   }
   
   try {
-    if (encoding) {
-      return new TextDecoder(encoding).decode(params.buffer);
-    }
-    // 没有获取到编码，默认尝试 GBK
-    return new TextDecoder("gbk").decode(params.buffer);
+    return new TextDecoder(encoding).decode(params.buffer);
   } catch {
-    // 任何情况失败，都回退到 GBK，再不行就 UTF-8
-    try {
-      return new TextDecoder("gbk").decode(params.buffer);
-    } catch {
-      return utf8;
-    }
+    // Encoding not supported by this runtime; fall back to UTF-8
+    // Don't force GBK for non-Chinese Windows users (e.g., Japanese shift-jis, Korean euc-kr)
+    return utf8;
   }
 }
 
