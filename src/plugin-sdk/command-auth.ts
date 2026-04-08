@@ -78,13 +78,8 @@ export {
   resolveModelsCommandReply,
 } from "../auto-reply/reply/commands-models.js";
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
-export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
-export type { StoredModelOverride } from "../auto-reply/reply/model-selection.js";
-export {
-  buildCommandsMessage,
-  buildCommandsMessagePaginated,
-  buildHelpMessage,
-} from "../auto-reply/status.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
+export type { StoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;

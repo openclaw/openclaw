@@ -706,6 +706,14 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceContract("command-auth", {
+      omits: ["buildCommandsMessage", "buildCommandsMessagePaginated", "buildHelpMessage"],
+    });
+    expectSourceMentions("command-status", [
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
+      "buildHelpMessage",
+    ]);
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
