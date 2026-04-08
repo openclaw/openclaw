@@ -255,9 +255,23 @@ const SIGNAL_EXIT_CODES = {
   SIGTERM: 143,
 };
 
+// These commands only inspect local live-control state. They should stay
+// side-effect free, so avoid runtime postbuild restaging and HEAD-only rebuilds
+// that can otherwise trigger nested package-manager installs in source checkouts.
+const READ_ONLY_INSPECTION_COMMAND_PREFIXES = [
+  ["live", "status"],
+  ["live", "journal"],
+];
+
 const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
+
+const matchesCommandPrefix = (args, prefix) =>
+  prefix.every((segment, index) => args[index] === segment);
+
+const isReadOnlyInspectionInvocation = (args) =>
+  READ_ONLY_INSPECTION_COMMAND_PREFIXES.some((prefix) => matchesCommandPrefix(args, prefix));
 
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
@@ -381,8 +395,15 @@ export async function runNodeMain(params = {}) {
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
 
   const buildRequirement = resolveBuildRequirement(deps);
-  if (!buildRequirement.shouldBuild) {
-    if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
+  const isReadOnlyInspection = isReadOnlyInspectionInvocation(deps.args);
+  const canSkipReadOnlyInspectionBuild =
+    isReadOnlyInspection && buildRequirement.reason === "git_head_changed";
+  const shouldBuild = canSkipReadOnlyInspectionBuild ? false : buildRequirement.shouldBuild;
+  const shouldSyncRuntimeArtifacts =
+    !isReadOnlyInspection && !shouldSkipCleanWatchRuntimeSync(deps);
+
+  if (!shouldBuild) {
+    if (shouldSyncRuntimeArtifacts && !syncRuntimeArtifacts(deps)) {
       return 1;
     }
     return await runOpenClaw(deps);

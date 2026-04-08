@@ -65,8 +65,12 @@ function expectedBuildSpawn() {
   return [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"];
 }
 
+function runnerCommandSpawn(...args: string[]) {
+  return [process.execPath, "openclaw.mjs", ...args];
+}
+
 function statusCommandSpawn() {
-  return [process.execPath, "openclaw.mjs", "status"];
+  return runnerCommandSpawn("status");
 }
 
 function resolvePath(tmp: string, relativePath: string) {
@@ -175,6 +179,30 @@ async function runStatusCommand(params: {
   return await runNodeMain({
     cwd: params.tmp,
     args: ["status"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
+async function runRunnerCommand(params: {
+  args: string[];
+  tmp: string;
+  spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: { cwd?: string }) => void;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: params.args,
     env: {
       ...process.env,
       OPENCLAW_RUNNER_LOG: "0",
@@ -345,6 +373,35 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips runtime postbuild restaging for live journal inspection commands", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runRunnerCommand({
+        args: ["live", "journal", "--limit", "1"],
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([runnerCommandSpawn("live", "journal", "--limit", "1")]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       const spawn = (cmd: string, args: string[] = []) => {
@@ -470,6 +527,35 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+    });
+  });
+
+  it("skips rebuilding live status inspection commands when only git HEAD changed", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "def456\n",
+        gitStatus: "",
+      });
+      const exitCode = await runRunnerCommand({
+        args: ["live", "status", "--json"],
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([runnerCommandSpawn("live", "status", "--json")]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
     });
   });
 
