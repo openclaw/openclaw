@@ -138,8 +138,8 @@ async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
     readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
-    pendingById: pending ?? {},
-    pairedByNodeId: paired ?? {},
+    pendingById: (pending && !Array.isArray(pending)) ? pending : {},
+    pairedByNodeId: (paired && !Array.isArray(paired)) ? paired : {},
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
