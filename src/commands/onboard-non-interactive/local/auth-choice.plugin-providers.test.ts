@@ -20,6 +20,10 @@ vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+  resolveOwningPluginIdsForProvider.mockReturnValue(undefined as never);
+  resolveProviderPluginChoice.mockReturnValue(undefined);
+  resolvePluginProviders.mockReturnValue([] as never);
 });
 
 function createRuntime() {
@@ -95,31 +99,17 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
     const runtime = createRuntime();
     resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
-    resolvePluginProviders.mockImplementation(
-      (params: { includeUntrustedWorkspacePlugins?: boolean } | undefined) =>
-        params?.includeUntrustedWorkspacePlugins === false
-          ? []
-          : ([{ id: "workspace-provider", pluginId: "workspace-provider" }] as never),
-    );
-    resolveProviderPluginChoice.mockImplementation(
-      (params: { choice?: string; providers?: Array<{ id?: string }> } | undefined) => {
-        if (params?.choice !== "workspace-provider-api-key") {
-          return undefined;
-        }
-        const providers = Array.isArray(params.providers) ? params.providers : [];
-        if (!providers.some((provider) => provider.id === "workspace-provider")) {
-          return undefined;
-        }
-        return {
-          provider: {
-            id: "workspace-provider",
-            pluginId: "workspace-provider",
-            label: "Workspace Provider",
-          },
-          method: { id: "api-key" },
-        };
+    resolvePluginProviders
+      .mockReturnValueOnce([] as never)
+      .mockReturnValueOnce([{ id: "workspace-provider", pluginId: "workspace-provider" }] as never);
+    resolveProviderPluginChoice.mockReturnValueOnce(undefined).mockReturnValueOnce({
+      provider: {
+        id: "workspace-provider",
+        pluginId: "workspace-provider",
+        label: "Workspace Provider",
       },
-    );
+      method: { id: "api-key" },
+    });
 
     const result = await applyNonInteractivePluginProviderChoice({
       nextConfig: { agents: { defaults: {} } } as OpenClawConfig,

@@ -109,7 +109,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
         label: "Demo Provider",
         auth: [{ id: "api-key", label: "API key", kind: "api_key" }],
       },
-    ]);
+    ] as never);
     resolveProviderPluginChoice.mockReturnValue({
       provider: { id: "demo-provider" },
       method: { id: "api-key" },
