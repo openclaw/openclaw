@@ -245,7 +245,7 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const channel = (await rest.get(Routes.channel(params.threadId.replace(/^(channel:|user:)/i, '')))) as {
       id?: string;
       type?: number;
       parent_id?: string;
