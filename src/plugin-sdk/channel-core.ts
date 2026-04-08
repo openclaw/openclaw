@@ -12,6 +12,7 @@ export {
   buildChannelConfigSchema,
   buildChannelOutboundSessionRoute,
   clearAccountEntryFields,
+  createChannelPluginBase,
   createChatChannelPlugin,
   defineChannelPluginEntry,
   defineSetupPluginEntry,

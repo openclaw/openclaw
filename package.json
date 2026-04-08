@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.8",
+  "version": "2026.4.9",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -933,6 +933,10 @@
       "types": "./dist/plugin-sdk/provider-web-fetch.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch.js"
     },
+    "./plugin-sdk/provider-web-search-config-contract": {
+      "types": "./dist/plugin-sdk/provider-web-search-config-contract.d.ts",
+      "default": "./dist/plugin-sdk/provider-web-search-config-contract.js"
+    },
     "./plugin-sdk/provider-web-search-contract": {
       "types": "./dist/plugin-sdk/provider-web-search-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search-contract.js"
@@ -1000,6 +1004,10 @@
     "./plugin-sdk/tlon": {
       "types": "./dist/plugin-sdk/tlon.d.ts",
       "default": "./dist/plugin-sdk/tlon.js"
+    },
+    "./plugin-sdk/tool-payload": {
+      "types": "./dist/plugin-sdk/tool-payload.d.ts",
+      "default": "./dist/plugin-sdk/tool-payload.js"
     },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",
@@ -1074,7 +1082,7 @@
     "canon:check": "node scripts/canon.mjs check",
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
-    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
+    "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm tsgo && node scripts/prepare-extension-package-boundary-artifacts.mjs && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
@@ -1127,6 +1135,10 @@
     "ios:gen": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate'",
     "ios:open": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:run": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted ai.openclaw.ios'",
+    "ios:version": "node --import tsx scripts/ios-version.ts --json",
+    "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
+    "ios:version:pin": "node --import tsx scripts/ios-pin-version.ts",
+    "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
     "lint": "node scripts/run-oxlint.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "pnpm lint && pnpm lint:swift",
