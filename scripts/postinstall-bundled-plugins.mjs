@@ -154,6 +154,9 @@ export function runBundledPluginPostinstall(params = {}) {
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
+  if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
+    return;
+  }
   if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
     try {
       pruneBundledPluginSourceNodeModules({

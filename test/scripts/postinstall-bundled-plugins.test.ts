@@ -157,6 +157,23 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
+  it("honors disable env before source-checkout pruning", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-source-checkout-disabled-");
+    const extensionsDir = path.join(packageRoot, "extensions");
+    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
+
+    runBundledPluginPostinstall({
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
+      packageRoot,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
+  });
+
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
