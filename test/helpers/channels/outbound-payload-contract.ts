@@ -46,10 +46,19 @@ const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleI
   pluginId: "discord",
   artifactBasename: "src/outbound-adapter.js",
 });
+const slackTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "slack",
+  artifactBasename: "test-api.js",
+});
 
 let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
 let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
-let createSlackOutboundPayloadHarnessCache: CreateSlackOutboundPayloadHarness | undefined;
+let slackTestApiPromise:
+  | Promise<{
+      createSlackOutboundPayloadHarness: CreateSlackOutboundPayloadHarness;
+    }>
+  | undefined;
 let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
 let chunkZaloTextForOutboundCache: ChunkZaloTextForOutbound | undefined;
 let sendZaloPayloadWithChunkedTextAndMediaCache: SendPayloadWithChunkedTextAndMedia | undefined;
@@ -65,14 +74,12 @@ async function getDiscordOutbound(): Promise<ChannelOutboundAdapter> {
   return await discordOutboundCache;
 }
 
-function getCreateSlackOutboundPayloadHarness() {
-  if (!createSlackOutboundPayloadHarnessCache) {
-    ({ createSlackOutboundPayloadHarness: createSlackOutboundPayloadHarnessCache } =
-      loadBundledPluginTestApiSync<{
-        createSlackOutboundPayloadHarness: CreateSlackOutboundPayloadHarness;
-      }>("slack"));
-  }
-  return createSlackOutboundPayloadHarnessCache;
+async function getCreateSlackOutboundPayloadHarness(): Promise<CreateSlackOutboundPayloadHarness> {
+  slackTestApiPromise ??= import(slackTestApiModuleId) as Promise<{
+    createSlackOutboundPayloadHarness: CreateSlackOutboundPayloadHarness;
+  }>;
+  const { createSlackOutboundPayloadHarness } = await slackTestApiPromise;
+  return createSlackOutboundPayloadHarness;
 }
 
 function getWhatsAppOutbound(): ChannelOutboundAdapter {
@@ -162,18 +169,24 @@ type ChunkingMode =
 function installChannelOutboundPayloadContractSuite(params: {
   channel: string;
   chunking: ChunkingMode;
-  createHarness: (params: { payload: PayloadLike; sendResults?: SendResultLike[] }) => {
-    run: () => Promise<Record<string, unknown>>;
-    sendMock: Mock;
-    to: string;
-  };
+  createHarness: (params: { payload: PayloadLike; sendResults?: SendResultLike[] }) =>
+    | {
+        run: () => Promise<Record<string, unknown>>;
+        sendMock: Mock;
+        to: string;
+      }
+    | Promise<{
+        run: () => Promise<Record<string, unknown>>;
+        sendMock: Mock;
+        to: string;
+      }>;
 }) {
   beforeEach(() => {
     resetGlobalHookRunner();
   });
 
   it("text-only delegates to sendText", async () => {
-    const { run, sendMock, to } = params.createHarness({
+    const { run, sendMock, to } = await params.createHarness({
       payload: { text: "hello" },
     });
     const result = await run();
@@ -184,7 +197,7 @@ function installChannelOutboundPayloadContractSuite(params: {
   });
 
   it("single media delegates to sendMedia", async () => {
-    const { run, sendMock, to } = params.createHarness({
+    const { run, sendMock, to } = await params.createHarness({
       payload: { text: "cap", mediaUrl: "https://example.com/a.jpg" },
     });
     const result = await run();
@@ -199,7 +212,7 @@ function installChannelOutboundPayloadContractSuite(params: {
   });
 
   it("multi-media iterates URLs with caption on first", async () => {
-    const { run, sendMock, to } = params.createHarness({
+    const { run, sendMock, to } = await params.createHarness({
       payload: {
         text: "caption",
         mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
@@ -225,7 +238,7 @@ function installChannelOutboundPayloadContractSuite(params: {
   });
 
   it("empty payload returns no-op", async () => {
-    const { run, sendMock } = params.createHarness({ payload: {} });
+    const { run, sendMock } = await params.createHarness({ payload: {} });
     const result = await run();
 
     expect(sendMock).not.toHaveBeenCalled();
@@ -235,7 +248,7 @@ function installChannelOutboundPayloadContractSuite(params: {
   if (params.chunking.mode === "passthrough") {
     it("text exceeding chunk limit is sent as-is when chunker is null", async () => {
       const text = "a".repeat(params.chunking.longTextLength);
-      const { run, sendMock, to } = params.createHarness({ payload: { text } });
+      const { run, sendMock, to } = await params.createHarness({ payload: { text } });
       const result = await run();
 
       expect(sendMock).toHaveBeenCalledTimes(1);
@@ -249,7 +262,7 @@ function installChannelOutboundPayloadContractSuite(params: {
 
   it("chunking splits long text", async () => {
     const text = "a".repeat(chunking.longTextLength);
-    const { run, sendMock } = params.createHarness({
+    const { run, sendMock } = await params.createHarness({
       payload: { text },
       sendResults: [{ messageId: "c-1" }, { messageId: "c-2" }],
     });
@@ -425,7 +438,7 @@ export function installSlackOutboundPayloadContractSuite() {
   installChannelOutboundPayloadContractSuite({
     channel: "slack",
     chunking: { mode: "passthrough", longTextLength: 5000 },
-    createHarness: getCreateSlackOutboundPayloadHarness(),
+    createHarness: async (params) => (await getCreateSlackOutboundPayloadHarness())(params),
   });
 }
 
