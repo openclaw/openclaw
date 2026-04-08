@@ -1,0 +1,23 @@
+{
+  "name": "@openclaw/amazon-polly-speech",
+  "version": "2026.4.1-beta.1",
+  "private": true,
+  "description": "OpenClaw Amazon Polly speech provider with bidirectional streaming support",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-polly": "3.1022.0"
+  },
+  "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "extensions": [
+      "./index.ts"
+    ],
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@aws-sdk/client-polly"
+      ]
+    }
+  }
+}

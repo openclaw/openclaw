@@ -1,0 +1,64 @@
+{
+  "id": "amazon-polly",
+  "contracts": {
+    "speechProviders": ["amazon-polly"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable or disable the Amazon Polly speech provider."
+      },
+      "voice": {
+        "type": "string",
+        "description": "Default Polly voice ID (e.g. Joanna, Matthew, Ruth, Stephen)."
+      },
+      "engine": {
+        "type": "string",
+        "enum": ["neural", "standard", "generative", "long-form"],
+        "description": "Polly engine type."
+      },
+      "region": {
+        "type": "string",
+        "description": "AWS region for the Polly service (e.g. us-east-1)."
+      },
+      "languageCode": {
+        "type": "string",
+        "description": "BCP-47 language code (e.g. en-US, es-MX)."
+      },
+      "sampleRate": {
+        "type": "string",
+        "description": "Audio sample rate in Hz (e.g. 22050, 24000)."
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable Amazon Polly TTS."
+    },
+    "voice": {
+      "label": "Voice",
+      "help": "Polly voice ID. Use generative voices (Ruth, Stephen) for best quality. See: https://docs.aws.amazon.com/polly/latest/dg/voicelist.html"
+    },
+    "engine": {
+      "label": "Engine",
+      "help": "Generative engine produces the most natural speech. Neural is faster. Standard is cheapest."
+    },
+    "region": {
+      "label": "AWS Region",
+      "help": "Region for Polly API calls. Choose the region closest to your deployment."
+    },
+    "languageCode": {
+      "label": "Language Code",
+      "help": "BCP-47 language code. Required for bilingual voices."
+    },
+    "sampleRate": {
+      "label": "Sample Rate",
+      "help": "Audio sample rate in Hz. Default: 24000 for generative/neural, 22050 for standard.",
+      "advanced": true
+    }
+  }
+}
