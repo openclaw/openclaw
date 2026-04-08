@@ -188,7 +188,7 @@ function normalizeUnknownToolName(value: string | undefined): string | undefined
   return trimmed ? trimmed : undefined;
 }
 
-const UNKNOWN_TOOL_NAME_FRAGMENT = String.raw`[a-z0-9_./-]+`;
+const UNKNOWN_TOOL_NAME_FRAGMENT = String.raw`[a-z0-9_:./-]+`;
 
 function extractUnknownToolName(error: unknown): string | undefined {
   if (error === undefined || error === null) {
