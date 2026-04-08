@@ -28,6 +28,25 @@ func (docChunkTranslator) TranslateRaw(_ context.Context, text, _, _ string) (st
 
 func (docChunkTranslator) Close() {}
 
+type docLeafFallbackTranslator struct{}
+
+func (docLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	replacer := strings.NewReplacer(
+		"Gateway refuses to start unless `local`.", "Gateway 只有在 `local` 时才会启动。",
+		"`gateway.auth.mode: \"trusted-proxy\"`", "`gateway.auth.mode: \"trusted-proxy\"`",
+	)
+	return replacer.Replace(text), nil
+}
+
+func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "Gateway refuses to start unless `local`.") {
+		return strings.Replace(text, "Gateway refuses to start unless `local`.", "<Tip>Gateway only starts in local mode.</Tip>", 1), nil
+	}
+	return text, nil
+}
+
+func (docLeafFallbackTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -123,5 +142,32 @@ func TestStripAndReapplyCommonIndent(t *testing.T) {
 	roundTrip := reapplyCommonIndent(normalized, indent)
 	if roundTrip != source {
 		t.Fatalf("expected indent round-trip to preserve source\nwant:\n%s\ngot:\n%s", source, roundTrip)
+	}
+}
+
+func TestTranslateDocBodyChunkedFallsBackToMaskedTranslateForLeafValidationFailure(t *testing.T) {
+	body := strings.Join([]string{
+		"- `mode`: `local` or `remote`. Gateway refuses to start unless `local`.",
+		"- `gateway.auth.mode: \"trusted-proxy\"`: delegate auth to a reverse proxy.",
+		"",
+	}, "\n")
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	translated, err := translateDocBodyChunked(
+		context.Background(),
+		docLeafFallbackTranslator{},
+		"gateway/configuration-reference.md",
+		body,
+		"en",
+		"zh-CN",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if strings.Contains(translated, "<Tip>") {
+		t.Fatalf("expected masked fallback to remove hallucinated component tags:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Gateway 只有在 `local` 时才会启动。") {
+		t.Fatalf("expected fallback translation to be applied:\n%s", translated)
 	}
 }

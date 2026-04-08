@@ -60,6 +60,9 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		}
 	}
 	if len(blocks) <= 1 {
+		if fallback, fallbackErr := translateDocLeafBlock(ctx, translator, chunkID, source, srcLang, tgtLang); fallbackErr == nil {
+			return fallback, nil
+		}
 		return "", fmt.Errorf("%s: %w", chunkID, err)
 	}
 	mid := len(blocks) / 2
@@ -73,6 +76,24 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		return "", err
 	}
 	return left + right, nil
+}
+
+func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source, srcLang, tgtLang string) (string, error) {
+	sourceStructure := summarizeDocChunkStructure(source)
+	if sourceStructure.fenceCount != 0 || len(sourceStructure.tagCounts) != 0 {
+		return "", fmt.Errorf("%s: raw leaf fallback not applicable", chunkID)
+	}
+	normalizedSource, commonIndent := stripCommonIndent(source)
+	translated, err := translator.Translate(ctx, normalizedSource, srcLang, tgtLang)
+	if err != nil {
+		return "", err
+	}
+	translated = reapplyCommonIndent(translated, commonIndent)
+	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
+		return "", validationErr
+	}
+	log.Printf("docs-i18n: chunk leaf-fallback done %s out_bytes=%d", chunkID, len(translated))
+	return translated, nil
 }
 
 func splitDocBodyIntoBlocks(body string) []string {
