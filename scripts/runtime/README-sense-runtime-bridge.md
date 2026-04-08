@@ -909,6 +909,8 @@ For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides
 
 `digest_bucket_ui_layouts.meta` also exposes `summary_parts` as a shallow wrapper over `display_parts`, `percent`, and `share`, so UI code can read display-oriented substructures plus the formatted and numeric bucket-share values from one `meta.summary_parts` entry without extra recomposition.
 
+UI consumers should prefer `digest_bucket_ui_layouts.meta.summary_parts` as the first rendering entry for digest badge/leader/percent/share display before falling back to flatter fields. `render_parts` is intentionally not introduced yet; the current goal is to use `summary_parts` as the primary UI entrypoint.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`
