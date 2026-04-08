@@ -304,7 +304,7 @@ export async function buildStatusText(params: {
       model: {
         ...toAgentModelListLike(agentDefaults.model),
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
-        fallbacks: agentFallbacksOverride,
+        ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
