@@ -1,17 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { describe, expect, it } from "vitest";
+import {
+  planOpenClawModelsJsonWithDeps,
+  type PlanOpenClawModelsJsonDeps,
+} from "./models-config.plan.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
-vi.mock("./models-config.providers.js", () => ({
-  applyNativeStreamingUsageCompat: (providers: unknown) => providers,
-  enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
-  normalizeProviders: ({ providers }: { providers: unknown }) => providers,
-  resolveImplicitProviders: async ({
-    explicitProviders,
-  }: {
-    explicitProviders?: Record<string, unknown>;
-  }) => explicitProviders ?? {},
-}));
+const modelsConfigDeps: PlanOpenClawModelsJsonDeps = {
+  applyNativeStreamingUsageCompat: (providers) => providers,
+  enforceSourceManagedProviderSecrets: ({ providers }) => providers,
+  normalizeProviders: ({ providers }) => providers,
+  resolveImplicitProviders: async ({ explicitProviders }) => explicitProviders,
+};
 
 describe("models-config", () => {
   it("uses the first github-copilot profile when env tokens are missing", () => {
@@ -41,23 +40,26 @@ describe("models-config", () => {
   });
 
   it("does not override explicit github-copilot provider config", async () => {
-    const plan = await planOpenClawModelsJson({
-      cfg: {
-        models: {
-          providers: {
-            "github-copilot": {
-              baseUrl: "https://copilot.local",
-              api: "openai-responses",
-              models: [],
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              "github-copilot": {
+                baseUrl: "https://copilot.local",
+                api: "openai-responses",
+                models: [],
+              },
             },
           },
         },
+        agentDir: "/tmp/openclaw-agent",
+        env: {} as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: null,
       },
-      agentDir: "/tmp/openclaw-agent",
-      env: {} as NodeJS.ProcessEnv,
-      existingRaw: "",
-      existingParsed: null,
-    });
+      modelsConfigDeps,
+    );
 
     expect(plan.action).toBe("write");
     expect(

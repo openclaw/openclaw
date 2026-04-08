@@ -9,7 +9,10 @@ import {
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
-import { planOpenClawModelsJson } from "./models-config.plan.js";
+import {
+  planOpenClawModelsJsonWithDeps,
+  type PlanOpenClawModelsJsonDeps,
+} from "./models-config.plan.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
@@ -135,6 +138,7 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
+  deps?: PlanOpenClawModelsJsonDeps,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
@@ -159,14 +163,17 @@ export async function ensureOpenClawModelsJson(
     // are available to provider discovery without mutating process.env.
     const env = createConfigRuntimeEnv(cfg);
     const existingModelsFile = await readExistingModelsFile(targetPath);
-    const plan = await planOpenClawModelsJson({
-      cfg,
-      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-      agentDir,
-      env,
-      existingRaw: existingModelsFile.raw,
-      existingParsed: existingModelsFile.parsed,
-    });
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg,
+        sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+        agentDir,
+        env,
+        existingRaw: existingModelsFile.raw,
+        existingParsed: existingModelsFile.parsed,
+      },
+      deps,
+    );
 
     if (plan.action === "skip") {
       return { fingerprint, result: { agentDir, wrote: false } };

@@ -21,6 +21,13 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   explicitProviders: Record<string, ProviderConfig>;
 }) => Promise<Record<string, ProviderConfig>>;
 
+export type PlanOpenClawModelsJsonDeps = {
+  applyNativeStreamingUsageCompat?: typeof applyNativeStreamingUsageCompat;
+  enforceSourceManagedProviderSecrets?: typeof enforceSourceManagedProviderSecrets;
+  normalizeProviders?: typeof normalizeProviders;
+  resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
+};
+
 export type ModelsJsonPlan =
   | {
       action: "skip";
@@ -39,9 +46,7 @@ export async function resolveProvidersForModelsJsonWithDeps(
     agentDir: string;
     env: NodeJS.ProcessEnv;
   },
-  deps?: {
-    resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
-  },
+  deps?: PlanOpenClawModelsJsonDeps,
 ): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
@@ -107,11 +112,14 @@ export async function planOpenClawModelsJsonWithDeps(
     existingRaw: string;
     existingParsed: unknown;
   },
-  deps?: {
-    resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
-  },
+  deps?: PlanOpenClawModelsJsonDeps,
 ): Promise<ModelsJsonPlan> {
   const { cfg, agentDir, env } = params;
+  const normalizeProvidersImpl = deps?.normalizeProviders ?? normalizeProviders;
+  const enforceSourceManagedProviderSecretsImpl =
+    deps?.enforceSourceManagedProviderSecrets ?? enforceSourceManagedProviderSecrets;
+  const applyNativeStreamingUsageCompatImpl =
+    deps?.applyNativeStreamingUsageCompat ?? applyNativeStreamingUsageCompat;
   const providers = await resolveProvidersForModelsJsonWithDeps({ cfg, agentDir, env }, deps);
 
   if (Object.keys(providers).length === 0) {
@@ -121,7 +129,7 @@ export async function planOpenClawModelsJsonWithDeps(
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
   const normalizedProviders =
-    normalizeProviders({
+    normalizeProvidersImpl({
       providers,
       agentDir,
       env,
@@ -138,13 +146,13 @@ export async function planOpenClawModelsJsonWithDeps(
     explicitBaseUrlProviders: resolveExplicitBaseUrlProviders(cfg.models),
   });
   const secretEnforcedProviders =
-    enforceSourceManagedProviderSecrets({
+    enforceSourceManagedProviderSecretsImpl({
       providers: mergedProviders,
       sourceProviders: params.sourceConfigForSecrets?.models?.providers,
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const finalProviders = applyNativeStreamingUsageCompatImpl(secretEnforcedProviders);
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

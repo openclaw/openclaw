@@ -5,6 +5,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import type { PlanOpenClawModelsJsonDeps } from "./models-config.plan.js";
+
+const modelsConfigDeps: PlanOpenClawModelsJsonDeps = {
+  resolveImplicitProviders: async () => ({}),
+};
 
 function createGoogleModelsConfig(models: ModelDefinitionConfig[]): OpenClawConfig {
   return {
@@ -68,7 +73,7 @@ describe("models-config", () => {
         },
       ]);
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureOpenClawModelsJson(cfg, undefined, modelsConfigDeps);
       await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-pro-preview", "gemini-3-flash-preview"],
       });
@@ -90,7 +95,7 @@ describe("models-config", () => {
         },
       ]);
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureOpenClawModelsJson(cfg, undefined, modelsConfigDeps);
       await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-flash-preview"],
       });
@@ -123,7 +128,7 @@ describe("models-config", () => {
         },
       } satisfies OpenClawConfig;
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureOpenClawModelsJson(cfg, undefined, modelsConfigDeps);
       await expectGeneratedProvider(agentDir, "google-paid", {
         ids: ["gemini-3-pro-preview"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
@@ -156,7 +161,7 @@ describe("models-config", () => {
         },
       } satisfies OpenClawConfig;
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureOpenClawModelsJson(cfg, undefined, modelsConfigDeps);
       await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-flash-preview"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
