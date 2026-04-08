@@ -40,6 +40,26 @@ The agent has two tools for working with memory:
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
 
+## Memory Wiki companion plugin
+
+If you want durable memory to behave more like a maintained knowledge base than
+just raw notes, use the bundled `memory-wiki` plugin.
+
+`memory-wiki` compiles durable knowledge into a wiki vault with:
+
+- deterministic page structure
+- structured claims and evidence
+- contradiction and freshness tracking
+- generated dashboards
+- compiled digests for agent/runtime consumers
+- wiki-native tools like `wiki_search`, `wiki_get`, `wiki_apply`, and `wiki_lint`
+
+It does not replace the active memory plugin. The active memory plugin still
+owns recall, promotion, and dreaming. `memory-wiki` adds a provenance-rich
+knowledge layer beside it.
+
+See [Memory Wiki](/plugins/memory-wiki).
+
 ## Memory search
 
 When an embedding provider is configured, `memory_search` uses **hybrid
@@ -70,6 +90,15 @@ directories outside the workspace.
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
 AI-native cross-session memory with user modeling, semantic search, and
 multi-agent awareness. Plugin install.
+</Card>
+</CardGroup>
+
+## Knowledge wiki layer
+
+<CardGroup cols={1}>
+<Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">
+Compiles durable memory into a provenance-rich wiki vault with claims,
+dashboards, bridge mode, and Obsidian-friendly workflows.
 </Card>
 </CardGroup>
 
@@ -117,6 +146,7 @@ openclaw memory index --force   # Rebuild the index
 - [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
 - [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
+- [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
 - [Dreaming (experimental)](/concepts/dreaming) -- background promotion

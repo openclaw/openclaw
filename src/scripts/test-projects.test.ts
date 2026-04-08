@@ -41,7 +41,7 @@ const VITEST_NODE_PREFIX = [
   "exec",
   "node",
   "--no-maglev",
-  expect.stringContaining("/node_modules/vitest/vitest.mjs"),
+  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
 ];
 
 describe("test-projects args", () => {

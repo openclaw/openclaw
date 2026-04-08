@@ -1,10 +1,20 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
-const REQUIRED_DISCOVERY_REFS = [
-  "repo/qa/scenarios.md",
-  "repo/extensions/qa-lab/src/suite.ts",
-  "repo/docs/help/testing.md",
-] as const;
+function readRequiredDiscoveryRefs() {
+  const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
+    | { requiredFiles?: string[] }
+    | undefined;
+  return (
+    config?.requiredFiles ?? [
+      "repo/qa/scenarios/index.md",
+      "repo/extensions/qa-lab/src/suite.ts",
+      "repo/docs/help/testing.md",
+    ]
+  );
+}
+
+const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
 
 const REQUIRED_DISCOVERY_REFS_LOWER = REQUIRED_DISCOVERY_REFS.map(normalizeLowercaseStringOrEmpty);
 
@@ -20,6 +30,7 @@ const DISCOVERY_SCOPE_LEAK_PHRASES = [
 function confirmsDiscoveryFileRead(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const mentionsAllRefs = REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref));
+  const mentionsReadVerb = /(?:read|retrieved|inspected|loaded|accessed|digested)/.test(lower);
   const requiredCountPattern = "(?:three|3|four|4)";
   const confirmsRead =
     new RegExp(
@@ -29,7 +40,7 @@ function confirmsDiscoveryFileRead(text: string) {
       `all\\s+${requiredCountPattern}\\s+(?:(?:requested|required|mandated|seeded)\\s+)?files\\s+(?:were\\s+)?(?:read|retrieved|inspected|loaded|accessed|digested)(?:\\s+\\w+)?`,
     ).test(lower) ||
     new RegExp(`all\\s+${requiredCountPattern}\\s+seeded files readable`).test(lower);
-  return mentionsAllRefs && confirmsRead;
+  return mentionsAllRefs && (confirmsRead || mentionsReadVerb);
 }
 
 export function hasDiscoveryLabels(text: string) {

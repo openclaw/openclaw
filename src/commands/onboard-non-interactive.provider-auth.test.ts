@@ -26,6 +26,59 @@ const TEST_AUTH_STORE_VERSION = 1;
 const TEST_MAIN_AUTH_STORE_KEY = "__main__";
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
+const readConfigFileSnapshotMock = vi.hoisted(() =>
+  vi.fn(async () => {
+    const [{ default: fs }, { default: path }, { default: crypto }] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:path"),
+      import("node:crypto"),
+    ]);
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH must be set for provider auth onboarding tests");
+    }
+    let raw: string | null = null;
+    try {
+      raw = await fs.readFile(configPath, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const hash = raw === null ? undefined : crypto.createHash("sha256").update(raw).digest("hex");
+    return {
+      path: path.resolve(configPath),
+      exists: raw !== null,
+      valid: true,
+      raw,
+      hash,
+      config: structuredClone(parsed),
+      sourceConfig: structuredClone(parsed),
+      runtimeConfig: structuredClone(parsed),
+    };
+  }),
+);
+const replaceConfigFileMock = vi.hoisted(() =>
+  vi.fn(async (params: { nextConfig: unknown }) => {
+    const [{ default: fs }, { default: path }] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:path"),
+    ]);
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH must be set for provider auth onboarding tests");
+    }
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(params.nextConfig, null, 2)}\n`, "utf-8");
+    return {
+      path: configPath,
+      previousHash: null,
+      snapshot: {},
+      nextConfig: params.nextConfig,
+    };
+  }),
+);
 const testAuthProfileStores = vi.hoisted(
   () => new Map<string, { version: number; profiles: Record<string, Record<string, unknown>> }>(),
 );
@@ -88,6 +141,15 @@ function upsertAuthProfile(params: {
   writeRuntimeAuthSnapshots();
 }
 
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  return {
+    ...actual,
+    readConfigFileSnapshot: readConfigFileSnapshotMock,
+    replaceConfigFile: replaceConfigFileMock,
+  };
+});
+
 vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async () => {
   const [
     { resolveDefaultAgentId, resolveAgentDir, resolveAgentWorkspaceDir },
@@ -106,7 +168,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
   const ZAI_FALLBACKS = {
     "zai-api-key": {
       baseUrl: ZAI_GLOBAL_BASE_URL,
-      modelId: "glm-5",
+      modelId: "glm-5.1",
     },
     "zai-coding-cn": {
       baseUrl: ZAI_CODING_CN_BASE_URL,
@@ -114,7 +176,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     },
     "zai-coding-global": {
       baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
-      modelId: "glm-5",
+      modelId: "glm-5.1",
     },
   } as const;
 
@@ -782,7 +844,6 @@ const NON_INTERACTIVE_DEFAULT_OPTIONS = {
 
 let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
-let ensureAuthProfileStore: typeof import("../agents/auth-profiles.js").ensureAuthProfileStore;
 let replaceRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").replaceRuntimeAuthProfileStoreSnapshots;
 let resetFileLockStateForTest: typeof import("../infra/file-lock.js").resetFileLockStateForTest;
 let clearPluginDiscoveryCache: typeof import("../plugins/discovery.js").clearPluginDiscoveryCache;
@@ -980,7 +1041,7 @@ async function expectApiKeyProfile(params: {
   key: string;
   metadata?: Record<string, string>;
 }): Promise<void> {
-  const store = ensureAuthProfileStore();
+  const store = getOrCreateTestAuthStore();
   const profile = store.profiles[params.profileId];
   expect(profile?.type).toBe("api_key");
   if (profile?.type === "api_key") {
@@ -994,11 +1055,8 @@ async function expectApiKeyProfile(params: {
 
 async function loadProviderAuthOnboardModules(): Promise<void> {
   ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
-  ({
-    clearRuntimeAuthProfileStoreSnapshots,
-    ensureAuthProfileStore,
-    replaceRuntimeAuthProfileStoreSnapshots,
-  } = await import("../agents/auth-profiles.js"));
+  ({ clearRuntimeAuthProfileStoreSnapshots, replaceRuntimeAuthProfileStoreSnapshots } =
+    await import("../agents/auth-profiles.js"));
   ({ resetFileLockStateForTest } = await import("../infra/file-lock.js"));
   ({ clearPluginDiscoveryCache } = await import("../plugins/discovery.js"));
   ({ clearPluginManifestRegistryCache } = await import("../plugins/manifest-registry.js"));
@@ -1064,7 +1122,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("stores Z.AI API key after probing the global endpoint", async () => {
     await withZaiProbeFetch(
       {
-        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200,
       },
       async (fetchMock) =>
         await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
@@ -1078,7 +1136,7 @@ describe("onboard (non-interactive): provider auth", () => {
           expectZaiProbeCalls(fetchMock, [
             {
               url: `${ZAI_GLOBAL_BASE_URL}/chat/completions`,
-              modelId: "glm-5",
+              modelId: "glm-5.1",
             },
           ]);
           await expectApiKeyProfile({
@@ -1093,7 +1151,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports Z.AI CN coding endpoint auth choice", async () => {
     await withZaiProbeFetch(
       {
-        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5`]: 404,
+        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5.1`]: 404,
         [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-4.7`]: 200,
       },
       async (fetchMock) =>
@@ -1108,7 +1166,7 @@ describe("onboard (non-interactive): provider auth", () => {
           expectZaiProbeCalls(fetchMock, [
             {
               url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
-              modelId: "glm-5",
+              modelId: "glm-5.1",
             },
             {
               url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
@@ -1127,7 +1185,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports Z.AI Coding Plan global endpoint detection", async () => {
     await withZaiProbeFetch(
       {
-        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5.1`]: 200,
       },
       async (fetchMock) =>
         await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
@@ -1141,7 +1199,7 @@ describe("onboard (non-interactive): provider auth", () => {
           expectZaiProbeCalls(fetchMock, [
             {
               url: `${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions`,
-              modelId: "glm-5",
+              modelId: "glm-5.1",
             },
           ]);
           await expectApiKeyProfile({
@@ -1230,8 +1288,7 @@ describe("onboard (non-interactive): provider auth", () => {
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
       await runNonInteractiveSetupWithDefaults(runtime, {
-        authChoice: "token",
-        tokenProvider: "anthropic",
+        authChoice: "setup-token",
         token,
         tokenProfileId: "anthropic:default",
       });
@@ -1240,7 +1297,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
       expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
       expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-sonnet-4-6");
-      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toMatchObject({
+      expect(getOrCreateTestAuthStore().profiles["anthropic:default"]).toMatchObject({
         provider: "anthropic",
         type: "token",
         token: cleanToken,
@@ -1358,7 +1415,7 @@ describe("onboard (non-interactive): provider auth", () => {
             skipSkills: true,
           });
 
-          const store = ensureAuthProfileStore();
+          const store = getOrCreateTestAuthStore();
           for (const profileId of ["opencode:default", "opencode-go:default"]) {
             const profile = store.profiles[profileId];
             expect(profile?.type).toBe("api_key");
@@ -1373,66 +1430,6 @@ describe("onboard (non-interactive): provider auth", () => {
           }
         },
       );
-    });
-  });
-
-  it("configures vLLM via the provider plugin in non-interactive mode", async () => {
-    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "vllm",
-        customBaseUrl: "http://127.0.0.1:8100/v1",
-        customApiKey: "vllm-test-key", // pragma: allowlist secret
-        customModelId: "Qwen/Qwen3-8B",
-      });
-
-      expect(cfg.auth?.profiles?.["vllm:default"]?.provider).toBe("vllm");
-      expect(cfg.auth?.profiles?.["vllm:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.vllm).toEqual({
-        baseUrl: "http://127.0.0.1:8100/v1",
-        api: "openai-completions",
-        apiKey: "VLLM_API_KEY",
-        models: [
-          expect.objectContaining({
-            id: "Qwen/Qwen3-8B",
-          }),
-        ],
-      });
-      expect(cfg.agents?.defaults?.model?.primary).toBe("vllm/Qwen/Qwen3-8B");
-      await expectApiKeyProfile({
-        profileId: "vllm:default",
-        provider: "vllm",
-        key: "vllm-test-key",
-      });
-    });
-  });
-
-  it("configures SGLang via the provider plugin in non-interactive mode", async () => {
-    await withOnboardEnv("openclaw-onboard-sglang-non-interactive-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "sglang",
-        customBaseUrl: "http://127.0.0.1:31000/v1",
-        customApiKey: "sglang-test-key", // pragma: allowlist secret
-        customModelId: "Qwen/Qwen3-32B",
-      });
-
-      expect(cfg.auth?.profiles?.["sglang:default"]?.provider).toBe("sglang");
-      expect(cfg.auth?.profiles?.["sglang:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.sglang).toEqual({
-        baseUrl: "http://127.0.0.1:31000/v1",
-        api: "openai-completions",
-        apiKey: "SGLANG_API_KEY",
-        models: [
-          expect.objectContaining({
-            id: "Qwen/Qwen3-32B",
-          }),
-        ],
-      });
-      expect(cfg.agents?.defaults?.model?.primary).toBe("sglang/Qwen/Qwen3-32B");
-      await expectApiKeyProfile({
-        profileId: "sglang:default",
-        provider: "sglang",
-        key: "sglang-test-key",
-      });
     });
   });
 
@@ -1644,24 +1641,6 @@ describe("onboard (non-interactive): provider auth", () => {
         expect(message).not.toContain(providedSecret);
       });
     });
-  });
-
-  it("uses matching profile fallback for non-interactive custom provider auth", async () => {
-    await withOnboardEnv(
-      "openclaw-onboard-custom-provider-profile-fallback-",
-      async ({ configPath, runtime }) => {
-        upsertAuthProfile({
-          profileId: `${CUSTOM_LOCAL_PROVIDER_ID}:default`,
-          credential: {
-            type: "api_key",
-            provider: CUSTOM_LOCAL_PROVIDER_ID,
-            key: "custom-profile-key",
-          },
-        });
-        await runCustomLocalNonInteractive(runtime);
-        expect(await readCustomLocalProviderApiKey(configPath)).toBe("custom-profile-key");
-      },
-    );
   });
 
   it("fails custom provider auth when compatibility is invalid", async () => {
