@@ -344,8 +344,9 @@ function validateVideoGenerationCapabilities(params: {
     }
   }
   if (params.inputAudioCount > 0) {
-    // Default to 0: providers must explicitly declare maxInputAudios to accept audio inputs.
-    const maxInputAudios = caps.maxInputAudios ?? 0;
+    // Fall back to flat provider.capabilities.maxInputAudios for providers that set the
+    // all-modes default at the top level rather than nesting it in capabilities.generate etc.
+    const maxInputAudios = caps.maxInputAudios ?? provider.capabilities.maxInputAudios ?? 0;
     if (params.inputAudioCount > maxInputAudios) {
       throw new ToolInputError(
         maxInputAudios === 0

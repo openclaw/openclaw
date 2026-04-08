@@ -109,7 +109,9 @@ export async function generateVideo(
         inputImageCount,
         inputVideoCount,
       });
-      const maxAudio = candCaps?.maxInputAudios ?? 0;
+      // Fall back to flat provider.capabilities.maxInputAudios for providers that
+      // set the all-modes default directly rather than nesting it in capabilities.generate etc.
+      const maxAudio = candCaps?.maxInputAudios ?? provider.capabilities.maxInputAudios ?? 0;
       if (inputAudioCount > maxAudio) {
         const error =
           maxAudio === 0
