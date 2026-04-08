@@ -222,7 +222,7 @@ async function handleSingleRequest(
       maxProtocol: PROTOCOL_VERSION,
       scopes: requestAuth ? ["operator.read", "operator.write"] : [],
       client: {
-        id: "http-rpc", // Using a custom client ID for HTTP RPC
+        id: "gateway-client", // Using an appropriate client ID for HTTP RPC
         version: "1.0.0",
         platform: "http",
         mode: GATEWAY_CLIENT_MODES.BACKEND // Using BACKEND mode since there isn't a specific HTTP mode
