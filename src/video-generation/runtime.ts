@@ -19,12 +19,59 @@ import type {
   GeneratedVideoAsset,
   VideoGenerationIgnoredOverride,
   VideoGenerationNormalization,
+  VideoGenerationProviderOptionType,
   VideoGenerationResolution,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
 } from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
+
+/**
+ * Validate agent-supplied providerOptions against the candidate's declared
+ * schema. Returns a human-readable skip reason when the candidate cannot
+ * accept the supplied options, or undefined when everything checks out.
+ *
+ * Strict by default: a provider that declares no providerOptions schema is
+ * treated as "accepts none" and any non-empty providerOptions object skips
+ * the candidate. This prevents silently forwarding `{seed: 42}` to a
+ * provider that would ignore it and succeed without the caller's intent.
+ */
+function validateProviderOptionsAgainstDeclaration(params: {
+  providerId: string;
+  model: string;
+  providerOptions: Record<string, unknown>;
+  declaration: Readonly<Record<string, VideoGenerationProviderOptionType>> | undefined;
+}): string | undefined {
+  const { providerId, model, providerOptions, declaration } = params;
+  const keys = Object.keys(providerOptions);
+  if (keys.length === 0) {
+    return undefined;
+  }
+  if (!declaration || Object.keys(declaration).length === 0) {
+    return `${providerId}/${model} does not accept providerOptions (caller supplied: ${keys.join(", ")}); skipping to avoid silent provider-option drop`;
+  }
+  const unknown = keys.filter((key) => !Object.hasOwn(declaration, key));
+  if (unknown.length > 0) {
+    const accepted = Object.keys(declaration).join(", ");
+    return `${providerId}/${model} does not accept providerOptions keys: ${unknown.join(", ")} (accepted: ${accepted}); skipping`;
+  }
+  for (const key of keys) {
+    const expected = declaration[key];
+    const value = providerOptions[key];
+    const actual = typeof value;
+    if (expected === "number" && (actual !== "number" || !Number.isFinite(value as number))) {
+      return `${providerId}/${model} expects providerOptions.${key} to be a finite number, got ${actual}; skipping`;
+    }
+    if (expected === "boolean" && actual !== "boolean") {
+      return `${providerId}/${model} expects providerOptions.${key} to be a boolean, got ${actual}; skipping`;
+    }
+    if (expected === "string" && actual !== "string") {
+      return `${providerId}/${model} expects providerOptions.${key} to be a string, got ${actual}; skipping`;
+    }
+  }
+  return undefined;
+}
 
 export type GenerateVideoParams = {
   cfg: OpenClawConfig;
@@ -122,6 +169,41 @@ export async function generateVideo(
         lastError = new Error(error);
         log.debug(
           `video-generation candidate skipped (audio capability): ${candidate.provider}/${candidate.model}`,
+        );
+        continue;
+      }
+    }
+
+    // Guard: skip candidates that do not accept the requested providerOptions keys,
+    // or whose declared providerOptions schema does not match the supplied value
+    // types. Same skip-in-fallback rationale as the audio guard above — we never
+    // want to silently forward provider-specific options to the wrong provider,
+    // but we also do not want to block valid fallback candidates that *do* accept
+    // them. Providers opt in by declaring `capabilities.providerOptions` on the
+    // active mode or on the flat provider capabilities.
+    if (
+      params.providerOptions &&
+      typeof params.providerOptions === "object" &&
+      Object.keys(params.providerOptions).length > 0
+    ) {
+      const { capabilities: optCaps } = resolveVideoGenerationModeCapabilities({
+        provider,
+        inputImageCount,
+        inputVideoCount,
+      });
+      const declaredOptions =
+        optCaps?.providerOptions ?? provider.capabilities.providerOptions ?? undefined;
+      const mismatch = validateProviderOptionsAgainstDeclaration({
+        providerId: candidate.provider,
+        model: candidate.model,
+        providerOptions: params.providerOptions,
+        declaration: declaredOptions,
+      });
+      if (mismatch) {
+        attempts.push({ provider: candidate.provider, model: candidate.model, error: mismatch });
+        lastError = new Error(mismatch);
+        log.debug(
+          `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
         );
         continue;
       }

@@ -753,11 +753,21 @@ export function createVideoGenerateTool(options?: {
       });
       const audio = readBooleanToolParam(args, "audio");
       const watermark = readBooleanToolParam(args, "watermark");
+      // providerOptions must be a plain object. Arrays are objects in JS, so
+      // exclude them explicitly — a bogus call like `providerOptions: ["seed", 42]`
+      // would otherwise be cast to `Record<string, unknown>` with numeric-string
+      // keys and silently forwarded to the provider.
       const providerOptionsRaw = readSnakeCaseParamRaw(args, "providerOptions");
+      if (
+        providerOptionsRaw != null &&
+        (typeof providerOptionsRaw !== "object" || Array.isArray(providerOptionsRaw))
+      ) {
+        throw new ToolInputError(
+          "providerOptions must be a JSON object keyed by provider-specific option name.",
+        );
+      }
       const providerOptions =
-        providerOptionsRaw != null && typeof providerOptionsRaw === "object"
-          ? (providerOptionsRaw as Record<string, unknown>)
-          : undefined;
+        providerOptionsRaw != null ? (providerOptionsRaw as Record<string, unknown>) : undefined;
       const imageInputs = normalizeReferenceInputs({
         args,
         singularKey: "image",
