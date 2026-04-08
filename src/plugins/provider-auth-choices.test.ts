@@ -283,4 +283,59 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
   });
+
+  it("prefers trusted config auth-choice handlers over bundled collisions", () => {
+    setManifestPlugins([
+      {
+        id: "openai",
+        origin: "bundled",
+        providers: ["openai"],
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+      {
+        id: "custom-openai",
+        origin: "config",
+        providers: ["custom-openai"],
+        providerAuthChoices: [
+          {
+            provider: "custom-openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      expect.objectContaining({
+        pluginId: "custom-openai",
+        providerId: "custom-openai",
+        choiceId: "openai-api-key",
+      }),
+    ]);
+    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
+    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+      {
+        optionKey: "openaiApiKey",
+        authChoice: "openai-api-key",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+        description: "OpenAI API key",
+      },
+    ]);
+  });
 });
