@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/image-ops.js");
@@ -171,8 +171,7 @@ function createFalEditProvider(params?: {
 }
 
 describe("createImageGenerateTool", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doUnmock("../../secrets/provider-env-vars.js");
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/image-ops.js");
@@ -180,7 +179,9 @@ describe("createImageGenerateTool", () => {
     webMedia = await import("../../media/web-media.js");
     ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
       await import("./image-generate-tool.js"));
+  });
 
+  beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEYS", "");
     vi.stubEnv("GEMINI_API_KEY", "");
@@ -563,6 +564,36 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("ignores non-finite mediaMaxMb when loading reference images", async () => {
+    stubImageGenerationProviders();
+    stubEditedImageFlow({ width: 3200, height: 1800 });
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3-pro-image-preview",
+              },
+              mediaMaxMb: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-edit-infinity-cap", {
+      prompt: "Add a dramatic stormy sky but keep everything else identical.",
+      image: "./fixtures/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ maxBytes: undefined }),
+    );
+  });
+
   it("does not treat inferred edit resolution as an OpenAI override", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
@@ -794,6 +825,8 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects unsupported aspect ratios", async () => {
+    stubImageGenerationProviders();
+
     const tool = createImageGenerateTool({
       config: {
         agents: {

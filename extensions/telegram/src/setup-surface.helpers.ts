@@ -7,6 +7,7 @@ import {
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -45,7 +46,8 @@ export function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId
   const merged = mergeTelegramAccountConfig(cfg, accountId);
   const policy = merged.dmPolicy ?? "pairing";
   const hasAllowFrom =
-    Array.isArray(merged.allowFrom) && merged.allowFrom.some((entry) => String(entry).trim());
+    Array.isArray(merged.allowFrom) &&
+    merged.allowFrom.some((entry) => normalizeOptionalString(String(entry)));
   return policy === "pairing" && !hasAllowFrom;
 }
 

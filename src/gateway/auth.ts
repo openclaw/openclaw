@@ -110,7 +110,9 @@ type TailscaleUser = {
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
 function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean {
-  return Boolean(connectAuth?.token?.trim() || connectAuth?.password?.trim());
+  return Boolean(
+    normalizeOptionalString(connectAuth?.token) || normalizeOptionalString(connectAuth?.password),
+  );
 }
 
 function normalizeLogin(login: string): string {

@@ -92,6 +92,71 @@ describe("control UI routing", () => {
     expect(dreamsLink).not.toBeNull();
   });
 
+  it("renders the dreaming view on the /dreaming route", async () => {
+    const app = mountApp("/dreaming");
+    app.dreamingStatus = {
+      enabled: true,
+      timezone: "Europe/Madrid",
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 2,
+      recallSignalCount: 1,
+      dailySignalCount: 1,
+      totalSignalCount: 2,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 1,
+      promotedToday: 1,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
+        deep: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          limit: 20,
+          minScore: 0.75,
+          minRecallCount: 3,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 7,
+        },
+        rem: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 20,
+          minPatternStrength: 0.6,
+        },
+      },
+    };
+    app.dreamDiaryPath = "DREAMS.md";
+    app.dreamDiaryContent = [
+      "# Dream Diary",
+      "",
+      "<!-- openclaw:dreaming:diary:start -->",
+      "",
+      "---",
+      "",
+      "*January 1, 2026*",
+      "",
+      "What Happened",
+      "1. Stable operator rule surfaced.",
+      "",
+      "<!-- openclaw:dreaming:diary:end -->",
+    ].join("\n");
+    app.requestUpdate();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("dreams");
+    expect(app.querySelector(".dreams__tab")).not.toBeNull();
+    expect(app.querySelector(".dreams__lobster")).not.toBeNull();
+  });
+
   it("renders the refreshed top navigation shell", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

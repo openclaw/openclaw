@@ -51,6 +51,9 @@ function buildPreparedCliRunContext(params: {
           input: "arg" as const,
           modelArg: "--model",
           sessionMode: "existing" as const,
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+          systemPromptWhen: "first" as const,
           serialize: true,
         };
   const backend = { ...baseBackend, ...params.backend };
@@ -221,6 +224,39 @@ describe("runCliAgent spawn path", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+  it("passes Codex system prompts through model_instructions_file", async () => {
+    let promptFileText = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const configArgIndex = input.argv?.indexOf("-c") ?? -1;
+      expect(configArgIndex).toBeGreaterThanOrEqual(0);
+      const configArg = input.argv?.[configArgIndex + 1] ?? "";
+      const match = /^model_instructions_file="(.+)"$/.exec(configArg);
+      expect(match?.[1]).toBeTruthy();
+      promptFileText = await fs.readFile(match?.[1] ?? "", "utf-8");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-codex-system-prompt-file",
+      }),
+    );
+
+    expect(promptFileText).toBe("You are a helpful assistant.");
+  });
+
   it("cancels the managed CLI run when the abort signal fires", async () => {
     const abortController = new AbortController();
     let resolveWait!: (value: {
@@ -353,6 +389,66 @@ describe("runCliAgent spawn path", () => {
     } finally {
       stop();
     }
+  });
+
+  it("surfaces nested Claude stream-json API errors instead of raw event output", async () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    const apiError = `API Error: 400 ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message,
+      },
+      request_id: "req_011CZqHuXhFetYCnr8325DQc",
+    })}`;
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: apiError }],
+            },
+            session_id: "session-api-error",
+            error: "unknown",
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            result: apiError,
+            session_id: "session-api-error",
+          }),
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const run = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-api-error",
+      }),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      name: "FailoverError",
+      message,
+      reason: "billing",
+      status: 402,
+    });
   });
 
   it("sanitizes dangerous backend env overrides before spawn", async () => {

@@ -124,6 +124,9 @@ The provider id becomes the left side of your model ref:
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptArg: "--system",
+          // Codex-style CLIs can point at a prompt file instead:
+          // systemPromptFileConfigArg: "-c",
+          // systemPromptFileConfigKey: "model_instructions_file",
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
@@ -149,6 +152,12 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 `claude -p` usage as sanctioned for this integration unless Anthropic publishes
 a new policy.
 </Note>
+
+The bundled OpenAI `codex-cli` backend passes OpenClaw's system prompt through
+Codex's `model_instructions_file` config override (`-c
+model_instructions_file="..."`). Codex does not expose a Claude-style
+`--append-system-prompt` flag, so OpenClaw writes the assembled prompt to a
+temporary file for each fresh Codex CLI session.
 
 ## Sessions
 

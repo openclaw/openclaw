@@ -482,6 +482,7 @@ export function registerBrowserAgentActRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
+        const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
         const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
 
@@ -538,6 +539,7 @@ export function registerBrowserAgentActRoutes(
             const clickRequest: Parameters<typeof pw.clickViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               doubleClick,
             };
             if (ref) {
@@ -616,6 +618,7 @@ export function registerBrowserAgentActRoutes(
               text,
               submit,
               slowly,
+              ssrfPolicy,
             };
             if (ref) {
               typeRequest.ref = ref;
@@ -656,6 +659,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               key,
               delayMs: delayMs ?? undefined,
+              ssrfPolicy,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -1043,6 +1047,7 @@ export function registerBrowserAgentActRoutes(
             const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               fn,
               ref,
               signal: req.signal,
@@ -1102,6 +1107,7 @@ export function registerBrowserAgentActRoutes(
             const result = await pw.batchViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               actions,
               stopOnError,
               evaluateEnabled,

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
@@ -51,8 +51,7 @@ function mockSingleOpenAiCatalogModel() {
 }
 
 describe("loadModelCatalog", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
     }));
@@ -71,7 +70,9 @@ describe("loadModelCatalog", () => {
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
     augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
+  });
 
+  beforeEach(() => {
     resetModelCatalogCacheForTest();
     resetProviderRuntimeHookCacheForTest();
   });
@@ -81,6 +82,12 @@ describe("loadModelCatalog", () => {
     resetModelCatalogCacheForTest();
     resetProviderRuntimeHookCacheForTest();
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./models-config.js");
+    vi.doUnmock("./agent-paths.js");
+    vi.doUnmock("../plugins/provider-runtime.runtime.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {

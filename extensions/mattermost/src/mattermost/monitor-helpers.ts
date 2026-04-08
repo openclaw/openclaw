@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   createDedupeCache,
   formatInboundFromLabel as formatInboundFromLabelShared,
@@ -34,8 +37,7 @@ function normalizeAgentId(value: string | undefined | null): string {
     return trimmed;
   }
   return (
-    trimmed
-      .toLowerCase()
+    normalizeLowercaseStringOrEmpty(trimmed)
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+/, "")
       .replace(/-+$/, "")

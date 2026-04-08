@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
-import { markCompleteReplyConfig, withFastReplyConfig } from "./get-reply-fast-path.js";
+import {
+  initFastReplySessionState,
+  markCompleteReplyConfig,
+  withFastReplyConfig,
+} from "./get-reply-fast-path.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -182,5 +186,22 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  });
+
+  it("uses native command target session keys during fast bootstrap", () => {
+    const result = initFastReplySessionState({
+      ctx: buildCtx({
+        SessionKey: "telegram:slash:123",
+        CommandSource: "native",
+        CommandTargetSessionKey: "agent:main:main",
+      }),
+      cfg: { session: { store: "/tmp/sessions.json" } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.sessionKey).toBe("agent:main:main");
+    expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
   });
 });

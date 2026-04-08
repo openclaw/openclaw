@@ -179,7 +179,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   const canonicalMainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: params.mainKey,
-  }).toLowerCase();
+  });
   if (params.sessionKey === canonicalMainSessionKey) {
     return undefined;
   }

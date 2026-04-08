@@ -5,8 +5,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
@@ -24,18 +22,18 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
-import {
-  ToolInputError,
-  readNumberParam,
-  readStringArrayParam,
-  readStringParam,
-} from "./common.js";
+import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   applyVideoGenerationModelConfigDefaults,
-  findCapabilityProviderById,
+  buildMediaReferenceDetails,
+  buildTaskRunDetails,
+  normalizeMediaReferenceInputs,
+  readBooleanToolParam,
   resolveCapabilityModelConfigForTool,
+  resolveGenerateAction,
   resolveMediaToolLocalRoots,
+  resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import { type ToolModelConfig } from "./model-config.helpers.js";
 import {
@@ -160,15 +158,11 @@ export function resolveVideoGenerationModelConfigForTool(params: {
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
-  const raw = readStringParam(args, "action");
-  if (!raw) {
-    return "generate";
-  }
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "generate" || normalized === "list" || normalized === "status") {
-    return normalized;
-  }
-  throw new ToolInputError('action must be "generate", "status", or "list"');
+  return resolveGenerateAction({
+    args,
+    allowed: ["generate", "status", "list"],
+    defaultAction: "generate",
+  });
 }
 
 function normalizeResolution(raw: string | undefined): VideoGenerationResolution | undefined {
@@ -200,49 +194,19 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   );
 }
 
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalLowercaseString(raw);
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return undefined;
-}
-
 function normalizeReferenceInputs(params: {
   args: Record<string, unknown>;
   singularKey: "image" | "video";
   pluralKey: "images" | "videos";
   maxCount: number;
 }): string[] {
-  const single = readStringParam(params.args, params.singularKey);
-  const multiple = readStringArrayParam(params.args, params.pluralKey);
-  const combined = [...(single ? [single] : []), ...(multiple ?? [])];
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of combined) {
-    const trimmed = candidate.trim();
-    const dedupe = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-    if (!dedupe || seen.has(dedupe)) {
-      continue;
-    }
-    seen.add(dedupe);
-    deduped.push(trimmed);
-  }
-  if (deduped.length > params.maxCount) {
-    throw new ToolInputError(
-      `Too many reference ${params.pluralKey}: ${deduped.length} provided, maximum is ${params.maxCount}.`,
-    );
-  }
-  return deduped;
+  return normalizeMediaReferenceInputs({
+    args: params.args,
+    singularKey: params.singularKey,
+    pluralKey: params.pluralKey,
+    maxCount: params.maxCount,
+    label: `reference ${params.pluralKey}`,
+  });
 }
 
 function resolveSelectedVideoGenerationProvider(params: {
@@ -250,15 +214,11 @@ function resolveSelectedVideoGenerationProvider(params: {
   videoGenerationModelConfig: ToolModelConfig;
   modelOverride?: string;
 }): VideoGenerationProvider | undefined {
-  const selectedRef =
-    parseVideoGenerationModelRef(params.modelOverride) ??
-    parseVideoGenerationModelRef(params.videoGenerationModelConfig.primary);
-  if (!selectedRef) {
-    return undefined;
-  }
-  return findCapabilityProviderById({
+  return resolveSelectedCapabilityProvider({
     providers: listRuntimeVideoGenerationProviders({ config: params.config }),
-    providerId: selectedRef.provider,
+    modelConfig: params.videoGenerationModelConfig,
+    modelOverride: params.modelOverride,
+    parseModelRef: parseVideoGenerationModelRef,
   });
 }
 
@@ -603,44 +563,20 @@ async function executeVideoGenerationJob(params: {
         mediaUrls: savedVideos.map((video) => video.path),
       },
       paths: savedVideos.map((video) => video.path),
-      ...(params.taskHandle
-        ? {
-            task: {
-              taskId: params.taskHandle.taskId,
-              runId: params.taskHandle.runId,
-            },
-          }
-        : {}),
-      ...(params.loadedReferenceImages.length === 1
-        ? {
-            image: params.loadedReferenceImages[0]?.resolvedInput,
-            ...(params.loadedReferenceImages[0]?.rewrittenFrom
-              ? { rewrittenFrom: params.loadedReferenceImages[0].rewrittenFrom }
-              : {}),
-          }
-        : params.loadedReferenceImages.length > 1
-          ? {
-              images: params.loadedReferenceImages.map((entry) => ({
-                image: entry.resolvedInput,
-                ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
-              })),
-            }
-          : {}),
-      ...(params.loadedReferenceVideos.length === 1
-        ? {
-            video: params.loadedReferenceVideos[0]?.resolvedInput,
-            ...(params.loadedReferenceVideos[0]?.rewrittenFrom
-              ? { videoRewrittenFrom: params.loadedReferenceVideos[0].rewrittenFrom }
-              : {}),
-          }
-        : params.loadedReferenceVideos.length > 1
-          ? {
-              videos: params.loadedReferenceVideos.map((entry) => ({
-                video: entry.resolvedInput,
-                ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
-              })),
-            }
-          : {}),
+      ...buildTaskRunDetails(params.taskHandle),
+      ...buildMediaReferenceDetails({
+        entries: params.loadedReferenceImages,
+        singleKey: "image",
+        pluralKey: "images",
+        getResolvedInput: (entry) => entry.resolvedInput,
+      }),
+      ...buildMediaReferenceDetails({
+        entries: params.loadedReferenceVideos,
+        singleKey: "video",
+        pluralKey: "videos",
+        getResolvedInput: (entry) => entry.resolvedInput,
+        singleRewriteKey: "videoRewrittenFrom",
+      }),
       ...(normalizedSize ||
       (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
         ? { size: normalizedSize ?? params.size }
@@ -745,8 +681,8 @@ export function createVideoGenerateTool(options?: {
         integer: true,
         strict: true,
       });
-      const audio = readBooleanParam(args, "audio");
-      const watermark = readBooleanParam(args, "watermark");
+      const audio = readBooleanToolParam(args, "audio");
+      const watermark = readBooleanToolParam(args, "watermark");
       const imageInputs = normalizeReferenceInputs({
         args,
         singularKey: "image",
@@ -866,44 +802,20 @@ export function createVideoGenerateTool(options?: {
           details: {
             async: true,
             status: "started",
-            ...(taskHandle
-              ? {
-                  task: {
-                    taskId: taskHandle.taskId,
-                    runId: taskHandle.runId,
-                  },
-                }
-              : {}),
-            ...(loadedReferenceImages.length === 1
-              ? {
-                  image: loadedReferenceImages[0]?.resolvedInput,
-                  ...(loadedReferenceImages[0]?.rewrittenFrom
-                    ? { rewrittenFrom: loadedReferenceImages[0].rewrittenFrom }
-                    : {}),
-                }
-              : loadedReferenceImages.length > 1
-                ? {
-                    images: loadedReferenceImages.map((entry) => ({
-                      image: entry.resolvedInput,
-                      ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
-                    })),
-                  }
-                : {}),
-            ...(loadedReferenceVideos.length === 1
-              ? {
-                  video: loadedReferenceVideos[0]?.resolvedInput,
-                  ...(loadedReferenceVideos[0]?.rewrittenFrom
-                    ? { videoRewrittenFrom: loadedReferenceVideos[0].rewrittenFrom }
-                    : {}),
-                }
-              : loadedReferenceVideos.length > 1
-                ? {
-                    videos: loadedReferenceVideos.map((entry) => ({
-                      video: entry.resolvedInput,
-                      ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
-                    })),
-                  }
-                : {}),
+            ...buildTaskRunDetails(taskHandle),
+            ...buildMediaReferenceDetails({
+              entries: loadedReferenceImages,
+              singleKey: "image",
+              pluralKey: "images",
+              getResolvedInput: (entry) => entry.resolvedInput,
+            }),
+            ...buildMediaReferenceDetails({
+              entries: loadedReferenceVideos,
+              singleKey: "video",
+              pluralKey: "videos",
+              getResolvedInput: (entry) => entry.resolvedInput,
+              singleRewriteKey: "videoRewrittenFrom",
+            }),
             ...(model ? { model } : {}),
             ...(size ? { size } : {}),
             ...(aspectRatio ? { aspectRatio } : {}),

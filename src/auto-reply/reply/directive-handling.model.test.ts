@@ -198,6 +198,39 @@ async function persistModelDirectiveForTest(params: {
   return { persisted, sessionEntry };
 }
 
+type PersistInlineDirectivesParams = Parameters<typeof persistInlineDirectives>[0];
+
+async function persistInternalOperatorWriteDirective(
+  command: string,
+  overrides: Partial<PersistInlineDirectivesParams> = {},
+) {
+  const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
+  const sessionStore = overrides.sessionStore ?? { "agent:main:main": sessionEntry };
+  await persistInlineDirectives({
+    directives: parseInlineDirectives(command),
+    cfg: baseConfig(),
+    sessionEntry,
+    sessionStore,
+    sessionKey: "agent:main:main",
+    storePath: "/tmp/sessions.json",
+    elevatedEnabled: true,
+    elevatedAllowed: true,
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    aliasIndex: baseAliasIndex(),
+    allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    initialModelLabel: "anthropic/claude-opus-4-6",
+    formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    agentCfg: undefined,
+    surface: "webchat",
+    gatewayClientScopes: ["operator.write"],
+    ...overrides,
+  });
+  return sessionEntry;
+}
+
 async function resolveModelInfoReply(
   overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
 ) {
@@ -692,37 +725,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
 describe("persistInlineDirectives internal exec scope gate", () => {
   it("skips exec persistence for internal operator.write callers", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
-    const directives = parseInlineDirectives(
+    const sessionEntry = await persistInternalOperatorWriteDirective(
       "/exec host=node security=allowlist ask=always node=worker-1",
     );
-    const sessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const sessionStore = { "agent:main:main": sessionEntry };
-
-    await persistInlineDirectives({
-      directives,
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      agentCfg: undefined,
-      surface: "webchat",
-      gatewayClientScopes: ["operator.write"],
-    });
 
     expect(sessionEntry.execHost).toBeUndefined();
     expect(sessionEntry.execSecurity).toBeUndefined();
@@ -731,69 +736,15 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   });
 
   it("skips verbose persistence for internal operator.write callers", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
-    const directives = parseInlineDirectives("/verbose full");
-    const sessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const sessionStore = { "agent:main:main": sessionEntry };
-
-    await persistInlineDirectives({
-      directives,
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      agentCfg: undefined,
-      surface: "webchat",
-      gatewayClientScopes: ["operator.write"],
-    });
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full");
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 
   it("treats internal provider context as authoritative over external surface metadata", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
-    const directives = parseInlineDirectives("/verbose full");
-    const sessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const sessionStore = { "agent:main:main": sessionEntry };
-
-    await persistInlineDirectives({
-      directives,
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      agentCfg: undefined,
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "webchat",
       surface: "telegram",
-      gatewayClientScopes: ["operator.write"],
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();

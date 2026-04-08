@@ -8,11 +8,19 @@ import {
   withNoProxyForLocalhost,
 } from "./cdp-proxy-bypass.js";
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 beforeEach(() => {
   vi.useRealTimers();
 });
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   const origNoProxy = process.env.NO_PROXY;
@@ -208,22 +216,27 @@ describe("withNoProxyForLocalhost concurrency", () => {
     await withIsolatedNoProxyEnv(async () => {
       const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
 
-      // Simulate concurrent calls
+      const releaseA = createDeferred();
+      const enteredA = createDeferred();
+
       const callA = withNoProxyForLocalhost(async () => {
-        // While A is running, NO_PROXY should be set
         expect(process.env.NO_PROXY).toContain("localhost");
         expect(process.env.NO_PROXY).toContain("[::1]");
-        await delay(50);
+        enteredA.resolve();
+        await releaseA.promise;
         return "a";
       });
+
+      await enteredA.promise;
+
       const callB = withNoProxyForLocalhost(async () => {
-        await delay(20);
         return "b";
       });
 
-      await Promise.all([callA, callB]);
+      expect(await callB).toBe("b");
+      releaseA.resolve();
+      expect(await callA).toBe("a");
 
-      // After both complete, NO_PROXY should be restored (deleted)
       expect(process.env.NO_PROXY).toBeUndefined();
       expect(process.env.no_proxy).toBeUndefined();
     });
@@ -235,20 +248,32 @@ describe("withNoProxyForLocalhost reverse exit order", () => {
     await withIsolatedNoProxyEnv(async () => {
       const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
 
-      // Call A enters first, exits first (short task)
-      // Call B enters second, exits last (long task)
+      const enteredA = createDeferred();
+      const enteredB = createDeferred();
+      const releaseA = createDeferred();
+      const releaseB = createDeferred();
+
       const callA = withNoProxyForLocalhost(async () => {
-        await delay(10);
+        enteredA.resolve();
+        await releaseA.promise;
         return "a";
       });
+      await enteredA.promise;
+
       const callB = withNoProxyForLocalhost(async () => {
-        await delay(60);
+        enteredB.resolve();
+        await releaseB.promise;
         return "b";
       });
+      await enteredB.promise;
 
-      await Promise.all([callA, callB]);
+      releaseA.resolve();
+      expect(await callA).toBe("a");
+      expect(process.env.NO_PROXY).toContain("localhost");
 
-      // After both complete, NO_PROXY must be cleaned up
+      releaseB.resolve();
+      expect(await callB).toBe("b");
+
       expect(process.env.NO_PROXY).toBeUndefined();
       expect(process.env.no_proxy).toBeUndefined();
     });

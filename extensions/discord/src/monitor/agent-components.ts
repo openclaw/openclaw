@@ -36,6 +36,7 @@ import {
   parseDiscordModalCustomIdForCarbon,
 } from "../component-custom-id.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import {
   dispatchDiscordPluginInteractiveHandler,
   type DiscordInteractiveHandlerContext,
@@ -153,6 +154,16 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
     return "group";
   }
   return "channel";
+}
+
+export function resolveDiscordComponentOriginatingTo(
+  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
+) {
+  return resolveDiscordConversationIdentity({
+    isDirectMessage: interactionCtx.isDirectMessage,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+  });
 }
 
 async function dispatchPluginDiscordInteractiveEvent(params: {
@@ -464,7 +475,8 @@ async function dispatchDiscordComponentEvent(params: {
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
-    OriginatingTo: `channel:${interactionCtx.channelId}`,
+    OriginatingTo:
+      resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
   });
 
   await recordInboundSession({
@@ -475,7 +487,8 @@ async function dispatchDiscordComponentEvent(params: {
       ? {
           sessionKey: route.mainSessionKey,
           channel: "discord",
-          to: `user:${interactionCtx.userId}`,
+          to:
+            resolveDiscordComponentOriginatingTo(interactionCtx) ?? `user:${interactionCtx.userId}`,
           accountId,
           mainDmOwnerPin: pinnedMainDmOwner
             ? {

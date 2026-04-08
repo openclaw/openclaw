@@ -58,6 +58,9 @@ API key auth, and dynamic model resolution.
       "providerAuthEnvVars": {
         "acme-ai": ["ACME_AI_API_KEY"]
       },
+      "providerAuthAliases": {
+        "acme-ai-coding": "acme-ai"
+      },
       "providerAuthChoices": [
         {
           "provider": "acme-ai",
@@ -80,9 +83,10 @@ API key auth, and dynamic model resolution.
     </CodeGroup>
 
     The manifest declares `providerAuthEnvVars` so OpenClaw can detect
-    credentials without loading your plugin runtime. `modelSupport` is optional
-    and lets OpenClaw auto-load your provider plugin from shorthand model ids
-    like `acme-large` before runtime hooks exist. If you publish the
+    credentials without loading your plugin runtime. Add `providerAuthAliases`
+    when a provider variant should reuse another provider id's auth. `modelSupport`
+    is optional and lets OpenClaw auto-load your provider plugin from shorthand
+    model ids like `acme-large` before runtime hooks exist. If you publish the
     provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
     are required in `package.json`.
 
@@ -707,7 +711,7 @@ Do not use the legacy skill-only publish alias here; plugin packages should use
 ```
 <bundled-plugin-root>/acme-ai/
 ├── package.json              # openclaw.providers metadata
-├── openclaw.plugin.json      # Manifest with providerAuthEnvVars
+├── openclaw.plugin.json      # Manifest with provider auth metadata
 ├── index.ts                  # definePluginEntry + registerProvider
 └── src/
     ├── provider.test.ts      # Tests

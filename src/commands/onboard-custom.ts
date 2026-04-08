@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
@@ -576,8 +577,8 @@ export function resolveCustomProviderId(
 export function parseNonInteractiveCustomApiFlags(
   params: ParseNonInteractiveCustomApiFlagsParams,
 ): ParsedNonInteractiveCustomApiFlags {
-  const baseUrl = params.baseUrl?.trim() ?? "";
-  const modelId = params.modelId?.trim() ?? "";
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!baseUrl || !modelId) {
     throw new CustomApiError(
       "missing_required",
@@ -588,8 +589,8 @@ export function parseNonInteractiveCustomApiFlags(
     );
   }
 
-  const apiKey = params.apiKey?.trim();
-  const providerId = params.providerId?.trim();
+  const apiKey = normalizeOptionalString(params.apiKey);
+  const providerId = normalizeOptionalString(params.providerId);
   if (providerId && !normalizeEndpointId(providerId)) {
     throw new CustomApiError(
       "invalid_provider_id",
@@ -606,7 +607,7 @@ export function parseNonInteractiveCustomApiFlags(
 }
 
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
-  const baseUrl = params.baseUrl.trim();
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   try {
     new URL(baseUrl);
   } catch {
@@ -620,7 +621,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     );
   }
 
-  const modelId = params.modelId.trim();
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!modelId) {
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
@@ -638,7 +639,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const providers = params.config.models?.providers ?? {};
 
   const modelRef = modelKey(providerId, modelId);
-  const alias = params.alias?.trim() ?? "";
+  const alias = normalizeOptionalString(params.alias) ?? "";
   const aliasError = resolveAliasError({
     raw: alias,
     cfg: params.config,

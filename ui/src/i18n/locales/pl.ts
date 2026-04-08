@@ -295,10 +295,24 @@ export const pl: TranslationMap = {
       promotedSuffix: "promowany",
       nextSweepPrefix: "następne przetwarzanie",
     },
+    scene: {
+      backfill: "Uzupełnij",
+      reset: "Resetuj",
+      working: "Przetwarzanie…",
+    },
     stats: {
       shortTerm: "Krótkoterminowe",
       signals: "Sygnały",
+      promoted: "Promowane",
       phaseHits: "Trafienia faz",
+    },
+    trace: {
+      shortTerm: "Krótkoterminowe",
+      signals: "Sygnały",
+      promoted: "Promowane",
+      emptyShortTerm: "Brak aktywnych elementów krótkoterminowych.",
+      emptySignals: "Brak aktywnych sygnałów.",
+      emptyPromoted: "Nic nie zostało jeszcze dziś promowane.",
     },
     diary: {
       title: "Dziennik snów",

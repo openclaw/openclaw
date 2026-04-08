@@ -15,6 +15,8 @@ Provided by the active memory plugin (default: `memory-core`; set `plugins.slots
 Related:
 
 - Memory concept: [Memory](/concepts/memory)
+- Memory wiki: [Memory Wiki](/plugins/memory-wiki)
+- Wiki CLI: [wiki](/cli/wiki)
 - Plugins: [Plugins](/tools/plugin)
 
 ## Examples

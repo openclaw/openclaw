@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -64,14 +67,14 @@ export function resolveSandboxedSessionToolContext(params: {
 } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
-  const requesterInternalKey =
-    typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
-      ? resolveInternalSessionKey({
-          key: params.agentSessionKey,
-          alias,
-          mainKey,
-        })
-      : undefined;
+  const requesterSessionKey = normalizeOptionalString(params.agentSessionKey);
+  const requesterInternalKey = requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : undefined;
   const effectiveRequesterKey = requesterInternalKey ?? alias;
   const restrictToSpawned =
     params.sandboxed === true &&
@@ -97,7 +100,9 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return true;
     }
     return allowPatterns.some((pattern) => {
-      const raw = String(pattern ?? "").trim();
+      const raw =
+        normalizeOptionalString(typeof pattern === "string" ? pattern : String(pattern ?? "")) ??
+        "";
       if (!raw) {
         return false;
       }

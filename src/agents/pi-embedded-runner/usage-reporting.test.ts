@@ -19,8 +19,10 @@ function makeAttemptResult(
   return {
     aborted: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "test-session",
     messagesSnapshot: [],
     assistantTexts: [],

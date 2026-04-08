@@ -333,7 +333,7 @@ async function fetchOpenRouterPricingCatalog(
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
     const obj = entry as OpenRouterModelPayload;
-    const id = typeof obj.id === "string" ? obj.id.trim() : "";
+    const id = normalizeOptionalString(obj.id) ?? "";
     const pricing = parseOpenRouterPricing(obj.pricing);
     if (!id || !pricing) {
       continue;
