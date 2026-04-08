@@ -17,6 +17,11 @@ HEADLESS="${OPENCLAW_BROWSER_HEADLESS:-0}"
 ALLOW_NO_SANDBOX="${OPENCLAW_BROWSER_NO_SANDBOX:-0}"
 NOVNC_PASSWORD="${OPENCLAW_BROWSER_NOVNC_PASSWORD:-}"
 
+DISABLE_GRAPHICS_FLAGS="${OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS:-1}"
+DISABLE_EXTENSIONS="${OPENCLAW_BROWSER_DISABLE_EXTENSIONS:-1}"
+RENDERER_PROCESS_LIMIT="${OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT:-2}"
+AUTO_START_TIMEOUT_MS="${OPENCLAW_BROWSER_AUTO_START_TIMEOUT_MS:-12000}"
+
 mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
 
 Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
@@ -27,7 +32,6 @@ else
   CHROME_CDP_PORT="$((CDP_PORT + 1))"
 fi
 
-# --- Chrome args ---
 CHROME_ARGS=(
   "--remote-debugging-address=127.0.0.1"
   "--remote-debugging-port=${CHROME_CDP_PORT}"
@@ -52,15 +56,34 @@ if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
   CHROME_ARGS+=("--no-sandbox" "--disable-setuid-sandbox")
 fi
 
+DISABLE_GRAPHICS_FLAGS_LOWER="${DISABLE_GRAPHICS_FLAGS,,}"
+if [[ "${DISABLE_GRAPHICS_FLAGS_LOWER}" =~ ^(1|true|yes|on)$ ]]; then
+  CHROME_ARGS+=(
+    "--disable-3d-apis"
+    "--disable-gpu"
+    "--disable-software-rasterizer"
+  )
+fi
+
+DISABLE_EXTENSIONS_LOWER="${DISABLE_EXTENSIONS,,}"
+if [[ "${DISABLE_EXTENSIONS_LOWER}" =~ ^(1|true|yes|on)$ ]]; then
+  CHROME_ARGS+=("--disable-extensions")
+fi
+
+if [[ "${RENDERER_PROCESS_LIMIT}" =~ ^[0-9]+$ && "${RENDERER_PROCESS_LIMIT}" -gt 0 ]]; then
+  CHROME_ARGS+=("--renderer-process-limit=${RENDERER_PROCESS_LIMIT}")
+fi
+
 echo "[sandbox] Starting Chromium..."
 chromium "${CHROME_ARGS[@]}" about:blank &
 CHROME_PID=$!
 
-MAX_RETRIES=30
+MAX_RETRIES=$(( AUTO_START_TIMEOUT_MS / 1000 ))
+if [[ "$MAX_RETRIES" -le 0 ]]; then MAX_RETRIES=1; fi
 RETRY_INTERVAL=1
 CDP_READY=0
 
-echo "[sandbox] Waiting for CDP on port ${CHROME_CDP_PORT}..."
+echo "[sandbox] Waiting up to ${MAX_RETRIES}s for CDP on port ${CHROME_CDP_PORT}..."
 
 for ((i=1; i<=MAX_RETRIES; i++)); do
   if curl -s --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" > /dev/null; then
@@ -72,7 +95,7 @@ for ((i=1; i<=MAX_RETRIES; i++)); do
 done
 
 if [[ "$CDP_READY" == "0" ]]; then
-  echo "[sandbox] ERROR: CDP failed to start"
+  echo "[sandbox] ERROR: CDP failed to start within ${MAX_RETRIES}s."
   kill -9 "$CHROME_PID" || true
   exit 1
 fi
