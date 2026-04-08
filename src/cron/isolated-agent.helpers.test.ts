@@ -81,6 +81,7 @@ describe("resolveCronPayloadOutcome", () => {
         { text: "section 2" },
       ],
       finalAssistantVisibleText: "section 1\nsection 2",
+      preferFinalAssistantVisibleText: true,
     });
 
     expect(result.summary).toBe("section 1\nsection 2");
@@ -94,6 +95,7 @@ describe("resolveCronPayloadOutcome", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ mediaUrl: "https://example.com/report.png" }, { text: "final text" }],
       finalAssistantVisibleText: "full final report",
+      preferFinalAssistantVisibleText: true,
     });
 
     expect(result.deliveryPayloads).toEqual([
@@ -112,10 +114,24 @@ describe("resolveCronPayloadOutcome", () => {
         { text: "last error", isError: true },
       ],
       finalAssistantVisibleText: "Recovered final answer",
+      preferFinalAssistantVisibleText: true,
     });
 
     expect(result.outputText).toBe("last error");
     expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
     expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+  });
+
+  it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+      finalAssistantVisibleText: "Final weather summary",
+    });
+
+    expect(result.outputText).toBe("Final weather summary");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "Working on it..." },
+      { text: "Final weather summary" },
+    ]);
   });
 });

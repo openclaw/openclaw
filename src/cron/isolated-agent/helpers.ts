@@ -138,9 +138,11 @@ export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
   finalAssistantVisibleText?: string;
+  preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
   const firstText = params.payloads[0]?.text ?? "";
-  const fallbackSummary = pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
+  const fallbackSummary =
+    pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
   const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
@@ -165,11 +167,12 @@ export function resolveCronPayloadOutcome(params: {
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
   const shouldUseFinalAssistantVisibleText =
+    params.preferFinalAssistantVisibleText === true &&
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasFatalErrorPayload &&
     !hasStructuredDeliveryPayloads;
   const summary = shouldUseFinalAssistantVisibleText
-    ? pickSummaryFromOutput(normalizedFinalAssistantVisibleText) ?? fallbackSummary
+    ? (pickSummaryFromOutput(normalizedFinalAssistantVisibleText) ?? fallbackSummary)
     : fallbackSummary;
   const outputText = shouldUseFinalAssistantVisibleText
     ? normalizedFinalAssistantVisibleText

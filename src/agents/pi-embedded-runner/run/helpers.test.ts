@@ -7,12 +7,23 @@ function makeAssistantMessage(
   phase?: string,
 ): AssistantMessage {
   return {
+    api: "responses",
+    provider: "openai",
+    model: "gpt-5.4",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     role: "assistant",
     content,
     timestamp: Date.now(),
-    stopReason: "end_turn",
+    stopReason: "stop",
     ...(phase ? { phase } : {}),
-  } as AssistantMessage;
+  };
 }
 
 describe("resolveFinalAssistantVisibleText", () => {
