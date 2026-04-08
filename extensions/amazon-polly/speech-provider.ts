@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { pollySynthesize } from "./tts.js";
 
@@ -20,8 +21,9 @@ type PollyProviderConfig = {
   sampleRate?: string;
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+/** Default sample rate per engine. Generative/long-form support 24000; standard/neural require ≤22050. */
+function defaultSampleRate(engine: string): string {
+  return engine === "generative" || engine === "long-form" ? "24000" : "22050";
 }
 
 function readPollyProviderConfig(raw: Record<string, unknown>): PollyProviderConfig {
@@ -95,7 +97,7 @@ export function buildPollySpeechProvider(): SpeechProviderPlugin {
         voiceId: voice,
         engine,
         outputFormat: "mp3",
-        sampleRate: sampleRate ?? "24000",
+        sampleRate: sampleRate ?? defaultSampleRate(engine),
         languageCode,
         region,
         timeoutMs: req.timeoutMs,
@@ -105,7 +107,7 @@ export function buildPollySpeechProvider(): SpeechProviderPlugin {
         const opusBuffer = await convertToOpusOgg(audioBuffer);
         return {
           audioBuffer: opusBuffer,
-          outputFormat: "ogg_vorbis",
+          outputFormat: "ogg_opus",
           fileExtension: ".ogg",
           voiceCompatible: true,
         };
