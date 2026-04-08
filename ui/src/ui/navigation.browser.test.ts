@@ -103,6 +103,7 @@ describe("control UI routing", () => {
       shortTermCount: 2,
       recallSignalCount: 1,
       dailySignalCount: 1,
+      groundedSignalCount: 0,
       totalSignalCount: 2,
       phaseSignalCount: 0,
       lightPhaseHitCount: 0,

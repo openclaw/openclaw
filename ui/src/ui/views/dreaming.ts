@@ -269,6 +269,7 @@ export type DreamingProps = {
     snippet: string;
     recallCount: number;
     dailyCount: number;
+    groundedCount: number;
     totalSignalCount: number;
     lightHits: number;
     remHits: number;
@@ -284,6 +285,7 @@ export type DreamingProps = {
     snippet: string;
     recallCount: number;
     dailyCount: number;
+    groundedCount: number;
     totalSignalCount: number;
     lightHits: number;
     remHits: number;
@@ -299,6 +301,7 @@ export type DreamingProps = {
     snippet: string;
     recallCount: number;
     dailyCount: number;
+    groundedCount: number;
     totalSignalCount: number;
     lightHits: number;
     remHits: number;
@@ -580,6 +583,7 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
                 ? `${entry.recallCount} recall${entry.recallCount === 1 ? "" : "s"}`
                 : null,
               entry.dailyCount > 0 ? `${entry.dailyCount} daily` : null,
+              entry.groundedCount > 0 ? `${entry.groundedCount} grounded` : null,
               entry.phaseHitCount > 0
                 ? `${entry.phaseHitCount} phase hit${entry.phaseHitCount === 1 ? "" : "s"}`
                 : null,

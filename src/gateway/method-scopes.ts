@@ -136,6 +136,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.compaction.branch",
     "push.test",
     "node.pending.enqueue",
+    "doctor.memory.backfillDreamDiary",
+    "doctor.memory.resetDreamDiary",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",

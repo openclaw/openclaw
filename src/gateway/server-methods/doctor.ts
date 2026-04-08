@@ -64,6 +64,7 @@ type DoctorMemoryDreamingEntryPayload = {
   snippet: string;
   recallCount: number;
   dailyCount: number;
+  groundedCount: number;
   totalSignalCount: number;
   lightHits: number;
   remHits: number;
@@ -81,6 +82,7 @@ type DoctorMemoryDreamingPayload = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
   phaseSignalCount: number;
   lightPhaseHitCount: number;
@@ -139,7 +141,7 @@ function extractIsoDayFromPath(filePath: string): string | null {
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
   return markdown
     .split("\n")
-    .map((line) => line.trimEnd())
+    .map((line) => line.replace(/^##\s+/, "").trimEnd())
     .filter((line, index, lines) => line.length > 0 || (index > 0 && lines[index - 1]?.length > 0));
 }
 
@@ -166,6 +168,7 @@ function resolveDreamingConfig(
   | "shortTermCount"
   | "recallSignalCount"
   | "dailySignalCount"
+  | "groundedSignalCount"
   | "totalSignalCount"
   | "phaseSignalCount"
   | "lightPhaseHitCount"
@@ -238,6 +241,18 @@ function normalizeMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
+function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
+  const normalized = normalizeMemoryPath(rawPath);
+  const workspaceNormalized = normalizeMemoryPath(workspaceDir);
+  if (
+    path.isAbsolute(rawPath) &&
+    normalized.startsWith(`${workspaceNormalized}/`)
+  ) {
+    return normalized.slice(workspaceNormalized.length + 1);
+  }
+  return normalized;
+}
+
 function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
@@ -258,6 +273,7 @@ type DreamingStoreStats = Pick<
   | "shortTermCount"
   | "recallSignalCount"
   | "dailySignalCount"
+  | "groundedSignalCount"
   | "totalSignalCount"
   | "phaseSignalCount"
   | "lightPhaseHitCount"
@@ -370,6 +386,7 @@ async function loadDreamingStoreStats(
     let shortTermCount = 0;
     let recallSignalCount = 0;
     let dailySignalCount = 0;
+    let groundedSignalCount = 0;
     let totalSignalCount = 0;
     let phaseSignalCount = 0;
     let lightPhaseHitCount = 0;
@@ -396,20 +413,23 @@ async function loadDreamingStoreStats(
       const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
       const recallCount = toNonNegativeInt(entry.recallCount);
       const dailyCount = toNonNegativeInt(entry.dailyCount);
-      const totalEntrySignalCount = recallCount + dailyCount;
+      const groundedCount = toNonNegativeInt(entry.groundedCount);
+      const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
+      const normalizedEntryPath = normalizeMemoryPathForWorkspace(workspaceDir, entryPath);
       const snippet =
         normalizeTrimmedString(entry.snippet) ??
         normalizeTrimmedString(entry.summary) ??
-        normalizeMemoryPath(entryPath);
+        normalizedEntryPath;
       const lastRecalledAt = normalizeTrimmedString(entry.lastRecalledAt);
       const detail: DoctorMemoryDreamingEntryPayload = {
         key: entryKey,
-        path: normalizeMemoryPath(entryPath),
+        path: normalizedEntryPath,
         startLine: range.startLine,
         endLine: Math.max(range.startLine, range.endLine),
         snippet,
         recallCount,
         dailyCount,
+        groundedCount,
         totalSignalCount: totalEntrySignalCount,
         lightHits: 0,
         remHits: 0,
@@ -422,6 +442,7 @@ async function loadDreamingStoreStats(
         activeKeys.add(entryKey);
         recallSignalCount += recallCount;
         dailySignalCount += dailyCount;
+        groundedSignalCount += groundedCount;
         totalSignalCount += totalEntrySignalCount;
         shortTermEntries.push(detail);
         activeEntries.set(entryKey, detail);
@@ -476,6 +497,7 @@ async function loadDreamingStoreStats(
       shortTermCount,
       recallSignalCount,
       dailySignalCount,
+      groundedSignalCount,
       totalSignalCount,
       phaseSignalCount,
       lightPhaseHitCount,
@@ -497,6 +519,7 @@ async function loadDreamingStoreStats(
         shortTermCount: 0,
         recallSignalCount: 0,
         dailySignalCount: 0,
+        groundedSignalCount: 0,
         totalSignalCount: 0,
         phaseSignalCount: 0,
         lightPhaseHitCount: 0,
@@ -514,6 +537,7 @@ async function loadDreamingStoreStats(
       shortTermCount: 0,
       recallSignalCount: 0,
       dailySignalCount: 0,
+      groundedSignalCount: 0,
       totalSignalCount: 0,
       phaseSignalCount: 0,
       lightPhaseHitCount: 0,
@@ -534,6 +558,7 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   let shortTermCount = 0;
   let recallSignalCount = 0;
   let dailySignalCount = 0;
+  let groundedSignalCount = 0;
   let totalSignalCount = 0;
   let phaseSignalCount = 0;
   let lightPhaseHitCount = 0;
@@ -554,6 +579,7 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     shortTermCount += stat.shortTermCount;
     recallSignalCount += stat.recallSignalCount;
     dailySignalCount += stat.dailySignalCount;
+    groundedSignalCount += stat.groundedSignalCount;
     totalSignalCount += stat.totalSignalCount;
     phaseSignalCount += stat.phaseSignalCount;
     lightPhaseHitCount += stat.lightPhaseHitCount;
@@ -586,6 +612,7 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     shortTermCount,
     recallSignalCount,
     dailySignalCount,
+    groundedSignalCount,
     totalSignalCount,
     phaseSignalCount,
     lightPhaseHitCount,
@@ -788,6 +815,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
               shortTermCount: 0,
               recallSignalCount: 0,
               dailySignalCount: 0,
+              groundedSignalCount: 0,
               totalSignalCount: 0,
               phaseSignalCount: 0,
               lightPhaseHitCount: 0,
@@ -850,6 +878,20 @@ export const doctorHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const memoryDir = path.join(workspaceDir, "memory");
     const sourceFiles = await listWorkspaceDailyFiles(memoryDir);
+    if (sourceFiles.length === 0) {
+      const dreamDiary = await readDreamDiary(workspaceDir);
+      const payload: DoctorMemoryDreamDiaryActionPayload = {
+        agentId,
+        path: dreamDiary.path,
+        action: "backfill",
+        found: dreamDiary.found,
+        scannedFiles: 0,
+        written: 0,
+        replaced: 0,
+      };
+      respond(true, payload, undefined);
+      return;
+    }
     const grounded = await previewGroundedRemMarkdown({
       workspaceDir,
       inputPaths: sourceFiles,

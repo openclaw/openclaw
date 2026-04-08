@@ -13,6 +13,7 @@ overrides:
   fast-xml-parser: 5.5.7
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
+  basic-ftp: 5.2.1
   file-type: 22.0.0
   form-data: 2.5.4
   minimatch: 10.2.4
@@ -4339,8 +4340,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  basic-ftp@5.2.0:
-    resolution: {integrity: sha512-VoMINM2rqJwJgfdHq6RiUudKt2BV+FY5ZFezP/ypmwayk68+NzzAQy4XXLlqsGD4MCzq3DrmNFD/uUmBJuGoXw==}
+  basic-ftp@5.2.1:
+    resolution: {integrity: sha512-0yaL8JdxTknKDILitVpfYfV2Ob6yb3udX/hK97M7I3jOeznBNxQPtVvTUtnhUkyHlxFWyr5Lvknmgzoc7jf+1Q==}
     engines: {node: '>=10.0.0'}
 
   bidi-js@1.0.3:
@@ -10883,7 +10884,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  basic-ftp@5.2.0: {}
+  basic-ftp@5.2.1: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -11635,7 +11636,7 @@ snapshots:
 
   get-uri@6.0.5:
     dependencies:
-      basic-ftp: 5.2.0
+      basic-ftp: 5.2.1
       data-uri-to-buffer: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
@@ -11643,7 +11644,7 @@ snapshots:
 
   get-uri@8.0.0:
     dependencies:
-      basic-ftp: 5.2.0
+      basic-ftp: 5.2.1
       data-uri-to-buffer: 8.0.0
       debug: 4.4.3
     transitivePeerDependencies:
