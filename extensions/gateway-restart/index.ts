@@ -133,15 +133,28 @@ export default definePluginEntry({
           message: parsed.message,
         };
 
-        // Fix 1: Execute pre-commands BEFORE writing marker.
-        // If execSync throws, we never write the marker, preventing stale markers.
+        // Execute pre-commands BEFORE writing marker.
+        // If any command fails, we return a structured error and never write the marker.
         const commandOutputs: string[] = [];
-        for (const command of commands) {
-          const output = execSync(command, {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          commandOutputs.push(output);
+        try {
+          for (const command of commands) {
+            const output = execSync(command, {
+              encoding: "utf8",
+              timeout: 5 * 60 * 1000, // 5-minute hard cap per command
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            commandOutputs.push(output);
+          }
+        } catch (err) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `ERROR: Pre-restart command failed: ${String(err instanceof Error ? err.message : err)}`,
+              },
+            ],
+            details: null,
+          };
         }
 
         // Fix 1: Write marker only after all pre-commands succeed.

@@ -135,12 +135,11 @@ describe("gateway-restart plugin tool", () => {
       throw new Error("command failed");
     });
 
-    await expect(
-      tool.execute("call-3", {
-        sessionKey: "agent:main:telegram:direct:123",
-        commands: ["openclaw gateway install --force"],
-      }),
-    ).rejects.toThrow("command failed");
+    const result = (await tool.execute("call-3", {
+      sessionKey: "agent:main:telegram:direct:123",
+      commands: ["openclaw gateway install --force"],
+    })) as { content: Array<{ text: string }> };
+    expect(result.content[0]?.text).toContain("ERROR: Pre-restart command failed");
 
     expect(fsMocks.writeFileSync).not.toHaveBeenCalled();
   });
