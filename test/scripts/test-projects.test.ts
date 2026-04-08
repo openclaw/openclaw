@@ -213,7 +213,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "vitest.full-extension-channel-roots.config.ts",
       "vitest.full-extension-browser.config.ts",
       "vitest.full-extension-providers.config.ts",
-      "vitest.full-extensions.config.ts",
+      "vitest.full-extension-web-search.config.ts",
+      "vitest.full-extension-media-tools.config.ts",
+      "vitest.full-extension-qa-tools.config.ts",
+      "vitest.full-extension-dev-tools.config.ts",
     ]);
   });
 
@@ -304,7 +307,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "vitest.extension-zalo.config.ts",
       "vitest.extension-browser.config.ts",
       "vitest.extension-providers.config.ts",
-      "vitest.extensions.config.ts",
+      "vitest.extension-web-search.config.ts",
+      "vitest.extension-media-tools.config.ts",
+      "vitest.extension-qa-tools.config.ts",
+      "vitest.extension-dev-tools.config.ts",
     ]);
     expect(plans).toEqual(
       plans.map((plan) => ({

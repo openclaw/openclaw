@@ -126,8 +126,23 @@ export const fullSuiteVitestShards = [
     projects: ["vitest.extension-providers.config.ts"],
   },
   {
-    config: "vitest.full-extensions.config.ts",
-    name: "extensions",
-    projects: ["vitest.extensions.config.ts"],
+    config: "vitest.full-extension-web-search.config.ts",
+    name: "extension-web-search",
+    projects: ["vitest.extension-web-search.config.ts"],
+  },
+  {
+    config: "vitest.full-extension-media-tools.config.ts",
+    name: "extension-media-tools",
+    projects: ["vitest.extension-media-tools.config.ts"],
+  },
+  {
+    config: "vitest.full-extension-qa-tools.config.ts",
+    name: "extension-qa-tools",
+    projects: ["vitest.extension-qa-tools.config.ts"],
+  },
+  {
+    config: "vitest.full-extension-dev-tools.config.ts",
+    name: "extension-dev-tools",
+    projects: ["vitest.extension-dev-tools.config.ts"],
   },
 ];
