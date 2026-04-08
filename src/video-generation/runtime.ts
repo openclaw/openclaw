@@ -10,6 +10,7 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
+import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
@@ -96,6 +97,33 @@ export async function generateVideo(
       continue;
     }
 
+    // Guard: skip candidates that cannot satisfy reference-input counts so
+    // we never silently drop audio/image/video refs by falling over to a
+    // provider that ignores them and "succeeds" without the caller's assets.
+    const inputImageCount = params.inputImages?.length ?? 0;
+    const inputVideoCount = params.inputVideos?.length ?? 0;
+    const inputAudioCount = params.inputAudios?.length ?? 0;
+    if (inputAudioCount > 0) {
+      const { capabilities: candCaps } = resolveVideoGenerationModeCapabilities({
+        provider,
+        inputImageCount,
+        inputVideoCount,
+      });
+      const maxAudio = candCaps?.maxInputAudios ?? 0;
+      if (inputAudioCount > maxAudio) {
+        const error =
+          maxAudio === 0
+            ? `${candidate.provider}/${candidate.model} does not support reference audio inputs; skipping to avoid silent audio drop`
+            : `${candidate.provider}/${candidate.model} supports at most ${maxAudio} reference audio(s), ${inputAudioCount} requested; skipping`;
+        attempts.push({ provider: candidate.provider, model: candidate.model, error });
+        lastError = new Error(error);
+        log.debug(
+          `video-generation candidate skipped (audio capability): ${candidate.provider}/${candidate.model}`,
+        );
+        continue;
+      }
+    }
+
     try {
       const sanitized = resolveVideoGenerationOverrides({
         provider,
@@ -106,8 +134,8 @@ export async function generateVideo(
         durationSeconds: params.durationSeconds,
         audio: params.audio,
         watermark: params.watermark,
-        inputImageCount: params.inputImages?.length ?? 0,
-        inputVideoCount: params.inputVideos?.length ?? 0,
+        inputImageCount,
+        inputVideoCount,
       });
       const result: VideoGenerationResult = await provider.generateVideo({
         provider: candidate.provider,
