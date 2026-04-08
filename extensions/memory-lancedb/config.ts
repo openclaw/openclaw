@@ -136,13 +136,14 @@ export const memoryConfigSchema = {
       if (!storageOpts || typeof storageOpts !== "object" || Array.isArray(storageOpts)) {
         throw new Error("storageOptions must be an object");
       }
+      storageOptions = {};
       // Validate all values are strings
       for (const [key, value] of Object.entries(storageOpts)) {
         if (typeof value !== "string") {
           throw new Error(`storageOptions.${key} must be a string`);
         }
+        storageOptions[key] = resolveEnvVars(value);
       }
-      storageOptions = storageOpts as Record<string, string>;
     }
 
     return {
@@ -209,7 +210,7 @@ export const memoryConfigSchema = {
     storageOptions: {
       label: "Storage Options",
       advanced: true,
-      help: "Storage configuration options (access_key, secret_key, endpoint, etc.)",
+      help: "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values",
     },
   },
 };

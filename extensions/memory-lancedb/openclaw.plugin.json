@@ -51,7 +51,7 @@
     "storageOptions": {
       "label": "Storage Options",
       "advanced": true,
-      "help": "Storage configuration options (access_key, secret_key, endpoint, etc.)"
+      "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
     }
   },
   "configSchema": {
