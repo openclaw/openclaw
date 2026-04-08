@@ -92,7 +92,7 @@ function normalizeSenderKey(
     return "";
   }
   const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return withoutAt.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
 function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {

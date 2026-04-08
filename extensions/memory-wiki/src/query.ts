@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-host-files";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -176,10 +177,13 @@ async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle
 }
 
 function buildSnippet(raw: string, query: string): string {
-  const queryLower = query.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const matchingLine = raw
     .split(/\r?\n/)
-    .find((line) => line.toLowerCase().includes(queryLower) && line.trim().length > 0);
+    .find(
+      (line) =>
+        normalizeLowercaseStringOrEmpty(line).includes(queryLower) && line.trim().length > 0,
+    );
   return (
     matchingLine?.trim() ||
     raw
@@ -222,10 +226,10 @@ function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestCla
 
 function scoreDigestClaimMatch(claim: QueryDigestClaim, queryLower: string): number {
   let score = 0;
-  if (claim.text.toLowerCase().includes(queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
     score += 25;
   }
-  if (claim.id?.toLowerCase().includes(queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower)) {
     score += 10;
   }
   if (typeof claim.confidence === "number") {
@@ -254,7 +258,7 @@ function buildDigestCandidatePaths(params: {
   query: string;
   maxResults: number;
 }): string[] {
-  const queryLower = params.query.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(params.query);
   const claimsByPage = new Map<string, QueryDigestClaim[]>();
   for (const claim of params.digest.claims) {
     const current = claimsByPage.get(claim.pagePath) ?? [];
@@ -265,14 +269,16 @@ function buildDigestCandidatePaths(params: {
   return params.digest.pages
     .map((page) => {
       const claims = claimsByPage.get(page.path) ?? [];
-      const metadataLower = buildDigestPageSearchText(page, claims).toLowerCase();
+      const metadataLower = normalizeLowercaseStringOrEmpty(
+        buildDigestPageSearchText(page, claims),
+      );
       if (!metadataLower.includes(queryLower)) {
         return { path: page.path, score: 0 };
       }
       let score = 1;
-      const titleLower = page.title.toLowerCase();
-      const pathLower = page.path.toLowerCase();
-      const idLower = page.id?.toLowerCase() ?? "";
+      const titleLower = normalizeLowercaseStringOrEmpty(page.title);
+      const pathLower = normalizeLowercaseStringOrEmpty(page.path);
+      const idLower = normalizeLowercaseStringOrEmpty(page.id);
       if (titleLower === queryLower) {
         score += 50;
       } else if (titleLower.includes(queryLower)) {
@@ -284,15 +290,19 @@ function buildDigestCandidatePaths(params: {
       if (idLower.includes(queryLower)) {
         score += 20;
       }
-      if (page.sourceIds.some((sourceId) => sourceId.toLowerCase().includes(queryLower))) {
+      if (
+        page.sourceIds.some((sourceId) =>
+          normalizeLowercaseStringOrEmpty(sourceId).includes(queryLower),
+        )
+      ) {
         score += 12;
       }
       const matchingClaims = claims
         .filter((claim) => {
-          if (claim.text.toLowerCase().includes(queryLower)) {
+          if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
             return true;
           }
-          return claim.id?.toLowerCase().includes(queryLower) ?? false;
+          return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
         })
         .toSorted(
           (left, right) =>
@@ -316,18 +326,18 @@ function buildDigestCandidatePaths(params: {
 }
 
 function isClaimMatch(claim: WikiClaim, queryLower: string): boolean {
-  if (claim.text.toLowerCase().includes(queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
     return true;
   }
-  return claim.id?.toLowerCase().includes(queryLower) ?? false;
+  return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
 }
 
 function rankClaimMatch(page: QueryableWikiPage, claim: WikiClaim, queryLower: string): number {
   let score = 0;
-  if (claim.text.toLowerCase().includes(queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
     score += 25;
   }
-  if (claim.id?.toLowerCase().includes(queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower)) {
     score += 10;
   }
   if (typeof claim.confidence === "number") {
@@ -362,7 +372,7 @@ function getMatchingClaims(page: QueryableWikiPage, queryLower: string): WikiCla
 }
 
 function buildPageSnippet(page: QueryableWikiPage, query: string): string {
-  const queryLower = query.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const matchingClaim = getMatchingClaims(page, queryLower)[0];
   if (matchingClaim) {
     return matchingClaim.text;
@@ -371,12 +381,12 @@ function buildPageSnippet(page: QueryableWikiPage, query: string): string {
 }
 
 function scorePage(page: QueryableWikiPage, query: string): number {
-  const queryLower = query.toLowerCase();
-  const titleLower = page.title.toLowerCase();
-  const pathLower = page.relativePath.toLowerCase();
-  const idLower = page.id?.toLowerCase() ?? "";
-  const metadataLower = buildPageSearchText(page).toLowerCase();
-  const rawLower = page.raw.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
+  const titleLower = normalizeLowercaseStringOrEmpty(page.title);
+  const pathLower = normalizeLowercaseStringOrEmpty(page.relativePath);
+  const idLower = normalizeLowercaseStringOrEmpty(page.id);
+  const metadataLower = normalizeLowercaseStringOrEmpty(buildPageSearchText(page));
+  const rawLower = normalizeLowercaseStringOrEmpty(page.raw);
   if (
     !(
       titleLower.includes(queryLower) ||
@@ -401,7 +411,11 @@ function scorePage(page: QueryableWikiPage, query: string): number {
   if (idLower.includes(queryLower)) {
     score += 20;
   }
-  if (page.sourceIds.some((sourceId) => sourceId.toLowerCase().includes(queryLower))) {
+  if (
+    page.sourceIds.some((sourceId) =>
+      normalizeLowercaseStringOrEmpty(sourceId).includes(queryLower),
+    )
+  ) {
     score += 12;
   }
   const matchingClaims = getMatchingClaims(page, queryLower);

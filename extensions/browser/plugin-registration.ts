@@ -12,7 +12,7 @@ import {
   runBrowserProxyCommand,
 } from "./register.runtime.js";
 
-export const browserPluginReload = { restartPrefixes: ["browser"] } as const;
+export const browserPluginReload = { restartPrefixes: ["browser"] };
 
 export const browserPluginNodeHostCommands = [
   {
@@ -20,7 +20,7 @@ export const browserPluginNodeHostCommands = [
     cap: "browser",
     handle: runBrowserProxyCommand,
   },
-] as const;
+];
 
 export const browserSecurityAuditCollectors = [collectBrowserSecurityAuditFindings] as const;
 

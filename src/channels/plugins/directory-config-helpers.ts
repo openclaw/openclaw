@@ -17,7 +17,7 @@ export function applyDirectoryQueryAndLimit(
 ): string[] {
   const q = resolveDirectoryQuery(params.query);
   const limit = resolveDirectoryLimit(params.limit);
-  const filtered = ids.filter((id) => (q ? id.toLowerCase().includes(q) : true));
+  const filtered = ids.filter((id) => (q ? normalizeLowercaseStringOrEmpty(id).includes(q) : true));
   return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
 }
 

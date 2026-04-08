@@ -312,7 +312,9 @@ function buildDiscordCommandOptions(params: {
             model: context?.model,
           });
           const filtered = focusValue
-            ? choices.filter((choice) => choice.label.toLowerCase().includes(focusValue))
+            ? choices.filter((choice) =>
+                normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
+              )
             : choices;
           await interaction.respond(
             filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),

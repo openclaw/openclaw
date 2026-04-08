@@ -109,7 +109,7 @@ export type ScenarioRun = {
 };
 
 export type RunnerSelection = {
-  providerMode: "mock-openai" | "live-openai";
+  providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -325,7 +325,7 @@ function renderSidebar(state: UiState): string {
   const isRunning = runner?.status === "running";
   const realModels = state.bootstrap?.runnerCatalog.real ?? [];
   const modelOptions =
-    selection?.providerMode === "live-openai" && realModels.length > 0 ? realModels : MOCK_MODELS;
+    selection?.providerMode === "live-frontier" && realModels.length > 0 ? realModels : MOCK_MODELS;
   const selectedIds = new Set(selection?.scenarioIds ?? []);
 
   return `
@@ -337,7 +337,7 @@ function renderSidebar(state: UiState): string {
           <span class="config-label">Provider lane</span>
           <select id="provider-mode"${isRunning ? " disabled" : ""}>
             <option value="mock-openai"${selection?.providerMode === "mock-openai" ? " selected" : ""}>Synthetic (mock)</option>
-            <option value="live-openai"${selection?.providerMode === "live-openai" ? " selected" : ""}>Real providers</option>
+            <option value="live-frontier"${selection?.providerMode === "live-frontier" ? " selected" : ""}>Real frontier providers</option>
           </select>
         </div>
         ${renderModelSelect({
@@ -355,7 +355,7 @@ function renderSidebar(state: UiState): string {
           disabled: isRunning,
         })}
         ${
-          selection?.providerMode === "live-openai"
+          selection?.providerMode === "live-frontier"
             ? `<div class="config-hint">${esc(
                 state.bootstrap?.runnerCatalog.status === "loading"
                   ? "Loading model catalog\u2026"

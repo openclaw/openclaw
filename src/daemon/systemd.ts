@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -277,7 +278,7 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("disabled") ||
     normalized.includes("static") ||
@@ -317,7 +318,7 @@ export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
 }
 
@@ -628,7 +629,7 @@ export async function readSystemdServiceRuntime(
   ]);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("not found");
+    const missing = normalizeLowercaseStringOrEmpty(detail).includes("not found");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
@@ -636,7 +637,7 @@ export async function readSystemdServiceRuntime(
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");
-  const activeState = parsed.activeState?.toLowerCase();
+  const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
   const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
   return {
     status,
@@ -713,4 +714,3 @@ export async function uninstallLegacySystemdUnits({
 
   return units;
 }
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

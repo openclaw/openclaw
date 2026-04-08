@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import type { CliBundleMcpMode } from "../plugins/types.js";
@@ -60,14 +60,16 @@ function createBackendEntry(params: {
   };
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.doUnmock("../plugins/setup-registry.js");
   vi.doUnmock("../plugins/cli-backends.runtime.js");
-  vi.resetModules();
   ({ createEmptyPluginRegistry } = await import("../plugins/registry.js"));
   ({ setActivePluginRegistry } = await import("../plugins/runtime.js"));
   ({ normalizeClaudeBackendConfig, resolveCliBackendConfig, resolveCliBackendLiveTest } =
     await import("./cli-backends.js"));
+});
+
+beforeEach(() => {
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     createBackendEntry({

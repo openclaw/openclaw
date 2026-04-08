@@ -9,7 +9,10 @@ afterEach(() => {
 });
 
 function createGatewayRequestMock() {
-  return vi.fn(async <T = unknown>() => ({ ok: true }) as T);
+  return vi.fn(async (_method: string, _params: Record<string, unknown>) => ({
+    ok: true,
+  })) as unknown as (<T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>) &
+    ReturnType<typeof vi.fn>;
 }
 
 describe("createApprovalNativeRouteReporter", () => {

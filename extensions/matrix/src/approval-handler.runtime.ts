@@ -223,7 +223,8 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
   PendingApprovalContent,
   PreparedMatrixTarget,
   PendingMessage,
-  ReactionTargetRef
+  ReactionTargetRef,
+  string
 >({
   eventKinds: ["exec", "plugin"],
   availability: {
@@ -330,7 +331,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!primaryMessageId) {
         return;
       }
-      const text = payload as string;
+      const text = payload;
       await Promise.allSettled([
         editMessage(entry.roomId, primaryMessageId, text, {
           cfg: cfg as CoreConfig,

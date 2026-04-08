@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultQaRunSelection,
   createIdleQaRunnerSnapshot,
+  createQaRunOutputDir,
   normalizeQaRunSelection,
 } from "./run-config.js";
 
@@ -46,7 +47,7 @@ describe("qa run config", () => {
         scenarios,
       ),
     ).toEqual({
-      providerMode: "live-openai",
+      providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
       fastMode: true,
@@ -66,5 +67,10 @@ describe("qa run config", () => {
         scenarios,
       ).scenarioIds,
     ).toEqual(["dm-chat-baseline", "thread-lifecycle"]);
+  });
+
+  it("anchors generated run output dirs under the provided repo root", () => {
+    const outputDir = createQaRunOutputDir("/tmp/openclaw-repo");
+    expect(outputDir.startsWith("/tmp/openclaw-repo/.artifacts/qa-e2e/lab-")).toBe(true);
   });
 });

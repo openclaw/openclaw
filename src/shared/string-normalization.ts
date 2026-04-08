@@ -5,7 +5,7 @@ export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
 }
 
 export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
-  return normalizeStringEntries(list).map((entry) => entry.toLowerCase());
+  return normalizeStringEntries(list).map((entry) => normalizeOptionalLowercaseString(entry) ?? "");
 }
 
 export function normalizeTrimmedStringList(value: unknown): string[] {

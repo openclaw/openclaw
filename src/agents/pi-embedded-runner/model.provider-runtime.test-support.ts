@@ -1,3 +1,4 @@
+import { lowercasePreservingWhitespace } from "../../shared/string-coerce.js";
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -129,7 +130,7 @@ function buildDynamicModel(
   >,
 ) {
   const modelId = params.modelId.trim();
-  const lower = modelId.toLowerCase();
+  const lower = lowercasePreservingWhitespace(modelId);
   switch (params.provider) {
     case "openrouter": {
       const capabilities = options.getOpenRouterModelCapabilities(modelId);

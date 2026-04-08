@@ -101,14 +101,15 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
+import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -218,7 +219,7 @@ function uniquePreserveOrder(values: string[]): string[] {
     if (!normalized) {
       continue;
     }
-    const key = normalized.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized);
     if (seen.has(key)) {
       continue;
     }

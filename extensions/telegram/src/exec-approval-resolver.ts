@@ -1,4 +1,4 @@
-import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/infra-runtime";
 

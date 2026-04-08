@@ -273,7 +273,7 @@ function rememberPendingOutboundMessageId(entry: {
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
-    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    isMediaSnippet: normalizeLowercaseStringOrEmpty(snippetRaw).startsWith("<media:"),
     createdAt: Date.now(),
   });
   return pendingOutboundMessageIdCounter;
@@ -396,7 +396,7 @@ function resolveBlueBubblesAckReaction(params: {
     normalizeBlueBubblesReactionInput(raw);
     return raw;
   } catch {
-    const key = raw.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(raw);
     if (!invalidAckReactions.has(key)) {
       invalidAckReactions.add(key);
       logVerbose(

@@ -91,7 +91,7 @@ export function isOllamaCompatProvider(model: {
   }
   try {
     const parsed = new URL(model.baseUrl);
-    const hostname = parsed.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
     const isLocalhost =
       hostname === "localhost" ||
       hostname === "127.0.0.1" ||

@@ -220,7 +220,7 @@ export function parseExecApprovalCommandText(
   if (!match) {
     return null;
   }
-  const rawDecision = match[2].toLowerCase();
+  const rawDecision = normalizeOptionalLowercaseString(match[2]) ?? "";
   return {
     approvalId: match[1],
     decision:

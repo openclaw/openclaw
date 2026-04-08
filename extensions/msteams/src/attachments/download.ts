@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -29,21 +32,20 @@ type DownloadCandidate = {
 
 function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
-  const name = typeof att.name === "string" ? att.name.trim() : "";
+  const name = normalizeOptionalString(att.name) ?? "";
 
   if (contentType === "application/vnd.microsoft.teams.file.download.info") {
     if (!isRecord(att.content)) {
       return null;
     }
-    const downloadUrl =
-      typeof att.content.downloadUrl === "string" ? att.content.downloadUrl.trim() : "";
+    const downloadUrl = normalizeOptionalString(att.content.downloadUrl) ?? "";
     if (!downloadUrl) {
       return null;
     }
 
-    const fileType = typeof att.content.fileType === "string" ? att.content.fileType.trim() : "";
-    const uniqueId = typeof att.content.uniqueId === "string" ? att.content.uniqueId.trim() : "";
-    const fileName = typeof att.content.fileName === "string" ? att.content.fileName.trim() : "";
+    const fileType = normalizeOptionalString(att.content.fileType) ?? "";
+    const uniqueId = normalizeOptionalString(att.content.uniqueId) ?? "";
+    const fileName = normalizeOptionalString(att.content.fileName) ?? "";
 
     const fileHint = name || fileName || (uniqueId && fileType ? `${uniqueId}.${fileType}` : "");
     return {
@@ -58,7 +60,7 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     };
   }
 
-  const contentUrl = typeof att.contentUrl === "string" ? att.contentUrl.trim() : "";
+  const contentUrl = normalizeOptionalString(att.contentUrl) ?? "";
   if (!contentUrl) {
     return null;
   }

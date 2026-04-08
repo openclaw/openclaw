@@ -223,8 +223,8 @@ function matchesPromotionSelector(
   return (
     normalizeLowercaseStringOrEmpty(candidate.key) === trimmed ||
     normalizeLowercaseStringOrEmpty(candidate.key).includes(trimmed) ||
-    candidate.path.toLowerCase().includes(trimmed) ||
-    candidate.snippet.toLowerCase().includes(trimmed)
+    normalizeLowercaseStringOrEmpty(candidate.path).includes(trimmed) ||
+    normalizeLowercaseStringOrEmpty(candidate.snippet).includes(trimmed)
   );
 }
 

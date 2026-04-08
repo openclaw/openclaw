@@ -12,6 +12,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import {
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   readStringValue,
   resolvePrimaryStringValue,
@@ -293,7 +294,7 @@ function normalizePathForComparison(input: string): string {
     // Keep lexical path for non-existent directories.
   }
   if (process.platform === "win32") {
-    return normalizeLowercaseStringOrEmpty(normalized);
+    return lowercasePreservingWhitespace(normalized);
   }
   return normalized;
 }

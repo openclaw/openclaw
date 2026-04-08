@@ -4,6 +4,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -586,7 +587,7 @@ export function buildModelOptions(
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const addOption = (value: string, label: string) => {
-    const key = value.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       return;
     }
@@ -607,7 +608,7 @@ export function buildModelOptions(
     }
   }
 
-  if (current && !seen.has(current.toLowerCase())) {
+  if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
     options.unshift({ value: current, label: `Current (${current})` });
   }
 

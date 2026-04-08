@@ -1,8 +1,10 @@
+import { lowercasePreservingWhitespace } from "./shared/string-coerce.js";
+
 function toSnakeCaseKey(key: string): string {
-  return key
+  const snakeKey = key
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2");
+  return lowercasePreservingWhitespace(snakeKey);
 }
 
 export function readSnakeCaseParamRaw(params: Record<string, unknown>, key: string): unknown {

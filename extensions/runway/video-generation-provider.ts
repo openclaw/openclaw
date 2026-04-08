@@ -6,6 +6,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -212,7 +213,7 @@ async function pollRunwayTask(params: {
           (typeof payload.failure === "string"
             ? payload.failure
             : payload.failure?.message
-          )?.trim() || `Runway video generation ${payload.status.toLowerCase()}`,
+          )?.trim() || `Runway video generation ${normalizeLowercaseStringOrEmpty(payload.status)}`,
         );
       case "PENDING":
       case "RUNNING":

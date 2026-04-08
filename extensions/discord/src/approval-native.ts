@@ -1,4 +1,5 @@
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
@@ -239,7 +240,8 @@ export function createDiscordApprovalCapability(configOverride?: DiscordExecAppr
           configOverride,
         }),
       load: async () =>
-        (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
+        (await import("./approval-handler.runtime.js"))
+          .discordApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });
 }

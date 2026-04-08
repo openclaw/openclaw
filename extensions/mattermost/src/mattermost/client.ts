@@ -2,6 +2,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -344,7 +345,7 @@ export async function createMattermostDirectChannelWithRetry(
 function isRetryableError(error: Error): boolean {
   const candidates = collectErrorCandidates(error);
   const messages = candidates
-    .map((candidate) => readErrorMessage(candidate)?.toLowerCase())
+    .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
     .filter((message): message is string => Boolean(message));
 
   // Retry on 5xx server errors FIRST (before checking 4xx)

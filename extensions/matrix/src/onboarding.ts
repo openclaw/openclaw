@@ -4,6 +4,7 @@ import {
   type ChannelSetupWizardAdapter,
 } from "openclaw/plugin-sdk/setup";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -360,7 +361,9 @@ async function configureMatrixAccessPrompts(params: {
               limit: 10,
             });
             const exact = matches.find(
-              (match) => (match.name ?? "").toLowerCase() === trimmed.toLowerCase(),
+              (match) =>
+                normalizeLowercaseStringOrEmpty(match.name) ===
+                normalizeLowercaseStringOrEmpty(trimmed),
             );
             const best = exact ?? matches[0];
             if (best?.id) {

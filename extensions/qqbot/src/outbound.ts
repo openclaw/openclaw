@@ -1,5 +1,6 @@
 import * as path from "path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   getAccessToken,
   sendC2CFileMessage,
@@ -303,7 +304,7 @@ export async function sendPhoto(
       return { channel: "qqbot", error: sizeCheck.error! };
     }
     const fileBuffer = await readFileAsync(mediaPath);
-    const ext = path.extname(mediaPath).toLowerCase();
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(mediaPath));
     const mimeTypes: Record<string, string> = {
       ".jpg": "image/jpeg",
       ".jpeg": "image/jpeg",
@@ -482,7 +483,7 @@ async function sendVoiceFromLocal(
   const needsTranscode = shouldTranscodeVoice(mediaPath);
 
   if (needsTranscode && !transcodeEnabled) {
-    const ext = path.extname(mediaPath).toLowerCase();
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(mediaPath));
     debugLog(
       `${prefix} sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
     );
@@ -886,7 +887,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         sendQueue.push({ type: "text", content: textBefore });
       }
 
-      const tagName = match[1].toLowerCase();
+      const tagName = normalizeLowercaseStringOrEmpty(match[1]);
 
       let mediaPath = match[2]?.trim() ?? "";
       if (mediaPath.startsWith("MEDIA:")) {
@@ -1368,7 +1369,7 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
 /** Extract a lowercase extension from a path or URL, ignoring query and hash segments. */
 function getCleanExt(filePath: string): string {
   const cleanPath = filePath.split("?")[0].split("#")[0];
-  return path.extname(cleanPath).toLowerCase();
+  return normalizeLowercaseStringOrEmpty(path.extname(cleanPath));
 }
 
 /** Check whether a file is an image using MIME first and extension as fallback. */

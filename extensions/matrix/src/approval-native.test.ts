@@ -173,7 +173,7 @@ describe("matrix native approval adapter", () => {
           createdAtMs: 0,
           expiresAtMs: 1000,
         },
-      }),
+      } as never),
     ).toBe(true);
   });
 

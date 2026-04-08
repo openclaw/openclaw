@@ -5,6 +5,7 @@ import type { AssistantIdentity } from "../assistant-identity.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
@@ -726,10 +727,11 @@ function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const normalizedRole = normalizeRoleForGrouping(role);
+  const normalizedRawRole = normalizeLowercaseStringOrEmpty(role);
   const isToolResult =
     isToolResultMessage(message) ||
-    role.toLowerCase() === "toolresult" ||
-    role.toLowerCase() === "tool_result" ||
+    normalizedRawRole === "toolresult" ||
+    normalizedRawRole === "tool_result" ||
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
@@ -752,7 +754,12 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in", canCopyMarkdown ? "has-copy" : ""]
+  const bubbleClasses = [
+    "chat-bubble",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+    canCopyMarkdown ? "has-copy" : "",
+  ]
     .filter(Boolean)
     .join(" ");
 
