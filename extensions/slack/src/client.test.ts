@@ -85,16 +85,16 @@ describe("slack web client config", () => {
 describe("slack proxy agent", () => {
   const originalEnv = { ...process.env };
 
+  const PROXY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"];
+
   beforeEach(() => {
-    // Clear all proxy env vars before each test
-    for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+    for (const key of PROXY_KEYS) {
       delete process.env[key];
     }
   });
 
   afterEach(() => {
-    // Restore original env
-    for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+    for (const key of PROXY_KEYS) {
       if (originalEnv[key] !== undefined) {
         process.env[key] = originalEnv[key];
       } else {
@@ -148,5 +148,45 @@ describe("slack proxy agent", () => {
 
     expect(options.agent).toBeDefined();
     expect(options.agent!.constructor.name).toBe("HttpsProxyAgent");
+  });
+
+  it("respects NO_PROXY excluding slack.com", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    process.env.NO_PROXY = "localhost,slack.com,.internal.corp";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeUndefined();
+  });
+
+  it("respects no_proxy (lowercase) excluding .slack.com", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    process.env.no_proxy = ".slack.com";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeUndefined();
+  });
+
+  it("respects NO_PROXY wildcard", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    process.env.NO_PROXY = "*";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeUndefined();
+  });
+
+  it("does not skip proxy when NO_PROXY excludes unrelated hosts", () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    process.env.NO_PROXY = "localhost,.internal.corp";
+    const options = resolveSlackWebClientOptions();
+
+    expect(options.agent).toBeDefined();
+  });
+
+  it("degrades gracefully on malformed proxy URL", () => {
+    process.env.HTTPS_PROXY = "not-a-valid-url://:::bad";
+    const options = resolveSlackWebClientOptions();
+
+    // Should not throw; falls back to no agent
+    expect(options.agent).toBeUndefined();
   });
 });

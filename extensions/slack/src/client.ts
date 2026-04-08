@@ -14,6 +14,47 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
 };
 
 /**
+ * Check whether a hostname is excluded from proxying by `NO_PROXY` / `no_proxy`.
+ * Supports comma-separated entries with optional leading dots (e.g. `.slack.com`).
+ */
+function isHostExcludedByNoProxy(
+  hostname: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env.no_proxy ?? env.NO_PROXY;
+  if (!raw) {
+    return false;
+  }
+  const entries = raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const lower = hostname.toLowerCase();
+  for (const entry of entries) {
+    if (entry === "*") {
+      return true;
+    }
+    // Exact match or suffix match (with leading dot)
+    if (lower === entry || lower.endsWith(entry.startsWith(".") ? entry : `.${entry}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve the proxy URL from env vars following undici EnvHttpProxyAgent
+ * semantics: lower-case takes precedence, HTTPS prefers https_proxy then
+ * falls back to http_proxy.  Returns `undefined` when no proxy is configured.
+ */
+function resolveProxyUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return (
+    env.https_proxy?.trim() ||
+    env.HTTPS_PROXY?.trim() ||
+    env.http_proxy?.trim() ||
+    env.HTTP_PROXY?.trim() ||
+    undefined
+  );
+}
+
+/**
  * Build an HTTPS proxy agent from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
  * for use as the `agent` option in Slack WebClient and Socket Mode connections.
  *
@@ -22,21 +63,27 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
  * WebSocket upgrade request through the proxy.  This fixes Socket Mode in
  * environments where outbound traffic must go through an HTTP CONNECT proxy.
  *
- * Returns `undefined` when no proxy env var is configured.
+ * Respects `NO_PROXY` / `no_proxy` — if `*.slack.com` (or a matching pattern)
+ * appears in the exclusion list, returns `undefined` so the connection is direct.
+ *
+ * Returns `undefined` when no proxy env var is configured or when Slack hosts
+ * are excluded by `NO_PROXY`.
  */
 function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
-  // Match undici EnvHttpProxyAgent semantics: lower-case takes precedence,
-  // HTTPS prefers https_proxy then falls back to http_proxy.
-  const proxyUrl =
-    process.env.https_proxy?.trim() ||
-    process.env.HTTPS_PROXY?.trim() ||
-    process.env.http_proxy?.trim() ||
-    process.env.HTTP_PROXY?.trim() ||
-    undefined;
+  const proxyUrl = resolveProxyUrlFromEnv();
   if (!proxyUrl) {
     return undefined;
   }
-  return new HttpsProxyAgent<string>(proxyUrl);
+  // Slack Socket Mode connects to these hosts; skip proxy if excluded.
+  if (isHostExcludedByNoProxy("slack.com")) {
+    return undefined;
+  }
+  try {
+    return new HttpsProxyAgent<string>(proxyUrl);
+  } catch {
+    // Malformed proxy URL — degrade gracefully to direct connection.
+    return undefined;
+  }
 }
 
 export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
