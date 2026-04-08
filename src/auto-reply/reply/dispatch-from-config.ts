@@ -920,7 +920,26 @@ export async function dispatchReplyFromConfig(
             } else {
               // Await delivery so block text reaches the user before tool
               // execution continues on the same channel (#32868).
-              await dispatcher.sendBlockReply(ttsPayload);
+              // Race delivery against the pipeline timeout/abort to avoid hanging.
+              const deliveryPromise = dispatcher.sendBlockReply(ttsPayload);
+              if (deliveryPromise !== false) {
+                if (context?.abortSignal) {
+                  await Promise.race([
+                    deliveryPromise,
+                    new Promise<void>((_, reject) => {
+                      if (context.abortSignal!.aborted) {
+                        reject(new Error("block reply aborted before delivery"));
+                      } else {
+                        context.abortSignal!.addEventListener("abort", () => {
+                          reject(new Error("block reply aborted during delivery"));
+                        });
+                      }
+                    }),
+                  ]);
+                } else {
+                  await deliveryPromise;
+                }
+              }
             }
           };
           return run();
