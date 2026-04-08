@@ -330,9 +330,9 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   // as it's not directly exposed in the SDK
   const internalClient = getDriveInternalClient(client);
   const domain = internalClient.domain ?? "https://open.feishu.cn";
-  const res = (await internalClient.httpInstance.get(
+  const res: FeishuExplorerRootFolderMetaResponse = await internalClient.httpInstance.get(
     `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-  )) as FeishuExplorerRootFolderMetaResponse;
+  );
   if (res.code !== 0) {
     throw new Error(res.msg ?? "Failed to get root folder");
   }
@@ -774,17 +774,18 @@ async function extractPdfText(filePath: string): Promise<string | undefined> {
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
     const data = new Uint8Array(await fs.promises.readFile(filePath));
-    const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
+    const doc = await pdfjsLib.getDocument({ data }).promise;
     const pages: string[] = [];
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pdfjs item type
       const text = content.items
-        .filter((item: { str?: string }) => "str" in item)
-        .map((item: { str?: string }) => item.str)
+        .filter((item): item is { str: string } => "str" in item)
+        .map((item) => item.str)
         .join(" ");
-      if (text.trim()) pages.push(text);
+      if (text.trim()) {
+        pages.push(text);
+      }
     }
     return pages.length > 0 ? pages.join("\n\n") : undefined;
   } catch {
@@ -812,12 +813,16 @@ function detectFileExtension(headers: Record<string, string | undefined>): strin
     const fnMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
     if (fnMatch) {
       const ext = path.extname(decodeURIComponent(fnMatch[1]));
-      if (ext) return ext;
+      if (ext) {
+        return ext;
+      }
     }
 
     const ct = headers["content-type"] ?? "";
     for (const [mime, extension] of Object.entries(MIME_EXTENSION_MAP)) {
-      if (ct.includes(mime)) return extension;
+      if (ct.includes(mime)) {
+        return extension;
+      }
     }
   } catch {
     // ignore header parsing errors
@@ -829,7 +834,9 @@ function detectFileName(headers: Record<string, string | undefined>): string {
   try {
     const disposition = headers["content-disposition"] ?? "";
     const fnMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
-    if (fnMatch) return decodeURIComponent(fnMatch[1]);
+    if (fnMatch) {
+      return decodeURIComponent(fnMatch[1]);
+    }
   } catch {
     // ignore
   }
@@ -889,7 +896,9 @@ async function tryExtractText(
 ): Promise<string | undefined> {
   if (ext === ".pdf") {
     const text = await extractPdfText(filePath);
-    if (text) return text;
+    if (text) {
+      return text;
+    }
   }
 
   // Try reading small files as UTF-8 text
@@ -897,8 +906,11 @@ async function tryExtractText(
     try {
       const buf = await fs.promises.readFile(filePath);
       const text = buf.toString("utf-8");
-      const nonPrintable = text.replace(/[\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
-      if (text.length === 0) return undefined;
+      // eslint-disable-next-line no-control-regex -- intentional: strip printable chars to measure non-printable ratio
+      const nonPrintable = text.replace(/[\u0009\u000A\u000D\u0020-\u007E\u00A0-\uFFFF]/g, "");
+      if (text.length === 0) {
+        return undefined;
+      }
       if (nonPrintable.length / text.length < 0.05) {
         return text;
       }
