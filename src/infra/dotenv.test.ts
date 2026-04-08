@@ -620,6 +620,7 @@ describe("workspace .env blocklist completeness", () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         const runtimeControlKeys = [
           "OPENCLAW_UPDATE_PACKAGE_SPEC",
+          "OPENCLAW_GATEWAY_PORT",
           "OPENCLAW_GATEWAY_URL",
           "OPENCLAW_CLAWHUB_URL",
           "CLAWHUB_URL",
