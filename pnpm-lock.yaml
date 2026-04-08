@@ -808,8 +808,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/model-switch: {}
-
   extensions/moonshot:
     devDependencies:
       '@openclaw/plugin-sdk':
