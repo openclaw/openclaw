@@ -284,6 +284,18 @@ async function saveSessionStoreUnlocked(
     const shouldWarnOnly = maintenance.mode === "warn";
     const beforeCount = Object.keys(store).length;
 
+    // Collect directories from all sessions *before* prune/cap so that
+    // directories belonging to about-to-be-removed entries are still included
+    // in the archive cleanup scan (fixes leaked archives for pruned sessions
+    // with legacy external paths).
+    const allSessionDirs = new Set<string>();
+    for (const entry of Object.values(store)) {
+      const sf = entry?.sessionFile?.trim();
+      if (sf) {
+        allSessionDirs.add(path.dirname(path.resolve(sf)));
+      }
+    }
+
     if (shouldWarnOnly) {
       const activeSessionKey = opts?.activeSessionKey?.trim();
       if (activeSessionKey) {
@@ -333,7 +345,7 @@ async function saveSessionStoreUnlocked(
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
       });
-      const archivedDirs = new Set<string>();
+      const archivedDirs = new Set<string>(allSessionDirs);
       const referencedSessionIds = new Set(
         Object.values(store)
           .map((entry) => entry?.sessionId)
@@ -349,20 +361,7 @@ async function saveSessionStoreUnlocked(
       for (const archivedDir of archivedForDeletedSessions) {
         archivedDirs.add(archivedDir);
       }
-      // Also include parent directories of active session transcript files so
-      // that compaction archives for sessions with legacy absolute paths
-      // (outside the store directory) are cleaned up.
-      for (const entry of Object.values(store)) {
-        const sf = entry?.sessionFile?.trim();
-        if (sf) {
-          archivedDirs.add(path.dirname(path.resolve(sf)));
-        }
-      }
-      if (
-        archivedDirs.size > 0 ||
-        maintenance.resetArchiveRetentionMs != null ||
-        maintenance.compactionArchiveRetentionMs != null
-      ) {
+      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
         const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
         const targetDirs =
           archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
@@ -376,13 +375,6 @@ async function saveSessionStoreUnlocked(
             directories: targetDirs,
             olderThanMs: maintenance.resetArchiveRetentionMs,
             reason: "reset",
-          });
-        }
-        if (maintenance.compactionArchiveRetentionMs != null) {
-          await cleanupArchivedSessionTranscripts({
-            directories: targetDirs,
-            olderThanMs: maintenance.compactionArchiveRetentionMs,
-            reason: "compaction",
           });
         }
       }
@@ -405,6 +397,22 @@ async function saveSessionStoreUnlocked(
         pruned,
         capped,
         diskBudget,
+      });
+    }
+
+    // Compaction archive cleanup runs regardless of mode — warn mode skips
+    // prune/cap but still needs to sweep expired .compaction.* files.
+    if (maintenance.compactionArchiveRetentionMs != null) {
+      const compactionDirs = new Set<string>(allSessionDirs);
+      // In enforce mode the store may have shrunk, but allSessionDirs was
+      // captured before pruning so it already covers removed entries.
+      // Also include the store directory itself as a fallback.
+      compactionDirs.add(path.dirname(path.resolve(storePath)));
+      const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+      await cleanupArchivedSessionTranscripts({
+        directories: [...compactionDirs],
+        olderThanMs: maintenance.compactionArchiveRetentionMs,
+        reason: "compaction",
       });
     }
   }
