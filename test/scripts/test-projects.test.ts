@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
@@ -194,10 +194,13 @@ describe("scripts/test-projects changed-target routing", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
-  it("splits untargeted runs into fixed shard configs", () => {
+  beforeEach(() => {
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     delete process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
+  });
 
+  it("splits untargeted runs into fixed shard configs", () => {
     expect(buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config)).toEqual([
       "vitest.full-core-unit-fast.config.ts",
       "vitest.full-core-unit-src.config.ts",

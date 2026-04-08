@@ -2,12 +2,53 @@ import fs from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-
-type StaticModule = typeof import("./models-config.providers.static.js");
+import { afterAll, describe, expect, it } from "vitest";
+import type { BundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import {
+  loadBundledProviderCatalogExportMap,
+  resolveBundledProviderCatalogEntries,
+} from "./models-config.providers.static.js";
 
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), "openclaw-provider-catalogs-"));
 const fixtureExtensionsDir = path.join(fixtureRoot, "dist-runtime", "extensions");
+const fixtureDeps = {
+  listBundledPluginMetadata: (_params?: {
+    rootDir?: string;
+    includeChannelConfigs?: boolean;
+    includeSyntheticChannelConfigs?: boolean;
+  }): BundledPluginMetadata[] => [
+    {
+      dirName: "openrouter",
+      idHint: "openrouter",
+      source: { source: "src/index.ts", built: "dist/index.js" },
+      publicSurfaceArtifacts: ["provider-catalog.js"],
+      manifest: { id: "openrouter", configSchema: {}, providers: ["openrouter"] },
+    },
+    {
+      dirName: "volcengine",
+      idHint: "volcengine",
+      source: { source: "src/index.ts", built: "dist/index.js" },
+      publicSurfaceArtifacts: ["provider-catalog.js"],
+      manifest: { id: "volcengine", configSchema: {}, providers: ["volcengine", "byteplus"] },
+    },
+    {
+      dirName: "ignored",
+      idHint: "ignored",
+      source: { source: "src/index.ts", built: "dist/index.js" },
+      publicSurfaceArtifacts: ["api.js"],
+      manifest: { id: "ignored", configSchema: {}, providers: [] },
+    },
+  ],
+  resolveBundledPluginPublicSurfacePath: ({
+    rootDir,
+    dirName,
+    artifactBasename,
+  }: {
+    rootDir: string;
+    dirName: string;
+    artifactBasename: string;
+  }) => path.join(rootDir, "dist-runtime", "extensions", dirName, artifactBasename),
+};
 
 function writeFixtureCatalog(dirName: string, exportNames: string[]) {
   const pluginDir = path.join(fixtureExtensionsDir, dirName);
@@ -24,50 +65,16 @@ function writeFixtureCatalog(dirName: string, exportNames: string[]) {
 writeFixtureCatalog("openrouter", ["buildOpenrouterProvider"]);
 writeFixtureCatalog("volcengine", ["buildDoubaoProvider", "buildDoubaoCodingProvider"]);
 
-let staticModule: StaticModule;
-
-beforeAll(async () => {
-  vi.resetModules();
-  vi.doMock("../plugins/bundled-plugin-metadata.js", () => ({
-    listBundledPluginMetadata: (_params: { rootDir: string }) => [
-      {
-        dirName: "openrouter",
-        publicSurfaceArtifacts: ["provider-catalog.js"],
-        manifest: { id: "openrouter", providers: ["openrouter"] },
-      },
-      {
-        dirName: "volcengine",
-        publicSurfaceArtifacts: ["provider-catalog.js"],
-        manifest: { id: "volcengine", providers: ["volcengine", "byteplus"] },
-      },
-      {
-        dirName: "ignored",
-        publicSurfaceArtifacts: ["api.js"],
-        manifest: { id: "ignored", providers: [] },
-      },
-    ],
-    resolveBundledPluginPublicSurfacePath: ({
-      rootDir,
-      dirName,
-      artifactBasename,
-    }: {
-      rootDir: string;
-      dirName: string;
-      artifactBasename: string;
-    }) => path.join(rootDir, "dist-runtime", "extensions", dirName, artifactBasename),
-  }));
-  staticModule = await import("./models-config.providers.static.js");
-});
-
 afterAll(() => {
-  vi.doUnmock("../plugins/bundled-plugin-metadata.js");
-  vi.resetModules();
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 describe("models-config bundled provider catalogs", () => {
   it("detects provider catalogs from plugin folders via metadata artifacts", () => {
-    const entries = staticModule.resolveBundledProviderCatalogEntries({ rootDir: fixtureRoot });
+    const entries = resolveBundledProviderCatalogEntries({
+      rootDir: fixtureRoot,
+      deps: fixtureDeps,
+    });
     expect(entries.map((entry) => entry.dirName)).toEqual(["openrouter", "volcengine"]);
     expect(entries.find((entry) => entry.dirName === "volcengine")).toMatchObject({
       dirName: "volcengine",
@@ -76,8 +83,9 @@ describe("models-config bundled provider catalogs", () => {
   });
 
   it("loads provider catalog exports from detected plugin folders", async () => {
-    const exports = await staticModule.loadBundledProviderCatalogExportMap({
+    const exports = await loadBundledProviderCatalogExportMap({
       rootDir: fixtureRoot,
+      deps: fixtureDeps,
     });
     expect(exports.buildOpenrouterProvider).toBeTypeOf("function");
     expect(exports.buildDoubaoProvider).toBeTypeOf("function");
