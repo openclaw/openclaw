@@ -479,8 +479,28 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   // `launchctl kickstart` nor KeepAlive can revive it — `openclaw gateway
   // restart` would find a dead service.  Disable the service first so that
   // KeepAlive / RunAtLoad do not immediately relaunch it.  (#63128)
-  await execLaunchctl(["disable", serviceTarget]);
-  await execLaunchctl(["bootstrap", domain, plistPath]);
+  const disable = await execLaunchctl(["disable", serviceTarget]);
+  if (disable.code !== 0) {
+    const detail = (disable.stderr || disable.stdout).trim();
+    stdout.write(
+      `${formatLine("Warning", `launchctl disable failed (KeepAlive may restart the service): ${detail}`)}\n`,
+    );
+  }
+  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  if (boot.code !== 0) {
+    const detail = (boot.stderr || boot.stdout).trim();
+    const normalized = normalizeLowercaseStringOrEmpty(detail);
+    // exit 130 / "already exists in domain" means the service is still
+    // registered — that is fine, we just wanted it to stay loaded.
+    const alreadyLoaded = boot.code === 130 || normalized.includes("already exists in domain");
+    if (!alreadyLoaded) {
+      stdout.write(
+        `${formatLine("Warning", `launchctl bootstrap failed — service is unregistered, not just dormant: ${detail}`)}\n`,
+      );
+      stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
+      return;
+    }
+  }
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 

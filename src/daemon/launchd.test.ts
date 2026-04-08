@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -22,6 +23,8 @@ const state = vi.hoisted(() => ({
   bootstrapCode: 1,
   kickstartError: "",
   kickstartFailuresRemaining: 0,
+  disableError: "",
+  disableCode: 0,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -79,6 +82,9 @@ vi.mock("./exec-file.js", () => ({
         return { stdout: "", stderr: "Could not find service", code: 113 };
       }
       return { stdout: state.printOutput, stderr: "", code: 0 };
+    }
+    if (call[0] === "disable" && state.disableError) {
+      return { stdout: "", stderr: state.disableError, code: state.disableCode };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
@@ -162,6 +168,8 @@ beforeEach(() => {
   state.bootstrapCode = 1;
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
+  state.disableError = "";
+  state.disableCode = 0;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -617,5 +625,144 @@ describe("resolveLaunchAgentPlistPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
+  });
+});
+
+describe("stopLaunchAgent", () => {
+  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+    return {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+  }
+
+  function resolveServiceTarget() {
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    return { domain, label: "ai.openclaw.gateway", serviceTarget: `${domain}/ai.openclaw.gateway` };
+  }
+
+  it("executes bootout, disable, and bootstrap in order on success", async () => {
+    const env = createDefaultLaunchdEnv();
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    const { domain, serviceTarget } = resolveServiceTarget();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+
+    const bootoutIdx = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootout" && c[1] === serviceTarget,
+    );
+    const disableIdx = state.launchctlCalls.findIndex(
+      (c) => c[0] === "disable" && c[1] === serviceTarget,
+    );
+    const bootstrapIdx = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+    );
+
+    expect(bootoutIdx).toBeGreaterThanOrEqual(0);
+    expect(disableIdx).toBeGreaterThan(bootoutIdx);
+    expect(bootstrapIdx).toBeGreaterThan(disableIdx);
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("Warning");
+    expect(output).not.toContain("degraded");
+  });
+
+  it("warns when disable fails but still attempts bootstrap", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disableError = "Operation not permitted";
+    state.disableCode = 1;
+
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    expect(output).toContain("launchctl disable failed");
+    expect(output).toContain("KeepAlive may restart");
+    expect(state.launchctlCalls.some((c) => c[0] === "bootstrap")).toBe(true);
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
+  });
+
+  it("reports degraded stop when bootstrap fails with a genuine error", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootstrapError = "Could not find specified service";
+    state.bootstrapCode = 1;
+
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    expect(output).toContain("launchctl bootstrap failed");
+    expect(output).toContain("unregistered, not just dormant");
+    expect(output).toContain("Stopped LaunchAgent (degraded)");
+  });
+
+  it("treats bootstrap 'already exists in domain' as success", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 5;
+
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
+    expect(output).not.toContain("Warning");
+  });
+
+  it("treats bootstrap exit code 130 as success", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootstrapError = "Service already loaded";
+    state.bootstrapCode = 130;
+
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
+  });
+
+  it("warns on both disable and bootstrap failure", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disableError = "Permission denied";
+    state.disableCode = 1;
+    state.bootstrapError = "Could not find specified service";
+    state.bootstrapCode = 1;
+
+    const out = new PassThrough();
+    let output = "";
+    out.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout: out });
+
+    expect(output).toContain("launchctl disable failed");
+    expect(output).toContain("launchctl bootstrap failed");
+    expect(output).toContain("Stopped LaunchAgent (degraded)");
   });
 });
