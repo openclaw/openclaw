@@ -48,7 +48,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       JSON.stringify(
         {
           name: "@openclaw/feishu",
-          version: "2026.4.8",
+          version: "2026.4.9",
           dependencies: {
             "@larksuiteoapi/node-sdk": "^1.60.0",
           },
@@ -120,7 +120,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       JSON.stringify(
         {
           name: "@openclaw/amazon-bedrock-provider",
-          version: "2026.4.8",
+          version: "2026.4.9",
           dependencies: {
             "@aws-sdk/client-bedrock": "3.1024.0",
           },

@@ -18,6 +18,11 @@ execution:
   handler: memory-recall
   summary: Verify the agent can store a fact, switch topics, then recall the fact accurately later.
   config:
-    rememberPrompt: "Please remember this fact for later: the QA canary code is ALPHA-7."
-    recallPrompt: "What was the QA canary code I asked you to remember earlier?"
+    resetDurableMemory: true
+    rememberPrompt: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored."
+    rememberAckAny:
+      - remembered alpha-7
+    recallPrompt: "What was the QA canary code I asked you to remember earlier? Reply with the code only, plus at most one short sentence."
+    recallExpectedAny:
+      - alpha-7
 ```

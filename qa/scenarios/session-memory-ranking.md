@@ -20,4 +20,10 @@ execution:
   kind: custom
   handler: session-memory-ranking
   summary: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
+  config:
+    staleFact: ORBIT-9
+    currentFact: ORBIT-10
+    transcriptQuestion: "What is the current Project Nebula codename?"
+    transcriptAnswer: "The current Project Nebula codename is ORBIT-10."
+    prompt: "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact."
 ```

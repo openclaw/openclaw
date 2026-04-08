@@ -27,4 +27,9 @@ execution:
       - qa
       - mission
       - testing
+      - repo
+      - worked
+      - failed
+      - blocked
+      - chat flows
 ```
