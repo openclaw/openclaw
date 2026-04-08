@@ -580,6 +580,11 @@ export async function runExecProcess(opts: {
   };
   addSession(session);
 
+  let updateSuppressed = false;
+  const disableUpdates = () => {
+    updateSuppressed = true;
+  };
+
   const emitUpdate = () => {
     if (!opts.onUpdate) {
       return;
