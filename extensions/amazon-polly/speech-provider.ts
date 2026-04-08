@@ -24,6 +24,11 @@ type PollyProviderConfig = {
   sampleRate?: string;
 };
 
+/** Default sample rate per engine. Generative/long-form support 24000; standard/neural require ≤22050. */
+function defaultSampleRate(engine: string): string {
+  return engine === "generative" || engine === "long-form" ? "24000" : "22050";
+}
+
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -171,11 +176,7 @@ export function buildPollySpeechProvider(): SpeechProviderPlugin {
       const isVoiceNote = req.target === "voice-note";
       const outputFormat = isVoiceNote ? "ogg_vorbis" : "mp3";
 
-      // Polly generative/long-form engines support 24000 Hz;
-      // standard/neural only accept 8000, 16000, or 22050 Hz.
-      const effectiveSampleRate =
-        config.sampleRate ??
-        (engine === "generative" || engine === "long-form" ? "24000" : "22050");
+      const effectiveSampleRate = config.sampleRate ?? defaultSampleRate(engine);
 
       const audioBuffer = await pollySynthesize({
         text: req.text,

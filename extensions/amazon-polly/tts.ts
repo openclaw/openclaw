@@ -30,8 +30,16 @@ export type PollySynthesizeParams = {
   timeoutMs: number;
 };
 
-function createPollyClient(region: string): PollyClient {
-  return new PollyClient({ region });
+/** Lazy-initialized client cache keyed by region. */
+const clients = new Map<string, PollyClient>();
+
+function getClient(region: string): PollyClient {
+  let client = clients.get(region);
+  if (!client) {
+    client = new PollyClient({ region });
+    clients.set(region, client);
+  }
+  return client;
 }
 
 /**
@@ -43,7 +51,7 @@ export async function pollySynthesize(params: PollySynthesizeParams): Promise<Bu
   const { text, voiceId, engine, outputFormat, sampleRate, languageCode, region, timeoutMs } =
     params;
 
-  const client = createPollyClient(region);
+  const client = getClient(region);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -81,7 +89,6 @@ export async function pollySynthesize(params: PollySynthesizeParams): Promise<Bu
     return audioBuffer;
   } finally {
     clearTimeout(timeout);
-    client.destroy();
   }
 }
 
@@ -95,28 +102,24 @@ export async function pollyListVoices(params: {
   languageCode?: string;
   engine?: string;
 }): Promise<PollyVoiceEntry[]> {
-  const client = createPollyClient(params.region);
+  const client = getClient(params.region);
 
-  try {
-    const command = new DescribeVoicesCommand({
-      ...(params.languageCode ? { LanguageCode: params.languageCode as LanguageCode } : {}),
-      ...(params.engine ? { Engine: params.engine as Engine } : {}),
-    });
+  const command = new DescribeVoicesCommand({
+    ...(params.languageCode ? { LanguageCode: params.languageCode as LanguageCode } : {}),
+    ...(params.engine ? { Engine: params.engine as Engine } : {}),
+  });
 
-    const response = await client.send(command);
-    const voices = response.Voices ?? [];
+  const response = await client.send(command);
+  const voices = response.Voices ?? [];
 
-    return voices
-      .map((voice) => ({
-        id: voice.Id ?? "",
-        name: voice.Name ?? voice.Id ?? "",
-        gender: voice.Gender,
-        languageCode: voice.LanguageCode,
-        languageName: voice.LanguageName,
-        supportedEngines: (voice.SupportedEngines ?? []) as string[],
-      }))
-      .filter((voice) => voice.id.length > 0);
-  } finally {
-    client.destroy();
-  }
+  return voices
+    .map((voice) => ({
+      id: voice.Id ?? "",
+      name: voice.Name ?? voice.Id ?? "",
+      gender: voice.Gender,
+      languageCode: voice.LanguageCode,
+      languageName: voice.LanguageName,
+      supportedEngines: (voice.SupportedEngines ?? []) as string[],
+    }))
+    .filter((voice) => voice.id.length > 0);
 }

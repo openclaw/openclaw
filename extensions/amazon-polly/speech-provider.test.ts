@@ -91,7 +91,7 @@ describe("buildPollySpeechProvider", () => {
       target: "voice-note",
     });
 
-    expect(result.outputFormat).toBe("ogg_vorbis");
+    expect(result.outputFormat).toBe("ogg_opus");
     expect(result.fileExtension).toBe(".ogg");
     expect(result.voiceCompatible).toBe(true);
     // Verify ffmpeg was called with opus conversion args
