@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   isAbortError,
-  isLikelyWhatsAppCryptoError,
   isTransientNetworkError,
   isTransientSqliteError,
   isTransientUnhandledRejectionError,
@@ -255,28 +254,6 @@ describe("isTransientSqliteError", () => {
     const error = new Error("database is locked");
 
     expect(isTransientSqliteError(error)).toBe(false);
-  });
-});
-
-describe("isLikelyWhatsAppCryptoError", () => {
-  it("returns true for Baileys decrypt auth failures", () => {
-    const error = new Error("Unsupported state or unable to authenticate data");
-    error.stack = [
-      "Error: Unsupported state or unable to authenticate data",
-      "    at aesDecryptGCM (file:///x/@whiskeysockets/baileys/src/Utils/crypto.ts:71:55)",
-      "    at decrypt (file:///x/@whiskeysockets/baileys/src/Utils/noise-handler.ts:49:18)",
-    ].join("\n");
-
-    expect(isLikelyWhatsAppCryptoError(error)).toBe(true);
-  });
-
-  it("returns true for bad mac string signatures", () => {
-    expect(isLikelyWhatsAppCryptoError("bad mac in aesDecryptGCM (baileys)")).toBe(true);
-  });
-
-  it("returns false for unrelated authentication errors", () => {
-    expect(isLikelyWhatsAppCryptoError(new Error("unable to authenticate user"))).toBe(false);
-    expect(isLikelyWhatsAppCryptoError("bad mac without provider hint")).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import { isUnhandledRejectionHandled } from "../../../src/infra/unhandled-rejections.js";
 import {
   createWebInboundDeliverySpies,
   createMockWebListener,
@@ -186,6 +187,50 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("routes WhatsApp crypto rejections through the extension-owned handler", async () => {
+    const sleep = vi.fn(async () => {});
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+    });
+
+    await Promise.resolve();
+    expect(scripted.getListenerCount()).toBe(1);
+
+    const err = new Error("Unsupported state or unable to authenticate data");
+    err.stack = [
+      "Error: Unsupported state or unable to authenticate data",
+      "    at aesDecryptGCM (file:///x/@whiskeysockets/baileys/src/Utils/crypto.ts:71:55)",
+      "    at decrypt (file:///x/@whiskeysockets/baileys/src/Utils/noise-handler.ts:49:18)",
+    ].join("\n");
+
+    expect(isUnhandledRejectionHandled(err)).toBe(true);
+    expect(scripted.listeners[0]?.signalClose).toHaveBeenCalledWith({
+      status: 499,
+      isLoggedOut: false,
+      error: err,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    controller.abort();
+    scripted.resolveClose(scripted.getListenerCount() - 1, {
+      status: 499,
+      isLoggedOut: false,
+      error: "aborted",
+    });
+    await run;
+
+    expect(isUnhandledRejectionHandled(err)).toBe(false);
   });
 
   it("gives a reconnected listener a fresh watchdog window", async () => {
