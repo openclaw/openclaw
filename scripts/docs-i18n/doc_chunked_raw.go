@@ -96,7 +96,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		return "", fmt.Errorf("%s: %w", chunkID, err)
 	}
 	mid := len(blocks) / 2
-	log.Printf("docs-i18n: chunk split %s blocks=%d err=%v", chunkID, len(blocks), err)
+	logDocChunkSplit(chunkID, len(blocks), err)
 	left, err := translateDocBlockGroup(ctx, translator, chunkID+"a", blocks[:mid], srcLang, tgtLang)
 	if err != nil {
 		return "", err
@@ -110,11 +110,16 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 
 func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source, srcLang, tgtLang string) (string, error) {
 	sourceStructure := summarizeDocChunkStructure(source)
-	if sourceStructure.fenceCount != 0 || len(sourceStructure.tagCounts) != 0 {
+	if sourceStructure.fenceCount != 0 {
 		return "", fmt.Errorf("%s: raw leaf fallback not applicable", chunkID)
 	}
 	normalizedSource, commonIndent := stripCommonIndent(source)
-	translated, err := translator.Translate(ctx, normalizedSource, srcLang, tgtLang)
+	maskedSource, placeholders := maskDocComponentTags(normalizedSource)
+	translated, err := translator.Translate(ctx, maskedSource, srcLang, tgtLang)
+	if err != nil {
+		return "", err
+	}
+	translated, err = restoreDocComponentTags(translated, placeholders)
 	if err != nil {
 		return "", err
 	}
@@ -230,6 +235,34 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 		return translated
 	}
 	return body
+}
+
+func maskDocComponentTags(text string) (string, []string) {
+	placeholders := make([]string, 0, 4)
+	masked := docsComponentTagRE.ReplaceAllStringFunc(text, func(match string) string {
+		placeholder := fmt.Sprintf("__OC_DOC_TAG_%03d__", len(placeholders))
+		placeholders = append(placeholders, match)
+		return placeholder
+	})
+	return masked, placeholders
+}
+
+func restoreDocComponentTags(text string, placeholders []string) (string, error) {
+	restored := text
+	for index, original := range placeholders {
+		placeholder := fmt.Sprintf("__OC_DOC_TAG_%03d__", index)
+		if !strings.Contains(restored, placeholder) {
+			return "", fmt.Errorf("component tag placeholder missing: %s", placeholder)
+		}
+		restored = strings.ReplaceAll(restored, placeholder, original)
+	}
+	return restored, nil
+}
+
+func logDocChunkSplit(chunkID string, blockCount int, err error) {
+	if docsI18nVerboseLogs() || blockCount >= 16 {
+		log.Printf("docs-i18n: chunk split %s blocks=%d err=%v", chunkID, blockCount, err)
+	}
 }
 
 func summarizeDocChunkStructure(text string) docChunkStructure {

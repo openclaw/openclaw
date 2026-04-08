@@ -139,21 +139,29 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 		return nil
 	}
 	if summary, ok := data["summary"].(string); ok {
-		log.Printf("docs-i18n: frontmatter start %s field=summary bytes=%d", relPath, len(summary))
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter start %s field=summary bytes=%d", relPath, len(summary))
+		}
 		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:summary", summary, srcLang, tgtLang)
 		if err != nil {
 			return err
 		}
-		log.Printf("docs-i18n: frontmatter done %s field=summary out_bytes=%d", relPath, len(translated))
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter done %s field=summary out_bytes=%d", relPath, len(translated))
+		}
 		data["summary"] = translated
 	}
 	if title, ok := data["title"].(string); ok {
-		log.Printf("docs-i18n: frontmatter start %s field=title bytes=%d", relPath, len(title))
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter start %s field=title bytes=%d", relPath, len(title))
+		}
 		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:title", title, srcLang, tgtLang)
 		if err != nil {
 			return err
 		}
-		log.Printf("docs-i18n: frontmatter done %s field=title out_bytes=%d", relPath, len(translated))
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter done %s field=title out_bytes=%d", relPath, len(translated))
+		}
 		data["title"] = translated
 	}
 	if readWhen, ok := data["read_when"].([]any); ok {
@@ -164,17 +172,34 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 				translated = append(translated, item)
 				continue
 			}
-			log.Printf("docs-i18n: frontmatter start %s field=read_when[%d] bytes=%d", relPath, idx, len(textValue))
+			if docsI18nVerboseLogs() {
+				log.Printf("docs-i18n: frontmatter start %s field=read_when[%d] bytes=%d", relPath, idx, len(textValue))
+			}
 			value, err := translateSnippet(ctx, translator, tm, fmt.Sprintf("%s:frontmatter:read_when:%d", relPath, idx), textValue, srcLang, tgtLang)
 			if err != nil {
 				return err
 			}
-			log.Printf("docs-i18n: frontmatter done %s field=read_when[%d] out_bytes=%d", relPath, idx, len(value))
+			if docsI18nVerboseLogs() {
+				log.Printf("docs-i18n: frontmatter done %s field=read_when[%d] out_bytes=%d", relPath, idx, len(value))
+			}
 			translated = append(translated, value)
 		}
 		data["read_when"] = translated
 	}
 	return nil
+}
+
+func docsI18nVerboseLogs() bool {
+	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_VERBOSE_LOGS"))
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on", "debug", "verbose":
+		return true
+	default:
+		return false
+	}
 }
 
 func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {

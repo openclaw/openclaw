@@ -150,6 +150,21 @@ func (docWrappedLeafTranslator) TranslateRaw(_ context.Context, text, _, _ strin
 
 func (docWrappedLeafTranslator) Close() {}
 
+type docComponentLeafFallbackTranslator struct{}
+
+func (docComponentLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return strings.ReplaceAll(text, "Yes.", "是的。"), nil
+}
+
+func (docComponentLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "Can I use Claude Max subscription without an API key?") {
+		return strings.ReplaceAll(text, "Yes.\n", "Yes.\n</Accordion>\n"), nil
+	}
+	return text, nil
+}
+
+func (docComponentLeafFallbackTranslator) Close() {}
+
 type docPromptBudgetTranslator struct {
 	rawInputs []string
 }
@@ -383,6 +398,32 @@ func TestTranslateDocBodyChunkedUnwrapsTaggedLeafProtocolLeakage(t *testing.T) {
 	}
 	if !strings.Contains(translated, "# Fly.io 部署") {
 		t.Fatalf("expected unwrapped body translation:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedFallsBackForComponentLeafValidationFailure(t *testing.T) {
+	body := "  <Accordion title=\"Can I use Claude Max subscription without an API key?\">\n    Yes.\n\n"
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	translated, err := translateDocBodyChunked(
+		context.Background(),
+		docComponentLeafFallbackTranslator{},
+		"help/faq.md",
+		body,
+		"en",
+		"zh-CN",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if strings.Contains(translated, "</Accordion>") {
+		t.Fatalf("expected component leaf fallback to avoid hallucinated closing tag:\n%s", translated)
+	}
+	if !strings.Contains(translated, "是的。") {
+		t.Fatalf("expected body text to be translated after component leaf fallback:\n%s", translated)
+	}
+	if !strings.Contains(translated, "<Accordion title=\"Can I use Claude Max subscription without an API key?\">") {
+		t.Fatalf("expected Accordion opening tag to be preserved:\n%s", translated)
 	}
 }
 
