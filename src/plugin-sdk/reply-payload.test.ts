@@ -7,12 +7,54 @@ import {
   hasOutboundReplyContent,
   hasOutboundText,
   isNumericTargetId,
+  normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
+
+describe("normalizeOutboundReplyPayload", () => {
+  it("extracts mediaUrl when present", () => {
+    expect(normalizeOutboundReplyPayload({ mediaUrl: "https://example.com/a.png" })).toMatchObject({
+      mediaUrl: "https://example.com/a.png",
+    });
+  });
+
+  it("falls back to filePath when mediaUrl is absent", () => {
+    expect(normalizeOutboundReplyPayload({ filePath: "/tmp/photo.jpg" })).toMatchObject({
+      mediaUrl: "/tmp/photo.jpg",
+    });
+  });
+
+  it("falls back to path when mediaUrl and filePath are absent", () => {
+    expect(normalizeOutboundReplyPayload({ path: "/tmp/doc.pdf" })).toMatchObject({
+      mediaUrl: "/tmp/doc.pdf",
+    });
+  });
+
+  it("falls back to media when mediaUrl, filePath, and path are absent", () => {
+    expect(
+      normalizeOutboundReplyPayload({ media: "https://cdn.example.com/img.png" }),
+    ).toMatchObject({ mediaUrl: "https://cdn.example.com/img.png" });
+  });
+
+  it("prefers mediaUrl over filePath/path/media", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        mediaUrl: "https://primary.com/a.png",
+        filePath: "/tmp/fallback.jpg",
+        path: "/tmp/other.jpg",
+        media: "https://cdn.example.com/other.png",
+      }),
+    ).toMatchObject({ mediaUrl: "https://primary.com/a.png" });
+  });
+
+  it("returns undefined mediaUrl when no media fields are present", () => {
+    expect(normalizeOutboundReplyPayload({ text: "hello" }).mediaUrl).toBeUndefined();
+  });
+});
 
 describe("sendPayloadWithChunkedTextAndMedia", () => {
   it("returns empty result when payload has no text and no media", async () => {

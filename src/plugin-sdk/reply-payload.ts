@@ -37,7 +37,16 @@ export function normalizeOutboundReplyPayload(
         (entry): entry is string => typeof entry === "string" && entry.length > 0,
       )
     : undefined;
-  const mediaUrl = typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined;
+  const mediaUrl =
+    typeof payload.mediaUrl === "string"
+      ? payload.mediaUrl
+      : typeof payload.filePath === "string"
+        ? payload.filePath
+        : typeof payload.path === "string"
+          ? payload.path
+          : typeof payload.media === "string"
+            ? payload.media
+            : undefined;
   const replyToId = typeof payload.replyToId === "string" ? payload.replyToId : undefined;
   return {
     text,
