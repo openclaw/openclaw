@@ -167,6 +167,7 @@ export async function ensureSandboxBrowser(params: {
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
       enableNoVnc: params.cfg.browser.enableNoVnc,
+      autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
       cdpSourceRange,
     },
     securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
