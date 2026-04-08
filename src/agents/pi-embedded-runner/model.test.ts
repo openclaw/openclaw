@@ -918,6 +918,59 @@ describe("resolveModel", () => {
     });
   });
 
+  it("passes configured workspaceDir to runtime preference hooks", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+      },
+    });
+
+    const shouldPreferRuntimeResolvedModel = vi.fn(
+      (params: { workspaceDir?: string; context: { agentDir?: string } }) =>
+        params.workspaceDir === "/tmp/workspace" && params.context.agentDir === "/tmp/agent-state",
+    );
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      shouldPreferProviderRuntimeResolvedModel: shouldPreferRuntimeResolvedModel,
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent-state", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
+      runtimeHooks,
+    });
+
+    expect(shouldPreferRuntimeResolvedModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          agentDir: "/tmp/agent-state",
+          workspaceDir: "/tmp/workspace",
+        }),
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
   it("keeps exact discovered metadata for other openai-codex models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
