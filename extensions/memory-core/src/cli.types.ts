@@ -29,4 +29,11 @@ export type MemoryPromoteExplainOptions = MemoryCommandOptions & {
 
 export type MemoryRemHarnessOptions = MemoryCommandOptions & {
   includePromoted?: boolean;
+  path?: string;
+  grounded?: boolean;
+};
+
+export type MemoryRemBackfillOptions = MemoryCommandOptions & {
+  path?: string;
+  rollback?: boolean;
 };
