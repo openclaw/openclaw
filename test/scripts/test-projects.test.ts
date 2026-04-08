@@ -175,13 +175,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes the gateway e2e fixture to the e2e lane", () => {
-    const plans = buildVitestRunPlans(["src/gateway/gateway.test.ts"], process.cwd());
+  it.each([
+    "src/gateway/gateway.test.ts",
+    "src/gateway/server.startup-matrix-migration.integration.test.ts",
+    "src/gateway/sessions-history-http.test.ts",
+  ])("routes gateway integration fixture %s to the e2e lane", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
 
     expect(plans).toEqual([
       {
         config: "vitest.e2e.config.ts",
-        forwardedArgs: ["src/gateway/gateway.test.ts"],
+        forwardedArgs: [target],
         includePatterns: null,
         watchMode: false,
       },
