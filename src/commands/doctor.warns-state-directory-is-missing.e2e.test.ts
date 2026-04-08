@@ -15,7 +15,7 @@ let doctorCommand: typeof import("./doctor.js").doctorCommand;
 describe("doctor command", () => {
   beforeEach(async () => {
     doctorCommand = await loadDoctorCommandForTest({
-      unmockModules: ["./doctor-state-integrity.js"],
+      unmockModules: ["../flows/doctor-health-contributions.js", "./doctor-state-integrity.js"],
     });
   });
 
@@ -101,7 +101,7 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const warned = note.mock.calls.some(
+    const warned = terminalNoteMock.mock.calls.some(
       ([message, title]) =>
         title === "Codex OAuth" && String(message).includes("models.providers.openai-codex"),
     );
