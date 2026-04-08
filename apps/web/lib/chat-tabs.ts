@@ -53,6 +53,7 @@ export function bindParentSessionToChatTab(
   tabId: string,
   sessionId: string | null,
 ): TabState {
+  const nextSessionId = sessionId ?? undefined;
   const existingTab = sessionId
     ? state.tabs.find((tab) =>
       tab.id !== tabId &&
@@ -67,24 +68,32 @@ export function bindParentSessionToChatTab(
     const tabs = currentTab && !currentTab.pinned
       ? state.tabs.filter((tab) => tab.id !== tabId)
       : state.tabs;
+    if (tabs === state.tabs && state.activeTabId === existingTab.id) {
+      return state;
+    }
     return {
       tabs,
       activeTabId: existingTab.id,
     };
   }
 
-  return {
-    ...state,
-    tabs: state.tabs.map((tab) =>
-      tab.id === tabId
-        ? {
-            ...tab,
-            sessionId: sessionId ?? undefined,
-            sessionKey: undefined,
-          }
-        : tab,
-    ),
-  };
+  let changed = false;
+  const tabs = state.tabs.map((tab) => {
+    if (tab.id !== tabId) {
+      return tab;
+    }
+    if (tab.sessionId === nextSessionId && tab.sessionKey === undefined) {
+      return tab;
+    }
+    changed = true;
+    return {
+      ...tab,
+      sessionId: nextSessionId,
+      sessionKey: undefined,
+    };
+  });
+
+  return changed ? { ...state, tabs } : state;
 }
 
 export function updateChatTabTitle(
@@ -92,14 +101,15 @@ export function updateChatTabTitle(
   tabId: string,
   title: string,
 ): TabState {
-  return {
-    ...state,
-    tabs: state.tabs.map((tab) =>
-      tab.id === tabId && tab.title !== title
-        ? { ...tab, title }
-        : tab,
-    ),
-  };
+  let changed = false;
+  const tabs = state.tabs.map((tab) => {
+    if (tab.id !== tabId || tab.title === title) {
+      return tab;
+    }
+    changed = true;
+    return { ...tab, title };
+  });
+  return changed ? { ...state, tabs } : state;
 }
 
 export function syncParentChatTabTitles(

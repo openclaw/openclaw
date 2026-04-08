@@ -11,6 +11,7 @@ import {
   resolveChatIdentityForTab,
   syncParentChatTabTitles,
   syncSubagentChatTabTitles,
+  updateChatTabTitle,
 } from "./chat-tabs";
 
 function baseState(): TabState {
@@ -77,6 +78,18 @@ describe("chat tab helpers", () => {
     expect(next.activeTabId).toBe(existing.id);
   });
 
+  it("reuses tab state when rebinding the same parent session", () => {
+    const parent = createParentChatTab({ sessionId: "parent-1", title: "Parent" });
+    const state = {
+      tabs: [HOME_TAB, parent],
+      activeTabId: parent.id,
+    } satisfies TabState;
+
+    const next = bindParentSessionToChatTab(state, parent.id, "parent-1");
+
+    expect(next).toBe(state);
+  });
+
   it("closes a deleted parent session and all of its subagent tabs (prevents orphan child tabs)", () => {
     const parent = createParentChatTab({ sessionId: "parent-1", title: "Parent" });
     const child = createSubagentChatTab({
@@ -116,6 +129,18 @@ describe("chat tab helpers", () => {
 
     expect(fullySynced.tabs.find((tab) => tab.id === parent.id)?.title).toBe("Real title");
     expect(fullySynced.tabs.find((tab) => tab.id === child.id)?.title).toBe("Research branch");
+  });
+
+  it("reuses tab state when a chat title is already up to date", () => {
+    const parent = createParentChatTab({ sessionId: "parent-1", title: "Real title" });
+    const state = {
+      tabs: [HOME_TAB, parent],
+      activeTabId: parent.id,
+    } satisfies TabState;
+
+    const next = updateChatTabTitle(state, parent.id, "Real title");
+
+    expect(next).toBe(state);
   });
 
   it("resolves chat identity for parent and subagent tabs", () => {

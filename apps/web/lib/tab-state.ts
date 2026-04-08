@@ -213,6 +213,9 @@ export function openTab(state: TabState, tab: Tab, options?: TabOpenOptions): Ta
         : undefined;
 
   if (existing) {
+    if (state.activeTabId === existing.id) {
+      return state;
+    }
     return { ...state, activeTabId: existing.id };
   }
 
@@ -287,6 +290,7 @@ export function closeAllTabs(state: TabState): TabState {
 
 export function activateTab(state: TabState, tabId: string): TabState {
   if (!state.tabs.some((t) => t.id === tabId)) return state;
+  if (state.activeTabId === tabId) return state;
   return { ...state, activeTabId: tabId };
 }
 
