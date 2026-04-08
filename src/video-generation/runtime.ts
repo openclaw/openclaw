@@ -11,6 +11,7 @@ import {
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
+import { resolveVideoGenerationSupportedDurations } from "./duration-support.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
@@ -121,6 +122,39 @@ export async function generateVideo(
         lastError = new Error(error);
         log.debug(
           `video-generation candidate skipped (audio capability): ${candidate.provider}/${candidate.model}`,
+        );
+        continue;
+      }
+    }
+
+    // Guard: skip candidates whose maxDurationSeconds hard cap is below the requested
+    // duration. Only applies when the provider uses a simple max with no explicit
+    // supported-durations list — when a list exists, runtime normalization snaps to the
+    // nearest valid value so skipping is not appropriate.
+    const requestedDuration = params.durationSeconds;
+    if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
+      const { capabilities: durCaps } = resolveVideoGenerationModeCapabilities({
+        provider,
+        inputImageCount,
+        inputVideoCount,
+      });
+      const supportedDurations = resolveVideoGenerationSupportedDurations({
+        provider,
+        model: candidate.model,
+        inputImageCount,
+        inputVideoCount,
+      });
+      const maxDuration = durCaps?.maxDurationSeconds ?? provider.capabilities.maxDurationSeconds;
+      if (
+        !supportedDurations &&
+        typeof maxDuration === "number" &&
+        requestedDuration > maxDuration
+      ) {
+        const error = `${candidate.provider}/${candidate.model} supports at most ${maxDuration}s per video, ${requestedDuration}s requested; skipping`;
+        attempts.push({ provider: candidate.provider, model: candidate.model, error });
+        lastError = new Error(error);
+        log.debug(
+          `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
         );
         continue;
       }

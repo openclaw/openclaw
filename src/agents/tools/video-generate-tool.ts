@@ -11,7 +11,6 @@ import {
   resolveVideoGenerationMode,
   resolveVideoGenerationModeCapabilities,
 } from "../../video-generation/capabilities.js";
-import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
   generateVideo,
@@ -347,22 +346,11 @@ function validateVideoGenerationCapabilities(params: {
   // The runtime guard skips per-candidate providers that lack audio support, allowing
   // fallback candidates that do support audio to run. A ToolInputError here would fire
   // against only the primary provider and prevent valid fallback-based audio requests.
-  if (
-    typeof params.durationSeconds === "number" &&
-    Number.isFinite(params.durationSeconds) &&
-    !resolveVideoGenerationSupportedDurations({
-      provider,
-      model: params.model,
-      inputImageCount: params.inputImageCount,
-      inputVideoCount: params.inputVideoCount,
-    }) &&
-    typeof caps.maxDurationSeconds === "number" &&
-    params.durationSeconds > caps.maxDurationSeconds
-  ) {
-    throw new ToolInputError(
-      `${provider.id} supports at most ${caps.maxDurationSeconds} seconds per video.`,
-    );
-  }
+  // maxDurationSeconds validation is intentionally deferred to runtime.ts (generateVideo).
+  // The runtime guard skips per-candidate providers whose hard cap is below the requested
+  // duration, allowing a fallback with a higher cap to run — same rationale as the audio
+  // check above. When providers declare an explicit supportedDurationSeconds list, runtime
+  // normalization snaps to the nearest valid value instead of skipping.
 }
 
 function formatIgnoredVideoGenerationOverride(override: VideoGenerationIgnoredOverride): string {
