@@ -1,6 +1,5 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
-import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
@@ -43,13 +42,6 @@ function assertSlackFileUrl(rawUrl: string): URL {
   return parsed;
 }
 
-function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
-  if (typeof fetchImpl !== "function") {
-    return false;
-  }
-  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
-}
-
 function createSlackMediaFetch(token: string): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
@@ -58,11 +50,6 @@ function createSlackMediaFetch(token: string): FetchLike {
     }
     const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
     const headers = new Headers(initHeaders);
-    const fetchImpl =
-      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
-        ? fetchWithRuntimeDispatcher
-        : globalThis.fetch;
-
     let requestUrl = url;
     try {
       const parsed = new URL(url);
@@ -86,7 +73,7 @@ function createSlackMediaFetch(token: string): FetchLike {
     if ((rest as { signal?: AbortSignal }).signal) {
       safeInit.signal = (rest as { signal: AbortSignal }).signal;
     }
-    return fetchImpl(requestUrl, safeInit);
+    return fetch(requestUrl, safeInit);
   };
 }
 
