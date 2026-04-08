@@ -38,7 +38,6 @@ export const discordGuildActionRuntime = {
   addRoleDiscord,
   createChannelDiscord,
   createScheduledEventDiscord,
-  resolveEventCoverImage,
   deleteChannelDiscord,
   editChannelDiscord,
   fetchChannelInfoDiscord,
@@ -320,7 +319,6 @@ export async function handleDiscordGuildAction(
         entity_type: entityType,
         channel_id: channelId,
         entity_metadata: entityType === 3 && location ? { location } : undefined,
-        image,
         privacy_level: 2,
         image,
       };
