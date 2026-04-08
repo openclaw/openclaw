@@ -631,7 +631,8 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const configs = expandToProjectConfigs ? shard.projects : [shard.config];
+    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const configs = expandShard ? shard.projects : [shard.config];
     return configs.map((config) => ({
       config,
       forwardedArgs,

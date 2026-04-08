@@ -294,10 +294,24 @@ export const pt_BR: TranslationMap = {
       promotedSuffix: "promovido",
       nextSweepPrefix: "próxima varredura",
     },
+    scene: {
+      backfill: "Preencher retroativamente",
+      reset: "Redefinir",
+      working: "Trabalhando…",
+    },
     stats: {
       shortTerm: "Curto prazo",
       signals: "Sinais",
+      promoted: "Promovido",
       phaseHits: "Acertos de fase",
+    },
+    trace: {
+      shortTerm: "Curto prazo",
+      signals: "Sinais",
+      promoted: "Promovido",
+      emptyShortTerm: "Nenhum item ativo de curto prazo.",
+      emptySignals: "Nenhum sinal ativo.",
+      emptyPromoted: "Nada promovido hoje ainda.",
     },
     diary: {
       title: "Diário dos sonhos",

@@ -114,7 +114,10 @@ export const fullSuiteVitestShards = [
       "vitest.extension-voice-call.config.ts",
       "vitest.extension-whatsapp.config.ts",
       "vitest.extension-zalo.config.ts",
-      "vitest.extensions.config.ts",
+      "vitest.extension-browser.config.ts",
+      "vitest.extension-qa.config.ts",
+      "vitest.extension-media.config.ts",
+      "vitest.extension-misc.config.ts",
     ],
   },
 ];

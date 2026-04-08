@@ -115,7 +115,8 @@ describe("runQaCharacterEval", () => {
     expect(report).toContain("reply from codex-cli/test-model");
     expect(report).toContain("Judge thinking: xhigh");
     expect(report).toContain("Fast mode: on");
-    expect(report).toContain("Duration ms:");
+    expect(report).toContain("Duration:");
+    expect(report).not.toContain("Duration ms:");
     expect(report).not.toContain("Judge Raw Reply");
   });
 
@@ -199,6 +200,92 @@ describe("runQaCharacterEval", () => {
       "high",
     ]);
     expect(runJudge.mock.calls.map(([params]) => params.judgeFastMode)).toEqual([true, false]);
+  });
+
+  it("runs candidate models with bounded concurrency while preserving result order", async () => {
+    let activeRuns = 0;
+    let maxActiveRuns = 0;
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
+      activeRuns += 1;
+      maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeRuns -= 1;
+      return makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
+      });
+    });
+    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
+      JSON.stringify({
+        rankings: [
+          { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
+          { model: "anthropic/claude-sonnet-4-6", rank: 2, score: 7, summary: "ok" },
+          { model: "moonshot/kimi-k2.5", rank: 3, score: 6, summary: "ok" },
+        ],
+      }),
+    );
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6", "moonshot/kimi-k2.5"],
+      candidateConcurrency: 2,
+      judgeModels: ["openai/gpt-5.4"],
+      runSuite,
+      runJudge,
+    });
+
+    expect(maxActiveRuns).toBe(2);
+    expect(result.runs.map((run) => run.model)).toEqual([
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "moonshot/kimi-k2.5",
+    ]);
+  });
+
+  it("defaults candidate and judge concurrency to eight", async () => {
+    let activeRuns = 0;
+    let maxActiveRuns = 0;
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
+      activeRuns += 1;
+      maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeRuns -= 1;
+      return makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
+      });
+    });
+    let activeJudges = 0;
+    let maxActiveJudges = 0;
+    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) => {
+      activeJudges += 1;
+      maxActiveJudges = Math.max(maxActiveJudges, activeJudges);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeJudges -= 1;
+      return JSON.stringify({
+        rankings: Array.from({ length: 10 }, (_, index) => ({
+          model: `provider/model-${index + 1}`,
+          rank: index + 1,
+          score: 10 - index,
+          summary: "ok",
+        })),
+      });
+    });
+
+    await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: Array.from({ length: 10 }, (_, index) => `provider/model-${index + 1}`),
+      judgeModels: Array.from({ length: 10 }, (_, index) => `judge/model-${index + 1}`),
+      runSuite,
+      runJudge,
+    });
+
+    expect(maxActiveRuns).toBe(8);
+    expect(maxActiveJudges).toBe(8);
   });
 
   it("lets explicit candidate thinking override the default panel", async () => {

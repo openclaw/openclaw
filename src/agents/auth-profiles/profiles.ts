@@ -3,7 +3,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreForLocalUpdate,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
@@ -59,9 +59,9 @@ export function upsertAuthProfile(params: {
       : params.credential.type === "token"
         ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
         : params.credential;
-  const store = ensureAuthProfileStore(params.agentDir);
+  const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   store.profiles[params.profileId] = credential;
-  saveAuthProfileStore(store, params.agentDir);
+  saveAuthProfileStore(store, params.agentDir, { syncExternalCli: false });
 }
 
 export async function upsertAuthProfileWithLock(params: {

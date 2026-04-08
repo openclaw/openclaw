@@ -297,10 +297,24 @@ export const fr: TranslationMap = {
       promotedSuffix: "promu",
       nextSweepPrefix: "prochaine passe",
     },
+    scene: {
+      backfill: "Rattrapage",
+      reset: "Réinitialiser",
+      working: "En cours…",
+    },
     stats: {
       shortTerm: "Court terme",
       signals: "Signaux",
+      promoted: "Promus",
       phaseHits: "Occurrences de phase",
+    },
+    trace: {
+      shortTerm: "Court terme",
+      signals: "Signaux",
+      promoted: "Promus",
+      emptyShortTerm: "Aucun élément à court terme actif.",
+      emptySignals: "Aucun signal actif.",
+      emptyPromoted: "Rien n’a encore été promu aujourd’hui.",
     },
     diary: {
       title: "Journal des rêves",

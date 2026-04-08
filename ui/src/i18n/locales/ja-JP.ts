@@ -298,10 +298,24 @@ export const ja_JP: TranslationMap = {
       promotedSuffix: "昇格済み",
       nextSweepPrefix: "次のスイープ",
     },
+    scene: {
+      backfill: "バックフィル",
+      reset: "リセット",
+      working: "処理中…",
+    },
     stats: {
       shortTerm: "短期",
       signals: "シグナル",
+      promoted: "昇格済み",
       phaseHits: "フェーズヒット",
+    },
+    trace: {
+      shortTerm: "短期",
+      signals: "シグナル",
+      promoted: "昇格済み",
+      emptyShortTerm: "アクティブな短期項目はありません。",
+      emptySignals: "アクティブなシグナルはありません。",
+      emptyPromoted: "今日はまだ何も昇格されていません。",
     },
     diary: {
       title: "夢日記",

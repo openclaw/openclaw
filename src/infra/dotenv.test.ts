@@ -613,3 +613,80 @@ describe("loadCliDotEnv", () => {
     });
   });
 });
+
+describe("workspace .env blocklist completeness", () => {
+  it("blocks runtime-control variables from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        const runtimeControlKeys = [
+          "OPENCLAW_UPDATE_PACKAGE_SPEC",
+          "OPENCLAW_GATEWAY_PORT",
+          "OPENCLAW_GATEWAY_URL",
+          "OPENCLAW_CLAWHUB_URL",
+          "CLAWHUB_URL",
+          "OPENCLAW_CLAWHUB_TOKEN",
+          "CLAWHUB_TOKEN",
+          "CLAWHUB_AUTH_TOKEN",
+          "CLAWHUB_CONFIG_PATH",
+          "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+          "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+          "OPENCLAW_BROWSER_EXECUTABLE_PATH",
+          "BROWSER_EXECUTABLE_PATH",
+          "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+          "OPENCLAW_SKIP_CHANNELS",
+          "OPENCLAW_SKIP_PROVIDERS",
+          "OPENCLAW_SKIP_CRON",
+          "OPENCLAW_RAW_STREAM",
+          "OPENCLAW_RAW_STREAM_PATH",
+          "OPENCLAW_CACHE_TRACE",
+          "OPENCLAW_CACHE_TRACE_FILE",
+          "OPENCLAW_CACHE_TRACE_MESSAGES",
+          "OPENCLAW_CACHE_TRACE_PROMPT",
+          "OPENCLAW_CACHE_TRACE_SYSTEM",
+          "OPENCLAW_SHOW_SECRETS",
+          "OPENCLAW_PLUGIN_CATALOG_PATHS",
+          "OPENCLAW_MPM_CATALOG_PATHS",
+          "OPENCLAW_NODE_EXEC_HOST",
+          "OPENCLAW_NODE_EXEC_FALLBACK",
+          "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+        ];
+
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${runtimeControlKeys.map((key) => `${key}=INJECTED_${key}`).join("\n")}\n`,
+        );
+
+        for (const key of runtimeControlKeys) {
+          delete process.env[key];
+        }
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        for (const key of runtimeControlKeys) {
+          expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
+        }
+      });
+    });
+  });
+
+  it("still allows user-defined non-control vars through workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "MY_APP_KEY=user-value\nGITHUB_TOKEN=ghp_test123\nDATABASE_URL_CUSTOM=pg://localhost\n",
+        );
+
+        delete process.env.MY_APP_KEY;
+        delete process.env.GITHUB_TOKEN;
+        delete process.env.DATABASE_URL_CUSTOM;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.MY_APP_KEY).toBe("user-value");
+        expect(process.env.GITHUB_TOKEN).toBe("ghp_test123");
+        expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
+      });
+    });
+  });
+});
