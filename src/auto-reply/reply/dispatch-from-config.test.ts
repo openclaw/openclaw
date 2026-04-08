@@ -2819,6 +2819,35 @@ describe("dispatchReplyFromConfig", () => {
     expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
   });
 
+  it("generates final-mode TTS after block streaming when final replies exist but none were delivered", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+
+    // Simulate a final reply being produced, but the channel delivery refusing to queue it.
+    (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mockImplementation(() => false);
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Hello from streaming blocks." });
+      // Non-empty replies array, but not delivered due to sendFinalReply=false above.
+      return { text: "" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    // First call: attempted to send the returned final reply (empty text).
+    // Second call: TTS-only synthetic payload (media only).
+    expect(finalCalls.length).toBeGreaterThanOrEqual(2);
+    const ttsOnlyPayload = finalCalls.at(-1)?.[0] as ReplyPayload | undefined;
+    expect(ttsOnlyPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(ttsOnlyPayload?.text).toBeUndefined();
+  });
+
   it("forwards payload metadata into onBlockReplyQueued context", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

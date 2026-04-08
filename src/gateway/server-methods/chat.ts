@@ -1827,12 +1827,16 @@ export const chatHandlers: GatewayRequestHandlers = {
               const finalPayloads = deliveredReplies
                 .filter((entry) => entry.kind === "final")
                 .map((entry) => entry.payload);
+              const deliveredPayloads = deliveredReplies.map((entry) => entry.payload);
               const combinedReply = finalPayloads
                 .map((part) => part.text?.trim() ?? "")
                 .filter(Boolean)
                 .join("\n\n")
                 .trim();
-              const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(finalPayloads);
+              // Webchat transcript embedding should include local audio even when it arrived via
+              // streaming/tool block payloads (e.g. embedded pending tool media flushes).
+              const audioBlocks =
+                buildWebchatAudioContentBlocksFromReplyPayloads(deliveredPayloads);
               const assistantContent: Array<Record<string, unknown>> = [];
               if (combinedReply) {
                 assistantContent.push({ type: "text", text: combinedReply });

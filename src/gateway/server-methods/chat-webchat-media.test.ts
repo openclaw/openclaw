@@ -36,6 +36,17 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     );
   });
 
+  it("embeds audio paths provided via mediaUrls arrays", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0x03]));
+
+    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrls: [audioPath] }]);
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { type?: string }).type).toBe("audio");
+  });
+
   it("skips remote URLs", () => {
     const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([
       { mediaUrl: "https://example.com/a.mp3" },

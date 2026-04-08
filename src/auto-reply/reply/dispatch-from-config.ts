@@ -980,15 +980,10 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const ttsMode = resolveConfiguredTtsMode(cfg);
-    // Generate TTS-only reply after block streaming completes (when there's no final reply).
+    // Generate TTS-only reply after block streaming completes (when there's no delivered final).
     // This handles the case where block streaming succeeds and drops final payloads,
     // but we still want TTS audio to be generated from the accumulated block content.
-    if (
-      ttsMode === "final" &&
-      replies.length === 0 &&
-      blockCount > 0 &&
-      accumulatedBlockText.trim()
-    ) {
+    if (ttsMode === "final" && !queuedFinal && blockCount > 0 && accumulatedBlockText.trim()) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
           payload: { text: accumulatedBlockText },
