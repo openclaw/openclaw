@@ -584,6 +584,7 @@ export function resolveModelWithRegistry(params: {
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,
   };
+  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const explicitModel = resolveExplicitModelWithRegistry(normalizedParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;

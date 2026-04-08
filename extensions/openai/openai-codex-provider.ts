@@ -2,6 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ensureAuthProfileStore,
@@ -86,7 +87,7 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
 ] as const;
 const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
 
-function normalizeCodexTransport<T extends { api?: string; baseUrl?: string }>(model: T): T {
+function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const useCodexTransport =
     !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
   const api =
@@ -105,20 +106,14 @@ function normalizeCodexTransport<T extends { api?: string; baseUrl?: string }>(m
   };
 }
 
-function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+function resolveCodexForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
 
   let templateIds: readonly string[];
-  let patch:
-    | {
-        templateModel?: string;
-        contextWindow?: number;
-        contextTokens?: number;
-        maxTokens?: number;
-        cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-      }
-    | undefined;
+  let patch: Partial<ProviderRuntimeModel> | undefined;
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     patch = {
@@ -172,7 +167,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-    })
+    } as ProviderRuntimeModel)
   );
 }
 
