@@ -29,6 +29,19 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
+  it("keeps provider prefix for namespaced OpenRouter ids", () => {
+    expect(
+      buildChatModelOption({
+        id: "meta-llama/llama-3.3-70b-instruct",
+        name: "Llama 3.3 70B Instruct",
+        provider: "openrouter",
+      }),
+    ).toEqual({
+      value: "openrouter/meta-llama/llama-3.3-70b-instruct",
+      label: "meta-llama/llama-3.3-70b-instruct · openrouter",
+    });
+  });
+
   it("preserves already-qualified model refs without prepending provider", () => {
     expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai-codex")).toBe(
       "ollama/qwen3:30b",
