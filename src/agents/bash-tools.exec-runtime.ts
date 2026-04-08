@@ -821,6 +821,7 @@ export async function runExecProcess(opts: {
   const promise = managedRun
     .wait()
     .then(async (exit): Promise<ExecProcessOutcome> => {
+      disableUpdates(); // NEW: Proactively disable before processing exit
       const durationMs = Date.now() - startedAt;
       const outcome = buildExecExitOutcome({
         exit,
@@ -845,6 +846,7 @@ export async function runExecProcess(opts: {
       return outcome;
     })
     .catch((err): ExecProcessOutcome => {
+      disableUpdates(); // NEW: Proactively disable on error
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
       return buildExecRuntimeErrorOutcome({
