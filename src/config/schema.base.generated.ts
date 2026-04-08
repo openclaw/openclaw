@@ -26980,5 +26980,5 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
   },
   version: "2026.4.9",
-  generatedAt: "2026-03-22T21:17:33.302Z",
+  generatedAt: "2026-04-08T17:01:11Z",
 };

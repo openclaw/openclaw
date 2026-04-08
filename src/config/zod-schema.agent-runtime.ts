@@ -318,6 +318,16 @@ export const ToolsWebSearchSchema = z
   .strict()
   .optional();
 
+const SsrFPolicySchema = z
+  .object({
+    allowPrivateNetwork: z.boolean().optional(),
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowRfc2544BenchmarkRange: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+    hostnameAllowlist: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -330,7 +340,9 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    ssrfPolicy: SsrFPolicySchema.optional(),
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
+
     // start and then migrate cleanly through doctor.
     firecrawl: z
       .object({
