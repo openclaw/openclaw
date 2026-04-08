@@ -502,6 +502,33 @@ describe("gateway server cron", () => {
       expect(clearedCommand?.payload?.args).toBeUndefined();
       expect(clearedCommand?.payload?.timeoutSeconds).toBe(30);
 
+      const switchToCommandRes = await rpcReq(ws, "cron.update", {
+        id: mergeJobId,
+        patch: {
+          payload: {
+            kind: "command",
+            command: "echo",
+            args: null,
+            timeoutSeconds: 15,
+          },
+        },
+      });
+      expect(switchToCommandRes.ok).toBe(true);
+      const switchedCommand = switchToCommandRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              command?: unknown;
+              args?: unknown;
+              timeoutSeconds?: unknown;
+            };
+          }
+        | undefined;
+      expect(switchedCommand?.payload?.kind).toBe("command");
+      expect(switchedCommand?.payload?.command).toBe("echo");
+      expect(switchedCommand?.payload?.args).toBeUndefined();
+      expect(switchedCommand?.payload?.timeoutSeconds).toBe(15);
+
       const rejectJobId = await addMainSystemEventCronJob({ ws, name: "patch reject" });
 
       const rejectUpdateRes = await rpcReq(ws, "cron.update", {

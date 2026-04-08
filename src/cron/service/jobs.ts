@@ -732,7 +732,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return {
       kind: "command",
       command: patch.command,
-      args: patch.args,
+      args: Array.isArray(patch.args) ? patch.args : undefined,
       timeoutSeconds: patch.timeoutSeconds,
     };
   }
