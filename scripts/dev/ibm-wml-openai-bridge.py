@@ -35,14 +35,24 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from threading import Lock
 from typing import Any
 
-from flask import Flask, Response, jsonify, request
-from ibm_watsonx_ai import Credentials
-from ibm_watsonx_ai.foundation_models import ModelInference
+try:
+    from flask import Flask, Response, jsonify, request
+    from ibm_watsonx_ai import Credentials
+    from ibm_watsonx_ai.foundation_models import ModelInference
+except ImportError:
+    print(
+        "Missing required dependencies for scripts/dev/ibm-wml-openai-bridge.py.\n"
+        "Install them with:\n"
+        "    pip install flask ibm-watsonx-ai",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
