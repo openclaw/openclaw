@@ -516,6 +516,7 @@ export function attachGatewayWsMessageHandler(params: {
           allowRealIpFallback,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
+          clientMode: connectParams.client.mode,
         });
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =

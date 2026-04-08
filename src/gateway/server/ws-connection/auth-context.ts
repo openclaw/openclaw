@@ -11,6 +11,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
+import type { GatewayClientMode } from "../../protocol/client-info.js";
 
 type HandshakeConnectAuth = {
   token?: string;
@@ -76,6 +77,8 @@ export async function resolveConnectAuthState(params: {
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
+  /** Client mode from the connect payload, used to exempt internal backend/probe clients. */
+  clientMode?: GatewayClientMode;
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
@@ -94,6 +97,7 @@ export async function resolveConnectAuthState(params: {
     rateLimiter: sharedAuthProvided ? params.rateLimiter : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    clientMode: params.clientMode,
   });
 
   const sharedAuthResult =
@@ -107,6 +111,7 @@ export async function resolveConnectAuthState(params: {
       // Shared-auth probe only; rate-limit side effects are handled in the
       // primary auth flow (or deferred for device-token candidates).
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+      clientMode: params.clientMode,
     }));
   // Trusted-proxy auth is semantically shared: the proxy vouches for identity,
   // no per-device credential needed. Include it so operator connections

@@ -134,6 +134,14 @@ export type GatewayTrustedProxyConfig = {
    * @default false
    */
   allowLoopback?: boolean;
+  /**
+   * Identity to assign to loopback connections when allowLoopback is true
+   * and the request does not carry the configured userHeader.
+   * This allows internal subsystems (browser tool, sub-agents, CLI) to
+   * authenticate without going through the reverse proxy.
+   * Example: "agent@internal"
+   */
+  loopbackUser?: string;
 };
 
 export type GatewayAuthConfig = {

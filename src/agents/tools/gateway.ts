@@ -1,5 +1,5 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, resolveInternalGatewayUrl } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -13,6 +13,8 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { readStringParam } from "./common.js";
 
+export { resolveInternalGatewayUrl };
+/** @deprecated Use resolveInternalGatewayUrl(config) to get the correct URL for the configured bind mode. */
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
 export type GatewayCallOptions = {

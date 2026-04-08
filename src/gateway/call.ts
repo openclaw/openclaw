@@ -14,6 +14,7 @@ import {
 } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -45,6 +46,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import { pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
@@ -155,6 +157,39 @@ export function buildGatewayConnectionDetails(
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
+}
+
+/**
+ * Resolve the gateway WebSocket URL for internal self-connections.
+ * Respects gateway.bind mode so internal subsystems (browser tool, sub-agents,
+ * exec approvals) connect via the correct interface — loopback, LAN IP, or
+ * tailnet IP — rather than always using the hardcoded 127.0.0.1 default.
+ */
+export function resolveInternalGatewayUrl(config: OpenClawConfig): string {
+  const port = resolveGatewayPortValue(config);
+  const bindMode = config.gateway?.bind ?? "loopback";
+  const scheme = config.gateway?.tls?.enabled === true ? "wss" : "ws";
+
+  if (bindMode === "lan" || bindMode === "custom") {
+    // In K8s/container environments prefer POD_IP when available.
+    const podIp = process.env["POD_IP"];
+    if (podIp) {
+      return `${scheme}://${podIp}:${port}`;
+    }
+    const lanIp = pickPrimaryLanIPv4();
+    if (lanIp) {
+      return `${scheme}://${lanIp}:${port}`;
+    }
+  }
+
+  if (bindMode === "tailnet") {
+    const tailnetIp = pickPrimaryTailnetIPv4();
+    if (tailnetIp) {
+      return `${scheme}://${tailnetIp}:${port}`;
+    }
+  }
+
+  return `${scheme}://127.0.0.1:${port}`;
 }
 
 export const __testing = {

@@ -954,6 +954,84 @@ describe("trusted-proxy auth", () => {
       expect(res2.method).toBe("trusted-proxy");
     });
 
+    it("injects loopbackUser when userHeader is missing on loopback", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+            loopbackUser: "agent@internal",
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            // No x-forwarded-user header — simulates browser tool / sub-agent
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("trusted-proxy");
+      expect(res.user).toBe("agent@internal");
+    });
+
+    it("rejects loopback without userHeader when loopbackUser is not set", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+            // no loopbackUser
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-proto": "https",
+            // No x-forwarded-user — should fail at user check, not header check
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_user_missing");
+    });
+
+    it("prefers real userHeader over loopbackUser on loopback", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+            loopbackUser: "agent@internal",
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "real-user@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.user).toBe("real-user@example.com");
+    });
+
     it("rejects trusted-proxy identity headers from loopback sources", async () => {
       const res = await authorizeGatewayConnect({
         auth: {

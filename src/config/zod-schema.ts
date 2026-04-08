@@ -715,6 +715,7 @@ export const OpenClawSchema = z
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
                 allowLoopback: z.boolean().optional(),
+                loopbackUser: z.string().optional(),
               })
               .strict()
               .optional(),
