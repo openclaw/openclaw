@@ -57,6 +57,7 @@ let
             enable = true;
             package = openclaw;
             settings.port = lib.toInt sharedConstants.ports.openclaw-gateway;
+            settings.host = "0.0.0.0"; # VM needs all-interfaces for host→guest port forwarding
           };
         }
       )
