@@ -235,9 +235,8 @@ describe("resolveCronSession", () => {
           cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
           cliSessionBindings: {
             "claude-cli": {
-              cliSessionId: "prev-cli-session-abc",
-              modelOverride: "claude-opus-4-6",
-              providerOverride: "anthropic",
+              sessionId: "prev-cli-session-abc",
+              authProfileId: "anthropic-default",
             },
           },
           claudeCliSessionId: "prev-cli-session-abc",
@@ -265,7 +264,7 @@ describe("resolveCronSession", () => {
           cliSessionIds: { "codex-cli": "prev-codex-session-xyz" },
           cliSessionBindings: {
             "codex-cli": {
-              cliSessionId: "prev-codex-session-xyz",
+              sessionId: "prev-codex-session-xyz",
             },
           },
           claudeCliSessionId: "prev-claude-session-stale",
@@ -288,7 +287,7 @@ describe("resolveCronSession", () => {
           cliSessionIds: { "claude-cli": "live-cli-session-keep" },
           cliSessionBindings: {
             "claude-cli": {
-              cliSessionId: "live-cli-session-keep",
+              sessionId: "live-cli-session-keep",
             },
           },
           claudeCliSessionId: "live-cli-session-keep",
@@ -302,7 +301,7 @@ describe("resolveCronSession", () => {
       });
       expect(result.sessionEntry.cliSessionBindings).toEqual({
         "claude-cli": {
-          cliSessionId: "live-cli-session-keep",
+          sessionId: "live-cli-session-keep",
         },
       });
       expect(result.sessionEntry.claudeCliSessionId).toBe("live-cli-session-keep");
