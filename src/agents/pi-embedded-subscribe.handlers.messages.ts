@@ -282,7 +282,9 @@ export function handleMessageUpdate(
         chunk = content.slice(ctx.state.deltaBuffer.length);
       } else if (ctx.state.deltaBuffer.startsWith(content)) {
         chunk = "";
-      } else if (!ctx.state.deltaBuffer.includes(content)) {
+      } else if (ctx.state.deltaBuffer.includes(content)) {
+        chunk = "";
+      } else {
         chunk = appendUniqueSuffix(ctx.state.deltaBuffer, content, { minOverlap: 10 }).slice(
           ctx.state.deltaBuffer.length,
         );
