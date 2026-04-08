@@ -104,7 +104,7 @@ dedupe_chrome_args
 chromium "${CHROME_ARGS[@]}" about:blank &
 
 READY=0
-for _ in $(seq 1 50); do
+for _ in $(seq 1 200); do
   if curl -sS --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" >/dev/null; then
     READY=1
     break
