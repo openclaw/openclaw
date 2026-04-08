@@ -14,7 +14,7 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
-import { stringEnum } from "../schema/typebox.js";
+import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
@@ -289,9 +289,7 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
-  continuationKind: Type.Optional(
-    Type.Union([Type.Literal("systemEvent"), Type.Literal("agentTurn")]),
-  ),
+  continuationKind: optionalStringEnum(["systemEvent", "agentTurn"] as const),
   continuationMessage: Type.Optional(Type.String()),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),

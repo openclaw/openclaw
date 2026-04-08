@@ -69,6 +69,30 @@ describe("gateway tool restart continuation", () => {
     scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true, delayMs: 250 });
   });
 
+  it("uses a flat enum for continuationKind in the tool schema", async () => {
+    const { createGatewayTool } = await import("./gateway-tool.js");
+    const tool = createGatewayTool();
+    const continuationKind = (
+      tool.parameters as {
+        properties?: {
+          continuationKind?: {
+            type?: string;
+            enum?: string[];
+            anyOf?: unknown[];
+          };
+        };
+      }
+    ).properties?.continuationKind;
+
+    expect(continuationKind).toEqual(
+      expect.objectContaining({
+        type: "string",
+        enum: ["systemEvent", "agentTurn"],
+      }),
+    );
+    expect(continuationKind).not.toHaveProperty("anyOf");
+  });
+
   it("writes an agentTurn continuation into the restart sentinel", async () => {
     const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool({
