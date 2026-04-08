@@ -374,7 +374,17 @@ function rotateLogFile(basePath: string): string {
 function appendLogLine(file: string, line: string): boolean {
   try {
     if (currentLogFileFd !== null && file === currentLogFilePath) {
-      fs.writeSync(currentLogFileFd, line);
+      // writeSync may write fewer bytes than requested (e.g. low-disk, interrupted write).
+      // Loop until all bytes land or a zero-progress write signals a permanent stall.
+      const buf = Buffer.from(line, "utf8");
+      let offset = 0;
+      while (offset < buf.byteLength) {
+        const written = fs.writeSync(currentLogFileFd, buf, offset, buf.byteLength - offset);
+        if (written === 0) {
+          return false;
+        }
+        offset += written;
+      }
       return true;
     }
     fs.appendFileSync(file, line, { encoding: "utf8" });
