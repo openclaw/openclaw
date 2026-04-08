@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { killProcessTree } from "../../kill-tree.js";
-import { decodeCapturedOutputBuffer } from "../../../node-host/invoke.js";
+import { resolveWindowsConsoleEncoding } from "../../../node-host/invoke.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
@@ -103,19 +103,36 @@ export async function createChildAdapter(params: {
       }
     : undefined;
 
+  // Resolve Windows console encoding once and create streaming decoder
+  // For multi-byte encodings like GBK, we need to maintain decoder state across chunks
+  const enc = resolveWindowsConsoleEncoding() ?? "utf-8";
+  let stdoutDecoder: TextDecoder;
+  let stderrDecoder: TextDecoder;
+  try {
+    stdoutDecoder = new TextDecoder(enc, { fatal: false });
+    stderrDecoder = new TextDecoder(enc, { fatal: false });
+  } catch {
+    stdoutDecoder = new TextDecoder("utf-8", { fatal: false });
+    stderrDecoder = new TextDecoder("utf-8", { fatal: false });
+  }
+
   const onStdout = (listener: (chunk: string) => void) => {
     child.stdout.on("data", (chunk: Buffer) => {
-      // Use our improved decode with proper Windows encoding handling
-      const decoded = decodeCapturedOutputBuffer({ buffer: chunk });
-      listener(decoded);
+      listener(stdoutDecoder.decode(chunk, { stream: true }));
+    });
+    child.stdout.on("end", () => {
+      const tail = stdoutDecoder.decode();
+      if (tail) listener(tail);
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
     child.stderr.on("data", (chunk: Buffer) => {
-      // Use our improved decode with proper Windows encoding handling
-      const decoded = decodeCapturedOutputBuffer({ buffer: chunk });
-      listener(decoded);
+      listener(stderrDecoder.decode(chunk, { stream: true }));
+    });
+    child.stderr.on("end", () => {
+      const tail = stderrDecoder.decode();
+      if (tail) listener(tail);
     });
   };
 
