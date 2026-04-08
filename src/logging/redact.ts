@@ -177,10 +177,12 @@ export function getDefaultRedactPatterns(): string[] {
 }
 
 // Applies already-resolved redaction to a batch of lines without re-resolving options.
-// Use this instead of mapping redactSensitiveText when options are resolved once per request.
+// Lines are joined before redacting so multiline patterns (e.g. PEM blocks) can match across
+// line boundaries, then split back. Use this instead of mapping redactSensitiveText when
+// options are resolved once per request.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
   if (resolved.mode === "off" || !resolved.patterns.length) {
     return lines;
   }
-  return lines.map((line) => (line ? redactText(line, resolved.patterns) : line));
+  return redactText(lines.join("\n"), resolved.patterns).split("\n");
 }

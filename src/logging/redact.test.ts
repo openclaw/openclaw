@@ -185,4 +185,22 @@ describe("redactSensitiveLines", () => {
     const lines = ["TOKEN=abcdef1234567890ghij"];
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
+
+  it("redacts a PEM block spanning multiple lines in the array", () => {
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: defaults });
+    const lines = [
+      "log: key follows",
+      "-----BEGIN PRIVATE KEY-----",
+      "ABCDEF1234567890",
+      "ZYXWVUT987654321",
+      "-----END PRIVATE KEY-----",
+      "log: key done",
+    ];
+    const result = redactSensitiveLines(lines, resolved);
+    const joined = result.join("\n");
+    expect(joined).toContain("-----BEGIN PRIVATE KEY-----");
+    expect(joined).toContain("-----END PRIVATE KEY-----");
+    expect(joined).toContain("…redacted…");
+    expect(joined).not.toContain("ABCDEF1234567890");
+  });
 });
