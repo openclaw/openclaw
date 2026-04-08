@@ -339,6 +339,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("returns error and stops early when deps install fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     const stableTag = "v1.0.1-1";
     const { runner, calls } = createRunner({
@@ -347,6 +348,7 @@ describe("runGatewayUpdate", () => {
     });
 
     const result = await runWithRunner(runner, { channel: "stable" });
+    platformSpy.mockRestore();
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("deps-install-failed");

@@ -13,7 +13,7 @@ import {
 import { builtinModules } from "node:module";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, posix, relative, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
@@ -361,8 +361,8 @@ function isBundledExtensionOwnedRuntimeImport(params: {
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
   return platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
+    ? win32.join(prefixDir, "openclaw.cmd")
+    : posix.join(prefixDir, "bin", "openclaw");
 }
 
 function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {

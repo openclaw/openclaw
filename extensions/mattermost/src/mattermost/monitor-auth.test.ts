@@ -2,16 +2,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const evaluateSenderGroupAccessForPolicy = vi.hoisted(() => vi.fn());
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
-const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
 const resolveControlCommandGate = vi.hoisted(() => vi.fn());
-const resolveEffectiveAllowFromLists = vi.hoisted(() => vi.fn());
 
 vi.mock("./runtime-api.js", () => ({
   evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
-  resolveAllowlistMatchSimple,
   resolveControlCommandGate,
-  resolveEffectiveAllowFromLists,
 }));
 
 describe("mattermost monitor auth", () => {
@@ -34,17 +30,10 @@ describe("mattermost monitor auth", () => {
   beforeEach(() => {
     evaluateSenderGroupAccessForPolicy.mockReset();
     isDangerousNameMatchingEnabled.mockReset();
-    resolveAllowlistMatchSimple.mockReset();
     resolveControlCommandGate.mockReset();
-    resolveEffectiveAllowFromLists.mockReset();
   });
 
   it("normalizes allowlist entries and resolves effective lists", () => {
-    resolveEffectiveAllowFromLists.mockReturnValue({
-      effectiveAllowFrom: ["alice"],
-      effectiveGroupAllowFrom: ["team"],
-    });
-
     expect(normalizeMattermostAllowEntry(" @Alice ")).toBe("alice");
     expect(normalizeMattermostAllowEntry("mattermost:Bob")).toBe("bob");
     expect(normalizeMattermostAllowEntry("*")).toBe("*");
@@ -60,19 +49,12 @@ describe("mattermost monitor auth", () => {
         dmPolicy: "pairing",
       }),
     ).toEqual({
-      effectiveAllowFrom: ["alice"],
+      effectiveAllowFrom: ["alice", "store"],
       effectiveGroupAllowFrom: ["team"],
-    });
-    expect(resolveEffectiveAllowFromLists).toHaveBeenCalledWith({
-      allowFrom: ["alice"],
-      groupAllowFrom: ["team"],
-      storeAllowFrom: ["store"],
-      dmPolicy: "pairing",
     });
   });
 
   it("checks sender allowlists against normalized ids and names", () => {
-    resolveAllowlistMatchSimple.mockReturnValue({ allowed: true });
     expect(
       isMattermostSenderAllowed({
         senderId: "@Alice",
@@ -81,20 +63,18 @@ describe("mattermost monitor auth", () => {
         allowNameMatching: true,
       }),
     ).toBe(true);
-    expect(resolveAllowlistMatchSimple).toHaveBeenCalledWith({
-      allowFrom: ["alice"],
-      senderId: "alice",
-      senderName: "alice",
-      allowNameMatching: true,
-    });
+    expect(
+      isMattermostSenderAllowed({
+        senderId: "@Mallory",
+        senderName: "Mallory",
+        allowFrom: [" mattermost:alice "],
+        allowNameMatching: true,
+      }),
+    ).toBe(false);
   });
 
   it("authorizes direct messages in open mode and blocks disabled/group-restricted channels", async () => {
     isDangerousNameMatchingEnabled.mockReturnValue(false);
-    resolveEffectiveAllowFromLists.mockReturnValue({
-      effectiveAllowFrom: [],
-      effectiveGroupAllowFrom: [],
-    });
     resolveControlCommandGate.mockReturnValue({
       commandAuthorized: false,
       shouldBlock: false,
@@ -103,7 +83,6 @@ describe("mattermost monitor auth", () => {
       allowed: false,
       reason: "empty_allowlist",
     });
-    resolveAllowlistMatchSimple.mockReturnValue({ allowed: false });
 
     expect(
       authorizeMattermostCommandInvocation({

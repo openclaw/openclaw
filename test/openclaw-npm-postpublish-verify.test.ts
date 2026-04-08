@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
@@ -145,13 +145,13 @@ describe("normalizeInstalledBinaryVersion", () => {
 describe("resolveInstalledBinaryPath", () => {
   it("uses the Unix global bin path on non-Windows platforms", () => {
     expect(resolveInstalledBinaryPath("/tmp/openclaw-prefix", "darwin")).toBe(
-      "/tmp/openclaw-prefix/bin/openclaw",
+      posix.join("/tmp/openclaw-prefix", "bin", "openclaw"),
     );
   });
 
   it("uses the Windows npm shim path on win32", () => {
     expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
-      "C:/openclaw-prefix/openclaw.cmd",
+      win32.join("C:/openclaw-prefix", "openclaw.cmd"),
     );
   });
 });
