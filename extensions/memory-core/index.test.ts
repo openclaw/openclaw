@@ -1,14 +1,12 @@
-import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { describe, expect, it, vi } from "vitest";
-import plugin, {
+import { describe, expect, it } from "vitest";
+import {
   buildMemoryFlushPlan,
   buildPromptSection,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./index.js";
-import { memoryRuntime } from "./src/runtime-provider.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
@@ -22,6 +20,7 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("then use memory_get");
+    expect(result[1]).toContain("indexed session transcripts");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -32,6 +31,7 @@ describe("buildPromptSection", () => {
     const result = buildPromptSection({ availableTools: new Set(["memory_search"]) });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
+    expect(result[1]).toContain("indexed session transcripts");
     expect(result[1]).not.toContain("then use memory_get");
   });
 
@@ -50,59 +50,6 @@ describe("buildPromptSection", () => {
     expect(result).toContain(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
-  });
-});
-
-describe("plugin registration", () => {
-  it("registers memory tools + cli through extension-local modules", () => {
-    const registerTool = vi.fn();
-    const registerMemoryPromptSection = vi.fn();
-    const registerMemoryFlushPlan = vi.fn();
-    const registerMemoryRuntime = vi.fn();
-    const registerMemoryEmbeddingProvider = vi.fn();
-    const registerCli = vi.fn();
-    const api = {
-      registerTool,
-      registerMemoryPromptSection,
-      registerMemoryFlushPlan,
-      registerMemoryRuntime,
-      registerMemoryEmbeddingProvider,
-      registerCli,
-    };
-
-    plugin.register(api as never);
-
-    expect(registerMemoryPromptSection).toHaveBeenCalledWith(buildPromptSection);
-    expect(registerMemoryFlushPlan).toHaveBeenCalledWith(buildMemoryFlushPlan);
-    expect(registerMemoryRuntime).toHaveBeenCalledWith(memoryRuntime);
-    expect(registerMemoryEmbeddingProvider).toHaveBeenCalledTimes(6);
-    expect(registerTool).toHaveBeenCalledTimes(2);
-    expect(registerTool.mock.calls[0]?.[1]).toEqual({ names: ["memory_search"] });
-    expect(registerTool.mock.calls[1]?.[1]).toEqual({ names: ["memory_get"] });
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
-      descriptors: [
-        {
-          name: "memory",
-          description: "Search, inspect, and reindex memory files",
-          hasSubcommands: true,
-        },
-      ],
-    });
-
-    const searchFactory = registerTool.mock.calls[0]?.[0] as
-      | ((ctx: unknown) => unknown)
-      | undefined;
-    const getFactory = registerTool.mock.calls[1]?.[0] as ((ctx: unknown) => unknown) | undefined;
-    const cliRegistrar = registerCli.mock.calls[0]?.[0] as
-      | ((ctx: { program: unknown }) => void)
-      | undefined;
-    const ctx = { config: { plugins: {} }, sessionKey: "agent:main:slack:dm:u123" };
-    const program = new Command();
-
-    expect((searchFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_search");
-    expect((getFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_get");
-    expect(() => cliRegistrar?.({ program } as never)).not.toThrow();
-    expect(program.commands.map((command) => command.name())).toContain("memory");
   });
 });
 
@@ -137,7 +84,7 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.prompt).toContain("memory/2026-02-16.md");
     expect(plan?.prompt).toContain(
-      "Current time: Monday, February 16th, 2026 — 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
     );
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
   });

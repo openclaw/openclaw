@@ -27,10 +27,10 @@ export function buildDispatchInboundCaptureMock<T extends Record<string, unknown
 }
 
 export async function buildDispatchInboundContextCapture(
-  importOriginal: <T extends Record<string, unknown>>() => Promise<T>,
+  loadActual: <T extends Record<string, unknown>>() => Promise<T>,
   capture: InboundContextCapture,
 ) {
-  const actual = await importOriginal<typeof import("../../../auto-reply/dispatch.js")>();
+  const actual = await loadActual<typeof import("../../../auto-reply/dispatch.js")>();
   return buildDispatchInboundCaptureMock(actual, (ctx) => {
     capture.ctx = ctx as MsgContext;
   });

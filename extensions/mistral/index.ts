@@ -3,8 +3,15 @@ import { applyMistralModelCompat } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
+import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 
 const PROVIDER_ID = "mistral";
+export function buildMistralReplayPolicy() {
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict9" as const,
+  };
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -33,19 +40,12 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
     },
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
-    capabilities: {
-      transcriptToolCallIdMode: "strict9",
-      transcriptToolCallIdModelHints: [
-        "mistral",
-        "mixtral",
-        "codestral",
-        "pixtral",
-        "devstral",
-        "ministral",
-        "mistralai",
-      ],
-    },
+    contributeResolvedModelCompat: ({ modelId, model }) =>
+      contributeMistralResolvedModelCompat({ modelId, model }),
+    buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);

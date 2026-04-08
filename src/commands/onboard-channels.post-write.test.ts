@@ -1,16 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  patchChannelOnboardingAdapter,
-  setDefaultChannelPluginRegistryForTests,
-} from "./channel-test-helpers.js";
+import { patchChannelSetupWizardAdapter } from "./channel-test-helpers.js";
 import {
   createChannelOnboardingPostWriteHookCollector,
   runCollectedChannelOnboardingPostWriteHooks,
   setupChannels,
 } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
+
+function setMinimalTelegramOnboardingRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "telegram",
+            label: "Telegram",
+            capabilities: { chatTypes: ["direct", "group"] },
+          }),
+          setup: {
+            applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+          },
+          setupWizard: {
+            channel: "telegram",
+            status: {
+              configuredLabel: "Configured",
+              unconfiguredLabel: "Not configured",
+              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                Boolean(cfg.channels?.telegram?.botToken),
+            },
+            credentials: [],
+          },
+        },
+      },
+    ]),
+  );
+}
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(
@@ -45,7 +75,7 @@ function createUnexpectedQuickstartPrompter(select: WizardPrompter["select"]) {
 
 describe("setupChannels post-write hooks", () => {
   beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalTelegramOnboardingRegistryForTests();
   });
 
   it("collects onboarding post-write hooks and runs them against the final config", async () => {
@@ -61,7 +91,7 @@ describe("setupChannels post-write hooks", () => {
       } as OpenClawConfig,
       accountId: "acct-1",
     }));
-    const restore = patchChannelOnboardingAdapter("telegram", {
+    const restore = patchChannelSetupWizardAdapter("telegram", {
       configureInteractive,
       afterConfigWritten,
       getStatus: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({

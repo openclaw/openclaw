@@ -570,6 +570,15 @@ function emitMessageSentHooks(
   emitInternalMessageSentHook(params);
 }
 
+export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams): void {
+  const hookRunner = getGlobalHookRunner();
+  emitMessageSentHooks({
+    ...params,
+    hookRunner,
+    enabled: hookRunner?.hasHooks("message_sent") ?? false,
+  });
+}
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
@@ -731,7 +740,7 @@ export async function deliverReplies(params: {
         accountId: params.accountId,
         content: contentForSentHook,
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,
       });

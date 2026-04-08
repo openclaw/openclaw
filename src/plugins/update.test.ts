@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
+
+const APP_ROOT = "/app";
+
+function appBundledPluginRoot(pluginId: string): string {
+  return bundledPluginRootAt(APP_ROOT, pluginId);
+}
 
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
@@ -131,7 +138,7 @@ function createBundledPathInstallConfig(params: {
       installs: {
         feishu: {
           source: "path",
-          sourcePath: params.sourcePath ?? "/app/extensions/feishu",
+          sourcePath: params.sourcePath ?? appBundledPluginRoot("feishu"),
           installPath: params.installPath,
           ...(params.spec ? { spec: params.spec } : {}),
         },
@@ -178,7 +185,7 @@ function createBundledSource(params?: { pluginId?: string; localPath?: string; n
   const pluginId = params?.pluginId ?? "feishu";
   return {
     pluginId,
-    localPath: params?.localPath ?? `/app/extensions/${pluginId}`,
+    localPath: params?.localPath ?? appBundledPluginRoot(pluginId),
     npmSpec: params?.npmSpec ?? `@openclaw/${pluginId}`,
   };
 }
@@ -598,6 +605,32 @@ describe("updateNpmInstalledPlugins", () => {
       marketplacePlugin: "claude-bundle",
     });
   });
+
+  it("forwards dangerous force unsafe install to plugin update installers", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      dangerouslyForceUnsafeInstall: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        dangerouslyForceUnsafeInstall: true,
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
@@ -610,13 +643,13 @@ describe("syncPluginsForUpdateChannel", () => {
     {
       name: "keeps bundled path installs on beta without reinstalling from npm",
       config: createBundledPathInstallConfig({
-        loadPaths: ["/app/extensions/feishu"],
-        installPath: "/app/extensions/feishu",
+        loadPaths: [appBundledPluginRoot("feishu")],
+        installPath: appBundledPluginRoot("feishu"),
         spec: "@openclaw/feishu",
       }),
       expectedChanged: false,
-      expectedLoadPaths: ["/app/extensions/feishu"],
-      expectedInstallPath: "/app/extensions/feishu",
+      expectedLoadPaths: [appBundledPluginRoot("feishu")],
+      expectedInstallPath: appBundledPluginRoot("feishu"),
     },
     {
       name: "repairs bundled install metadata when the load path is re-added",
@@ -626,8 +659,8 @@ describe("syncPluginsForUpdateChannel", () => {
         spec: "@openclaw/feishu",
       }),
       expectedChanged: true,
-      expectedLoadPaths: ["/app/extensions/feishu"],
-      expectedInstallPath: "/app/extensions/feishu",
+      expectedLoadPaths: [appBundledPluginRoot("feishu")],
+      expectedInstallPath: appBundledPluginRoot("feishu"),
     },
   ] as const)(
     "$name",
@@ -645,7 +678,7 @@ describe("syncPluginsForUpdateChannel", () => {
       expect(result.config.plugins?.load?.paths).toEqual(expectedLoadPaths);
       expectBundledPathInstall({
         install: result.config.plugins?.installs?.feishu,
-        sourcePath: "/app/extensions/feishu",
+        sourcePath: appBundledPluginRoot("feishu"),
         installPath: expectedInstallPath,
         spec: "@openclaw/feishu",
       });

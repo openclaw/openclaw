@@ -1,16 +1,22 @@
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { type ChannelPlugin, type ResolvedLineAccount } from "../api.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveLineAccount } from "./accounts.js";
+import { lineBindingsAdapter } from "./bindings.js";
+import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
+
+const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
@@ -43,15 +49,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
         }
         return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
       },
+      resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
+      transformReplyPayload: ({ payload }) => {
+        if (!payload.text || !hasLineDirectives(payload.text)) {
+          return payload;
+        }
+        return parseLineDirectives(payload);
+      },
       targetResolver: {
         looksLikeId: (id) => {
           const trimmed = id?.trim();
           if (!trimmed) {
             return false;
           }
-          // LINE user IDs are typically U followed by 32 hex characters
-          // Group IDs are C followed by 32 hex characters
-          // Room IDs are R followed by 32 hex characters
           return /^[UCR][a-f0-9]{32}$/i.test(trimmed) || /^line:/i.test(trimmed);
         },
         hint: "<userId|groupId|roomId>",
@@ -61,6 +71,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setup: lineSetupAdapter,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
+    bindings: lineBindingsAdapter,
+    conversationBindings: {
+      defaultTopLevelPlacement: "current",
+    },
     agentPrompt: {
       messageToolHints: () => [
         "",
@@ -115,15 +129,18 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     text: {
       idLabel: "lineUserId",
       message: "OpenClaw: your access has been approved.",
-      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
       notify: async ({ cfg, id, message }) => {
-        const line = getLineRuntime().channel.line;
-        const account = line.resolveLineAccount({ cfg });
+        const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
+          cfg,
+        });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
         }
-        await line.pushMessageLine(id, message, {
+        const pushMessageLine =
+          getLineRuntime().channel.line?.pushMessageLine ??
+          (await loadLineChannelRuntime()).pushMessageLine;
+        await pushMessageLine(id, message, {
           accountId: account.accountId,
           channelAccessToken: account.channelAccessToken,
         });

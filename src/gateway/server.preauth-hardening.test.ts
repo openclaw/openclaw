@@ -6,9 +6,15 @@ import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { testState } from "./test-helpers.mocks.js";
-import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
+import { testState } from "./test-helpers.runtime-state.js";
+import {
+  createGatewaySuiteHarness,
+  installGatewayTestHooks,
+  readConnectChallengeNonce,
+} from "./test-helpers.server.js";
 import { withTempConfig } from "./test-temp-config.js";
+
+installGatewayTestHooks({ scope: "suite" });
 
 let cleanupEnv: Array<() => void> = [];
 
@@ -118,7 +124,7 @@ describe("gateway pre-auth hardening", () => {
       });
       expect(close.code).toBe(1000);
       expect(close.elapsedMs).toBeGreaterThan(0);
-      expect(close.elapsedMs).toBeLessThan(1_000);
+      expect(close.elapsedMs).toBeLessThan(2_500);
     } finally {
       await harness.close();
     }

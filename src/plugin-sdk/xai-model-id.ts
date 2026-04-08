@@ -1,1 +1,1 @@
-export { normalizeXaiModelId } from "./xai.js";
+export { normalizeNativeXaiModelId as normalizeXaiModelId } from "./provider-model-shared.js";

@@ -32,6 +32,13 @@ export function resolveUsageProviderId(provider?: string | null): UsageProviderI
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "minimax-portal" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal-cn"
+  ) {
+    return "minimax";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;

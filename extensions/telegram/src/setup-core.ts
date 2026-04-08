@@ -1,15 +1,14 @@
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
-  DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 

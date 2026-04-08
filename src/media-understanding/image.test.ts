@@ -29,15 +29,18 @@ const {
   fetchMock,
 } = hoisted;
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     complete: completeMock,
   };
 });
 
-vi.mock("../agents/models-config.js", () => ({
+vi.mock("../agents/models-config.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/models-config.js")>(
+    "../agents/models-config.js",
+  )),
   ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
 }));
 
@@ -54,7 +57,7 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
-let describeImageWithModel: typeof import("./image.js").describeImageWithModel;
+const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
@@ -62,31 +65,8 @@ describe("describeImageWithModel", () => {
     vi.restoreAllMocks();
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-      return {
-        ...actual,
-        complete: completeMock,
-      };
-    });
-    vi.doMock("../agents/models-config.js", () => ({
-      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-    }));
-    vi.doMock("../agents/model-auth.js", () => ({
-      getApiKeyForModel: getApiKeyForModelMock,
-      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-      requireApiKey: requireApiKeyMock,
-    }));
-    vi.doMock("../agents/pi-model-discovery-runtime.js", () => ({
-      discoverAuthStorage: () => ({
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      }),
-      discoverModels: discoverModelsMock,
-    }));
-    ({ describeImageWithModel } = await import("./image.js"));
     vi.clearAllMocks();
     fetchMock.mockResolvedValue({
       ok: true,
@@ -130,18 +110,22 @@ describe("describeImageWithModel", () => {
     expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
-    expect(fetchMock).toHaveBeenCalledWith("https://api.minimax.io/v1/coding_plan/vlm", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer oauth-test",
-        "Content-Type": "application/json",
-        "MM-API-Source": "OpenClaw",
-      },
-      body: JSON.stringify({
-        prompt: "Describe the image.",
-        image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.minimax.io/v1/coding_plan/vlm",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          Authorization: "Bearer oauth-test",
+          "Content-Type": "application/json",
+          "MM-API-Source": "OpenClaw",
+        },
+        body: JSON.stringify({
+          prompt: "Describe the image.",
+          image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
+        }),
+        signal: expect.any(AbortSignal),
       }),
-    });
+    );
     expect(completeMock).not.toHaveBeenCalled();
   });
 

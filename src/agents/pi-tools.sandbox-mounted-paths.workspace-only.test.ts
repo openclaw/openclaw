@@ -10,8 +10,9 @@ import {
 } from "./test-helpers/pi-tools-fs-helpers.js";
 import { withUnsafeMountedSandboxHarness } from "./test-helpers/unsafe-mounted-sandbox.js";
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 
@@ -33,7 +34,7 @@ function resolveApplyPatchTool(
     workspaceDir: params.workspaceDir,
     config: params.config,
     modelProvider: "openai",
-    modelId: "gpt-5.2",
+    modelId: "gpt-5.4",
   });
   const applyPatchTool = tools.find((t) => t.name === "apply_patch") as ToolWithExecute | undefined;
   if (!applyPatchTool) {

@@ -7,6 +7,7 @@ type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
+  getGatewayStatus?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   setSession?: SetSessionMock;
@@ -18,6 +19,7 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
+  const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
@@ -34,12 +36,13 @@ function createHarness(params?: {
   const state = {
     currentSessionKey: "agent:main:main",
     activeChatRunId: params?.activeChatRunId ?? null,
+    pendingOptimisticUserMessage: false,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
 
   const { handleCommand } = createCommandHandlers({
-    client: { sendChat, patchSession, resetSession } as never,
+    client: { sendChat, getGatewayStatus, patchSession, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
@@ -64,6 +67,7 @@ function createHarness(params?: {
 
   return {
     handleCommand,
+    getGatewayStatus,
     sendChat,
     patchSession,
     resetSession,
@@ -126,6 +130,48 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
+  it("forwards /status to the shared gateway command path", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness();
+
+    await handleCommand("/status");
+
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(addUser).toHaveBeenCalledWith("/status");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "/status",
+      }),
+    );
+  });
+
+  it("keeps gateway diagnostics on /gateway-status", async () => {
+    const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
+      getGatewayStatus: vi.fn().mockResolvedValue({
+        runtimeVersion: "1.2.3",
+        sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
+      }),
+    });
+
+    await handleCommand("/gateway-status");
+
+    expect(getGatewayStatus).toHaveBeenCalledTimes(1);
+    expect(addUser).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("Gateway status");
+    expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+  });
+
+  it("defers local run binding until gateway events provide a real run id", async () => {
+    const { handleCommand, noteLocalRunId, state } = createHarness();
+
+    await handleCommand("/context");
+
+    expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+  });
+
   it("sends /btw without hijacking the active main run", async () => {
     const setActivityStatus = vi.fn();
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
@@ -173,7 +219,7 @@ describe("tui command handlers", () => {
 
   it("reports send failures and marks activity status as error", async () => {
     const setActivityStatus = vi.fn();
-    const { handleCommand, addSystem } = createHarness({
+    const { handleCommand, addSystem, state } = createHarness({
       sendChat: vi.fn().mockRejectedValue(new Error("gateway down")),
       setActivityStatus,
     });
@@ -182,6 +228,7 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+    expect(state.pendingOptimisticUserMessage).toBe(false);
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {

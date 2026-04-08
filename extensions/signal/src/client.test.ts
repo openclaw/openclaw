@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithTimeoutMock = vi.fn();
 const resolveFetchMock = vi.fn();
@@ -7,8 +7,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/core")>();
+vi.mock("openclaw/plugin-sdk/core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/core")>(
+    "openclaw/plugin-sdk/core",
+  );
   return {
     ...actual,
     generateSecureUuid: () => "test-id",
@@ -29,11 +31,13 @@ function rpcResponse(body: unknown, status = 200): Response {
 }
 
 describe("signalRpcRequest", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ signalRpcRequest } = await import("./client.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     resolveFetchMock.mockReturnValue(vi.fn());
-    ({ signalRpcRequest } = await import("./client.js"));
   });
 
   it("returns parsed RPC result", async () => {

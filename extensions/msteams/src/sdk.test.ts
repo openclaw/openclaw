@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createBotFrameworkJwtValidator,
   createMSTeamsAdapter,
+  createMSTeamsApp,
   type MSTeamsTeamsSdk,
 } from "./sdk.js";
 import type { MSTeamsCredentials } from "./token.js";
@@ -10,6 +11,10 @@ const jwtValidatorState = vi.hoisted(() => ({
   instances: [] as Array<{ config: Record<string, unknown> }>,
   behaviorByJwks: new Map<string, "success" | "null" | "throw">(),
   calls: [] as Array<{ jwksUri: string; token: string; overrideOptions?: unknown }>,
+}));
+
+const clientConstructorState = vi.hoisted(() => ({
+  calls: [] as Array<{ serviceUrl: string; options: unknown }>,
 }));
 
 vi.mock("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js", () => ({
@@ -37,6 +42,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clientConstructorState.calls.length = 0;
   jwtValidatorState.instances.length = 0;
   jwtValidatorState.calls.length = 0;
   jwtValidatorState.behaviorByJwks.clear();
@@ -55,7 +61,9 @@ function createSdkStub(): MSTeamsTeamsSdk {
   }
 
   class ClientStub {
-    constructor(_serviceUrl: string, _options: unknown) {}
+    constructor(serviceUrl: string, options: unknown) {
+      clientConstructorState.calls.push({ serviceUrl, options });
+    }
 
     conversations = {
       activities: (_conversationId: string) => ({
@@ -69,6 +77,28 @@ function createSdkStub(): MSTeamsTeamsSdk {
     Client: ClientStub as unknown as MSTeamsTeamsSdk["Client"],
   };
 }
+
+describe("createMSTeamsApp", () => {
+  it("does not crash with express 5 path-to-regexp (#55161)", async () => {
+    // Regression test for: https://github.com/openclaw/openclaw/issues/55161
+    // createMSTeamsApp passes a no-op httpServerAdapter to prevent the SDK from
+    // creating its default HttpPlugin (which registers `/api*` — invalid in Express 5).
+    const { App } = await import("@microsoft/teams.apps");
+    const { Client } = await import("@microsoft/teams.api");
+    const sdk: MSTeamsTeamsSdk = { App, Client };
+    const creds: MSTeamsCredentials = {
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    // This would throw "Missing parameter name at index 5: /api*" without the fix
+    const app = await createMSTeamsApp(creds, sdk);
+    expect(app).toBeDefined();
+    // Verify token methods are available (the reason we use the App class)
+    expect(typeof (app as unknown as Record<string, unknown>).getBotToken).toBe("function");
+  });
+});
 
 describe("createMSTeamsAdapter", () => {
   it("provides deleteActivity in proactive continueConversation contexts", async () => {
@@ -109,6 +139,43 @@ describe("createMSTeamsAdapter", () => {
         }),
       }),
     );
+  });
+
+  it("passes the OpenClaw User-Agent to the Bot Framework connector client", async () => {
+    const creds = {
+      appId: "app-id",
+      appPassword: "secret",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsCredentials;
+    const sdk = createSdkStub();
+    const app = new sdk.App({
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
+      tenantId: creds.tenantId,
+    });
+    const adapter = createMSTeamsAdapter(app, sdk);
+
+    await adapter.continueConversation(
+      creds.appId,
+      {
+        serviceUrl: "https://service.example.com/",
+        conversation: { id: "19:conversation@thread.tacv2" },
+        channelId: "msteams",
+      },
+      async (ctx) => {
+        await ctx.sendActivity("hello");
+      },
+    );
+
+    expect(clientConstructorState.calls).toHaveLength(1);
+    expect(clientConstructorState.calls[0]).toMatchObject({
+      serviceUrl: "https://service.example.com/",
+      options: {
+        headers: {
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+        },
+      },
+    });
   });
 });
 

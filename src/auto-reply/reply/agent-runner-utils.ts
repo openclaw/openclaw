@@ -2,7 +2,11 @@ import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -14,6 +18,12 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+
+export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  return (
+    (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
+  );
+}
 
 /**
  * Build provider-specific threading context for tool auto-injection.
@@ -38,7 +48,7 @@ export function buildThreadingToolContext(params: {
       currentMessageId,
     };
   }
-  const rawProvider = originProvider?.trim().toLowerCase();
+  const rawProvider = normalizeOptionalLowercaseString(originProvider);
   if (!rawProvider) {
     return {
       currentMessageId,
@@ -49,7 +59,7 @@ export function buildThreadingToolContext(params: {
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
-      currentChannelId: originTo?.trim() || undefined,
+      currentChannelId: normalizeOptionalString(originTo),
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       hasRepliedRef,
@@ -92,17 +102,30 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
-export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
-  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+export const resolveEnforceFinalTag = (
+  run: FollowupRun["run"],
+  provider: string,
+  model = run.model,
+) =>
+  Boolean(
+    (run.skipProviderRuntimeHints ? false : undefined) ??
+    (run.enforceFinalTag ||
+      isReasoningTagProvider(provider, {
+        config: resolveQueuedReplyRuntimeConfig(run.config),
+        workspaceDir: run.workspaceDir,
+        modelId: model,
+      })),
+  );
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
+  const config = resolveQueuedReplyRuntimeConfig(run.config);
   return {
-    cfg: run.config,
+    cfg: config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
     fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: run.config,
+      cfg: config,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
     }),
@@ -117,16 +140,18 @@ export function buildEmbeddedRunBaseParams(params: {
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
 }) {
+  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     agentDir: params.run.agentDir,
-    config: params.run.config,
+    config,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
-    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
+    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
+    silentExpected: params.run.silentExpected,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,
@@ -146,6 +171,7 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
+  const config = resolveQueuedReplyRuntimeConfig(params.run.config);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -163,7 +189,7 @@ export function buildEmbeddedContextFromTemplate(params: {
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
-      config: params.run.config,
+      config,
       hasRepliedRef: params.hasRepliedRef,
     }),
   };
@@ -171,10 +197,10 @@ export function buildEmbeddedContextFromTemplate(params: {
 
 export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
-    senderId: sessionCtx.SenderId?.trim() || undefined,
-    senderName: sessionCtx.SenderName?.trim() || undefined,
-    senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-    senderE164: sessionCtx.SenderE164?.trim() || undefined,
+    senderId: normalizeOptionalString(sessionCtx.SenderId),
+    senderName: normalizeOptionalString(sessionCtx.SenderName),
+    senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
+    senderE164: normalizeOptionalString(sessionCtx.SenderE164),
   };
 }
 

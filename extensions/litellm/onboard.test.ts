@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLegacyProviderConfig } from "../../test/helpers/extensions/onboard-config.js";
+import { createLegacyProviderConfig } from "../../test/helpers/plugins/onboard-config.js";
 import { applyLitellmProviderConfig } from "./onboard.js";
 
 describe("litellm onboard", () => {

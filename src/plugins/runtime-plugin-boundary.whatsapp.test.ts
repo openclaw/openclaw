@@ -1,9 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 type LightModule = {
   getActiveWebListener: (accountId?: string | null) => unknown;
@@ -24,8 +25,7 @@ function writeRuntimeFixtureText(rootDir: string, relativePath: string, value: s
 }
 
 function createBundledWhatsAppRuntimeFixture() {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-whatsapp-boundary-"));
-  tempDirs.push(rootDir);
+  const rootDir = makeTrackedTempDir("openclaw-whatsapp-boundary", tempDirs);
   for (const [relativePath, value] of Object.entries({
     "package.json": JSON.stringify(
       {
@@ -44,10 +44,10 @@ function createBundledWhatsAppRuntimeFixture() {
       2,
     ),
     "openclaw.mjs": "export {};\n",
-    "dist/extensions/whatsapp/index.js": "export default {};\n",
-    "dist/extensions/whatsapp/light-runtime-api.js":
+    [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
+    [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]:
       'export { getActiveWebListener } from "../../active-listener.js";\n',
-    "dist/extensions/whatsapp/runtime-api.js":
+    [bundledDistPluginFile("whatsapp", "runtime-api.js")]:
       'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
     "dist/active-listener.js": [
       'const key = Symbol.for("openclaw.whatsapp.activeListenerState");',
@@ -106,9 +106,7 @@ function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: 
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("runtime plugin boundary whatsapp seam", () => {

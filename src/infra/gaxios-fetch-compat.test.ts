@@ -23,7 +23,6 @@ beforeEach(() => {
 
 describe("gaxios fetch compat", () => {
   afterEach(() => {
-    vi.doUnmock("undici");
     Reflect.deleteProperty(globalThis as object, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE);
     __testing.resetGaxiosFetchCompatForTests();
     vi.restoreAllMocks();

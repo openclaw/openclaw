@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -70,7 +71,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
       continue;
     }
     // Skip duplicate text (URL might be in both text message and balloon)
-    const normalizedText = text.toLowerCase();
+    const normalizedText = normalizeLowercaseStringOrEmpty(text);
     if (seenTexts.has(normalizedText)) {
       continue;
     }
@@ -150,7 +151,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           const balloonBundleId = msg.balloonBundleId?.trim();
           const associatedMessageGuid = msg.associatedMessageGuid?.trim();
           if (balloonBundleId && associatedMessageGuid) {
-            return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+            return `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`;
           }
 
           const messageId = msg.messageId?.trim();

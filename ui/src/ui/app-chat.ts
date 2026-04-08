@@ -1,4 +1,3 @@
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -10,7 +9,10 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -32,6 +34,7 @@ export type ChatHost = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
@@ -49,7 +52,7 @@ export function isChatStopCommand(text: string) {
   if (!trimmed) {
     return false;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "/stop") {
     return true;
   }
@@ -67,7 +70,7 @@ function isChatResetCommand(text: string) {
   if (!trimmed) {
     return false;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "/new" || normalized === "/reset") {
     return true;
   }
@@ -104,6 +107,22 @@ function enqueueChatMessage(
       refreshSessions,
       localCommandArgs: localCommand?.args,
       localCommandName: localCommand?.name,
+    },
+  ];
+}
+
+function enqueuePendingRunMessage(host: ChatHost, text: string, pendingRunId: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  host.chatQueue = [
+    ...host.chatQueue,
+    {
+      id: generateUUID(),
+      text: trimmed,
+      createdAt: Date.now(),
+      pendingRunId,
     },
   ];
 }
@@ -158,11 +177,12 @@ async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
-  const [next, ...rest] = host.chatQueue;
-  if (!next) {
+  const nextIndex = host.chatQueue.findIndex((item) => !item.pendingRunId);
+  if (nextIndex < 0) {
     return;
   }
-  host.chatQueue = rest;
+  const next = host.chatQueue[nextIndex];
+  host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
   let ok = false;
   try {
     if (next.localCommandName) {
@@ -187,6 +207,13 @@ async function flushChatQueue(host: ChatHost) {
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+}
+
+export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
+  if (!runId) {
+    return;
+  }
+  host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
 }
 
 export async function handleSendChat(
@@ -260,7 +287,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session"].includes(name);
+  return !["stop", "focus", "export-session", "steer", "redirect"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -307,10 +334,21 @@ async function dispatchSlashCommand(
   const targetSessionKey = host.sessionKey;
   const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
     chatModelCatalog: host.chatModelCatalog,
+    sessionsResult: host.sessionsResult,
   });
 
   if (result.content) {
     injectCommandResult(host, result.content);
+  }
+
+  if (result.trackRunId) {
+    host.chatRunId = result.trackRunId;
+    host.chatStream = "";
+    host.chatSending = false;
+  }
+
+  if (result.pendingCurrentRun && host.chatRunId) {
+    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
@@ -387,10 +425,24 @@ async function refreshChatModels(host: ChatHost) {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+const chatAvatarRequestVersions = new WeakMap<object, number>();
 
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
 };
+
+function beginChatAvatarRequest(host: ChatHost): number {
+  const key = host as object;
+  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
+  chatAvatarRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function shouldApplyChatAvatarResult(host: ChatHost, version: number, sessionKey: string): boolean {
+  return (
+    chatAvatarRequestVersions.get(host as object) === version && host.sessionKey === sessionKey
+  );
+}
 
 function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
@@ -415,23 +467,35 @@ export async function refreshChatAvatar(host: ChatHost) {
     host.chatAvatarUrl = null;
     return;
   }
+  const sessionKey = host.sessionKey;
+  const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
-    host.chatAvatarUrl = null;
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      host.chatAvatarUrl = null;
+    }
     return;
   }
   host.chatAvatarUrl = null;
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
     const res = await fetch(url, { method: "GET" });
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      return;
+    }
     if (!res.ok) {
       host.chatAvatarUrl = null;
       return;
     }
     const data = (await res.json()) as { avatarUrl?: unknown };
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      return;
+    }
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     host.chatAvatarUrl = avatarUrl || null;
   } catch {
-    host.chatAvatarUrl = null;
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      host.chatAvatarUrl = null;
+    }
   }
 }

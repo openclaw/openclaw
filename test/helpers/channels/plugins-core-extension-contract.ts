@@ -5,7 +5,7 @@ import {
   type DiscordProbe,
   type DiscordTokenResolution,
 } from "../../../extensions/discord/api.js";
-import type { IMessageProbe } from "../../../extensions/imessage/api.js";
+import type { IMessageProbe } from "../../../extensions/imessage/runtime-api.js";
 import type { SignalProbe } from "../../../extensions/signal/api.js";
 import {
   listSlackDirectoryGroupsFromConfig,

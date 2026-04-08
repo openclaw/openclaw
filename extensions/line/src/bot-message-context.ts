@@ -1,23 +1,36 @@
-import type { EventSource, MessageEvent, PostbackEvent, StickerEventMessage } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import {
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  ensureConfiguredBindingRouteReady,
+  getSessionBindingService,
   recordInboundSession,
   resolvePinnedMainDmOwnerFromAllowlist,
+  resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  deriveLastRoutePolicy,
+  resolveAgentIdFromSessionKey,
+  resolveAgentRoute,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
-import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import type { ResolvedLineAccount } from "./types.js";
+
+type EventSource = webhook.Source | undefined;
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+type StickerEventMessage = webhook.StickerMessageContent;
 
 interface MediaRef {
   path: string;
@@ -42,6 +55,9 @@ export type LineSourceInfo = {
 };
 
 export function getLineSourceInfo(source: EventSource): LineSourceInfo {
+  if (!source) {
+    return { userId: undefined, groupId: undefined, roomId: undefined, isGroup: false };
+  }
   const userId =
     source.type === "user"
       ? source.userId
@@ -58,10 +74,12 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
 }
 
 function buildPeerId(source: EventSource): string {
-  const groupKey = resolveLineGroupHistoryKey({
-    groupId: source.type === "group" ? source.groupId : undefined,
-    roomId: source.type === "room" ? source.roomId : undefined,
-  });
+  if (!source) {
+    return "unknown";
+  }
+  const groupKey =
+    normalizeOptionalString(source.type === "group" ? source.groupId : undefined) ??
+    normalizeOptionalString(source.type === "room" ? source.roomId : undefined);
   if (groupKey) {
     return groupKey;
   }
@@ -71,18 +89,18 @@ function buildPeerId(source: EventSource): string {
   return "unknown";
 }
 
-function resolveLineInboundRoute(params: {
+async function resolveLineInboundRoute(params: {
   source: EventSource;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
-}): {
+}): Promise<{
   userId?: string;
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
   peerId: string;
   route: ReturnType<typeof resolveAgentRoute>;
-} {
+}> {
   recordChannelActivity({
     channel: "line",
     accountId: params.account.accountId,
@@ -91,7 +109,7 @@ function resolveLineInboundRoute(params: {
 
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
-  const route = resolveAgentRoute({
+  let route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "line",
     accountId: params.account.accountId,
@@ -100,6 +118,57 @@ function resolveLineInboundRoute(params: {
       id: peerId,
     },
   });
+
+  const configuredRoute = resolveConfiguredBindingRoute({
+    cfg: params.cfg,
+    route,
+    conversation: {
+      channel: "line",
+      accountId: params.account.accountId,
+      conversationId: peerId,
+    },
+  });
+  let configuredBinding = configuredRoute.bindingResolution;
+  const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+  route = configuredRoute.route;
+
+  const boundConversation = getSessionBindingService().resolveByConversation({
+    channel: "line",
+    accountId: params.account.accountId,
+    conversationId: peerId,
+  });
+  const boundSessionKey = boundConversation?.targetSessionKey?.trim();
+  if (boundConversation && boundSessionKey) {
+    route = {
+      ...route,
+      sessionKey: boundSessionKey,
+      agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: boundSessionKey,
+        mainSessionKey: route.mainSessionKey,
+      }),
+      matchedBy: "binding.channel",
+    };
+    configuredBinding = null;
+    getSessionBindingService().touch(boundConversation.bindingId);
+    logVerbose(`line: routed via bound conversation ${peerId} -> ${boundSessionKey}`);
+  }
+
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredBindingRouteReady({
+      cfg: params.cfg,
+      bindingResolution: configuredBinding,
+    });
+    if (!ensured.ok) {
+      logVerbose(
+        `line: configured ACP binding unavailable for ${peerId} -> ${configuredBindingSessionKey}: ${ensured.error}`,
+      );
+      throw new Error(`Configured ACP binding unavailable: ${ensured.error}`);
+    }
+    logVerbose(
+      `line: using configured ACP binding for ${peerId} -> ${configuredBindingSessionKey}`,
+    );
+  }
 
   return { userId, groupId, roomId, isGroup, peerId, route };
 }
@@ -214,17 +283,6 @@ function resolveLineAddresses(params: {
   return { fromAddress, toAddress, originatingTo };
 }
 
-function resolveLineGroupSystemPrompt(
-  groups: Record<string, LineGroupConfig | undefined> | undefined,
-  source: LineSourceInfoWithPeerId,
-): string | undefined {
-  const entry = resolveLineGroupConfigEntry(groups, {
-    groupId: source.groupId,
-    roomId: source.roomId,
-  });
-  return entry?.systemPrompt?.trim() || undefined;
-}
-
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -311,7 +369,12 @@ async function finalizeLineInboundContext(params: {
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
     GroupSystemPrompt: params.source.isGroup
-      ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
+      ? normalizeOptionalString(
+          resolveLineGroupConfigEntry(params.account.config.groups, {
+            groupId: params.source.groupId,
+            roomId: params.source.roomId,
+          })?.systemPrompt,
+        )
       : undefined,
     InboundHistory: params.inboundHistory,
   });
@@ -371,7 +434,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const { event, allMedia, cfg, account, commandAuthorized, groupHistories, historyLimit } = params;
 
   const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
     source,
     cfg,
     account,
@@ -460,7 +523,7 @@ export async function buildLinePostbackContext(params: {
   const { event, cfg, account, commandAuthorized } = params;
 
   const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
     source,
     cfg,
     account,

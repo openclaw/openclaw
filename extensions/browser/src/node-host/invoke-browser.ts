@@ -51,6 +51,12 @@ function resolveBrowserProxyConfig() {
 
 let browserControlReady: Promise<void> | null = null;
 
+// Keep the production singleton but give tests a cheap reset seam so they do
+// not need to reload the entire module graph between cases.
+export function resetBrowserProxyCommandStateForTests(): void {
+  browserControlReady = null;
+}
+
 async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
     return browserControlReady;
@@ -234,12 +240,10 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       profile: params.profile,
     }) ?? "";
   const allowedProfiles = proxyConfig.allowProfiles;
+  if (isPersistentBrowserProfileMutation(method, path)) {
+    throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+  }
   if (allowedProfiles.length > 0) {
-    if (isPersistentBrowserProfileMutation(method, path)) {
-      throw new Error(
-        "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-      );
-    }
     if (path !== "/profiles") {
       const profileToCheck = requestedProfile || resolved.defaultProfile;
       if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {

@@ -9,6 +9,7 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
+  toolResultFormat?: "markdown" | "plain";
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -16,11 +17,15 @@ function createMockContext(overrides?: {
       runId: "test-run",
       onToolResult,
       onAgentEvent: vi.fn(),
+      toolResultFormat: overrides?.toolResultFormat,
     },
     state: {
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),
+      itemActiveIds: new Set(),
+      itemStartedCount: 0,
+      itemCompletedCount: 0,
       pendingMessagingTexts: new Map(),
       pendingMessagingTargets: new Map(),
       pendingMessagingMediaUrls: new Map(),
@@ -30,6 +35,7 @@ function createMockContext(overrides?: {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+      deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
     },
     log: { debug: vi.fn(), warn: vi.fn() },
@@ -212,6 +218,115 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.emitToolOutput).toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+  });
+
+  it("does not queue structured media already emitted in plain verbose output", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("still queues structured media for markdown verbose output", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "markdown",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
+  });
+
+  it("emits provider inventory output for compact video_generate list results", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "video_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: [
+              "openai: default=sora-2 | models=sora-2",
+              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+            ].join("\n"),
+          },
+        ],
+        details: {
+          providers: [
+            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
+            {
+              id: "google",
+              defaultModel: "veo-3.1-fast-generate-preview",
+              models: ["veo-3.1-fast-generate-preview"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "video_generate",
+      undefined,
+      [
+        "openai: default=sora-2 | models=sora-2",
+        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+      ].join("\n"),
+      expect.any(Object),
+    );
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
   it("does NOT emit media for error results", async () => {

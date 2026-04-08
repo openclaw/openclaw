@@ -4,7 +4,6 @@ import {
   resolveOutboundSendDep,
   type ChannelOutboundAdapter,
 } from "./runtime-api.js";
-import { getMatrixRuntime } from "./runtime.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -35,6 +34,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     text,
     mediaUrl,
     mediaLocalRoots,
+    mediaReadFile,
     deps,
     replyToId,
     threadId,
@@ -49,6 +49,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       cfg,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,

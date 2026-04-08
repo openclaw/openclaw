@@ -1,10 +1,21 @@
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
-import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixClient } from "../sdk.js";
 
 const getCore = () => getMatrixRuntime();
+
+type MatrixSendClientRuntime = Pick<
+  typeof import("../client-bootstrap.js"),
+  "withResolvedRuntimeMatrixClient"
+>;
+
+let matrixSendClientRuntimePromise: Promise<MatrixSendClientRuntime> | null = null;
+
+async function loadMatrixSendClientRuntime(): Promise<MatrixSendClientRuntime> {
+  matrixSendClientRuntimePromise ??= import("../client-bootstrap.js");
+  return await matrixSendClientRuntimePromise;
+}
 
 export function resolveMediaMaxBytes(
   accountId?: string | null,
@@ -19,7 +30,7 @@ export function resolveMediaMaxBytes(
   return undefined;
 }
 
-export async function withResolvedMatrixClient<T>(
+export async function withResolvedMatrixSendClient<T>(
   opts: {
     client?: MatrixClient;
     cfg?: CoreConfig;
@@ -28,11 +39,52 @@ export async function withResolvedMatrixClient<T>(
   },
   run: (client: MatrixClient) => Promise<T>,
 ): Promise<T> {
-  return await withResolvedRuntimeMatrixClient(
+  return await withResolvedMatrixClient(
     {
       ...opts,
-      readiness: "prepared",
+      // One-off outbound sends still need a started client so room encryption
+      // state and live crypto sessions are available before sendMessage/sendEvent.
+      readiness: "started",
+    },
+    run,
+    // Started one-off send clients should flush sync/crypto state before CLI
+    // shutdown paths can tear down the process.
+    "persist",
+  );
+}
+
+export async function withResolvedMatrixControlClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+  },
+  run: (client: MatrixClient) => Promise<T>,
+): Promise<T> {
+  return await withResolvedMatrixClient(
+    {
+      ...opts,
+      readiness: "none",
     },
     run,
   );
+}
+
+async function withResolvedMatrixClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+    readiness: "started" | "none";
+  },
+  run: (client: MatrixClient) => Promise<T>,
+  shutdownBehavior?: "persist",
+): Promise<T> {
+  if (opts.client) {
+    return await run(opts.client);
+  }
+  const { withResolvedRuntimeMatrixClient } = await loadMatrixSendClientRuntime();
+  return await withResolvedRuntimeMatrixClient(opts, run, shutdownBehavior);
 }

@@ -40,6 +40,19 @@ describe("timeout-triggered compaction", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
+        promptCache: {
+          retention: "short",
+          lastCallUsage: {
+            input: 150000,
+            cacheRead: 32000,
+            total: 182000,
+          },
+          observation: {
+            broke: false,
+            cacheRead: 32000,
+          },
+          lastCacheTouchAt: 1_700_000_000_000,
+        },
         lastAssistant: {
           usage: { input: 150000 },
         } as never,
@@ -67,6 +80,18 @@ describe("timeout-triggered compaction", () => {
         force: true,
         compactionTarget: "budget",
         runtimeContext: expect.objectContaining({
+          promptCache: expect.objectContaining({
+            retention: "short",
+            lastCallUsage: expect.objectContaining({
+              input: 150000,
+              cacheRead: 32000,
+            }),
+            observation: expect.objectContaining({
+              broke: false,
+              cacheRead: 32000,
+            }),
+            lastCacheTouchAt: 1_700_000_000_000,
+          }),
           trigger: "timeout_recovery",
           attempt: 1,
           maxAttempts: 2,

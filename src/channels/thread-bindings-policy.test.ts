@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   requiresNativeThreadContextForThreadHere,
   resolveThreadBindingPlacementForCurrentContext,
@@ -6,33 +8,61 @@ import {
 } from "./thread-bindings-policy.js";
 
 describe("thread binding spawn policy helpers", () => {
-  it("treats Discord and Matrix as automatic child-thread spawn channels", () => {
-    expect(supportsAutomaticThreadBindingSpawn("discord")).toBe(true);
-    expect(supportsAutomaticThreadBindingSpawn("matrix")).toBe(true);
-    expect(supportsAutomaticThreadBindingSpawn("telegram")).toBe(false);
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "child-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "child-chat", label: "Child chat" }),
+            conversationBindings: { defaultTopLevelPlacement: "child" },
+          },
+        },
+        {
+          pluginId: "current-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "current-chat", label: "Current chat" }),
+            conversationBindings: { defaultTopLevelPlacement: "current" },
+          },
+        },
+      ]),
+    );
+  });
+
+  it("treats child-placement channels as automatic child-thread spawn channels", () => {
+    expect(supportsAutomaticThreadBindingSpawn("child-chat")).toBe(true);
+    expect(supportsAutomaticThreadBindingSpawn("current-chat")).toBe(false);
+    expect(supportsAutomaticThreadBindingSpawn("unknown-chat")).toBe(false);
   });
 
   it("allows thread-here on threadless conversation channels without a native thread id", () => {
-    expect(requiresNativeThreadContextForThreadHere("telegram")).toBe(false);
-    expect(requiresNativeThreadContextForThreadHere("feishu")).toBe(false);
-    expect(requiresNativeThreadContextForThreadHere("discord")).toBe(true);
+    expect(requiresNativeThreadContextForThreadHere("current-chat")).toBe(false);
+    expect(requiresNativeThreadContextForThreadHere("unknown-chat")).toBe(false);
+    expect(requiresNativeThreadContextForThreadHere("child-chat")).toBe(true);
   });
 
   it("resolves current vs child placement from the current channel context", () => {
     expect(
       resolveThreadBindingPlacementForCurrentContext({
-        channel: "discord",
+        channel: "child-chat",
       }),
     ).toBe("child");
     expect(
       resolveThreadBindingPlacementForCurrentContext({
-        channel: "discord",
+        channel: "child-chat",
         threadId: "thread-1",
       }),
     ).toBe("current");
     expect(
       resolveThreadBindingPlacementForCurrentContext({
-        channel: "telegram",
+        channel: "current-chat",
+      }),
+    ).toBe("current");
+    expect(
+      resolveThreadBindingPlacementForCurrentContext({
+        channel: "unknown-chat",
       }),
     ).toBe("current");
   });

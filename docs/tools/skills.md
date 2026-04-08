@@ -43,6 +43,42 @@ If the same skill name exists in more than one place, the usual precedence
 applies: workspace wins, then project agent skills, then personal agent skills,
 then managed/local, then bundled, then extra dirs.
 
+## Agent skill allowlists
+
+Skill **location** and skill **visibility** are separate controls.
+
+- Location/precedence decides which copy of a same-named skill wins.
+- Agent allowlists decide which visible skills an agent can actually use.
+
+Use `agents.defaults.skills` for a shared baseline, then override per agent with
+`agents.list[].skills`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      skills: ["github", "weather"],
+    },
+    list: [
+      { id: "writer" }, // inherits github, weather
+      { id: "docs", skills: ["docs-search"] }, // replaces defaults
+      { id: "locked-down", skills: [] }, // no skills
+    ],
+  },
+}
+```
+
+Rules:
+
+- Omit `agents.defaults.skills` for unrestricted skills by default.
+- Omit `agents.list[].skills` to inherit `agents.defaults.skills`.
+- Set `agents.list[].skills: []` for no skills.
+- A non-empty `agents.list[].skills` list is the final set for that agent; it
+  does not merge with defaults.
+
+OpenClaw applies the effective agent skill set across prompt building, skill
+slash-command discovery, sandbox sync, and skill snapshots.
+
 ## Plugins + skills
 
 Plugins can ship their own skills by listing `skills` directories in
@@ -57,7 +93,7 @@ tool surface those skills teach.
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-[https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
+[https://clawhub.ai](https://clawhub.ai). Use native `openclaw skills`
 commands to discover/install/update skills, or the separate `clawhub` CLI when
 you need publish/sync workflows.
 Full guide: [ClawHub](/tools/clawhub).
@@ -81,6 +117,8 @@ OpenClaw picks that up as `<workspace>/skills` on the next session.
 - Treat third-party skills as **untrusted code**. Read them before enabling.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
 - Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
+- Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
+- `openclaw skills install <slug>` is different: it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 - For a broader threat model and checklists, see [Security](/gateway/security).
@@ -190,6 +228,12 @@ Notes:
 - Node installs honor `skills.install.nodeManager` in `openclaw.json` (default: npm; options: npm/pnpm/yarn/bun).
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun is not recommended for WhatsApp/Telegram).
+- Gateway-backed installer selection is preference-driven, not node-only:
+  when install specs mix kinds, OpenClaw prefers Homebrew when
+  `skills.install.preferBrew` is enabled and `brew` exists, then `uv`, then the
+  configured node manager, then other fallbacks like `go` or `download`.
+- If every install spec is `download`, OpenClaw surfaces all download options
+  instead of collapsing to one preferred installer.
 - Go installs: if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew’s `bin` when possible.
 - Download installs: `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
 
@@ -265,9 +309,13 @@ OpenClaw snapshots the eligible skills **when a session starts** and reuses that
 
 Skills can also refresh mid-session when the skills watcher is enabled or when a new eligible remote node appears (see below). Think of this as a **hot reload**: the refreshed list is picked up on the next agent turn.
 
+If the effective agent skill allowlist changes for that session, OpenClaw
+refreshes the snapshot so the visible skills stay aligned with the current
+agent.
+
 ## Remote macOS nodes (Linux gateway)
 
-If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
+If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `exec` tool with `host=node`.
 
 This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
 
@@ -317,6 +365,13 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse [https://clawhub.com](https://clawhub.com).
+Browse [https://clawhub.ai](https://clawhub.ai).
 
 ---
+
+## Related
+
+- [Creating Skills](/tools/creating-skills) — building custom skills
+- [Skills Config](/tools/skills-config) — skill configuration reference
+- [Slash Commands](/tools/slash-commands) — all available slash commands
+- [Plugins](/tools/plugin) — plugin system overview

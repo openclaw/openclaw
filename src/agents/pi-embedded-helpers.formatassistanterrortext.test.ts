@@ -191,6 +191,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it.each(["disk full", "ENOSPC: no space left on device, write"])(
+    "returns a friendly disk-space message for %s",
+    (errorMessage) => {
+      const msg = makeAssistantError(errorMessage);
+      expect(formatAssistantErrorText(msg)).toBe(
+        "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+      );
+    },
+  );
+
   it("returns a DNS-specific message for provider lookup failures", () => {
     const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -202,6 +212,15 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("socket hang up");
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request failed: network connection was interrupted.",
+    );
+  });
+
+  it("sanitizes invalid streaming event order errors", () => {
+    const msg = makeAssistantError(
+      'Unexpected event order, got message_start before receiving "message_stop"',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
     );
   });
 });

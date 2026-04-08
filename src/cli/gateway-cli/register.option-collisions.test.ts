@@ -1,13 +1,22 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerGatewayCli } from "./register.js";
 
-const callGatewayCli = vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
-  ok: true,
+const mocks = vi.hoisted(() => ({
+  callGatewayCli: vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
+    ok: true,
+  })),
+  gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
+  defaultRuntime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+    exit: vi.fn(),
+  },
 }));
-const gatewayStatusCommand = vi.fn(async (_opts: unknown, _runtime: unknown) => {});
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { callGatewayCli, gatewayStatusCommand, defaultRuntime } = mocks;
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: async (
@@ -23,13 +32,14 @@ vi.mock("../cli-utils.js", () => ({
   },
 }));
 
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  defaultRuntime,
+vi.mock("../../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js")),
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../../commands/gateway-status.js", () => ({
-  gatewayStatusCommand: (opts: unknown, runtime: unknown) => gatewayStatusCommand(opts, runtime),
+  gatewayStatusCommand: (opts: unknown, runtime: unknown) =>
+    mocks.gatewayStatusCommand(opts, runtime),
 }));
 
 vi.mock("./call.js", () => ({
@@ -42,7 +52,7 @@ vi.mock("./call.js", () => ({
       .option("--expect-final", "Wait for final response (agent)", false)
       .option("--json", "Output JSON", false),
   callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
-    callGatewayCli(method, opts, params),
+    mocks.callGatewayCli(method, opts, params),
 }));
 
 vi.mock("./run.js", () => ({
@@ -113,20 +123,21 @@ vi.mock("./discover.js", () => ({
 }));
 
 describe("gateway register option collisions", () => {
-  let registerGatewayCli: typeof import("./register.js").registerGatewayCli;
-  let sharedProgram: Command;
+  let sharedProgram: Command = new Command();
 
-  beforeAll(async () => {
-    ({ registerGatewayCli } = await import("./register.js"));
-    sharedProgram = new Command();
+  if (sharedProgram.commands.length === 0) {
     sharedProgram.exitOverride();
     registerGatewayCli(sharedProgram);
-  });
+  }
 
   beforeEach(() => {
-    resetRuntimeCapture();
     callGatewayCli.mockClear();
     gatewayStatusCommand.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
   });
 
   it.each([

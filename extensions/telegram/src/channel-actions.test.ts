@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
 
 const handleTelegramActionMock = vi.hoisted(() => vi.fn());
@@ -191,6 +191,45 @@ describe("telegramMessageActions", () => {
         expect(actions, testCase.name).not.toContain("sticker-search");
       }
     }
+  });
+
+  it("honors account-scoped action gates during discovery", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          actions: {
+            reactions: false,
+            poll: true,
+          },
+          accounts: {
+            work: {
+              botToken: "tok-work",
+              actions: {
+                reactions: true,
+                poll: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const defaultActions =
+      telegramMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "default",
+      })?.actions ?? [];
+    const workActions =
+      telegramMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "work",
+      })?.actions ?? [];
+
+    expect(defaultActions).toContain("poll");
+    expect(defaultActions).not.toContain("react");
+    expect(workActions).toContain("react");
+    expect(workActions).not.toContain("poll");
   });
 
   it("normalizes reaction message identifiers before dispatch", async () => {

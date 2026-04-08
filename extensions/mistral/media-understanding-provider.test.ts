@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.js";
+} from "../../src/media-understanding/audio.test-helpers.ts";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();

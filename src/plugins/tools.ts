@@ -1,13 +1,17 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { resolveRuntimePluginRegistry } from "./loader.js";
-import { createPluginLoaderLogger } from "./logger.js";
+import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRuntimeSubagentMode,
+} from "./runtime.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  resolvePluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-const log = createSubsystemLogger("plugins");
 
 type PluginToolMeta = {
   pluginId: string;
@@ -50,6 +54,20 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
+function resolvePluginToolRegistry(params: {
+  loadOptions: PluginLoadOptions;
+  allowGatewaySubagentBinding?: boolean;
+}) {
+  if (
+    params.allowGatewaySubagentBinding &&
+    getActivePluginRegistryKey() &&
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
+  ) {
+    return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);
+  }
+  return resolveRuntimePluginRegistry(params.loadOptions);
+}
+
 export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
@@ -62,24 +80,24 @@ export function resolvePluginTools(params: {
   // This matters a lot for unit tests and for tool construction hot paths.
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
-  const effectiveConfig = applyPluginAutoEnable({ config: baseConfig, env }).config;
-  const normalized = normalizePluginsConfig(effectiveConfig.plugins);
+  const context = resolvePluginRuntimeLoadContext({
+    config: baseConfig,
+    env,
+    workspaceDir: params.context.workspaceDir,
+  });
+  const normalized = normalizePluginsConfig(context.config.plugins);
   if (!normalized.enabled) {
     return [];
   }
 
-  const loadOptions = {
-    config: effectiveConfig,
-    workspaceDir: params.context.workspaceDir,
-    runtimeOptions: params.allowGatewaySubagentBinding
-      ? {
-          allowGatewaySubagentBinding: true,
-        }
-      : undefined,
-    env,
-    logger: createPluginLoaderLogger(log),
-  };
-  const registry = resolveRuntimePluginRegistry(loadOptions);
+  const runtimeOptions = params.allowGatewaySubagentBinding
+    ? { allowGatewaySubagentBinding: true as const }
+    : undefined;
+  const loadOptions = buildPluginRuntimeLoadOptions(context, { runtimeOptions });
+  const registry = resolvePluginToolRegistry({
+    loadOptions,
+    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+  });
   if (!registry) {
     return [];
   }
@@ -98,7 +116,7 @@ export function resolvePluginTools(params: {
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
       if (!params.suppressNameConflicts) {
-        log.error(message);
+        context.logger.error(message);
         registry.diagnostics.push({
           level: "error",
           pluginId: entry.pluginId,
@@ -113,12 +131,12 @@ export function resolvePluginTools(params: {
     try {
       resolved = entry.factory(params.context);
     } catch (err) {
-      log.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
+      context.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
       continue;
     }
     if (!resolved) {
       if (entry.names.length > 0) {
-        log.debug(
+        context.logger.debug?.(
           `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
         );
       }
@@ -142,7 +160,7 @@ export function resolvePluginTools(params: {
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
         if (!params.suppressNameConflicts) {
-          log.error(message);
+          context.logger.error(message);
           registry.diagnostics.push({
             level: "error",
             pluginId: entry.pluginId,
