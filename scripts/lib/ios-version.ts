@@ -17,9 +17,6 @@ export type ResolvedIosVersion = {
   canonicalVersion: string;
   marketingVersion: string;
   buildVersion: string;
-  isPrerelease: boolean;
-  prereleaseChannel: string | null;
-  prereleaseNumber: number | null;
   versionFilePath: string;
   changelogPath: string;
   versionXcconfigPath: string;
@@ -108,9 +105,6 @@ export function resolveIosVersion(rootDir = path.resolve(".")): ResolvedIosVersi
     canonicalVersion,
     marketingVersion: canonicalVersion,
     buildVersion: "1",
-    isPrerelease: false,
-    prereleaseChannel: null,
-    prereleaseNumber: null,
     versionFilePath,
     changelogPath,
     versionXcconfigPath,
@@ -153,11 +147,7 @@ export function renderIosReleaseNotes(
   version: ResolvedIosVersion,
   changelogContent: string,
 ): string {
-  const candidateHeadings = [version.canonicalVersion];
-  if (!candidateHeadings.includes(version.marketingVersion)) {
-    candidateHeadings.push(version.marketingVersion);
-  }
-  candidateHeadings.push("Unreleased");
+  const candidateHeadings = [version.canonicalVersion, "Unreleased"];
 
   for (const heading of candidateHeadings) {
     const body = extractChangelogSection(changelogContent, heading);

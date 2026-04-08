@@ -71,9 +71,6 @@ if (options.format === "shell") {
       `OPENCLAW_IOS_VERSION=${version.canonicalVersion}`,
       `OPENCLAW_MARKETING_VERSION=${version.marketingVersion}`,
       `OPENCLAW_BUILD_VERSION=${version.buildVersion}`,
-      `OPENCLAW_PRERELEASE=${version.isPrerelease ? "1" : "0"}`,
-      `OPENCLAW_PRERELEASE_CHANNEL=${version.prereleaseChannel ?? ""}`,
-      `OPENCLAW_PRERELEASE_NUMBER=${version.prereleaseNumber ?? ""}`,
     ].join("\n") + "\n",
   );
 } else {

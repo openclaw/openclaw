@@ -54,9 +54,6 @@ describe("resolveIosVersion", () => {
       canonicalVersion: "2026.4.6",
       marketingVersion: "2026.4.6",
       buildVersion: "1",
-      isPrerelease: false,
-      prereleaseChannel: null,
-      prereleaseNumber: null,
     });
   });
 
