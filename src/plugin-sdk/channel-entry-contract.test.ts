@@ -14,6 +14,7 @@ afterEach(() => {
   }
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.unstubAllEnvs();
 });
 
 describe("loadBundledEntryExportSync", () => {
@@ -83,5 +84,40 @@ describe("loadBundledEntryExportSync", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("can disable source-tree fallback for dist bundled entry checks", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    fs.writeFileSync(path.join(tempRoot, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    const sourceRoot = path.join(tempRoot, "extensions", "telegram", "src");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(sourceRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "index.js");
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "secret-contract.ts"),
+      "export const sentinel = 42;\n",
+      "utf8",
+    );
+
+    expect(
+      loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+        specifier: "./src/secret-contract.js",
+        exportName: "sentinel",
+      }),
+    ).toBe(42);
+
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", "1");
+
+    expect(() =>
+      loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+        specifier: "./src/secret-contract.js",
+        exportName: "sentinel",
+      }),
+    ).toThrow(`resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`);
   });
 });

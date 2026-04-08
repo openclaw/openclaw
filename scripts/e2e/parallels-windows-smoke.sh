@@ -1585,7 +1585,7 @@ try {
   $bootstrapBin = Join-Path $bootstrapRoot 'node_modules\.bin'
   $env:PATH = "$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
   $env:ComSpec = Join-Path $env:SystemRoot 'System32\cmd.exe'
-  $env:npm_config_script_shell = $env:ComSpec
+  $env:npm_config_ignore_scripts = 'true'
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   $gitRoot = Join-Path $env:USERPROFILE 'openclaw'
   $gitEntry = Join-Path $gitRoot 'openclaw.mjs'
@@ -1599,7 +1599,8 @@ try {
   $env:TEMP = $shortTemp
   $env:TMP = $shortTemp
   Write-LoggedLine ("TEMP=" + $env:TEMP)
-  Write-LoggedLine ("npm_config_script_shell=" + $env:npm_config_script_shell)
+  Write-LoggedLine ("ComSpec=" + $env:ComSpec)
+  Write-LoggedLine ("npm_config_ignore_scripts=" + $env:npm_config_ignore_scripts)
 
   Write-ProgressLog 'update.where-pnpm-pre'
   $pnpmPre = Get-Command pnpm -ErrorAction SilentlyContinue

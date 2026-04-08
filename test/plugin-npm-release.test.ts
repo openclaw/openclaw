@@ -133,7 +133,7 @@ describe("collectPublishablePluginPackages", () => {
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
-      version: "2026.4.7",
+      version: "2026.4.8",
       openclaw: {
         extensions: ["./index.ts"],
         install: {
@@ -150,7 +150,7 @@ describe("collectPublishablePluginPackages", () => {
         extensionId: "demo-plugin",
         packageDir: "extensions/demo-plugin",
         packageName: "@openclaw/demo-plugin",
-        version: "2026.4.7",
+        version: "2026.4.8",
         channel: "stable",
         publishTag: "latest",
         installNpmSpec: "@openclaw/demo-plugin",

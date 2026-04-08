@@ -387,13 +387,13 @@ AI CLI backend such as `codex-cli`.
 
 ### Exclusive slots
 
-| Method                                     | What it registers                     |
-| ------------------------------------------ | ------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
-| `api.registerMemoryCapability(capability)` | Unified memory capability             |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
+| Method                                     | What it registers                                                                                                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
 
 ### Memory embedding adapters
 

@@ -17,16 +17,20 @@ The desired end state is a generic QA harness that loads powerful scenario defin
 
 ## Current State
 
-Primary source of truth now lives in `qa/scenarios.md`.
+Primary source of truth now lives in `qa/scenarios/index.md` plus one file per
+scenario under `qa/scenarios/*.md`.
 
 Implemented:
 
-- `qa/scenarios.md`
-  - canonical QA pack
+- `qa/scenarios/index.md`
+  - canonical QA pack metadata
   - operator identity
   - kickoff mission
+- `qa/scenarios/*.md`
+  - one markdown file per scenario
   - scenario metadata
   - handler bindings
+  - scenario-specific execution config
 - `extensions/qa-lab/src/scenario-catalog.ts`
   - markdown pack parser + zod validation
 - `extensions/qa-lab/src/qa-agent-bootstrap.ts`
@@ -103,7 +107,8 @@ These categories matter because they drive DSL requirements. A flat list of prom
 
 ### Single source of truth
 
-Use `qa/scenarios.md` as the authored source of truth.
+Use `qa/scenarios/index.md` plus `qa/scenarios/*.md` as the authored source of
+truth.
 
 The pack should stay:
 
@@ -188,7 +193,6 @@ Verify generated media is reattached on the follow-up turn.
 - action: session.create
   key: agent:qa:image-roundtrip
 ```
-````
 
 # Steps
 
@@ -221,7 +225,6 @@ Verify generated media is reattached on the follow-up turn.
 - assert: artifact.exists
   ref: lighthouseImage
 ```
-
 ````
 
 ## Runner Capabilities The DSL Must Cover
@@ -359,7 +362,8 @@ Generated compatibility:
 
 Done.
 
-- added `qa/scenarios.md`
+- added `qa/scenarios/index.md`
+- split scenarios into `qa/scenarios/*.md`
 - added parser for named markdown YAML pack content
 - validated with zod
 - switched consumers to the parsed pack
@@ -458,7 +462,7 @@ type QaBusAttachment = {
   altText?: string;
   transcript?: string;
 };
-````
+```
 
 Then add `attachments?: QaBusAttachment[]` to:
 

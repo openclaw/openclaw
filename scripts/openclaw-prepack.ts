@@ -112,14 +112,20 @@ function run(command: string, args: string[]): void {
   process.exit(result.status ?? 1);
 }
 
+function runBuildSmoke(): void {
+  run(process.execPath, ["scripts/test-built-bundled-channel-entry-smoke.mjs"]);
+}
+
 function main(): void {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   if (shouldSkipPrepack()) {
     ensurePreparedArtifacts();
+    runBuildSmoke();
     return;
   }
   run(pnpmCommand, ["build"]);
   run(pnpmCommand, ["ui:build"]);
+  runBuildSmoke();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

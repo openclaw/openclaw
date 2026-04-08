@@ -941,6 +941,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+      https-proxy-agent:
+        specifier: ^9.0.0
+        version: 9.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
