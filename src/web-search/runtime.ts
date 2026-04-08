@@ -6,6 +6,9 @@ import type {
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+} from "../shared/string-coerce.js";
+import {
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
 } from "../plugins/web-search-providers.runtime.js";
@@ -127,10 +130,9 @@ export function resolveWebSearchProviderId(params: {
         origin: "bundled",
       }),
   );
-  const raw =
-    params.search && "provider" in params.search && typeof params.search.provider === "string"
-      ? params.search.provider.trim().toLowerCase()
-      : "";
+  const raw = normalizeLowercaseStringOrEmpty(
+    params.search && "provider" in params.search ? params.search.provider : undefined,
+  );
 
   if (raw) {
     const explicit = providers.find((provider) => provider.id === raw);
@@ -224,7 +226,7 @@ export async function runWebSearch(
     search && "fallbacks" in search && Array.isArray(search.fallbacks)
       ? search.fallbacks
           .filter((id): id is string => typeof id === "string")
-          .map((id) => id.trim().toLowerCase())
+          .map((id) => id.trim())
           .filter((id) => id.length > 0)
       : [];
 
@@ -235,7 +237,7 @@ export async function runWebSearch(
   // configured fallbacks from being tried.
   const runtimePref = params.preferRuntimeProviders ?? true;
   if (params.providerId !== undefined) {
-    const normalizedExplicit = params.providerId.trim().toLowerCase();
+    const normalizedExplicit = normalizeLowercaseStringOrEmpty(params.providerId);
     const registry = runtimePref
       ? resolveRuntimeWebSearchProviders({ config: params.config, bundledAllowlistCompat: true })
       : resolvePluginWebSearchProviders({
@@ -310,12 +312,14 @@ export async function runWebSearch(
       if (!fallbackId) {
         continue;
       }
-      const normalizedFallbackId = fallbackId.trim().toLowerCase();
+      const normalizedFallbackId = normalizeLowercaseStringOrEmpty(fallbackId);
       if (seenProviderIds.has(normalizedFallbackId)) {
         continue;
       }
       seenProviderIds.add(normalizedFallbackId);
-      allProviderIds.push(normalizedFallbackId);
+      // Push trimmed casing (not lowercased) so resolveWebSearchDefinition
+      // can match it case-sensitively as registered.
+      allProviderIds.push(fallbackId.trim());
     }
   }
 
@@ -357,7 +361,8 @@ export async function runWebSearch(
           preferRuntimeProviders: runtimePref,
         });
       } catch (err) {
-        // Init-time errors: if this is the primary and no fallback ran yet, save the error.
+        // Init-time errors: save the most recent error so the final failure
+        // reflects the terminal error from the last attempted provider.
         // For non-retryable FailoverError (not rate_limit/billing), throw immediately
         // so hard config/auth errors don't silently switch to a different provider.
         const normalized = coerceToFailoverError(err, { provider: providerId });
@@ -367,9 +372,7 @@ export async function runWebSearch(
             throw err;
           }
         }
-        if (allProviderIds.indexOf(providerId) === 0) {
-          lastError = err;
-        }
+        lastError = err;
         // Definition init failed (e.g. provider createTool throws) — skip without stopping the chain
         continue;
       }
