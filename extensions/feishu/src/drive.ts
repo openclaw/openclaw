@@ -392,9 +392,7 @@ async function getFileInfo(client: Lark.Client, fileToken: string, type?: string
     throw new Error(res.msg);
   }
 
-  const failed = res.data?.failed_list?.find(
-    (f: { token?: string }) => f.token === fileToken,
-  );
+  const failed = res.data?.failed_list?.find((f: { token?: string }) => f.token === fileToken);
   if (failed) {
     throw new Error(
       `File not accessible (token: ${fileToken}, code: ${(failed as { code?: number }).code})`,
@@ -871,6 +869,11 @@ async function writeResponseToFile(resAny: any, filePath: string): Promise<void>
   }
 }
 
+/** Strip path-traversal characters from tokens before using in file paths. */
+function sanitizeToken(token: string): string {
+  return token.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 async function resolveDownloadsDir(): Promise<string> {
   const homeDir = os.homedir();
   const dlDir = path.join(homeDir, ".openclaw", "workspace", "downloads");
@@ -895,6 +898,7 @@ async function tryExtractText(
       const buf = await fs.promises.readFile(filePath);
       const text = buf.toString("utf-8");
       const nonPrintable = text.replace(/[\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
+      if (text.length === 0) return undefined;
       if (nonPrintable.length / text.length < 0.05) {
         return text;
       }
@@ -928,7 +932,7 @@ async function downloadFile(client: Lark.Client, fileToken: string, fileType?: s
   const headers = resolveResponseHeaders(resAny);
   const ext = detectFileExtension(headers);
   const dlDir = await resolveDownloadsDir();
-  const tmpPath = path.join(dlDir, `${fileToken}_${Date.now()}${ext}`);
+  const tmpPath = path.join(dlDir, `${sanitizeToken(fileToken)}_${Date.now()}${ext}`);
 
   await writeResponseToFile(resAny, tmpPath);
 
@@ -996,16 +1000,20 @@ async function downloadViaExport(client: Lark.Client, fileToken: string, fileTyp
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const dlAny = dlRes as any;
   const dlDir = await resolveDownloadsDir();
-  const tmpPath = path.join(dlDir, `${fileToken}_export_${Date.now()}.pdf`);
+  const tmpPath = path.join(dlDir, `${sanitizeToken(fileToken)}_export_${Date.now()}.pdf`);
 
   await writeResponseToFile(dlAny, tmpPath);
 
   const stat = await fs.promises.stat(tmpPath);
+  const textContent = await tryExtractText(tmpPath, ".pdf", stat.size);
   return {
     file_path: tmpPath,
     size_bytes: stat.size,
     exported_as: "pdf",
-    note: `Native ${fileType} exported as PDF and saved to ${tmpPath}. Use the read tool to view it.`,
+    text_content: textContent,
+    note: textContent
+      ? `Native ${fileType} exported as PDF; text content extracted above.`
+      : `Native ${fileType} exported as PDF and saved to ${tmpPath}. Use the read tool to view it.`,
   };
 }
 
@@ -1032,7 +1040,7 @@ async function downloadMessageAttachment(
   const ext = detectFileExtension(headers);
   const fileName = detectFileName(headers);
   const dlDir = await resolveDownloadsDir();
-  const tmpPath = path.join(dlDir, `${fileKey}_${Date.now()}${ext}`);
+  const tmpPath = path.join(dlDir, `${sanitizeToken(fileKey)}_${Date.now()}${ext}`);
 
   await writeResponseToFile(resAny, tmpPath);
 
