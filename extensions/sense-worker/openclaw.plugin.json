@@ -7,7 +7,18 @@
     "additionalProperties": false,
     "properties": {
       "baseUrl": { "type": "string" },
-      "timeoutMs": { "type": "number" }
+      "timeoutMs": { "type": "number" },
+      "token": { "type": "string" },
+      "tokenEnv": { "type": "string" },
+      "slackNotifyTo": { "type": "string" },
+      "slackNotifyAccountId": { "type": "string" },
+      "slackNotifyEvents": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["job_done", "job_failed", "digest_ready"]
+        }
+      }
     }
   }
 }

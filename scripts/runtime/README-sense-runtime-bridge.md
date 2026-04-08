@@ -1028,6 +1028,14 @@ Implementation guidance for the first Slack layer:
 - do not change runtime orchestration semantics
 - treat Slack as an execution visibility/output surface first, not a new control-plane authority
 
+Current first-pass wiring is intentionally limited to:
+
+- `digest_ready`
+- `job_failed`
+- `job_done`
+
+These notifications are emitted from the NemoClaw runner completion path and rendered through the same shallow digest selector/formatter chain used by preview-oriented consumers. This phase prioritizes execution visibility only; `job_queued`, `job_running`, and `digest_alert` stay for later phases.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

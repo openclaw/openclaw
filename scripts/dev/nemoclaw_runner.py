@@ -4,10 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
+import subprocess
 import sys
 import time
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -19,11 +22,56 @@ DEFAULT_PROCESSING_DELAY = 1.5
 DEFAULT_HEARTBEAT_INTERVAL = 30.0
 DEFAULT_OLLAMA_URL = "http://192.168.11.11:11434"
 DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b")
+DEFAULT_RUNNER_ID_ENV = "NEMOCLAW_RUNNER_ID"
+DEFAULT_SLACK_NOTIFY_SCRIPT = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "runtime", "nemoclaw_slack_notify.ts")
+)
 
 
 def log(message: str) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
     print(f"[{timestamp}] [nemoclaw-runner] {message}", file=sys.stderr, flush=True)
+
+
+def has_notification_digest(payload: object) -> bool:
+    if isinstance(payload, dict):
+        if isinstance(payload.get("notification_digest_summary"), list):
+            return True
+        result = payload.get("result")
+        if isinstance(result, dict) and isinstance(result.get("notification_digest_summary"), list):
+            return True
+        completion = payload.get("completion")
+        if isinstance(completion, dict) and isinstance(completion.get("notification_digest_summary"), list):
+            return True
+    return False
+
+
+def notify_slack(event: str, job_id: str, payload: dict) -> None:
+    script_path = DEFAULT_SLACK_NOTIFY_SCRIPT
+    if not os.path.exists(script_path):
+        log(f"slack notify skipped job_id={job_id} event={event} reason=script_missing")
+        return
+    command = ["node", "--import", "tsx", script_path, "--event", event, "--job-id", job_id]
+    try:
+        completed = subprocess.run(
+            command,
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception as exc:
+        log(f"slack notify failed job_id={job_id} event={event} error={exc}")
+        return
+    if completed.returncode != 0:
+        stderr = completed.stderr.strip()
+        log(
+            f"slack notify failed job_id={job_id} event={event} "
+            f"code={completed.returncode} error={stderr or 'unknown'}"
+        )
+        return
+    stdout = completed.stdout.strip()
+    log(f"slack notify ok job_id={job_id} event={event} output={stdout or '{}'}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--processing-delay", type=float, default=DEFAULT_PROCESSING_DELAY, help="Seconds to simulate processing work.")
     parser.add_argument("--heartbeat-interval", type=float, default=DEFAULT_HEARTBEAT_INTERVAL, help="Seconds between job heartbeat calls.")
     parser.add_argument("--runner-name", default="nemoclaw_runner", help="Runner identifier stored in result.runner.")
+    parser.add_argument("--worker-id", help="Stable worker identifier used for async job ownership.")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help="Local Ollama base URL.")
     parser.add_argument("--ollama-model", default=DEFAULT_OLLAMA_MODEL, help="Ollama model name.")
     parser.add_argument("--ollama-timeout", type=float, default=60.0, help="Timeout for Ollama generate requests.")
@@ -47,6 +96,15 @@ def resolve_token(args: argparse.Namespace) -> str | None:
         return args.token.strip()
     env_value = os.environ.get(args.token_env or DEFAULT_TOKEN_ENV, "")
     return env_value.strip() or None
+
+
+def resolve_worker_id(args: argparse.Namespace) -> str:
+    if isinstance(args.worker_id, str) and args.worker_id.strip():
+        return args.worker_id.strip()
+    env_value = os.environ.get(DEFAULT_RUNNER_ID_ENV, "").strip()
+    if env_value:
+        return env_value
+    return f"{socket.gethostname().lower()}-{os.getpid()}"
 
 
 def normalize_http_url(value: str) -> str:
@@ -75,11 +133,20 @@ def resolve_ollama_url(args: argparse.Namespace, params: dict | None) -> str:
     return DEFAULT_OLLAMA_URL
 
 
-def request_json(method: str, url: str, token: str | None = None, body: dict | None = None, timeout: float = 10.0) -> tuple[int, dict]:
+def request_json(
+    method: str,
+    url: str,
+    token: str | None = None,
+    body: dict | None = None,
+    timeout: float = 10.0,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, dict]:
     headers = {"Accept": "application/json"}
     data = None
     if token:
         headers["X-Sense-Worker-Token"] = token
+    if extra_headers:
+        headers.update(extra_headers)
     if body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode("utf-8")
@@ -193,8 +260,8 @@ def build_result(job: dict, runner_name: str, ollama_url: str, ollama_model: str
         }
 
 
-def fetch_next_job(base_url: str, token: str | None) -> dict | None:
-    status, body = request_json("GET", f"{base_url}/jobs/next", token=token)
+def fetch_next_job(base_url: str, token: str | None, worker_id: str) -> dict | None:
+    status, body = request_json("GET", f"{base_url}/jobs/next?worker_id={urllib.parse.quote(worker_id)}", token=token)
     if status == 200:
         return body
     if status == 404 and body.get("error") == "no_queued_jobs":
@@ -202,15 +269,26 @@ def fetch_next_job(base_url: str, token: str | None) -> dict | None:
     raise RuntimeError(f"jobs/next failed with status={status} body={json.dumps(body, ensure_ascii=False)}")
 
 
-def complete_job(base_url: str, job_id: str, token: str | None, result: dict) -> dict:
-    status, body = request_json("POST", f"{base_url}/jobs/{job_id}/complete", token=token, body={"result": result})
+def complete_job(base_url: str, job_id: str, token: str | None, result: dict, worker_id: str) -> dict:
+    status, body = request_json(
+        "POST",
+        f"{base_url}/jobs/{job_id}/complete",
+        token=token,
+        body={"result": result},
+        extra_headers={"X-Runner-Id": worker_id},
+    )
     if status != 200:
         raise RuntimeError(f"jobs/{job_id}/complete failed with status={status} body={json.dumps(body, ensure_ascii=False)}")
     return body
 
 
-def heartbeat_job(base_url: str, job_id: str, token: str | None) -> dict:
-    status, body = request_json("POST", f"{base_url}/jobs/{job_id}/heartbeat", token=token)
+def heartbeat_job(base_url: str, job_id: str, token: str | None, worker_id: str) -> dict:
+    status, body = request_json(
+        "POST",
+        f"{base_url}/jobs/{job_id}/heartbeat",
+        token=token,
+        extra_headers={"X-Runner-Id": worker_id},
+    )
     if status != 200:
         raise RuntimeError(f"jobs/{job_id}/heartbeat failed with status={status} body={json.dumps(body, ensure_ascii=False)}")
     return body
@@ -223,23 +301,24 @@ def resolve_heartbeat_interval(job: dict, requested_interval: float) -> float:
     return max(1.0, float(requested_interval))
 
 
-def heartbeat_loop(base_url: str, job_id: str, token: str | None, interval_sec: float, stop_event: threading.Event) -> None:
+def heartbeat_loop(base_url: str, job_id: str, token: str | None, worker_id: str, interval_sec: float, stop_event: threading.Event) -> None:
     while not stop_event.wait(interval_sec):
         try:
-            heartbeat_job(base_url, job_id, token)
-            log(f"heartbeat ok job_id={job_id} interval={interval_sec:.1f}s")
+            heartbeat_job(base_url, job_id, token, worker_id)
+            log(f"heartbeat ok job_id={job_id} worker_id={worker_id} interval={interval_sec:.1f}s")
         except Exception as exc:
-            log(f"heartbeat failed job_id={job_id} error={exc}")
+            log(f"heartbeat failed job_id={job_id} worker_id={worker_id} error={exc}")
 
 
 def main() -> int:
     args = parse_args()
     token = resolve_token(args)
+    worker_id = resolve_worker_id(args)
     base_url = args.base_url.rstrip("/")
 
-    log(f"starting base_url={base_url} once={args.once} runner={args.runner_name}")
+    log(f"starting base_url={base_url} once={args.once} runner={args.runner_name} worker_id={worker_id}")
     while True:
-        job = fetch_next_job(base_url, token)
+        job = fetch_next_job(base_url, token, worker_id)
         if not job:
             log("no queued jobs")
             if args.once:
@@ -254,23 +333,30 @@ def main() -> int:
             mode = str(params.get("mode") or "")
         ollama_url = resolve_ollama_url(args, params)
         heartbeat_interval = resolve_heartbeat_interval(job, args.heartbeat_interval)
-        log(f"picked job_id={job_id} mode={mode or 'unknown'} status={job.get('status')}")
+        log(f"picked job_id={job_id} mode={mode or 'unknown'} status={job.get('status')} worker_id={worker_id}")
         log(f"ollama_host={ollama_url}")
         log(f"heartbeat_interval={heartbeat_interval:.1f}s")
         stop_event = threading.Event()
         heartbeat_thread = threading.Thread(
             target=heartbeat_loop,
-            args=(base_url, job_id, token, heartbeat_interval, stop_event),
+            args=(base_url, job_id, token, worker_id, heartbeat_interval, stop_event),
             daemon=True,
         )
         heartbeat_thread.start()
         try:
             time.sleep(max(args.processing_delay, 0.0))
             result = build_result(job, args.runner_name, ollama_url, args.ollama_model, args.ollama_timeout)
-            completion = complete_job(base_url, job_id, token, result)
+            completion = complete_job(base_url, job_id, token, result, worker_id)
         finally:
             stop_event.set()
             heartbeat_thread.join(timeout=1.0)
+        notify_payload = {"job": job, "result": result, "completion": completion}
+        if result.get("exit_code") == 0 and str(completion.get("status") or "") == "done":
+            notify_slack("job_done", job_id, notify_payload)
+        else:
+            notify_slack("job_failed", job_id, notify_payload)
+        if has_notification_digest(notify_payload):
+            notify_slack("digest_ready", job_id, notify_payload)
         log(f"completed job_id={job_id} status={completion.get('status')}")
         print(json.dumps({"job_id": job_id, "result": result, "completion": completion}, ensure_ascii=False, indent=2))
         if args.once:
