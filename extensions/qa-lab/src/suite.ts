@@ -65,8 +65,11 @@ type QaSuiteEnvironment = {
 
 const _QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAAAklEQVR4AewaftIAAAK4SURBVO3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+7ciPkoAAAAASUVORK5CYII=";
-const QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
+const _QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAACuklEQVR4Ae3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+2YE/z8AAAAASUVORK5CYII=";
+
+const QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 
 type QaSkillStatusEntry = {
   name?: string;
@@ -170,12 +173,14 @@ async function waitForOutboundMessage(
   state: QaBusState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
+  options?: { sinceIndex?: number },
 ) {
   return await waitForCondition(
     () =>
       state
         .getSnapshot()
         .messages.filter((message) => message.direction === "outbound")
+        .slice(options?.sinceIndex ?? 0)
         .find(predicate),
     timeoutMs,
   );
@@ -1131,9 +1136,19 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
             name: "stores the canary fact",
             run: async () => {
               const config = readScenarioExecutionConfig<{
+                resetDurableMemory?: boolean;
                 rememberPrompt?: string;
+                rememberAckAny?: string[];
                 recallPrompt?: string;
+                recallExpectedAny?: string[];
               }>("memory-recall");
+              if (config.resetDurableMemory) {
+                const today = formatMemoryDreamingDay(Date.now());
+                await fs.rm(path.join(env.gateway.workspaceDir, "MEMORY.md"), { force: true });
+                await fs.rm(path.join(env.gateway.workspaceDir, "memory", `${today}.md`), {
+                  force: true,
+                });
+              }
               await reset();
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:memory",
@@ -1141,9 +1156,16 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                   config.rememberPrompt ??
                   "Please remember this fact for later: the QA canary code is ALPHA-7.",
               });
+              const rememberAckAny = (config.rememberAckAny ?? ["remembered alpha-7"]).map(
+                (needle) => needle.toLowerCase(),
+              );
               const outbound = await waitForOutboundMessage(
                 state,
-                (candidate) => candidate.conversation.id === "qa-operator",
+                (candidate) =>
+                  candidate.conversation.id === "qa-operator" &&
+                  rememberAckAny.some((needle) =>
+                    normalizeLowercaseStringOrEmpty(candidate.text).includes(needle),
+                  ),
               );
               return outbound.text;
             },
@@ -1152,8 +1174,11 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
             name: "recalls the same fact later",
             run: async () => {
               const config = readScenarioExecutionConfig<{
+                resetDurableMemory?: boolean;
                 rememberPrompt?: string;
+                rememberAckAny?: string[];
                 recallPrompt?: string;
+                recallExpectedAny?: string[];
               }>("memory-recall");
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:memory",
@@ -1161,6 +1186,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                   config.recallPrompt ??
                   "What was the QA canary code I asked you to remember earlier?",
               });
+              const recallExpectedAny = (config.recallExpectedAny ?? ["alpha-7"]).map((needle) =>
+                needle.toLowerCase(),
+              );
               const outbound = await waitForCondition(
                 () =>
                   state
@@ -1169,7 +1197,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.includes("ALPHA-7"),
+                        recallExpectedAny.some((needle) =>
+                          normalizeLowercaseStringOrEmpty(candidate.text).includes(needle),
+                        ),
                     )
                     .at(-1),
                 20_000,
@@ -2049,6 +2079,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
           {
             name: "prefers the newer transcript-backed fact over the stale durable note",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                staleFact?: string;
+                currentFact?: string;
+                transcriptQuestion?: string;
+                transcriptAnswer?: string;
+                prompt?: string;
+              }>("session-memory-ranking");
+              const staleFact = config.staleFact ?? "ORBIT-9";
+              const currentFact = config.currentFact ?? "ORBIT-10";
               const original = await readConfigSnapshot(env);
               const originalMemorySearch =
                 original.config.agents &&
@@ -2090,7 +2129,11 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await waitForQaChannelReady(env, 60_000);
               try {
                 const memoryPath = path.join(env.gateway.workspaceDir, "MEMORY.md");
-                await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
+                await fs.writeFile(
+                  memoryPath,
+                  `Project Nebula stale codename: ${staleFact}.\n`,
+                  "utf8",
+                );
                 const staleAt = new Date("2020-01-01T00:00:00.000Z");
                 await fs.utimes(memoryPath, staleAt, staleAt);
                 const transcriptsDir = resolveSessionTranscriptsDirForAgent(
@@ -2117,7 +2160,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                         content: [
                           {
                             type: "text",
-                            text: "What is the current Project Nebula codename?",
+                            text:
+                              config.transcriptQuestion ??
+                              "What is the current Project Nebula codename?",
                           },
                         ],
                       },
@@ -2130,7 +2175,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                         content: [
                           {
                             type: "text",
-                            text: "The current Project Nebula codename is ORBIT-10.",
+                            text:
+                              config.transcriptAnswer ??
+                              `The current Project Nebula codename is ${currentFact}.`,
                           },
                         ],
                       },
@@ -2140,26 +2187,27 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 );
                 await forceMemoryIndex({
                   env,
-                  query: "current Project Nebula codename ORBIT-10",
-                  expectedNeedle: "ORBIT-10",
+                  query: `current Project Nebula codename ${currentFact}`,
+                  expectedNeedle: currentFact,
                 });
                 await reset();
                 await runAgentPrompt(env, {
                   sessionKey: "agent:qa:session-memory-ranking",
                   message:
-                    "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+                    config.prompt ??
+                    `Session memory ranking check: what is the current Project Nebula codename? Use memory tools first. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact.`,
                   timeoutMs: liveTurnTimeoutMs(env, 45_000),
                 });
                 const outbound = await waitForOutboundMessage(
                   state,
                   (candidate) =>
                     candidate.conversation.id === "qa-operator" &&
-                    candidate.text.includes("ORBIT-10"),
+                    candidate.text.includes(currentFact),
                   liveTurnTimeoutMs(env, 45_000),
                 );
                 const lower = normalizeLowercaseStringOrEmpty(outbound.text);
                 const staleLeak =
-                  outbound.text.includes("ORBIT-9") &&
+                  outbound.text.includes(staleFact) &&
                   !lower.includes("stale") &&
                   !lower.includes("older") &&
                   !lower.includes("previous");
@@ -2380,18 +2428,23 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               const config = readScenarioExecutionConfig<{
                 prompt?: string;
                 expectedContains?: string;
+                skillName?: string;
+                skillBody?: string;
               }>("skill-visibility-invocation");
+              const skillName = config.skillName ?? "qa-visible-skill";
               await writeWorkspaceSkill({
                 env,
-                name: "qa-visible-skill",
-                body: `---
+                name: skillName,
+                body:
+                  config.skillBody ??
+                  `---
 name: qa-visible-skill
 description: Visible QA skill marker
 ---
 When the user asks for the visible skill marker exactly, reply with exactly: VISIBLE-SKILL-OK`,
               });
               const skills = await readSkillStatus(env);
-              const visible = findSkill(skills, "qa-visible-skill");
+              const visible = findSkill(skills, skillName);
               if (!visible?.eligible || visible.disabled || visible.blockedByAllowlist) {
                 throw new Error(`skill not visible/eligible: ${JSON.stringify(visible)}`);
               }
@@ -2635,16 +2688,24 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
           {
             name: "describes an attached image in one short sentence",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                prompt?: string;
+                requiredColorGroups?: string[][];
+              }>("image-understanding-attachment");
               await reset();
+              const outboundStartIndex = state
+                .getSnapshot()
+                .messages.filter((message) => message.direction === "outbound").length;
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:image-understanding",
                 message:
+                  config.prompt ??
                   "Image understanding check: describe the top and bottom colors in the attached image in one short sentence.",
                 attachments: [
                   {
                     mimeType: "image/png",
                     fileName: "red-top-blue-bottom.png",
-                    content: QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,
+                    content: QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64,
                   },
                 ],
                 timeoutMs: liveTurnTimeoutMs(env, 45_000),
@@ -2653,9 +2714,17 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                 state,
                 (candidate) => candidate.conversation.id === "qa-operator",
                 liveTurnTimeoutMs(env, 45_000),
+                { sinceIndex: outboundStartIndex },
               );
               const lower = normalizeLowercaseStringOrEmpty(outbound.text);
-              if (!lower.includes("red") || !lower.includes("blue")) {
+              const requiredColorGroups = config.requiredColorGroups ?? [
+                ["red", "scarlet", "crimson"],
+                ["blue", "azure", "teal", "cyan", "aqua"],
+              ];
+              const missingColorGroup = requiredColorGroups.find(
+                (group) => !group.some((candidate) => lower.includes(candidate)),
+              );
+              if (missingColorGroup) {
                 throw new Error(`missing expected colors in image description: ${outbound.text}`);
               }
               if (env.mock) {
@@ -2835,6 +2904,11 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
           {
             name: "restores image_generate after restart and uses it in the same session",
             run: async () => {
+              const config = readScenarioExecutionConfig<{
+                setupPrompt?: string;
+                imagePrompt?: string;
+                imagePromptSnippet?: string;
+              }>("config-restart-capability-flip");
               await ensureImageGenerationConfigured(env);
               const original = await readConfigSnapshot(env);
               const originalTools =
@@ -2868,6 +2942,7 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 await runAgentPrompt(env, {
                   sessionKey,
                   message:
+                    config.setupPrompt ??
                     "Capability flip setup: acknowledge this setup so restart wake-up has a route.",
                   timeoutMs: liveTurnTimeoutMs(env, 30_000),
                 });
@@ -2907,12 +2982,13 @@ When the user asks for the hot disable marker exactly, reply with exactly: HOT-P
                 await runAgentPrompt(env, {
                   sessionKey,
                   message:
+                    config.imagePrompt ??
                     "Capability flip image check: generate a QA lighthouse image now and keep the media path in the reply.",
                   timeoutMs: liveTurnTimeoutMs(env, 45_000),
                 });
                 const mediaPath = await resolveGeneratedImagePath({
                   env,
-                  promptSnippet: "Capability flip image check",
+                  promptSnippet: config.imagePromptSnippet ?? "Capability flip image check",
                   startedAtMs: imageStartedAtMs,
                   timeoutMs: liveTurnTimeoutMs(env, 45_000),
                 });

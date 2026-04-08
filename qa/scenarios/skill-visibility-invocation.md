@@ -20,6 +20,13 @@ execution:
   handler: skill-visibility-invocation
   summary: Verify a workspace skill becomes visible in skills.status and influences the next agent turn.
   config:
-    prompt: "Visible skill marker: give me the visible skill marker exactly."
+    skillName: qa-visible-skill
+    skillBody: |-
+      ---
+      name: qa-visible-skill
+      description: Visible QA skill marker
+      ---
+      When the user asks for the visible skill marker exactly, or explicitly asks you to use qa-visible-skill, reply with exactly: VISIBLE-SKILL-OK
+    prompt: "Use qa-visible-skill now. Reply exactly with the visible skill marker and nothing else."
     expectedContains: "VISIBLE-SKILL-OK"
 ```

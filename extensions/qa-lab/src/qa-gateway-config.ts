@@ -8,28 +8,6 @@ import {
   type QaProviderMode,
 } from "./model-selection.js";
 
-const DISABLED_BUNDLED_CHANNELS = Object.freeze({
-  bluebubbles: { enabled: false },
-  discord: { enabled: false },
-  feishu: { enabled: false },
-  googlechat: { enabled: false },
-  imessage: { enabled: false },
-  irc: { enabled: false },
-  line: { enabled: false },
-  mattermost: { enabled: false },
-  matrix: { enabled: false },
-  msteams: { enabled: false },
-  qqbot: { enabled: false },
-  signal: { enabled: false },
-  slack: { enabled: false },
-  "synology-chat": { enabled: false },
-  telegram: { enabled: false },
-  tlon: { enabled: false },
-  whatsapp: { enabled: false },
-  zalo: { enabled: false },
-  zalouser: { enabled: false },
-} satisfies Record<string, { enabled: false }>);
-
 export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
   "http://localhost:18789",
@@ -273,7 +251,6 @@ export function buildQaGatewayConfig(params: {
       },
     },
     channels: {
-      ...DISABLED_BUNDLED_CHANNELS,
       "qa-channel": {
         enabled: true,
         baseUrl: params.qaBusBaseUrl,
