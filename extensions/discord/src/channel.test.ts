@@ -479,3 +479,27 @@ describe("discordPlugin groups", () => {
     ).toEqual({ allow: ["message.channel"] });
   });
 });
+
+describe("discordPlugin.messaging.parseExplicitTarget", () => {
+  it("returns normalized targets so user vs channel intent survives explicit delivery resolution", () => {
+    const parse = discordPlugin.messaging?.parseExplicitTarget;
+    expect(parse).toBeDefined();
+
+    expect(parse!({ raw: "user:111222333444555666" })).toEqual({
+      to: "user:111222333444555666",
+      chatType: "direct",
+    });
+    expect(parse!({ raw: "channel:777888999000111222" })).toEqual({
+      to: "channel:777888999000111222",
+      chatType: "channel",
+    });
+    expect(parse!({ raw: "general" })).toEqual({
+      to: "channel:general",
+      chatType: "channel",
+    });
+    expect(parse!({ raw: "1479668391169097891" })).toEqual({
+      to: "channel:1479668391169097891",
+      chatType: "channel",
+    });
+  });
+});

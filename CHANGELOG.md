@@ -104,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - Logging: make `logging.level` and `logging.consoleLevel` honor the documented severity threshold ordering again, and keep child loggers inheriting the parent `minLevel`. (#44646) Thanks @zhumengzhu.
 - Agents/sessions_send: pass `threadId` through announce delivery so cross-session notifications land in the correct Telegram forum topic instead of the group's general thread. (#62758) Thanks @jalehman.
 - Daemon/systemd: keep sudo systemctl calls scoped to the invoking user when machine-scoped systemctl fails, while still avoiding machine fallback for permission-denied user bus errors. (#62337) Thanks @Aftabbs.
+- Discord/messaging: preserve normalized explicit targets (`user:` / `channel:`) in `parseExplicitTarget` so cron and other explicit delivery paths keep DM vs channel intent instead of collapsing to bare IDs. (#62777) Thanks @neeravmakwana.
 
 ## 2026.4.5
 
