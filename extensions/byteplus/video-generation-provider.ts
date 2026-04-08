@@ -144,7 +144,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       providerOptions: {
         seed: "number",
         draft: "boolean",
-        camerafixed: "boolean",
+        camera_fixed: "boolean",
       },
       generate: {
         maxVideos: 1,
@@ -231,15 +231,16 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       const opts = req.providerOptions ?? {};
       const seed = typeof opts.seed === "number" ? opts.seed : undefined;
       const draft = opts.draft === true;
-      const camerafixed = typeof opts.camerafixed === "boolean" ? opts.camerafixed : undefined;
+      // Official API field is camera_fixed (JSON body method); legacy text uses --camerafixed.
+      const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
       if (seed != null) {
         body.seed = seed;
       }
       if (draft && !body.resolution) {
         body.resolution = "480p";
       }
-      if (camerafixed != null) {
-        body.camerafixed = camerafixed;
+      if (cameraFixed != null) {
+        body.camera_fixed = cameraFixed;
       }
 
       const { response, release } = await postJsonRequest({
