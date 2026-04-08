@@ -331,6 +331,8 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+
 function buildMissingApiKeyFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
@@ -341,7 +343,10 @@ function buildMissingApiKeyFailureText(message: string): string | null {
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
     return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.";
   }
-  return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+  if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
+    return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+  }
+  return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
 }
 
 function buildExternalRunFailureText(message: string): string {
