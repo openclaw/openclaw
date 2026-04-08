@@ -1,4 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
@@ -49,7 +54,7 @@ function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<str
     }
     const trimmed = name.trim();
     if (trimmed) {
-      normalized.add(trimmed.toLowerCase());
+      normalized.add(normalizeLowercaseStringOrEmpty(trimmed));
     }
   }
   return normalized.size > 0 ? normalized : null;
@@ -69,7 +74,7 @@ function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> 
   if (!allowedToolNames) {
     return true;
   }
-  return allowedToolNames.has(trimmed.toLowerCase());
+  return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
 }
 
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
@@ -96,13 +101,13 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
-  const rawName = typeof block.name === "string" ? block.name : undefined;
+  const rawName = readStringValue(block.name);
   const trimmedName = rawName?.trim();
   const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
   const normalizedName = hasTrimmedName ? trimmedName : undefined;
   const nameChanged = hasTrimmedName && rawName !== trimmedName;
 
-  const isSessionsSpawn = normalizedName?.toLowerCase() === "sessions_spawn";
+  const isSessionsSpawn = normalizeLowercaseStringOrEmpty(normalizedName) === "sessions_spawn";
 
   if (!isSessionsSpawn) {
     if (!nameChanged) {
@@ -151,20 +156,12 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function normalizeToolResultName(
   message: Extract<AgentMessage, { role: "toolResult" }>,
   fallbackName?: string,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = trimNonEmptyString(rawToolName);
+  const normalizedToolName = normalizeOptionalString(rawToolName);
   if (normalizedToolName) {
     if (rawToolName === normalizedToolName) {
       return message;
@@ -172,7 +169,7 @@ function normalizeToolResultName(
     return { ...message, toolName: normalizedToolName };
   }
 
-  const normalizedFallback = trimNonEmptyString(fallbackName);
+  const normalizedFallback = normalizeOptionalString(fallbackName);
   if (normalizedFallback) {
     return { ...message, toolName: normalizedFallback };
   }
@@ -271,7 +268,7 @@ export function repairToolCallInputs(
             typeof (block as { name?: unknown }).name === "string"
               ? (block as { name: string }).name.trim()
               : undefined;
-          if (blockName?.toLowerCase() === "sessions_spawn") {
+          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
             const sanitized = sanitizeToolCallBlock(block);
             if (sanitized !== block) {
               changed = true;

@@ -125,6 +125,11 @@ export type AppViewState = {
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
   configFormMode: "form" | "raw";
   configSearchQuery: string;
   configActiveSection: string | null;
@@ -205,6 +210,11 @@ export type AppViewState = {
   sessionsPage: number;
   sessionsPageSize: number;
   sessionsSelectedKeys: Set<string>;
+  sessionsExpandedCheckpointKey: string | null;
+  sessionsCheckpointItemsByKey: Record<string, import("./types.ts").SessionCompactionCheckpoint[]>;
+  sessionsCheckpointLoadingKey: string | null;
+  sessionsCheckpointBusyKey: string | null;
+  sessionsCheckpointErrorByKey: Record<string, string>;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;

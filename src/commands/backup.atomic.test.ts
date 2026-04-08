@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import * as backupShared from "./backup-shared.js";
+import { resolveBackupPlanFromPaths } from "./backup-shared.js";
 import { backupCreateCommand } from "./backup.js";
 
 const tarCreateMock = vi.hoisted(() => vi.fn());
@@ -58,6 +60,17 @@ describe("backupCreateCommand atomic archive write", () => {
         exit: vi.fn(),
       };
       const outputPath = path.join(archiveDir, "backup.tar.gz");
+      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
+        await resolveBackupPlanFromPaths({
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+          includeWorkspace: false,
+          configInsideState: true,
+          oauthInsideState: true,
+          nowMs: 123,
+        }),
+      );
 
       await expect(
         backupCreateCommand(runtime, {
@@ -96,6 +109,17 @@ describe("backupCreateCommand atomic archive write", () => {
         exit: vi.fn(),
       };
       const outputPath = path.join(archiveDir, "backup.tar.gz");
+      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
+        await resolveBackupPlanFromPaths({
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+          includeWorkspace: false,
+          configInsideState: true,
+          oauthInsideState: true,
+          nowMs: 123,
+        }),
+      );
 
       await expect(
         backupCreateCommand(runtime, {
@@ -131,6 +155,17 @@ describe("backupCreateCommand atomic archive write", () => {
         exit: vi.fn(),
       };
       const outputPath = path.join(archiveDir, "backup.tar.gz");
+      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
+        await resolveBackupPlanFromPaths({
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+          includeWorkspace: false,
+          configInsideState: true,
+          oauthInsideState: true,
+          nowMs: 123,
+        }),
+      );
 
       const result = await backupCreateCommand(runtime, {
         output: outputPath,

@@ -35,7 +35,7 @@ function createApi(params: {
       },
     } as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
-  }) as OpenClawPluginApi;
+  });
 }
 
 function createCommandContext(args: string): PluginCommandContext {

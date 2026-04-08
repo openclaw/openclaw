@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
   "a",
@@ -116,7 +117,7 @@ function installHooks() {
 
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
-    if (href.toLowerCase().includes("tail")) {
+    if (normalizeLowercaseStringOrEmpty(href).includes("tail")) {
       node.classList.add(TAIL_LINK_BLUR_CLASS);
     }
   });

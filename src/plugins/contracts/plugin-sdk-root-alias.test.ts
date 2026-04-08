@@ -26,6 +26,7 @@ function loadRootAliasWithStubs(options?: {
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
+  platform?: string;
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -39,6 +40,7 @@ function loadRootAliasWithStubs(options?: {
     {
       process: {
         env: options?.env ?? {},
+        platform: options?.platform ?? "darwin",
       },
     },
     { filename: rootAliasPath },
@@ -200,6 +202,18 @@ describe("plugin-sdk root alias", () => {
       options: {
         distExists: true,
         env: { VITEST: "1" },
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: false,
+    },
+    {
+      name: "prefers source loading on Windows even when compat resolves to dist",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "production" },
+        platform: "win32",
         monolithicExports: {
           slowHelper: (): string => "loaded",
         },

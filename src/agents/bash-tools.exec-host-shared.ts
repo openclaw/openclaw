@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { loadConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
-  hasConfiguredExecApprovalDmRoute,
   type ExecApprovalInitiatingSurfaceState,
   resolveExecApprovalInitiatingSurfaceState,
 } from "../infra/exec-approval-surface.js";
 import {
+  minSecurity,
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
@@ -90,6 +90,11 @@ export type ExecApprovalFollowupTarget = {
   turnSourceThreadId?: string | number;
 };
 
+export type ExecApprovalFollowupResultDeps = {
+  sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
+  logWarn?: typeof logWarn;
+};
+
 export type DefaultExecApprovalRequestArgs = {
   warnings: string[];
   approvalRunningNoticeMs: number;
@@ -164,7 +169,6 @@ export function createDefaultExecApprovalRequestContext(params: {
 export function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
-  obfuscationDetected: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
@@ -174,13 +178,6 @@ export function resolveBaseExecApprovalDecision(params: {
     return { approvedByAsk: false, deniedReason: "user-denied", timedOut: false };
   }
   if (!params.decision) {
-    if (params.obfuscationDetected) {
-      return {
-        approvedByAsk: false,
-        deniedReason: "approval-timeout (obfuscation-detected)",
-        timedOut: true,
-      };
-    }
     if (params.askFallback === "full") {
       return { approvedByAsk: true, deniedReason: null, timedOut: true };
     }
@@ -202,17 +199,11 @@ export function resolveExecHostApprovalContext(params: {
     security: params.security,
     ask: params.ask,
   });
-  // exec-approvals.json is the authoritative security policy and must be able to grant
-  // a less-restrictive level (e.g. "full") even when tool/runtime defaults are stricter
-  // (e.g. "allowlist"). This matches node-host behavior and mirrors the ask=off special
-  // case: exec-approvals.json can suppress prompts AND grant broader execution rights.
-  // When exec-approvals.json has no explicit agent or defaults entry, approvals.agent.security
-  // falls back to params.security, so this is backward-compatible.
-  const hostSecurity = approvals.agent.security;
-  // An explicit ask=off policy in exec-approvals.json must be able to suppress
-  // prompts even when tool/runtime defaults are stricter (for example on-miss).
-  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
-  const askFallback = approvals.agent.askFallback;
+  // Session/config tool policy is the caller's requested contract. The host file
+  // may tighten that contract, but it must not silently broaden it.
+  const hostSecurity = minSecurity(params.security, approvals.agent.security);
+  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+  const askFallback = minSecurity(hostSecurity, approvals.agent.askFallback);
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
   }
@@ -248,9 +239,9 @@ export function resolveExecApprovalUnavailableState(params: {
     channel: params.turnSourceChannel,
     accountId: params.turnSourceAccountId,
   });
-  const sentApproverDms =
-    (initiatingSurface.kind === "disabled" || initiatingSurface.kind === "unsupported") &&
-    hasConfiguredExecApprovalDmRoute(loadConfig());
+  // Native approval runtimes emit routed-elsewhere notices after actual delivery.
+  // Avoid claiming approver DMs were sent from config-only guesses here.
+  const sentApproverDms = false;
   const unavailableReason =
     params.preResolvedDecision === null
       ? "no-approval-route"
@@ -337,17 +328,42 @@ export function buildExecApprovalFollowupTarget(
 export function createExecApprovalDecisionState(params: {
   decision: string | null | undefined;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
-  obfuscationDetected: boolean;
 }) {
   const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision ?? null,
     askFallback: params.askFallback,
-    obfuscationDetected: params.obfuscationDetected,
   });
   return {
     baseDecision,
     approvedByAsk: baseDecision.approvedByAsk,
     deniedReason: baseDecision.deniedReason,
+  };
+}
+
+export function enforceStrictInlineEvalApprovalBoundary(params: {
+  baseDecision: {
+    timedOut: boolean;
+  };
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  requiresInlineEvalApproval: boolean;
+}): {
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+} {
+  if (
+    !params.baseDecision.timedOut ||
+    !params.requiresInlineEvalApproval ||
+    !params.approvedByAsk
+  ) {
+    return {
+      approvedByAsk: params.approvedByAsk,
+      deniedReason: params.deniedReason,
+    };
+  }
+  return {
+    approvedByAsk: false,
+    deniedReason: params.deniedReason ?? "approval-timeout",
   };
 }
 
@@ -386,8 +402,11 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
 export async function sendExecApprovalFollowupResult(
   target: ExecApprovalFollowupTarget,
   resultText: string,
+  deps: ExecApprovalFollowupResultDeps = {},
 ): Promise<void> {
-  await sendExecApprovalFollowup({
+  const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
+  const warn = deps.logWarn ?? logWarn;
+  await send({
     approvalId: target.approvalId,
     sessionKey: target.sessionKey,
     turnSourceChannel: target.turnSourceChannel,
@@ -396,12 +415,12 @@ export async function sendExecApprovalFollowupResult(
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
   }).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {
       return;
     }
-    logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
+    warn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
   });
 }
 
@@ -429,7 +448,9 @@ export function buildExecApprovalPendingToolResult(params: {
             ? (buildExecApprovalUnavailableReplyPayload({
                 warningText: params.warningText,
                 reason: params.unavailableReason,
+                channel: params.initiatingSurface.channel,
                 channelLabel: params.initiatingSurface.channelLabel,
+                accountId: params.initiatingSurface.accountId,
                 sentApproverDms: params.sentApproverDms,
               }).text ?? "")
             : buildApprovalPendingMessage({
@@ -449,7 +470,9 @@ export function buildExecApprovalPendingToolResult(params: {
         ? ({
             status: "approval-unavailable",
             reason: params.unavailableReason,
+            channel: params.initiatingSurface.channel,
             channelLabel: params.initiatingSurface.channelLabel,
+            accountId: params.initiatingSurface.accountId,
             sentApproverDms: params.sentApproverDms,
             host: params.host,
             command: params.command,

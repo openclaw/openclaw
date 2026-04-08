@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -110,6 +110,10 @@ vi.mock("../logging/subsystem.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     mocks.consumeRestartSentinel.mockResolvedValue({
@@ -178,7 +182,9 @@ describe("scheduleRestartSentinelWake", () => {
       .mockResolvedValueOnce([{ channel: "whatsapp", messageId: "msg-2" }]);
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -218,7 +224,9 @@ describe("scheduleRestartSentinelWake", () => {
       .mockRejectedValueOnce(new Error("transport still not ready"));
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugins/public-artifacts.js";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "./helpers/plugins/public-artifacts.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
@@ -10,16 +10,30 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
 );
 
 const allowedNonExtensionTests = new Set<string>([
+  "src/agents/pi-embedded-runner-extraparams-moonshot.test.ts",
   "src/agents/pi-embedded-runner-extraparams.test.ts",
+  "src/agents/pi-embedded-runner-extraparams-moonshot.test.ts",
   "src/channels/plugins/contracts/dm-policy.contract.test.ts",
   "src/channels/plugins/contracts/group-policy.contract.test.ts",
   "src/commands/channels.surfaces-signal-runtime-errors-channels-status-output.test.ts",
   "src/commands/onboard-channels.e2e.test.ts",
   "src/gateway/hooks.test.ts",
   "src/infra/outbound/deliver.test.ts",
+  "src/media-generation/provider-capabilities.contract.test.ts",
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
   "src/plugin-sdk/telegram-command-config.test.ts",
+  "src/security/audit-channel-slack-command-findings.test.ts",
+  "src/security/audit-feishu-doc-risk.test.ts",
+  "src/secrets/runtime-channel-inactive-variants.test.ts",
+  "src/secrets/runtime-discord-surface.test.ts",
+  "src/secrets/runtime-inactive-telegram-surfaces.test.ts",
+  "src/secrets/runtime-legacy-x-search.test.ts",
+  "src/secrets/runtime-matrix-shadowing.test.ts",
+  "src/secrets/runtime-matrix-top-level.test.ts",
+  "src/secrets/runtime-nextcloud-talk-file-precedence.test.ts",
+  "src/secrets/runtime-telegram-token-inheritance.test.ts",
+  "src/secrets/runtime-zalo-token-activity.test.ts",
 ]);
 
 function walk(dir: string, entries: string[] = []): string[] {
@@ -147,7 +161,6 @@ describe("non-extension test boundaries", () => {
       "../plugin-sdk/synthetic.js",
       "../plugin-sdk/xai.js",
       "../plugin-sdk/xiaomi.js",
-      "../plugin-sdk/zai.js",
     ]);
     const file = "src/commands/onboard-auth.test.ts";
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");

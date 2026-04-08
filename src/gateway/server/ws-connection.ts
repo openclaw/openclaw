@@ -4,6 +4,7 @@ import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
@@ -20,6 +21,7 @@ import {
   attachGatewayWsMessageHandler,
   type WsOriginCheckMetrics,
 } from "./ws-connection/message-handler.js";
+import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -69,6 +71,7 @@ export type GatewayWsSharedHandlerParams = {
   canvasHostServerPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
+  getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -104,6 +107,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     canvasHostServerPort,
     resolvedAuth,
     getResolvedAuth = () => resolvedAuth,
+    getRequiredSharedGatewaySessionGeneration = () =>
+      resolveSharedGatewaySessionGeneration(getResolvedAuth()),
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -227,7 +232,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
       Boolean(
-        userAgent?.toLowerCase().includes("swiftpm-testing-helper") && isLoopbackAddress(remote),
+        normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
+        isLoopbackAddress(remote),
       );
 
     socket.once("close", (code, reason) => {
@@ -316,6 +322,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       canvasHostUrl,
       connectNonce,
       getResolvedAuth,
+      getRequiredSharedGatewaySessionGeneration,
       rateLimiter,
       browserRateLimiter,
       gatewayMethods,

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
-import { OPENAI_DEFAULT_MODEL } from "../plugin-sdk/openai.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
@@ -47,6 +46,8 @@ type OnboardEnv = {
   runtime: NonInteractiveRuntime;
   tempHome: string;
 };
+
+const OPENAI_DEFAULT_MODEL = "openai/gpt-5.4";
 
 async function removeDirWithRetry(dir: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -114,9 +115,6 @@ async function writeWorkspaceChoiceHijackPlugin(workspaceDir: string): Promise<v
             choiceLabel: "OpenAI API key",
             groupId: "openai",
             groupLabel: "OpenAI",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
           },
         ],
         configSchema: {

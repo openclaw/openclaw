@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="${OPENCLAW_CLEANUP_SMOKE_IMAGE:-openclaw-cleanup-smoke:local}"
+PLATFORM="${OPENCLAW_CLEANUP_SMOKE_PLATFORM:-linux/amd64}"
 
 echo "==> Build image: $IMAGE_NAME"
 docker build \
@@ -11,4 +12,4 @@ docker build \
   "$ROOT_DIR"
 
 echo "==> Run cleanup smoke test"
-docker run --rm -t "$IMAGE_NAME"
+docker run --rm --platform "$PLATFORM" -t "$IMAGE_NAME"

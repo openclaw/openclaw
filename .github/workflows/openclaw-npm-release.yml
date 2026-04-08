@@ -78,7 +78,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
-          install-bun: "false"
+          install-bun: "true"
           use-sticky-disk: "false"
 
       - name: Ensure version is not already published

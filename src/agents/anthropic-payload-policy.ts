@@ -26,6 +26,29 @@ export type AnthropicPayloadPolicy = {
   serviceTier: AnthropicServiceTier | undefined;
 };
 
+function resolveBaseUrlHostname(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
+  if (typeof baseUrl !== "string") {
+    return false;
+  }
+  const hostname = resolveBaseUrlHostname(baseUrl);
+  if (!hostname) {
+    return false;
+  }
+  return (
+    hostname === "api.anthropic.com" ||
+    hostname === "aiplatform.googleapis.com" ||
+    hostname.endsWith("-aiplatform.googleapis.com")
+  );
+}
+
 function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
@@ -35,10 +58,7 @@ function resolveAnthropicEphemeralCacheControl(
   if (retention === "none") {
     return undefined;
   }
-  const ttl =
-    retention === "long" && typeof baseUrl === "string" && baseUrl.includes("api.anthropic.com")
-      ? "1h"
-      : undefined;
+  const ttl = retention === "long" && isLongTtlEligibleEndpoint(baseUrl) ? "1h" : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 

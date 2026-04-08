@@ -11,7 +11,7 @@ import {
   normalizeModelRef,
   normalizeProviderId,
   resolveModelRefFromString,
-  resolvePersistedModelRef,
+  resolvePersistedOverrideModelRef,
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -19,6 +19,10 @@ import { resolveSessionParentSessionKey } from "../../channels/plugins/session-c
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -41,6 +45,23 @@ type ModelSelectionState = {
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
 };
+
+export function createFastTestModelSelectionState(params: {
+  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  provider: string;
+  model: string;
+}): ModelSelectionState {
+  return {
+    provider: params.provider,
+    model: params.model,
+    allowedModelKeys: new Set<string>(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
+    resolveDefaultReasoningLevel: async () => "off",
+    needsModelCatalog: false,
+  };
+}
 
 function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -131,7 +152,7 @@ function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
   parentSessionKey?: string;
 }): string | null {
-  const explicit = params.parentSessionKey?.trim();
+  const explicit = normalizeOptionalString(params.parentSessionKey);
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
   }
@@ -149,7 +170,7 @@ export function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
   defaultProvider: string;
 }): StoredModelOverride | null {
-  const direct = resolvePersistedModelRef({
+  const direct = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.sessionEntry?.providerOverride,
     overrideModel: params.sessionEntry?.modelOverride,
@@ -165,7 +186,7 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   const parentEntry = params.sessionStore[parentKey];
-  const parentOverride = resolvePersistedModelRef({
+  const parentOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: parentEntry?.providerOverride,
     overrideModel: parentEntry?.modelOverride,
@@ -193,9 +214,9 @@ function scoreFuzzyMatch(params: {
 } {
   const provider = normalizeProviderId(params.provider);
   const model = params.model;
-  const fragment = params.fragment.trim().toLowerCase();
-  const providerLower = provider.toLowerCase();
-  const modelLower = model.toLowerCase();
+  const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
+  const providerLower = normalizeLowercaseStringOrEmpty(provider);
+  const modelLower = normalizeLowercaseStringOrEmpty(model);
   const haystack = `${providerLower}/${modelLower}`;
   const key = modelKey(provider, model);
 
@@ -241,7 +262,7 @@ function scoreFuzzyMatch(params: {
 
   const aliases = params.aliasIndex.byKey.get(key) ?? [];
   for (const alias of aliases) {
-    score += scoreFragment(alias.toLowerCase(), {
+    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), {
       exact: 140,
       starts: 90,
       includes: 60,
@@ -336,7 +357,7 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
-  const directStoredOverride = resolvePersistedModelRef({
+  const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
@@ -504,7 +525,7 @@ export function resolveModelDirectiveSelection(params: {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
 
   const rawTrimmed = raw.trim();
-  const rawLower = rawTrimmed.toLowerCase();
+  const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
 
   const pickAliasForKey = (provider: string, model: string): string | undefined =>
     aliasIndex.byKey.get(modelKey(provider, model))?.[0];
@@ -523,7 +544,7 @@ export function resolveModelDirectiveSelection(params: {
     provider?: string;
     fragment: string;
   }): { selection?: ModelDirectiveSelection; error?: string } => {
-    const fragment = params.fragment.trim().toLowerCase();
+    const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
     if (!fragment) {
       return {};
     }

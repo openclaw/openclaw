@@ -1,7 +1,12 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
+import {
+  isCommandsLightTarget,
+  resolveCommandsLightIncludePattern,
+} from "../vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../vitest.extension-acpx-paths.mjs";
 import { isBlueBubblesExtensionRoot } from "../vitest.extension-bluebubbles-paths.mjs";
 import { isDiffsExtensionRoot } from "../vitest.extension-diffs-paths.mjs";
@@ -17,7 +22,14 @@ import { isTelegramExtensionRoot } from "../vitest.extension-telegram-paths.mjs"
 import { isVoiceCallExtensionRoot } from "../vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../vitest.extension-zalo-paths.mjs";
+import {
+  isPluginSdkLightTarget,
+  resolvePluginSdkLightIncludePattern,
+} from "../vitest.plugin-sdk-paths.mjs";
+import { fullSuiteVitestShards } from "../vitest.test-shards.mjs";
+import { resolveUnitFastTestIncludePattern } from "../vitest.unit-fast-paths.mjs";
 import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
+import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "vitest.agents.config.ts";
@@ -27,6 +39,7 @@ const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
 const CLI_VITEST_CONFIG = "vitest.cli.config.ts";
+const COMMANDS_LIGHT_VITEST_CONFIG = "vitest.commands-light.config.ts";
 const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
 const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
 const CRON_VITEST_CONFIG = "vitest.cron.config.ts";
@@ -49,14 +62,17 @@ const EXTENSION_VOICE_CALL_VITEST_CONFIG = "vitest.extension-voice-call.config.t
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "vitest.extension-whatsapp.config.ts";
 const EXTENSION_ZALO_VITEST_CONFIG = "vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
+const FULL_EXTENSIONS_VITEST_CONFIG = "vitest.full-extensions.config.ts";
 const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
 const HOOKS_VITEST_CONFIG = "vitest.hooks.config.ts";
 const INFRA_VITEST_CONFIG = "vitest.infra.config.ts";
 const MEDIA_VITEST_CONFIG = "vitest.media.config.ts";
 const MEDIA_UNDERSTANDING_VITEST_CONFIG = "vitest.media-understanding.config.ts";
 const LOGGING_VITEST_CONFIG = "vitest.logging.config.ts";
+const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "vitest.plugin-sdk-light.config.ts";
 const PLUGIN_SDK_VITEST_CONFIG = "vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "vitest.plugins.config.ts";
+const UNIT_FAST_VITEST_CONFIG = "vitest.unit-fast.config.ts";
 const PROCESS_VITEST_CONFIG = "vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "vitest.secrets.config.ts";
@@ -68,6 +84,67 @@ const UI_VITEST_CONFIG = "vitest.ui.config.ts";
 const UTILS_VITEST_CONFIG = "vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
+const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
+const VITEST_CONFIG_BY_KIND = {
+  acp: ACP_VITEST_CONFIG,
+  agent: AGENTS_VITEST_CONFIG,
+  autoReply: AUTO_REPLY_VITEST_CONFIG,
+  boundary: BOUNDARY_VITEST_CONFIG,
+  bundled: BUNDLED_VITEST_CONFIG,
+  channel: CHANNEL_VITEST_CONFIG,
+  cli: CLI_VITEST_CONFIG,
+  command: COMMANDS_VITEST_CONFIG,
+  commandLight: COMMANDS_LIGHT_VITEST_CONFIG,
+  contracts: CONTRACTS_VITEST_CONFIG,
+  cron: CRON_VITEST_CONFIG,
+  daemon: DAEMON_VITEST_CONFIG,
+  e2e: E2E_VITEST_CONFIG,
+  extension: EXTENSIONS_VITEST_CONFIG,
+  extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
+  extensionBlueBubbles: EXTENSION_BLUEBUBBLES_VITEST_CONFIG,
+  extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
+  extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
+  extensionFeishu: EXTENSION_FEISHU_VITEST_CONFIG,
+  extensionIrc: EXTENSION_IRC_VITEST_CONFIG,
+  extensionMatrix: EXTENSION_MATRIX_VITEST_CONFIG,
+  extensionMattermost: EXTENSION_MATTERMOST_VITEST_CONFIG,
+  extensionMemory: EXTENSION_MEMORY_VITEST_CONFIG,
+  extensionMessaging: EXTENSION_MESSAGING_VITEST_CONFIG,
+  extensionMsTeams: EXTENSION_MSTEAMS_VITEST_CONFIG,
+  extensionProvider: EXTENSION_PROVIDERS_VITEST_CONFIG,
+  extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
+  extensionVoiceCall: EXTENSION_VOICE_CALL_VITEST_CONFIG,
+  extensionWhatsApp: EXTENSION_WHATSAPP_VITEST_CONFIG,
+  extensionZalo: EXTENSION_ZALO_VITEST_CONFIG,
+  gateway: GATEWAY_VITEST_CONFIG,
+  hooks: HOOKS_VITEST_CONFIG,
+  infra: INFRA_VITEST_CONFIG,
+  logging: LOGGING_VITEST_CONFIG,
+  media: MEDIA_VITEST_CONFIG,
+  mediaUnderstanding: MEDIA_UNDERSTANDING_VITEST_CONFIG,
+  plugin: PLUGINS_VITEST_CONFIG,
+  pluginSdk: PLUGIN_SDK_VITEST_CONFIG,
+  pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
+  process: PROCESS_VITEST_CONFIG,
+  unitFast: UNIT_FAST_VITEST_CONFIG,
+  runtimeConfig: RUNTIME_CONFIG_VITEST_CONFIG,
+  secrets: SECRETS_VITEST_CONFIG,
+  sharedCore: SHARED_CORE_VITEST_CONFIG,
+  tasks: TASKS_VITEST_CONFIG,
+  tooling: TOOLING_VITEST_CONFIG,
+  tui: TUI_VITEST_CONFIG,
+  ui: UI_VITEST_CONFIG,
+  utils: UTILS_VITEST_CONFIG,
+  wizard: WIZARD_VITEST_CONFIG,
+};
+const BROAD_CHANGED_RERUN_PATTERNS = [
+  /^package\.json$/u,
+  /^pnpm-lock\.yaml$/u,
+  /^test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts$/u,
+  /^vitest(?:\..+)?\.(?:config\.ts|paths\.mjs)$/u,
+  /^scripts\/run-vitest\.mjs$/u,
+  /^scripts\/test-projects(?:\.test-support)?\.mjs$/u,
+];
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
@@ -93,6 +170,10 @@ function isFileLikeTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
+function isLikelyFileTarget(arg) {
+  return /(?:^|\/)[^/]+\.[A-Za-z0-9]+$/u.test(arg);
+}
+
 function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
@@ -113,16 +194,99 @@ function toScopedIncludePattern(arg, cwd) {
   if (isGlobTarget(relative) || isFileLikeTarget(relative)) {
     return relative;
   }
-  if (isExistingFileTarget(arg, cwd)) {
+  if (isExistingFileTarget(arg, cwd) || isLikelyFileTarget(relative)) {
     const directory = normalizePathPattern(path.posix.dirname(relative));
     return directory === "." ? "**/*.test.ts" : `${directory}/**/*.test.ts`;
   }
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
 }
 
+function listChangedPathsFromGit(baseRef, cwd) {
+  return execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0);
+}
+
+function extractChangedBaseRef(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const match = arg.match(CHANGED_ARGS_PATTERN);
+    if (!match) {
+      continue;
+    }
+    if (match[1]) {
+      return match[1];
+    }
+    const nextArg = args[index + 1];
+    return nextArg && nextArg !== "--" && !nextArg.startsWith("-") ? nextArg : "HEAD";
+  }
+  return null;
+}
+
+function stripChangedArgs(args) {
+  const strippedArgs = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const match = arg.match(CHANGED_ARGS_PATTERN);
+    if (!match) {
+      strippedArgs.push(arg);
+      continue;
+    }
+    if (!match[1]) {
+      const nextArg = args[index + 1];
+      if (nextArg && nextArg !== "--" && !nextArg.startsWith("-")) {
+        index += 1;
+      }
+    }
+  }
+  return strippedArgs;
+}
+
+function shouldKeepBroadChangedRun(changedPaths) {
+  return changedPaths.some((changedPath) =>
+    BROAD_CHANGED_RERUN_PATTERNS.some((pattern) => pattern.test(changedPath)),
+  );
+}
+
+function isRoutableChangedTarget(changedPath) {
+  return /^(?:src|test|extensions|ui|packages|apps)(?:\/|$)/u.test(changedPath);
+}
+
+export function resolveChangedTargetArgs(
+  args,
+  cwd = process.cwd(),
+  listChangedPaths = listChangedPathsFromGit,
+) {
+  const baseRef = extractChangedBaseRef(args);
+  if (!baseRef) {
+    return null;
+  }
+  const changedPaths = listChangedPaths(baseRef, cwd);
+  if (changedPaths.length === 0 || shouldKeepBroadChangedRun(changedPaths)) {
+    return null;
+  }
+  const routablePaths = changedPaths.filter(isRoutableChangedTarget);
+  return routablePaths.length > 0 ? [...new Set(routablePaths)] : null;
+}
+
 function classifyTarget(arg, cwd) {
   const relative = toRepoRelativeTarget(arg, cwd);
+  if (resolveUnitFastTestIncludePattern(relative)) {
+    return "unitFast";
+  }
   if (relative.endsWith(".e2e.test.ts")) {
+    return "e2e";
+  }
+  if (
+    relative === "src/gateway/gateway.test.ts" ||
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
+    relative === "src/gateway/sessions-history-http.test.ts"
+  ) {
     return "e2e";
   }
   if (relative.startsWith("extensions/")) {
@@ -228,7 +392,7 @@ function classifyTarget(arg, cwd) {
     return "logging";
   }
   if (relative.startsWith("src/plugin-sdk/")) {
-    return "pluginSdk";
+    return isPluginSdkLightTarget(relative) ? "pluginSdkLight" : "pluginSdk";
   }
   if (relative.startsWith("src/process/")) {
     return "process";
@@ -252,7 +416,7 @@ function classifyTarget(arg, cwd) {
     return "cli";
   }
   if (relative.startsWith("src/commands/")) {
-    return "command";
+    return isCommandsLightTarget(relative) ? "commandLight" : "command";
   }
   if (relative.startsWith("src/auto-reply/")) {
     return "autoReply";
@@ -275,10 +439,29 @@ function classifyTarget(arg, cwd) {
   return "default";
 }
 
+function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
+  const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (kind === "unitFast") {
+    const includePattern = resolveUnitFastTestIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
+  if (kind === "pluginSdkLight") {
+    const includePattern = resolvePluginSdkLightIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
+  if (kind === "commandLight") {
+    const includePattern = resolveCommandsLightIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
+  return null;
+}
+
 function createVitestArgs(params) {
   return [
     "exec",
-    "vitest",
+    "node",
+    ...resolveVitestNodeArgs(params.env),
+    resolveVitestCliEntry(),
     ...(params.watchMode ? [] : ["run"]),
     "--config",
     params.config,
@@ -308,13 +491,21 @@ export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   return { forwardedArgs, targetArgs, watchMode };
 }
 
-export function buildVitestRunPlans(args, cwd = process.cwd()) {
+export function buildVitestRunPlans(
+  args,
+  cwd = process.cwd(),
+  listChangedPaths = listChangedPathsFromGit,
+) {
   const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
-  if (targetArgs.length === 0) {
+  const changedTargetArgs =
+    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths) : null;
+  const activeTargetArgs = changedTargetArgs ?? targetArgs;
+  const activeForwardedArgs = changedTargetArgs ? stripChangedArgs(forwardedArgs) : forwardedArgs;
+  if (activeTargetArgs.length === 0) {
     return [
       {
         config: DEFAULT_VITEST_CONFIG,
-        forwardedArgs,
+        forwardedArgs: activeForwardedArgs,
         includePatterns: null,
         watchMode,
       },
@@ -322,7 +513,7 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
   }
 
   const groupedTargets = new Map();
-  for (const targetArg of targetArgs) {
+  for (const targetArg of activeTargetArgs) {
     const kind = classifyTarget(targetArg, cwd);
     const current = groupedTargets.get(kind) ?? [];
     current.push(targetArg);
@@ -335,8 +526,9 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     );
   }
 
-  const nonTargetArgs = forwardedArgs.filter((arg) => !targetArgs.includes(arg));
+  const nonTargetArgs = activeForwardedArgs.filter((arg) => !activeTargetArgs.includes(arg));
   const orderedKinds = [
+    "unitFast",
     "default",
     "boundary",
     "tooling",
@@ -350,6 +542,7 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     "daemon",
     "media",
     "logging",
+    "pluginSdkLight",
     "pluginSdk",
     "process",
     "secrets",
@@ -359,6 +552,7 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     "mediaUnderstanding",
     "acp",
     "cli",
+    "commandLight",
     "command",
     "autoReply",
     "agent",
@@ -392,121 +586,18 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     if (!grouped || grouped.length === 0) {
       continue;
     }
-    const config =
-      kind === "boundary"
-        ? BOUNDARY_VITEST_CONFIG
-        : kind === "tooling"
-          ? TOOLING_VITEST_CONFIG
-          : kind === "contracts"
-            ? CONTRACTS_VITEST_CONFIG
-            : kind === "bundled"
-              ? BUNDLED_VITEST_CONFIG
-              : kind === "gateway"
-                ? GATEWAY_VITEST_CONFIG
-                : kind === "hooks"
-                  ? HOOKS_VITEST_CONFIG
-                  : kind === "infra"
-                    ? INFRA_VITEST_CONFIG
-                    : kind === "runtimeConfig"
-                      ? RUNTIME_CONFIG_VITEST_CONFIG
-                      : kind === "cron"
-                        ? CRON_VITEST_CONFIG
-                        : kind === "daemon"
-                          ? DAEMON_VITEST_CONFIG
-                          : kind === "media"
-                            ? MEDIA_VITEST_CONFIG
-                            : kind === "logging"
-                              ? LOGGING_VITEST_CONFIG
-                              : kind === "pluginSdk"
-                                ? PLUGIN_SDK_VITEST_CONFIG
-                                : kind === "process"
-                                  ? PROCESS_VITEST_CONFIG
-                                  : kind === "secrets"
-                                    ? SECRETS_VITEST_CONFIG
-                                    : kind === "sharedCore"
-                                      ? SHARED_CORE_VITEST_CONFIG
-                                      : kind === "tasks"
-                                        ? TASKS_VITEST_CONFIG
-                                        : kind === "tui"
-                                          ? TUI_VITEST_CONFIG
-                                          : kind === "mediaUnderstanding"
-                                            ? MEDIA_UNDERSTANDING_VITEST_CONFIG
-                                            : kind === "acp"
-                                              ? ACP_VITEST_CONFIG
-                                              : kind === "cli"
-                                                ? CLI_VITEST_CONFIG
-                                                : kind === "command"
-                                                  ? COMMANDS_VITEST_CONFIG
-                                                  : kind === "autoReply"
-                                                    ? AUTO_REPLY_VITEST_CONFIG
-                                                    : kind === "agent"
-                                                      ? AGENTS_VITEST_CONFIG
-                                                      : kind === "plugin"
-                                                        ? PLUGINS_VITEST_CONFIG
-                                                        : kind === "ui"
-                                                          ? UI_VITEST_CONFIG
-                                                          : kind === "utils"
-                                                            ? UTILS_VITEST_CONFIG
-                                                            : kind === "wizard"
-                                                              ? WIZARD_VITEST_CONFIG
-                                                              : kind === "e2e"
-                                                                ? E2E_VITEST_CONFIG
-                                                                : kind === "extensionAcpx"
-                                                                  ? EXTENSION_ACPX_VITEST_CONFIG
-                                                                  : kind === "extensionDiffs"
-                                                                    ? EXTENSION_DIFFS_VITEST_CONFIG
-                                                                    : kind ===
-                                                                        "extensionBlueBubbles"
-                                                                      ? EXTENSION_BLUEBUBBLES_VITEST_CONFIG
-                                                                      : kind === "extensionFeishu"
-                                                                        ? EXTENSION_FEISHU_VITEST_CONFIG
-                                                                        : kind === "extensionIrc"
-                                                                          ? EXTENSION_IRC_VITEST_CONFIG
-                                                                          : kind ===
-                                                                              "extensionMattermost"
-                                                                            ? EXTENSION_MATTERMOST_VITEST_CONFIG
-                                                                            : kind ===
-                                                                                "extensionChannel"
-                                                                              ? EXTENSION_CHANNELS_VITEST_CONFIG
-                                                                              : kind ===
-                                                                                  "extensionTelegram"
-                                                                                ? EXTENSION_TELEGRAM_VITEST_CONFIG
-                                                                                : kind ===
-                                                                                    "extensionVoiceCall"
-                                                                                  ? EXTENSION_VOICE_CALL_VITEST_CONFIG
-                                                                                  : kind ===
-                                                                                      "extensionWhatsApp"
-                                                                                    ? EXTENSION_WHATSAPP_VITEST_CONFIG
-                                                                                    : kind ===
-                                                                                        "extensionZalo"
-                                                                                      ? EXTENSION_ZALO_VITEST_CONFIG
-                                                                                      : kind ===
-                                                                                          "extensionMatrix"
-                                                                                        ? EXTENSION_MATRIX_VITEST_CONFIG
-                                                                                        : kind ===
-                                                                                            "extensionMemory"
-                                                                                          ? EXTENSION_MEMORY_VITEST_CONFIG
-                                                                                          : kind ===
-                                                                                              "extensionMsTeams"
-                                                                                            ? EXTENSION_MSTEAMS_VITEST_CONFIG
-                                                                                            : kind ===
-                                                                                                "extensionMessaging"
-                                                                                              ? EXTENSION_MESSAGING_VITEST_CONFIG
-                                                                                              : kind ===
-                                                                                                  "extensionProvider"
-                                                                                                ? EXTENSION_PROVIDERS_VITEST_CONFIG
-                                                                                                : kind ===
-                                                                                                    "channel"
-                                                                                                  ? CHANNEL_VITEST_CONFIG
-                                                                                                  : kind ===
-                                                                                                      "extension"
-                                                                                                    ? EXTENSIONS_VITEST_CONFIG
-                                                                                                    : DEFAULT_VITEST_CONFIG;
-    const includePatterns =
-      kind === "default" || kind === "e2e"
-        ? null
-        : grouped.map((targetArg) => toScopedIncludePattern(targetArg, cwd));
-    const scopedTargetArgs = kind === "default" || kind === "e2e" ? grouped : [];
+    const config = VITEST_CONFIG_BY_KIND[kind] ?? DEFAULT_VITEST_CONFIG;
+    const useCliTargetArgs =
+      kind === "e2e" ||
+      (kind === "default" &&
+        grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
+    const includePatterns = useCliTargetArgs
+      ? null
+      : grouped.flatMap((targetArg) => {
+          const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
+          return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
+        });
+    const scopedTargetArgs = useCliTargetArgs ? grouped : [];
     plans.push({
       config,
       forwardedArgs: [...nonTargetArgs, ...scopedTargetArgs],
@@ -515,6 +606,40 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     });
   }
   return plans;
+}
+
+export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
+  const { forwardedArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  if (watchMode) {
+    return [
+      {
+        config: "vitest.config.ts",
+        forwardedArgs,
+        includePatterns: null,
+        watchMode,
+      },
+    ];
+  }
+  const parallelShardCount = Number.parseInt(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL ?? "", 10);
+  const expandToProjectConfigs =
+    process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
+    (Number.isFinite(parallelShardCount) && parallelShardCount > 1);
+  return fullSuiteVitestShards.flatMap((shard) => {
+    if (
+      process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
+      shard.config === FULL_EXTENSIONS_VITEST_CONFIG
+    ) {
+      return [];
+    }
+    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const configs = expandShard ? shard.projects : [shard.config];
+    return configs.map((config) => ({
+      config,
+      forwardedArgs,
+      includePatterns: null,
+      watchMode: false,
+    }));
+  });
 }
 
 export function createVitestRunSpecs(args, params = {}) {

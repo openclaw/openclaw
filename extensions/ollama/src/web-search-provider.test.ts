@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "../index.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
+import {
+  __testing as testing,
+  createOllamaWebSearchProvider,
+  runOllamaWebSearch,
+} from "./web-search-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -10,35 +15,49 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+type OllamaProviderConfigOverride = Partial<{
+  api: "ollama";
+  apiKey: string;
+  baseUrl: string;
+  models: NonNullable<
+    NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
+  >["models"];
+}>;
+
+function createOllamaConfig(provider: OllamaProviderConfigOverride = {}): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        ollama: {
+          baseUrl: "http://ollama.local:11434/v1",
+          api: "ollama",
+          models: [],
+          ...provider,
+        },
+      },
+    },
+  };
+}
+
+function createSetupNotes() {
+  const notes: Array<{ title?: string; message: string }> = [];
+  return {
+    notes,
+    prompter: {
+      note: async (message: string, title?: string) => {
+        notes.push({ title, message });
+      },
+    },
+  };
+}
+
 describe("ollama web search provider", () => {
-  let createOllamaWebSearchProvider: typeof import("./web-search-provider.js").createOllamaWebSearchProvider;
-  let runOllamaWebSearch: typeof import("./web-search-provider.js").runOllamaWebSearch;
-  let testing: typeof import("./web-search-provider.js").__testing;
-
-  beforeAll(async () => {
-    ({
-      createOllamaWebSearchProvider,
-      runOllamaWebSearch,
-      __testing: testing,
-    } = await import("./web-search-provider.js"));
-  });
-
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
   it("registers a keyless web search provider", () => {
-    const webSearchProviders: unknown[] = [];
-
-    plugin.register({
-      registerProvider() {},
-      registerWebSearchProvider(provider: unknown) {
-        webSearchProviders.push(provider);
-      },
-    } as never);
-
-    expect(webSearchProviders).toHaveLength(1);
-    expect(webSearchProviders[0]).toMatchObject({
+    expect(createContractOllamaWebSearchProvider()).toMatchObject({
       id: "ollama",
       label: "Ollama Web Search",
       requiresCredential: false,
@@ -94,17 +113,7 @@ describe("ollama web search provider", () => {
 
     const provider = createOllamaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: "http://ollama.local:11434/v1",
-              api: "ollama",
-              models: [],
-            },
-          },
-        },
-      },
+      config: createOllamaConfig(),
     } as never);
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -154,26 +163,12 @@ describe("ollama web search provider", () => {
   it("warns when Ollama is not reachable during setup without cancelling", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connect failed"));
 
-    const notes: Array<{ title?: string; message: string }> = [];
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://ollama.local:11434/v1",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    };
+    const config = createOllamaConfig();
+    const { notes, prompter } = createSetupNotes();
 
     const next = await testing.warnOllamaWebSearchPrereqs({
       config,
-      prompter: {
-        note: async (message: string, title?: string) => {
-          notes.push({ title, message });
-        },
-      },
+      prompter,
     });
 
     expect(next).toBe(config);
@@ -189,18 +184,12 @@ describe("ollama web search provider", () => {
     const original = process.env.OLLAMA_API_KEY;
     try {
       process.env.OLLAMA_API_KEY = "real-secret-from-env";
-      const key = testing.resolveOllamaWebSearchApiKey({
-        models: {
-          providers: {
-            ollama: {
-              apiKey: "OLLAMA_API_KEY",
-              baseUrl: "http://localhost:11434",
-              api: "ollama",
-              models: [],
-            },
-          },
-        },
-      });
+      const key = testing.resolveOllamaWebSearchApiKey(
+        createOllamaConfig({
+          apiKey: "OLLAMA_API_KEY",
+          baseUrl: "http://localhost:11434",
+        }),
+      );
       expect(key).toBe("real-secret-from-env");
     } finally {
       if (original === undefined) {
@@ -231,26 +220,12 @@ describe("ollama web search provider", () => {
         release: vi.fn(async () => {}),
       });
 
-    const notes: Array<{ title?: string; message: string }> = [];
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "http://ollama.local:11434/v1",
-            api: "ollama",
-            models: [],
-          },
-        },
-      },
-    };
+    const config = createOllamaConfig();
+    const { notes, prompter } = createSetupNotes();
 
     const next = await testing.warnOllamaWebSearchPrereqs({
       config,
-      prompter: {
-        note: async (message: string, title?: string) => {
-          notes.push({ title, message });
-        },
-      },
+      prompter,
     });
 
     expect(next).toBe(config);

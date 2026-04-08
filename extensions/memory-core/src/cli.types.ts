@@ -22,3 +22,20 @@ export type MemoryPromoteCommandOptions = MemoryCommandOptions & {
   apply?: boolean;
   includePromoted?: boolean;
 };
+
+export type MemoryPromoteExplainOptions = MemoryCommandOptions & {
+  includePromoted?: boolean;
+};
+
+export type MemoryRemHarnessOptions = MemoryCommandOptions & {
+  includePromoted?: boolean;
+  path?: string;
+  grounded?: boolean;
+};
+
+export type MemoryRemBackfillOptions = MemoryCommandOptions & {
+  path?: string;
+  rollback?: boolean;
+  stageShortTerm?: boolean;
+  rollbackShortTerm?: boolean;
+};

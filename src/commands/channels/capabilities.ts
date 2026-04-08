@@ -16,7 +16,12 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
@@ -161,7 +166,7 @@ async function resolveChannelReports(params: {
           cfg,
         });
       } catch (err) {
-        probe = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        probe = { ok: false, error: formatErrorMessage(err) };
       }
     }
 
@@ -194,7 +199,7 @@ async function resolveChannelReports(params: {
       accountId,
       accountName:
         typeof (resolvedAccount as { name?: string }).name === "string"
-          ? (resolvedAccount as { name?: string }).name?.trim() || undefined
+          ? normalizeOptionalString((resolvedAccount as { name?: string }).name)
           : undefined,
       configured,
       enabled,
@@ -218,8 +223,8 @@ export async function channelsCapabilitiesCommand(
   }
   let cfg = loadedCfg;
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
-  const rawChannel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
-  const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
+  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
+  const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
     runtime.error(danger("--account requires a specific --channel."));
@@ -261,7 +266,7 @@ export async function channelsCapabilitiesCommand(
 
   const reports: ChannelCapabilitiesReport[] = [];
   for (const plugin of selected) {
-    const accountOverride = opts.account?.trim() || undefined;
+    const accountOverride = normalizeOptionalString(opts.account);
     reports.push(
       ...(await resolveChannelReports({
         plugin,

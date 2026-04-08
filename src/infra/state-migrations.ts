@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -25,6 +25,10 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import {
@@ -79,9 +83,14 @@ type LegacySessionSurface = {
 };
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
-  return getBundledChannelContractSurfaces().filter(
-    (surface): surface is LegacySessionSurface => Boolean(surface) && typeof surface === "object",
-  );
+  const surfaces: LegacySessionSurface[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    const surface = plugin.messaging;
+    if (surface && typeof surface === "object") {
+      surfaces.push(surface);
+    }
+  }
+  return surfaces;
 }
 
 function isSurfaceGroupKey(key: string): boolean {
@@ -92,6 +101,10 @@ function isLegacyGroupKey(key: string): boolean {
   const trimmed = key.trim();
   if (!trimmed) {
     return false;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
+    return true;
   }
   for (const surface of getLegacySessionSurfaces()) {
     if (surface.isLegacyGroupSessionKey?.(trimmed)) {
@@ -142,8 +155,9 @@ function canonicalizeSessionKeyForAgent(params: {
   if (!raw) {
     return raw;
   }
-  if (raw.toLowerCase() === "global" || raw.toLowerCase() === "unknown") {
-    return raw.toLowerCase();
+  const rawLower = normalizeLowercaseStringOrEmpty(raw);
+  if (rawLower === "global" || rawLower === "unknown") {
+    return rawLower;
   }
 
   // When shared-store guard is active, do not remap keys that belong to a
@@ -154,9 +168,8 @@ function canonicalizeSessionKeyForAgent(params: {
   if (params.skipCrossAgentRemap) {
     const parsed = parseAgentSessionKey(raw);
     if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-      return raw.toLowerCase();
+      return rawLower;
     }
-    const rawLower = raw.toLowerCase();
     if (
       agentId !== DEFAULT_AGENT_ID &&
       (rawLower === DEFAULT_MAIN_KEY || rawLower === params.mainKey)
@@ -171,7 +184,7 @@ function canonicalizeSessionKeyForAgent(params: {
     sessionKey: raw,
   });
   if (canonicalMain !== raw) {
-    return canonicalMain.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(canonicalMain);
   }
 
   // Handle cross-agent orphaned main-session keys: "agent:main:main" or
@@ -180,7 +193,6 @@ function canonicalizeSessionKeyForAgent(params: {
   // (hooks, subagents, cron, per-sender) may be intentional cross-agent
   // references and must not be touched (#29683).
   const defaultPrefix = `agent:${DEFAULT_AGENT_ID}:`;
-  const rawLower = raw.toLowerCase();
   if (
     rawLower.startsWith(defaultPrefix) &&
     agentId !== DEFAULT_AGENT_ID &&
@@ -195,30 +207,38 @@ function canonicalizeSessionKeyForAgent(params: {
         agentId,
         sessionKey: remapped,
       });
-      return canonicalized.toLowerCase();
+      return normalizeLowercaseStringOrEmpty(canonicalized);
     }
   }
 
-  if (raw.toLowerCase().startsWith("agent:")) {
-    return raw.toLowerCase();
+  if (rawLower.startsWith("agent:")) {
+    return rawLower;
   }
-  if (raw.toLowerCase().startsWith("subagent:")) {
+  if (rawLower.startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
-    return `agent:${agentId}:subagent:${rest}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:subagent:${rest}`);
   }
+  // Channel-owned legacy shapes must win before the generic group/channel
+  // fallback. WhatsApp shipped channel-qualified group sessions, so
+  // `group:123@g.us` must canonicalize to `...:whatsapp:group:...`, not the
+  // generic `...:unknown:group:...` bucket.
   for (const surface of getLegacySessionSurfaces()) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
       agentId,
     });
-    if (typeof canonicalized === "string" && canonicalized.trim()) {
-      return canonicalized.trim().toLowerCase();
+    const normalizedCanonicalized = normalizeOptionalLowercaseString(canonicalized);
+    if (normalizedCanonicalized) {
+      return normalizedCanonicalized;
     }
   }
-  if (isSurfaceGroupKey(raw)) {
-    return `agent:${agentId}:${raw}`.toLowerCase();
+  if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
-  return `agent:${agentId}:${raw}`.toLowerCase();
+  if (isSurfaceGroupKey(raw)) {
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
+  }
+  return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
 }
 
 function pickLatestLegacyDirectEntry(
@@ -240,7 +260,7 @@ function pickLatestLegacyDirectEntry(
     if (normalized.startsWith("agent:")) {
       continue;
     }
-    if (normalized.toLowerCase().startsWith("subagent:")) {
+    if (normalizeLowercaseStringOrEmpty(normalized).startsWith("subagent:")) {
       continue;
     }
     if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {
@@ -618,7 +638,6 @@ export async function autoMigrateLegacyStateDir(params: {
     } catch (fallbackErr) {
       try {
         if (!legacyDir) {
-          // oxlint-disable-next-line preserve-caught-error
           throw new Error("Legacy state dir not found", { cause: fallbackErr });
         }
         fs.renameSync(targetDir, legacyDir);

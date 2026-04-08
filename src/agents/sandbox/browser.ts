@@ -1,15 +1,21 @@
 import crypto from "node:crypto";
+import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import {
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+} from "../../plugin-sdk/browser-bridge.js";
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   resolveProfile,
-  startBrowserBridgeServer,
-  stopBrowserBridgeServer,
   type ResolvedBrowserConfig,
-} from "../../../extensions/browser/runtime-api.js";
-import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+} from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -117,7 +123,7 @@ async function ensureDockerNetwork(
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
   });
-  const normalized = network.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(network) ?? "";
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
@@ -148,7 +154,7 @@ export async function ensureSandboxBrowser(params: {
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
-  const cdpSourceRange = params.cfg.browser.cdpSourceRange?.trim() || undefined;
+  const cdpSourceRange = normalizeOptionalString(params.cfg.browser.cdpSourceRange);
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
@@ -293,8 +299,8 @@ export async function ensureSandboxBrowser(params: {
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
 
-  let desiredAuthToken = params.bridgeAuth?.token?.trim() || undefined;
-  let desiredAuthPassword = params.bridgeAuth?.password?.trim() || undefined;
+  let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
+  let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
   if (!desiredAuthToken && !desiredAuthPassword) {
     // Always require auth for the sandbox bridge server, even if gateway auth
     // mode doesn't produce a shared secret (e.g. trusted-proxy).

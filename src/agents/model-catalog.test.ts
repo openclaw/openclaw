@@ -1,25 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
-}));
-vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw",
-}));
-vi.mock("../plugins/provider-runtime.runtime.js", () => ({
-  augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
-}));
-import {
-  __setModelCatalogImportForTest,
-  findModelInCatalog,
-  loadModelCatalog,
-} from "./model-catalog.js";
-import {
-  installModelCatalogTestHooks,
-  mockCatalogImportFailThenRecover,
-  type PiSdkModule,
-} from "./model-catalog.test-harness.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
+
+type PiSdkModule = typeof import("./pi-model-discovery.js");
+
+let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
+let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
+let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
+let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
+let augmentCatalogMock: ReturnType<typeof vi.fn>;
+
+function mockCatalogImportFailThenRecover() {
+  let call = 0;
+  __setModelCatalogImportForTest(async () => {
+    call += 1;
+    if (call === 1) {
+      throw new Error("boom");
+    }
+    return {
+      discoverAuthStorage: () => ({}),
+      AuthStorage: class {},
+      ModelRegistry: class {
+        getAll() {
+          return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+        }
+      },
+    } as unknown as PiSdkModule;
+  });
+  return () => call;
+}
 
 function mockPiDiscoveryModels(models: unknown[]) {
   __setModelCatalogImportForTest(
@@ -41,11 +51,47 @@ function mockSingleOpenAiCatalogModel() {
 }
 
 describe("loadModelCatalog", () => {
-  installModelCatalogTestHooks();
+  beforeAll(async () => {
+    vi.doMock("./models-config.js", () => ({
+      ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
+    }));
+    vi.doMock("./agent-paths.js", () => ({
+      resolveOpenClawAgentDir: () => "/tmp/openclaw",
+    }));
+    vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
+      augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+    }));
+
+    ({
+      __setModelCatalogImportForTest,
+      findModelInCatalog,
+      loadModelCatalog,
+      resetModelCatalogCacheForTest,
+    } = await import("./model-catalog.js"));
+    const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
+    augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
+  });
+
+  beforeEach(() => {
+    resetModelCatalogCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
+  });
+
+  afterEach(() => {
+    __setModelCatalogImportForTest();
+    resetModelCatalogCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
+    vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./models-config.js");
+    vi.doUnmock("./agent-paths.js");
+    vi.doUnmock("../plugins/provider-runtime.runtime.js");
+  });
 
   it("retries after import failure without poisoning the cache", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const getCallCount = mockCatalogImportFailThenRecover();
 
@@ -56,7 +102,6 @@ describe("loadModelCatalog", () => {
       const second = await loadModelCatalog({ config: cfg });
       expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
       expect(getCallCount()).toBe(2);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
       setLoggerOverride(null);
       resetLogger();
@@ -65,7 +110,6 @@ describe("loadModelCatalog", () => {
 
   it("returns partial results on discovery errors", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       __setModelCatalogImportForTest(
         async () =>
@@ -91,7 +135,6 @@ describe("loadModelCatalog", () => {
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
       expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
     } finally {
       setLoggerOverride(null);
       resetLogger();
@@ -241,32 +284,20 @@ describe("loadModelCatalog", () => {
     ).toBe(false);
   });
 
-  it("merges configured models for opted-in non-pi-native providers", async () => {
+  it("merges provider-owned supplemental catalog entries", async () => {
     mockSingleOpenAiCatalogModel();
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "kilocode",
+        id: "google/gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 1048576,
+      },
+    ]);
 
-    const result = await loadModelCatalog({
-      config: {
-        models: {
-          providers: {
-            kilocode: {
-              baseUrl: "https://api.kilo.ai/api/gateway/",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "google/gemini-3-pro-preview",
-                  name: "Gemini 3 Pro Preview",
-                  input: ["text", "image"],
-                  reasoning: true,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1048576,
-                  maxTokens: 65536,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
     expect(result).toContainEqual(
       expect.objectContaining({
@@ -277,71 +308,45 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("merges configured models for opted-in ollama provider", async () => {
+  it("dedupes supplemental models against registry entries", async () => {
     mockSingleOpenAiCatalogModel();
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "ollama",
+        id: "llama3.2",
+        name: "Llama 3.2",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1048576,
+      },
+      {
+        provider: "openai",
+        id: "gpt-4.1",
+        name: "Duplicate GPT-4.1",
+      },
+    ]);
 
-    const result = await loadModelCatalog({
-      config: {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: "http://127.0.0.1:11434",
-              api: "ollama",
-              models: [
-                {
-                  id: "llama3.2",
-                  name: "Llama 3.2",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1048576,
-                  maxTokens: 65536,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
     expect(result).toContainEqual(
       expect.objectContaining({ provider: "ollama", id: "llama3.2", name: "Llama 3.2" }),
     );
+    expect(
+      result.filter((entry) => entry.provider === "openai" && entry.id === "gpt-4.1"),
+    ).toHaveLength(1);
   });
 
-  it("does not merge configured models for providers that are not opted in", async () => {
+  it("does not add unrelated models when provider plugins return nothing", async () => {
     mockSingleOpenAiCatalogModel();
 
-    const result = await loadModelCatalog({
-      config: {
-        models: {
-          providers: {
-            qianfan: {
-              baseUrl: "https://qianfan.baidubce.com/v2",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "deepseek-v3.2",
-                  name: "DEEPSEEK V3.2",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 98304,
-                  maxTokens: 32768,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
     expect(
       result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
     ).toBe(false);
   });
 
-  it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
+  it("does not duplicate provider-owned supplemental models already present in ModelRegistry", async () => {
     mockPiDiscoveryModels([
       {
         id: "kilo/auto",
@@ -349,30 +354,18 @@ describe("loadModelCatalog", () => {
         name: "Kilo Auto",
       },
     ]);
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "kilocode",
+        id: "kilo/auto",
+        name: "Configured Kilo Auto",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1000000,
+      },
+    ]);
 
-    const result = await loadModelCatalog({
-      config: {
-        models: {
-          providers: {
-            kilocode: {
-              baseUrl: "https://api.kilo.ai/api/gateway/",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "kilo/auto",
-                  name: "Configured Kilo Auto",
-                  reasoning: true,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1000000,
-                  maxTokens: 128000,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
     const matches = result.filter(
       (entry) => entry.provider === "kilocode" && entry.id === "kilo/auto",

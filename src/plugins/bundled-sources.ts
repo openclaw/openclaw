@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
@@ -55,8 +56,8 @@ export function resolveBundledPluginSources(params: {
     }
 
     const npmSpec =
-      candidate.packageManifest?.install?.npmSpec?.trim() ||
-      candidate.packageName?.trim() ||
+      normalizeOptionalString(candidate.packageManifest?.install?.npmSpec) ||
+      normalizeOptionalString(candidate.packageName) ||
       undefined;
 
     bundled.set(pluginId, {

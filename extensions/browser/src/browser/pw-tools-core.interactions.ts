@@ -1,7 +1,12 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { Frame, Page } from "playwright-core";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
+  assertPageNavigationCompletedSafely,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -24,6 +29,15 @@ type TargetOpts = {
 const MAX_CLICK_DELAY_MS = 5_000;
 const MAX_WAIT_TIME_MS = 30_000;
 const MAX_BATCH_ACTIONS = 100;
+const INTERACTION_NAVIGATION_GRACE_MS = 250;
+
+type NavigationObservablePage = Pick<Page, "url"> & {
+  mainFrame?: () => Frame;
+  on?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
+  off?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
+};
+
+const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -47,6 +61,254 @@ function resolveInteractionTimeoutMs(timeoutMs?: number): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
 }
 
+// Returns true only when the URL change indicates a cross-document navigation
+// (i.e., a real network fetch occurred). Same-document hash-only mutations —
+// anchor clicks and history.pushState/replaceState that change only the
+// fragment — do not cause a network request and must not trigger SSRF checks.
+function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
+  const currentUrl = page.url();
+  if (currentUrl === previousUrl) {
+    return false;
+  }
+  try {
+    const prev = new URL(previousUrl);
+    const curr = new URL(currentUrl);
+    if (
+      prev.origin === curr.origin &&
+      prev.pathname === curr.pathname &&
+      prev.search === curr.search
+    ) {
+      // Only the fragment changed — same-document navigation, no fetch.
+      return false;
+    }
+  } catch {
+    // Non-parseable URL; fall through to string comparison.
+  }
+  return true;
+}
+
+// Returns true when a framenavigated event represents only a hash-only
+// same-document mutation (no network request). Used in event-driven checks
+// where the event itself is the navigation signal — unlike URL polling, we
+// cannot use identical URLs as a "no navigation" sentinel because same-URL
+// reloads and form submits also fire framenavigated with an unchanged URL.
+function isHashOnlyNavigation(currentUrl: string, previousUrl: string): boolean {
+  if (currentUrl === previousUrl) {
+    // Exact same URL + framenavigated firing = reload or form submit, not a
+    // fragment hop. Must run SSRF checks.
+    return false;
+  }
+  try {
+    const prev = new URL(previousUrl);
+    const curr = new URL(currentUrl);
+    return (
+      prev.origin === curr.origin && prev.pathname === curr.pathname && prev.search === curr.search
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): boolean {
+  if (typeof page.mainFrame !== "function") {
+    return true;
+  }
+  return frame === page.mainFrame();
+}
+
+function observeDelayedInteractionNavigation(
+  page: NavigationObservablePage,
+  previousUrl: string,
+): Promise<boolean> {
+  if (didCrossDocumentUrlChange(page, previousUrl)) {
+    return Promise.resolve(true);
+  }
+  if (typeof page.on !== "function" || typeof page.off !== "function") {
+    return Promise.resolve(false);
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const onFrameNavigated = (frame: Frame) => {
+      if (!isMainFrameNavigation(page, frame)) {
+        return;
+      }
+      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
+      // event firing is itself the navigation signal, so a same-URL reload must
+      // not be treated as "no navigation" the way URL polling would.
+      if (isHashOnlyNavigation(page.url(), previousUrl)) {
+        return;
+      }
+      cleanup();
+      resolve(true);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve(didCrossDocumentUrlChange(page, previousUrl));
+    }, INTERACTION_NAVIGATION_GRACE_MS);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      // Call off directly on page (not via a cached reference) to preserve
+      // Playwright's EventEmitter `this` binding.
+      page.off!("framenavigated", onFrameNavigated);
+    };
+
+    // Call on directly on page (not via a cached reference) to preserve
+    // Playwright's EventEmitter `this` binding.
+    page.on!("framenavigated", onFrameNavigated);
+  });
+}
+
+function scheduleDelayedInteractionNavigationGuard(opts: {
+  cdpUrl: string;
+  page: Page;
+  previousUrl: string;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+}): void {
+  if (!opts.ssrfPolicy) {
+    return;
+  }
+  const page = opts.page as unknown as NavigationObservablePage;
+  if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
+    void assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    }).catch(() => {});
+    return;
+  }
+  if (typeof page.on !== "function" || typeof page.off !== "function") {
+    return;
+  }
+
+  pendingInteractionNavigationGuardCleanup.get(opts.page)?.();
+
+  const onFrameNavigated = (frame: Frame) => {
+    if (!isMainFrameNavigation(page, frame)) {
+      return;
+    }
+    // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
+    // event firing is itself the navigation signal, so a same-URL reload must
+    // not be treated as "no navigation" the way URL polling would.
+    if (isHashOnlyNavigation(page.url(), opts.previousUrl)) {
+      return;
+    }
+    cleanup();
+    void assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    }).catch(() => {});
+  };
+  const timeout = setTimeout(() => {
+    cleanup();
+  }, INTERACTION_NAVIGATION_GRACE_MS);
+  const cleanup = () => {
+    clearTimeout(timeout);
+    page.off!("framenavigated", onFrameNavigated);
+    if (pendingInteractionNavigationGuardCleanup.get(opts.page) === cleanup) {
+      pendingInteractionNavigationGuardCleanup.delete(opts.page);
+    }
+  };
+
+  pendingInteractionNavigationGuardCleanup.set(opts.page, cleanup);
+  page.on("framenavigated", onFrameNavigated);
+}
+
+async function assertInteractionNavigationCompletedSafely<T>(opts: {
+  action: () => Promise<T>;
+  cdpUrl: string;
+  page: Page;
+  previousUrl: string;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+}): Promise<T> {
+  if (!opts.ssrfPolicy) {
+    return await opts.action();
+  }
+  // Phase 1: keep a framenavigated listener alive for the entire duration of the
+  // action so navigations triggered mid-click or mid-evaluate are not missed.
+  // Using a fixed pre-action timer would expire before the action finishes for
+  // slow interactions, silently bypassing the SSRF guard.
+  const navPage = opts.page as unknown as NavigationObservablePage;
+  let navigatedDuringAction = false;
+  const onFrameNavigated = (frame: Frame) => {
+    if (!isMainFrameNavigation(navPage, frame)) {
+      return;
+    }
+    // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
+    // firing is the navigation signal, so a same-URL reload must not be skipped
+    // the way it would be by URL-equality polling.
+    if (!isHashOnlyNavigation(opts.page.url(), opts.previousUrl)) {
+      navigatedDuringAction = true;
+    }
+  };
+  if (typeof navPage.on === "function") {
+    navPage.on("framenavigated", onFrameNavigated);
+  }
+
+  let result: T | undefined;
+  let actionError: unknown = null;
+  try {
+    result = await opts.action();
+  } catch (err) {
+    actionError = err;
+  } finally {
+    if (typeof navPage.off === "function") {
+      navPage.off("framenavigated", onFrameNavigated);
+    }
+  }
+
+  const navigationObserved =
+    navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
+
+  if (navigationObserved) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  } else if (actionError) {
+    // Preserve the action-error path semantics: if a rejected click/evaluate still
+    // triggers a delayed navigation, the SSRF block must win over the original
+    // action error instead of surfacing a stale interaction failure.
+    const delayedNavigationObserved = await observeDelayedInteractionNavigation(
+      opts.page,
+      opts.previousUrl,
+    );
+    if (delayedNavigationObserved) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        response: null,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+    }
+  } else {
+    // Successful non-navigating interactions should not wait out the grace window,
+    // but we still keep a short-lived listener alive to quarantine late SSRF hops.
+    scheduleDelayedInteractionNavigationGuard({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      previousUrl: opts.previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
+
+  if (actionError) {
+    throw actionError;
+  }
+  return result as T;
+}
+
 async function awaitEvalWithAbort<T>(
   evalPromise: Promise<T>,
   abortPromise?: Promise<never>,
@@ -61,6 +323,24 @@ async function awaitEvalWithAbort<T>(
     void evalPromise.catch(() => {});
     throw err;
   }
+}
+
+async function assertPostInteractionNavigationSafe(opts: {
+  cdpUrl: string;
+  page: Awaited<ReturnType<typeof getPageForTargetId>>;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+}): Promise<void> {
+  if (!opts.ssrfPolicy) {
+    return;
+  }
+  await assertPageNavigationCompletedSafely({
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    response: null,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  });
 }
 
 export async function highlightViaPlaywright(opts: {
@@ -87,6 +367,7 @@ export async function clickViaPlaywright(opts: {
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
   delayMs?: number;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -95,25 +376,35 @@ export async function clickViaPlaywright(opts: {
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const previousUrl = page.url();
   try {
-    const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
-    if (delayMs > 0) {
-      await locator.hover({ timeout });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    if (opts.doubleClick) {
-      await locator.dblclick({
-        timeout,
-        button: opts.button,
-        modifiers: opts.modifiers,
-      });
-    } else {
-      await locator.click({
-        timeout,
-        button: opts.button,
-        modifiers: opts.modifiers,
-      });
-    }
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
+        if (delayMs > 0) {
+          await locator.hover({ timeout });
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        if (opts.doubleClick) {
+          await locator.dblclick({
+            timeout,
+            button: opts.button,
+            modifiers: opts.modifiers,
+          });
+          return;
+        }
+        await locator.click({
+          timeout,
+          button: opts.button,
+          modifiers: opts.modifiers,
+        });
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
@@ -201,8 +492,9 @@ export async function pressKeyViaPlaywright(opts: {
   targetId?: string;
   key: string;
   delayMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
-  const key = String(opts.key ?? "").trim();
+  const key = normalizeOptionalString(opts.key) ?? "";
   if (!key) {
     throw new Error("key is required");
   }
@@ -210,6 +502,12 @@ export async function pressKeyViaPlaywright(opts: {
   ensurePageState(page);
   await page.keyboard.press(key, {
     delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+  });
+  await assertPostInteractionNavigationSafe({
+    cdpUrl: opts.cdpUrl,
+    page,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
   });
 }
 
@@ -222,6 +520,7 @@ export async function typeViaPlaywright(opts: {
   submit?: boolean;
   slowly?: boolean;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const text = String(opts.text ?? "");
@@ -240,6 +539,12 @@ export async function typeViaPlaywright(opts: {
     }
     if (opts.submit) {
       await locator.press("Enter", { timeout });
+      await assertPostInteractionNavigationSafe({
+        cdpUrl: opts.cdpUrl,
+        page,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
     }
   } catch (err) {
     throw toAIFriendlyError(err, label);
@@ -289,12 +594,13 @@ export async function fillFormViaPlaywright(opts: {
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
   fn: string;
   ref?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<unknown> {
-  const fnText = String(opts.fn ?? "").trim();
+  const fnText = normalizeOptionalString(opts.fn) ?? "";
   if (!fnText) {
     throw new Error("function is required");
   }
@@ -350,6 +656,7 @@ export async function evaluateViaPlaywright(opts: {
   try {
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
+      const previousUrl = page.url();
       // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
       const elementEvaluator = new Function(
         "el",
@@ -378,9 +685,18 @@ export async function evaluateViaPlaywright(opts: {
         fnBody: fnText,
         timeoutMs: evaluateTimeout,
       });
-      return await awaitEvalWithAbort(evalPromise, abortPromise);
+      const result = await assertInteractionNavigationCompletedSafely({
+        action: () => awaitEvalWithAbort(evalPromise, abortPromise),
+        cdpUrl: opts.cdpUrl,
+        page,
+        previousUrl,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+      return result;
     }
 
+    const previousUrl = page.url();
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
     const browserEvaluator = new Function(
       "args",
@@ -408,7 +724,15 @@ export async function evaluateViaPlaywright(opts: {
       fnBody: fnText,
       timeoutMs: evaluateTimeout,
     });
-    return await awaitEvalWithAbort(evalPromise, abortPromise);
+    const result = await assertInteractionNavigationCompletedSafely({
+      action: () => awaitEvalWithAbort(evalPromise, abortPromise),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+    return result;
   } finally {
     if (signal && abortListener) {
       signal.removeEventListener("abort", abortListener);
@@ -470,13 +794,13 @@ export async function waitForViaPlaywright(opts: {
     });
   }
   if (opts.selector) {
-    const selector = String(opts.selector).trim();
+    const selector = normalizeOptionalString(opts.selector) ?? "";
     if (selector) {
       await page.locator(selector).first().waitFor({ state: "visible", timeout });
     }
   }
   if (opts.url) {
-    const url = String(opts.url).trim();
+    const url = normalizeOptionalString(opts.url) ?? "";
     if (url) {
       await page.waitForURL(url, { timeout });
     }
@@ -485,7 +809,7 @@ export async function waitForViaPlaywright(opts: {
     await page.waitForLoadState(opts.loadState, { timeout });
   }
   if (opts.fn) {
-    const fn = String(opts.fn).trim();
+    const fn = normalizeOptionalString(opts.fn) ?? "";
     if (fn) {
       await page.waitForFunction(fn, { timeout });
     }
@@ -667,8 +991,8 @@ export async function setInputFilesViaPlaywright(opts: {
   if (!opts.paths.length) {
     throw new Error("paths are required");
   }
-  const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
-  const element = typeof opts.element === "string" ? opts.element.trim() : "";
+  const inputRef = normalizeOptionalString(opts.inputRef) ?? "";
+  const element = normalizeOptionalString(opts.element) ?? "";
   if (inputRef && element) {
     throw new Error("inputRef and element are mutually exclusive");
   }
@@ -712,6 +1036,7 @@ async function executeSingleAction(
   cdpUrl: string,
   targetId?: string,
   evaluateEnabled?: boolean,
+  ssrfPolicy?: SsrFPolicy,
   depth = 0,
 ): Promise<void> {
   if (depth > MAX_BATCH_DEPTH) {
@@ -732,6 +1057,7 @@ async function executeSingleAction(
         >,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
       });
       break;
     case "type":
@@ -744,6 +1070,7 @@ async function executeSingleAction(
         submit: action.submit,
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
       });
       break;
     case "press":
@@ -752,6 +1079,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         key: action.key,
         delayMs: action.delayMs,
+        ssrfPolicy,
       });
       break;
     case "hover":
@@ -833,6 +1161,7 @@ async function executeSingleAction(
       await evaluateViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        ssrfPolicy,
         fn: action.fn,
         ref: action.ref,
         timeoutMs: action.timeoutMs,
@@ -848,6 +1177,7 @@ async function executeSingleAction(
       await batchViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        ssrfPolicy,
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
@@ -865,6 +1195,7 @@ export async function batchViaPlaywright(opts: {
   actions: BrowserActRequest[];
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   depth?: number;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
   const depth = opts.depth ?? 0;
@@ -877,10 +1208,17 @@ export async function batchViaPlaywright(opts: {
   const results: Array<{ ok: boolean; error?: string }> = [];
   for (const action of opts.actions) {
     try {
-      await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
+      await executeSingleAction(
+        action,
+        opts.cdpUrl,
+        opts.targetId,
+        opts.evaluateEnabled,
+        opts.ssrfPolicy,
+        depth,
+      );
       results.push({ ok: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       results.push({ ok: false, error: message });
       if (opts.stopOnError !== false) {
         break;
