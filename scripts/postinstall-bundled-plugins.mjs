@@ -124,7 +124,7 @@ export function pruneBundledPluginSourceNodeModules(params = {}) {
   }
 
   for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
       continue;
     }
 
@@ -154,6 +154,19 @@ export function runBundledPluginPostinstall(params = {}) {
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    try {
+      pruneBundledPluginSourceNodeModules({
+        extensionsDir: join(packageRoot, "extensions"),
+        existsSync: pathExists,
+        readdirSync: params.readdirSync,
+        rmSync: params.rmSync,
+      });
+    } catch (e) {
+      log.warn(`[postinstall] could not prune bundled plugin source node_modules: ${String(e)}`);
+    }
+    return;
+  }
   if (
     !shouldRunBundledPluginPostinstall({
       env,
@@ -162,13 +175,6 @@ export function runBundledPluginPostinstall(params = {}) {
       existsSync: pathExists,
     })
   ) {
-    return;
-  }
-  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
-    pruneBundledPluginSourceNodeModules({
-      extensionsDir: join(packageRoot, "extensions"),
-      existsSync: pathExists,
-    });
     return;
   }
   const runtimeDeps =

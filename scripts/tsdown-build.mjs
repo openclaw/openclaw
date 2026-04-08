@@ -60,9 +60,6 @@ function pruneSourceCheckoutBundledPluginNodeModules() {
   });
 }
 
-pruneSourceCheckoutBundledPluginNodeModules();
-pruneStaleRuntimeSymlinks();
-
 function findFatalUnresolvedImport(lines) {
   for (const line of lines) {
     if (!UNRESOLVED_IMPORT_RE.test(line)) {
@@ -112,6 +109,8 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
+  pruneSourceCheckoutBundledPluginNodeModules();
+  pruneStaleRuntimeSymlinks();
   const invocation = resolveTsdownBuildInvocation();
   const result = spawnSync(invocation.command, invocation.args, invocation.options);
 
