@@ -182,6 +182,17 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
   );
 }
 
+const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
+
+/** Strip trailing isolated-heartbeat suffixes so targeted wakes never nest `…:heartbeat:heartbeat`. */
+function stripHeartbeatIsolatedSessionSuffixes(sessionKey: string): string {
+  let key = sessionKey;
+  while (key.endsWith(HEARTBEAT_ISOLATED_SESSION_SUFFIX)) {
+    key = key.slice(0, -HEARTBEAT_ISOLATED_SESSION_SUFFIX.length);
+  }
+  return key;
+}
+
 function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -717,7 +728,8 @@ export async function runHeartbeatOnce(opts: {
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
-    const isolatedKey = `${sessionKey}:heartbeat`;
+    const baseSessionKey = stripHeartbeatIsolatedSessionSuffixes(sessionKey);
+    const isolatedKey = `${baseSessionKey}:heartbeat`;
     const cronSession = resolveCronSession({
       cfg,
       sessionKey: isolatedKey,

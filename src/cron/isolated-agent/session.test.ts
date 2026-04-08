@@ -201,6 +201,22 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
     });
 
+    it("clears sessionFile when forceNew is true so new sessionId gets a fresh transcript path (#62869)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-file",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          sessionFile: "/tmp/agents/main/sessions/prior-id.jsonl",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
     it("clears delivery routing metadata when session is stale", () => {
       const result = resolveWithStoredEntry({
         entry: {

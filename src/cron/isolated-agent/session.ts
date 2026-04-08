@@ -83,6 +83,9 @@ export function resolveCronSession(params: {
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      // New sessionId must resolve a fresh transcript path; inherited sessionFile
+      // would keep appending to the previous file (isolated heartbeat, forceNew).
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };

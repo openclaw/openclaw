@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Heartbeat: avoid nested `:heartbeat` session keys when targeted wakes reuse an isolated heartbeat session, and clear inherited `sessionFile` on cron-style session rollover so new session ids resolve fresh transcript paths. (#62869)
+
 ## 2026.4.7
 
 ### Changes
