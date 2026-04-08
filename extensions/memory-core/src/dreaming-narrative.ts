@@ -10,6 +10,7 @@ type SubagentSurface = {
     message: string;
     extraSystemPrompt?: string;
     deliver?: boolean;
+    idempotencyKey?: string;
   }) => Promise<{ runId: string }>;
   waitForRun: (params: {
     runId: string;
@@ -247,6 +248,7 @@ export async function generateAndAppendDreamNarrative(params: {
       message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       deliver: false,
+      idempotencyKey: sessionKey,
     });
 
     const result = await params.subagent.waitForRun({
