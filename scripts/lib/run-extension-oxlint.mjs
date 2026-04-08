@@ -9,13 +9,14 @@ import {
 
 const PLUGIN_SDK_DTS_STAMP = path.join("dist", "plugin-sdk", ".boundary-entry-shims.stamp");
 const PLUGIN_SDK_DTS_ENTRY = path.join("dist", "plugin-sdk", "index.d.ts");
+const PLUGIN_SDK_DTS_CONFIG_FILE = "tsconfig.plugin-sdk.dts.json";
 const PLUGIN_SDK_DTS_INPUT_FILES = [
-  "tsconfig.plugin-sdk.dts.json",
   path.join("scripts", "write-plugin-sdk-entry-dts.ts"),
   path.join("scripts", "lib", "plugin-sdk-entries.mjs"),
   path.join("scripts", "lib", "plugin-sdk-entrypoints.json"),
 ];
 const PLUGIN_SDK_DTS_SOURCE_ROOTS = ["src", path.join("packages", "memory-host-sdk", "src")];
+const TYPESCRIPT_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 
 export function runExtensionOxlint(params) {
   const repoRoot = process.cwd();
@@ -209,6 +210,10 @@ function collectTypeScriptFiles(directoryPath) {
 function resolveLatestPluginSdkDeclarationInputMtime(repoRoot, fsImpl) {
   let latestMtime = null;
 
+  for (const configPath of resolvePluginSdkDeclarationConfigPaths(repoRoot, fsImpl)) {
+    latestMtime = maxMtime(latestMtime, readMtimeMs(fsImpl, configPath));
+  }
+
   for (const inputPath of PLUGIN_SDK_DTS_INPUT_FILES) {
     latestMtime = maxMtime(latestMtime, readMtimeMs(fsImpl, path.join(repoRoot, inputPath)));
   }
@@ -221,6 +226,65 @@ function resolveLatestPluginSdkDeclarationInputMtime(repoRoot, fsImpl) {
   }
 
   return latestMtime;
+}
+
+function resolvePluginSdkDeclarationConfigPaths(repoRoot, fsImpl) {
+  const visited = new Set();
+  const resolvedPaths = [];
+
+  function visitConfig(filePath) {
+    const normalizedPath = path.normalize(filePath);
+    if (visited.has(normalizedPath) || !fsImpl.existsSync(normalizedPath)) {
+      return;
+    }
+    visited.add(normalizedPath);
+    resolvedPaths.push(normalizedPath);
+
+    let config;
+    try {
+      config = JSON.parse(fsImpl.readFileSync(normalizedPath, "utf8"));
+    } catch {
+      return;
+    }
+
+    const extendsValue = config?.extends;
+    if (typeof extendsValue !== "string" || extendsValue.trim().length === 0) {
+      return;
+    }
+
+    const resolvedBasePath = resolveTsconfigExtendsPath(
+      normalizedPath,
+      extendsValue.trim(),
+      fsImpl,
+    );
+    if (!resolvedBasePath) {
+      return;
+    }
+    visitConfig(resolvedBasePath);
+  }
+
+  visitConfig(path.join(repoRoot, PLUGIN_SDK_DTS_CONFIG_FILE));
+  return resolvedPaths;
+}
+
+function resolveTsconfigExtendsPath(configPath, extendsValue, fsImpl) {
+  if (!extendsValue.startsWith(".") && !extendsValue.startsWith("/")) {
+    return null;
+  }
+
+  const candidateBasePath = path.resolve(path.dirname(configPath), extendsValue);
+  const candidatePaths = [candidateBasePath];
+  if (!path.extname(candidateBasePath)) {
+    candidatePaths.push(`${candidateBasePath}.json`);
+  }
+
+  for (const candidatePath of candidatePaths) {
+    if (fsImpl.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return null;
 }
 
 function findLatestMtime(directoryPath, fsImpl, shouldSkip) {
@@ -249,11 +313,23 @@ function findLatestMtime(directoryPath, fsImpl, shouldSkip) {
 }
 
 function shouldSkipPluginSdkDeclarationInput(entryPath) {
+  if (
+    !TYPESCRIPT_SOURCE_EXTENSIONS.some((extension) => entryPath.endsWith(extension)) &&
+    !entryPath.endsWith(".d.ts") &&
+    !entryPath.endsWith(".d.mts") &&
+    !entryPath.endsWith(".d.cts")
+  ) {
+    return true;
+  }
   return (
     entryPath.endsWith(".test.ts") ||
     entryPath.endsWith(".test.tsx") ||
+    entryPath.endsWith(".test.mts") ||
+    entryPath.endsWith(".test.cts") ||
     entryPath.endsWith(".e2e.test.ts") ||
-    entryPath.endsWith(".live.test.ts")
+    entryPath.endsWith(".e2e.test.tsx") ||
+    entryPath.endsWith(".live.test.ts") ||
+    entryPath.endsWith(".live.test.tsx")
   );
 }
 

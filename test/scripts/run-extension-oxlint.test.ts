@@ -85,6 +85,68 @@ describe("run-extension-oxlint plugin-sdk declarations", () => {
     });
   });
 
+  it("requests a build when extended tsconfig inputs change after the declaration stamp", () => {
+    const repoRoot = createTempDir("openclaw-extension-oxlint-");
+    const tsconfigPath = writeFile(
+      repoRoot,
+      "tsconfig.plugin-sdk.dts.json",
+      '{\n  "extends": "./tsconfig.json"\n}\n',
+    );
+    const baseTsconfigPath = writeFile(repoRoot, "tsconfig.json", "{\n}\n");
+    const entryPath = writeFile(
+      repoRoot,
+      "dist/plugin-sdk/index.d.ts",
+      'export * from "./src/plugin-sdk/core.js";\n',
+    );
+    const stampPath = writeFile(
+      repoRoot,
+      "dist/plugin-sdk/.boundary-entry-shims.stamp",
+      "2026-04-08T10:00:00.000Z\n",
+    );
+
+    setMtime(tsconfigPath, "2026-04-08T10:00:00.000Z");
+    setMtime(entryPath, "2026-04-08T10:00:00.000Z");
+    setMtime(stampPath, "2026-04-08T10:00:00.000Z");
+    setMtime(baseTsconfigPath, "2026-04-08T10:00:05.000Z");
+
+    expect(resolvePluginSdkDeclarationBuildRequirement({ repoRoot })).toEqual({
+      shouldBuild: true,
+      reason: "stale_declarations",
+    });
+  });
+
+  it("ignores non-TypeScript files when checking declaration staleness", () => {
+    const repoRoot = createTempDir("openclaw-extension-oxlint-");
+    const sourcePath = writeFile(
+      repoRoot,
+      "src/plugin-sdk/core.ts",
+      "export type Core = string;\n",
+    );
+    const tsconfigPath = writeFile(repoRoot, "tsconfig.plugin-sdk.dts.json", "{\n}\n");
+    const notePath = writeFile(repoRoot, "src/plugin-sdk/notes.md", "# note\n");
+    const entryPath = writeFile(
+      repoRoot,
+      "dist/plugin-sdk/index.d.ts",
+      'export * from "./src/plugin-sdk/core.js";\n',
+    );
+    const stampPath = writeFile(
+      repoRoot,
+      "dist/plugin-sdk/.boundary-entry-shims.stamp",
+      "2026-04-08T10:00:10.000Z\n",
+    );
+
+    setMtime(sourcePath, "2026-04-08T10:00:00.000Z");
+    setMtime(tsconfigPath, "2026-04-08T10:00:00.000Z");
+    setMtime(entryPath, "2026-04-08T10:00:10.000Z");
+    setMtime(stampPath, "2026-04-08T10:00:10.000Z");
+    setMtime(notePath, "2026-04-08T10:00:20.000Z");
+
+    expect(resolvePluginSdkDeclarationBuildRequirement({ repoRoot })).toEqual({
+      shouldBuild: false,
+      reason: "fresh_declarations",
+    });
+  });
+
   it("skips the build when declaration shims are present and newer than the inputs", () => {
     const repoRoot = createTempDir("openclaw-extension-oxlint-");
     const sourcePath = writeFile(
