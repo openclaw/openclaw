@@ -160,6 +160,88 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("allows private-network image requests when browser.ssrfPolicy.dangerouslyAllowPrivateNetwork is true", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://192.168.1.15:8082/v1",
+              models: [],
+            },
+          },
+        },
+        browser: {
+          ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://192.168.1.15:8082/v1",
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://192.168.1.15:8082/v1/images/generations",
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
+  it("still blocks private-network image requests when ssrfPolicy opt-in is absent", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://192.168.1.15:8082/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://192.168.1.15:8082/v1",
+        allowPrivateNetwork: false,
+      }),
+    );
+  });
+
   it("uses JSON image_url edits for input-image requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
