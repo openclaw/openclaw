@@ -79,6 +79,7 @@ export const SessionSchema = z
         maxEntries: z.number().int().positive().optional(),
         rotateBytes: z.union([z.string(), z.number()]).optional(),
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
+        compactionArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
       })
@@ -119,6 +120,25 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["resetArchiveRetention"],
+              message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
+        if (
+          val.compactionArchiveRetention !== undefined &&
+          val.compactionArchiveRetention !== false
+        ) {
+          try {
+            parseDurationMs(
+              normalizeStringifiedOptionalString(val.compactionArchiveRetention) ?? "",
+              {
+                defaultUnit: "d",
+              },
+            );
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["compactionArchiveRetention"],
               message: "invalid duration (use ms, s, m, h, d)",
             });
           }
