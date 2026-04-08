@@ -465,6 +465,7 @@ export async function initSessionState(params: {
       ) {
         persistedAuthProfileOverride = entry.authProfileOverride;
         persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+        persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       }
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.

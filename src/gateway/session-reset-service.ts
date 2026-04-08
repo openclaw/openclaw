@@ -102,6 +102,9 @@ function resolveResetPreservedSelection(params: {
   if (isUserAuthOverride && entry.authProfileOverride) {
     preserved.authProfileOverride = entry.authProfileOverride;
     preserved.authProfileOverrideSource = entry.authProfileOverrideSource ?? "user";
+    if (entry.authProfileOverrideCompactionCount !== undefined) {
+      preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    }
   }
 
   return preserved;
