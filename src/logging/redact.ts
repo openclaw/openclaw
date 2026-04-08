@@ -6,6 +6,7 @@ import { replacePatternBounded } from "./redact-bounded.js";
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
+type RedactPattern = string | RegExp;
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
@@ -41,14 +42,23 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
 
 type RedactOptions = {
   mode?: RedactSensitiveMode;
-  patterns?: string[];
+  patterns?: RedactPattern[];
+};
+
+type ResolvedRedactOptions = {
+  mode: RedactSensitiveMode;
+  patterns: RegExp[];
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
 
-function parsePattern(raw: string): RegExp | null {
+function parsePattern(raw: RedactPattern): RegExp | null {
+  if (raw instanceof RegExp) {
+    const flags = raw.flags.includes("g") ? raw.flags : `${raw.flags}g`;
+    return new RegExp(raw.source, flags);
+  }
   if (!raw.trim()) {
     return null;
   }
@@ -60,7 +70,7 @@ function parsePattern(raw: string): RegExp | null {
   return compileConfigRegex(raw, "gi")?.regex ?? null;
 }
 
-function resolvePatterns(value?: string[]): RegExp[] {
+function resolvePatterns(value?: RedactPattern[]): RegExp[] {
   const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
   return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
@@ -123,19 +133,26 @@ function resolveConfigRedaction(): RedactOptions {
   };
 }
 
+export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
+  const resolved = options ?? resolveConfigRedaction();
+  return {
+    mode: normalizeMode(resolved.mode),
+    patterns: resolvePatterns(resolved.patterns),
+  };
+}
+
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") {
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off") {
     return text;
   }
-  const patterns = resolvePatterns(resolved.patterns);
-  if (!patterns.length) {
+  if (!resolved.patterns.length) {
     return text;
   }
-  return redactText(text, patterns);
+  return redactText(text, resolved.patterns);
 }
 
 export function redactToolDetail(detail: string): string {
