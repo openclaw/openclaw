@@ -1,0 +1,17 @@
+{
+  "name": "openclaw-memory-layer",
+  "version": "1.0.0",
+  "description": "Persistent memory system for OpenClaw - 纯JSON版本",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node test.js",
+    "quickstart": "node quick-start.js"
+  },
+  "keywords": ["openclaw", "memory", "cola", "ai"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chromadb": "^1.8.1"
+  }
+}
