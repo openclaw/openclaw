@@ -1,9 +1,17 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
@@ -29,6 +37,8 @@ type InstalledBundledExtensionManifestRecord = {
   manifest: InstalledBundledExtensionPackageJson;
   path: string;
 };
+
+const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 
 export type PublishedInstallScenario = {
   name: string;
@@ -110,17 +120,37 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
       continue;
     }
 
+    const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
       continue;
     }
 
     try {
+      const packageJsonStats = lstatSync(packageJsonPath);
+      if (!packageJsonStats.isFile()) {
+        throw new Error("manifest must be a regular file");
+      }
+      if (packageJsonStats.size > MAX_BUNDLED_EXTENSION_MANIFEST_BYTES) {
+        throw new Error(`manifest exceeds ${MAX_BUNDLED_EXTENSION_MANIFEST_BYTES} bytes`);
+      }
+
+      const realExtensionDirPath = realpathSync(extensionDirPath);
+      const realPackageJsonPath = realpathSync(packageJsonPath);
+      const relativeManifestPath = relative(realExtensionDirPath, realPackageJsonPath);
+      if (
+        relativeManifestPath.length === 0 ||
+        relativeManifestPath.startsWith("..") ||
+        isAbsolute(relativeManifestPath)
+      ) {
+        throw new Error("manifest resolves outside the bundled extension directory");
+      }
+
       manifests.push({
         manifest: JSON.parse(
-          readFileSync(packageJsonPath, "utf8"),
+          readFileSync(realPackageJsonPath, "utf8"),
         ) as InstalledBundledExtensionPackageJson,
-        path: packageJsonPath,
+        path: realPackageJsonPath,
       });
     } catch (error) {
       errors.push(
