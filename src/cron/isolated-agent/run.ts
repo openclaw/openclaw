@@ -562,6 +562,7 @@ async function finalizeCronRun(params: {
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
   });
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({

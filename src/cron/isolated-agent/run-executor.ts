@@ -307,6 +307,7 @@ export async function executeCronRun(params: {
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
