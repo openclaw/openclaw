@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
@@ -8,7 +8,6 @@ import {
   withCopilotGithubToken,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 
 vi.unmock("./models-config.js");
 vi.unmock("./agent-paths.js");
@@ -18,6 +17,21 @@ vi.unmock("../plugins/provider-runtime.runtime.js");
 vi.unmock("../secrets/provider-env-vars.js");
 
 installModelsConfigTestHooks({ restoreFetch: true });
+
+let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+
+async function loadModelsConfigForTest(): Promise<void> {
+  vi.resetModules();
+  vi.doUnmock("./models-config.js");
+  vi.doUnmock("./agent-paths.js");
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+  vi.doUnmock("../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+}
+
+beforeEach(loadModelsConfigForTest);
 
 describe("models-config", () => {
   it("auto-injects github-copilot provider when token is present", async () => {

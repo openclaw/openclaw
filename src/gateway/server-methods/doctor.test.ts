@@ -36,11 +36,8 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: getMemorySearchManager,
 }));
 
-vi.mock("../../../extensions/memory-core/src/rem-evidence.js", () => ({
+vi.mock("./doctor.memory-core-runtime.js", () => ({
   previewGroundedRemMarkdown,
-}));
-
-vi.mock("../../../extensions/memory-core/src/dreaming-narrative.js", () => ({
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
 }));

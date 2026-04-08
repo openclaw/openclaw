@@ -272,6 +272,101 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toEqual(["openai"]);
   });
 
+  it("maps configured OpenAI Responses provider aliases to the OpenAI plugin", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-plugin-owner-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "openai"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        providers: ["openai"],
+        cliBackends: ["codex-cli"],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.resolveQaOwnerPluginIdsForProviderIds({
+        repoRoot,
+        providerIds: ["custom-openai"],
+        providerConfigs: {
+          "custom-openai": {
+            baseUrl: "https://api.example.test/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                name: "model-a",
+                api: "openai-responses",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      }),
+    ).resolves.toEqual(["openai"]);
+  });
+
+  it("copies selected live provider configs from the host config", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            "custom-openai": {
+              baseUrl: "https://api.example.test/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "model-a",
+                  name: "model-a",
+                  api: "openai-responses",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+            ignored: {
+              baseUrl: "https://ignored.example.test/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.readQaLiveProviderConfigOverrides({
+        providerIds: ["custom-openai"],
+        env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+      }),
+    ).resolves.toEqual({
+      "custom-openai": expect.objectContaining({
+        baseUrl: "https://api.example.test/v1",
+        api: "openai-responses",
+      }),
+    });
+  });
+
   it("raises the QA runtime host version to the highest allowed plugin floor", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-runtime-version-"));
     cleanups.push(async () => {

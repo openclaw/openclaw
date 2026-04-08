@@ -38,6 +38,8 @@ async function runQaCharacterEval(opts: {
   modelThinking?: string[];
   judgeModel?: string[];
   judgeTimeoutMs?: number;
+  concurrency?: number;
+  judgeConcurrency?: number;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCharacterEvalCommand(opts);
@@ -197,6 +199,12 @@ export function registerQaLabCli(program: Command) {
     .option("--judge-timeout-ms <ms>", "Override judge wait timeout", (value: string) =>
       Number(value),
     )
+    .option("--concurrency <count>", "Candidate model run concurrency", (value: string) =>
+      Number(value),
+    )
+    .option("--judge-concurrency <count>", "Judge model run concurrency", (value: string) =>
+      Number(value),
+    )
     .action(
       async (opts: {
         repoRoot?: string;
@@ -208,6 +216,8 @@ export function registerQaLabCli(program: Command) {
         modelThinking?: string[];
         judgeModel?: string[];
         judgeTimeoutMs?: number;
+        concurrency?: number;
+        judgeConcurrency?: number;
       }) => {
         await runQaCharacterEval(opts);
       },

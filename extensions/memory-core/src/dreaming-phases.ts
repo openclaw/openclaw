@@ -29,6 +29,28 @@ import {
 } from "./short-term-promotion.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
+type DreamingPhaseStorageConfig = {
+  timezone?: string;
+  storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
+};
+type RunPhaseIfTriggeredParams = {
+  cleanedBody: string;
+  trigger?: string;
+  workspaceDir?: string;
+  cfg?: OpenClawConfig;
+  logger: Logger;
+  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  eventText: string;
+} & (
+  | {
+      phase: "light";
+      config: MemoryLightDreamingConfig & DreamingPhaseStorageConfig;
+    }
+  | {
+      phase: "rem";
+      config: MemoryRemDreamingConfig & DreamingPhaseStorageConfig;
+    }
+);
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
@@ -1102,7 +1124,9 @@ export async function seedHistoricalDailyMemorySignals(params: {
   importedSignalCount: number;
   skippedPaths: string[];
 }> {
-  const normalizedPaths = [...new Set(params.filePaths.map((entry) => entry.trim()).filter(Boolean))];
+  const normalizedPaths = [
+    ...new Set(params.filePaths.map((entry) => entry.trim()).filter(Boolean)),
+  ];
   if (normalizedPaths.length === 0) {
     return {
       importedFileCount: 0,
@@ -1133,7 +1157,9 @@ export async function seedHistoricalDailyMemorySignals(params: {
       return a.filePath.localeCompare(b.filePath);
     });
 
-  const valid = resolved.filter((entry): entry is { filePath: string; day: string } => Boolean(entry.day));
+  const valid = resolved.filter((entry): entry is { filePath: string; day: string } =>
+    Boolean(entry.day),
+  );
   const skippedPaths = resolved.filter((entry) => !entry.day).map((entry) => entry.filePath);
   const totalCap = Math.max(20, params.limit * 4);
   const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, valid.length)));
@@ -1605,26 +1631,11 @@ export async function runDreamingSweepPhases(params: {
   }
 }
 
-async function runPhaseIfTriggered(params: {
-  cleanedBody: string;
-  trigger?: string;
-  workspaceDir?: string;
-  cfg?: OpenClawConfig;
-  logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
-  phase: "light" | "rem";
-  eventText: string;
-  config:
-    | (MemoryLightDreamingConfig & {
-        timezone?: string;
-        storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-      })
-    | (MemoryRemDreamingConfig & {
-        timezone?: string;
-        storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-      });
-}): Promise<{ handled: true; reason: string } | undefined> {
-  if (params.trigger !== "heartbeat" || params.cleanedBody.trim() !== params.eventText) {
+async function runPhaseIfTriggered(
+  params: RunPhaseIfTriggeredParams,
+): Promise<{ handled: true; reason: string } | undefined> {
+  const hasEventToken = params.cleanedBody.trim().split(/\s+/).includes(params.eventText);
+  if (params.trigger !== "heartbeat" || !hasEventToken) {
     return undefined;
   }
   if (!params.config.enabled) {

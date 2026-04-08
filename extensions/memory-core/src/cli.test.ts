@@ -1110,6 +1110,7 @@ describe("memory cli", () => {
         grounded?: {
           files?: Array<{
             renderedMarkdown?: string;
+            reflections?: Array<{ text: string }>;
           }>;
         } | null;
       }>(writeJson);
@@ -1162,6 +1163,7 @@ describe("memory cli", () => {
         grounded?: {
           files?: Array<{
             renderedMarkdown?: string;
+            reflections?: Array<{ text: string }>;
           }>;
         } | null;
       }>(writeJson);
@@ -1206,6 +1208,7 @@ describe("memory cli", () => {
         grounded?: {
           files?: Array<{
             renderedMarkdown?: string;
+            reflections?: Array<{ text: string }>;
           }>;
         } | null;
       }>(writeJson);

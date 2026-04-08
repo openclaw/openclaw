@@ -5,6 +5,8 @@ vi.unmock("../secrets/provider-env-vars.js");
 let collectProviderApiKeys: typeof import("./live-auth-keys.js").collectProviderApiKeys;
 
 async function loadModulesForTest(): Promise<void> {
+  vi.resetModules();
+  vi.doUnmock("../secrets/provider-env-vars.js");
   ({ collectProviderApiKeys } = await import("./live-auth-keys.js"));
 }
 

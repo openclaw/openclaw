@@ -34,11 +34,11 @@ import type {
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
-import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -154,7 +154,9 @@ async function createHistoricalRemHarnessWorkspace(params: {
   for (const filePath of sourceFiles) {
     await fs.copyFile(filePath, path.join(memoryDir, path.basename(filePath)));
   }
-  const workspaceSourceFiles = sourceFiles.map((entry) => path.join(memoryDir, path.basename(entry)));
+  const workspaceSourceFiles = sourceFiles.map((entry) =>
+    path.join(memoryDir, path.basename(entry)),
+  );
   const seeded = await seedHistoricalDailyMemorySignals({
     workspaceDir,
     filePaths: workspaceSourceFiles,
@@ -1422,14 +1424,13 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
             workspaceDir,
             sourcePath: opts.path ? path.resolve(opts.path) : null,
             sourceFiles,
-            historicalImport:
-              opts.path
-                ? {
-                    importedFileCount,
-                    importedSignalCount,
-                    skippedPaths,
-                  }
-                : null,
+            historicalImport: opts.path
+              ? {
+                  importedFileCount,
+                  importedSignalCount,
+                  skippedPaths,
+                }
+              : null,
             remConfig,
             deepConfig: {
               minScore: deep.minScore,
@@ -1497,7 +1498,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
                 "",
                 colorize(rich, theme.heading, "Grounded REM"),
                 ...groundedPreview.files.flatMap((file) => [
-                  colorize(rich, theme.label, file.path),
+                  colorize(rich, theme.muted, file.path),
                   file.renderedMarkdown,
                   "",
                 ]),
@@ -1570,7 +1571,9 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
       }
 
       if (!opts.path) {
-        defaultRuntime.error("Memory rem-backfill requires --path <file-or-dir> unless using --rollback.");
+        defaultRuntime.error(
+          "Memory rem-backfill requires --path <file-or-dir> unless using --rollback.",
+        );
         process.exitCode = 1;
         return;
       }
@@ -1636,7 +1639,11 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             `${colorize(rich, theme.heading, "REM Backfill")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
             colorize(rich, theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
             colorize(rich, theme.muted, `sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
-            colorize(rich, theme.muted, `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`),
+            colorize(
+              rich,
+              theme.muted,
+              `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
+            ),
             colorize(rich, theme.muted, `dreamsPath=${shortenHomePath(written.dreamsPath)}`),
           ].join("\n"),
         );

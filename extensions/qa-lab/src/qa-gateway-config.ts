@@ -67,6 +67,7 @@ export function buildQaGatewayConfig(params: {
   imageGenerationModel?: string | null;
   enabledProviderIds?: string[];
   enabledPluginIds?: string[];
+  liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
@@ -181,6 +182,9 @@ export function buildQaGatewayConfig(params: {
           openaiWsWarmup: false,
         });
   const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
+  const liveProviderConfigs =
+    providerMode === "live-frontier" ? (params.liveProviderConfigs ?? {}) : {};
+  const hasLiveProviderConfigs = Object.keys(liveProviderConfigs).length > 0;
 
   return {
     plugins: {
@@ -261,7 +265,14 @@ export function buildQaGatewayConfig(params: {
             },
           },
         }
-      : {}),
+      : hasLiveProviderConfigs
+        ? {
+            models: {
+              mode: "merge",
+              providers: liveProviderConfigs,
+            },
+          }
+        : {}),
     gateway: {
       mode: "local",
       bind: params.bind,

@@ -70,6 +70,7 @@ type SettingsHost = {
   dreamingStatus: null;
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
