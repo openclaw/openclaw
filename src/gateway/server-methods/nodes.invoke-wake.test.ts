@@ -60,24 +60,6 @@ type RespondCall = [
   }?,
 ];
 
-function expectNodeNotConnected(respond: ReturnType<typeof vi.fn>) {
-  const call = respond.mock.calls[0] as RespondCall | undefined;
-  expect(call?.[0]).toBe(false);
-  expect(call?.[2]?.message).toBe("node not connected");
-}
-
-async function invokeDisconnectedNode(nodeId: string, idempotencyKey: string) {
-  const nodeRegistry = {
-    get: vi.fn(() => undefined),
-    invoke: vi.fn().mockResolvedValue({ ok: true }),
-  };
-
-  return await invokeNode({
-    nodeRegistry,
-    requestParams: { nodeId, idempotencyKey },
-  });
-}
-
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
@@ -384,9 +366,15 @@ describe("node.invoke APNs wake path", () => {
       reason: "BadDeviceToken",
     });
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(true);
-    const respond = await invokeDisconnectedNode("ios-node-stale", "idem-stale");
+    const wake = await maybeWakeNodeWithApns("ios-node-stale", { force: true });
 
-    expectNodeNotConnected(respond);
+    expect(wake).toMatchObject({
+      available: true,
+      throttled: false,
+      path: "send-error",
+      apnsReason: "BadDeviceToken",
+      apnsStatus: 400,
+    });
     expect(mocks.clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
       nodeId: "ios-node-stale",
       registration,
@@ -401,9 +389,15 @@ describe("node.invoke APNs wake path", () => {
       reason: "Unregistered",
     });
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
-    const respond = await invokeDisconnectedNode("ios-node-relay", "idem-relay");
+    const wake = await maybeWakeNodeWithApns("ios-node-relay", { force: true });
 
-    expectNodeNotConnected(respond);
+    expect(wake).toMatchObject({
+      available: true,
+      throttled: false,
+      path: "send-error",
+      apnsReason: "Unregistered",
+      apnsStatus: 410,
+    });
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
       push: {
         apns: {

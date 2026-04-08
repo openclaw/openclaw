@@ -81,6 +81,15 @@ async function expectRedirectFailure(params: {
 }
 
 describe("fetchWithSsrFGuard hardening", () => {
+  const PROXY_ENV_KEYS = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+  ] as const;
+
   type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
   const CROSS_ORIGIN_REDIRECT_STRIPPED_HEADERS = [
     "authorization",
@@ -100,10 +109,17 @@ describe("fetchWithSsrFGuard hardening", () => {
   const createPublicLookup = (): LookupFn =>
     vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
 
+  function clearProxyEnv(): void {
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
+  }
+
   async function runProxyModeDispatcherTest(params: {
     mode: (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
     expectEnvProxy: boolean;
   }): Promise<void> {
+    clearProxyEnv();
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,
@@ -1031,5 +1047,27 @@ describe("fetchWithSsrFGuard hardening", () => {
       }),
     ).rejects.toThrow(/blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("falls back to DNS pinning in trusted proxy mode when no proxy env var is configured", async () => {
+    clearProxyEnv();
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(requestInit.dispatcher).toBeDefined();
+      expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(lookupFn).toHaveBeenCalledOnce();
+    await result.release();
   });
 });

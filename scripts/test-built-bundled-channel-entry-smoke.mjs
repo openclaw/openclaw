@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -37,10 +38,98 @@ function installProcessWarningFilter() {
 
 installProcessWarningFilter();
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+process.env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK ??= "1";
 
-async function importBuiltModule(relativePath) {
-  return import(pathToFileURL(path.join(repoRoot, relativePath)).href);
+function parseArgs(argv) {
+  let packageRoot = process.env.OPENCLAW_BUNDLED_CHANNEL_SMOKE_ROOT;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--package-root") {
+      packageRoot = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--package-root=")) {
+      packageRoot = arg.slice("--package-root=".length);
+      continue;
+    }
+    throw new Error(`unknown argument: ${arg}`);
+  }
+  return {
+    packageRoot: path.resolve(
+      packageRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+    ),
+  };
+}
+
+const { packageRoot } = parseArgs(process.argv.slice(2));
+const distExtensionsRoot = path.join(packageRoot, "dist", "extensions");
+
+async function importBuiltModule(absolutePath) {
+  return import(pathToFileURL(absolutePath).href);
+}
+
+function readJson(pathname) {
+  return JSON.parse(fs.readFileSync(pathname, "utf8"));
+}
+
+function extensionEntryToDistFilename(entry) {
+  return entry.replace(/^\.\//u, "").replace(/\.[^.]+$/u, ".js");
+}
+
+function collectBundledChannelEntryFiles() {
+  const files = [];
+  for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+    const extensionRoot = path.join(distExtensionsRoot, dirent.name);
+    const packageJsonPath = path.join(extensionRoot, "package.json");
+    if (!fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+    const packageJson = readJson(packageJsonPath);
+    if (!packageJson.openclaw?.channel) {
+      continue;
+    }
+
+    const extensionEntries =
+      Array.isArray(packageJson.openclaw.extensions) && packageJson.openclaw.extensions.length > 0
+        ? packageJson.openclaw.extensions
+        : ["./index.ts"];
+    for (const entry of extensionEntries) {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        continue;
+      }
+      files.push({
+        id: dirent.name,
+        kind: "channel",
+        path: path.join(extensionRoot, extensionEntryToDistFilename(entry)),
+      });
+    }
+
+    const setupEntry = packageJson.openclaw.setupEntry;
+    if (typeof setupEntry === "string" && setupEntry.trim().length > 0) {
+      files.push({
+        id: dirent.name,
+        kind: "setup",
+        path: path.join(extensionRoot, extensionEntryToDistFilename(setupEntry)),
+      });
+    }
+
+    const channelEntryPath = path.join(extensionRoot, "channel-entry.js");
+    if (fs.existsSync(channelEntryPath)) {
+      files.push({
+        id: dirent.name,
+        kind: "channel",
+        path: channelEntryPath,
+      });
+    }
+  }
+
+  return files.toSorted((left, right) =>
+    `${left.id}:${left.kind}:${left.path}`.localeCompare(`${right.id}:${right.kind}:${right.path}`),
+  );
 }
 
 function assertSecretContractShape(secrets, context) {
@@ -56,38 +145,78 @@ function assertSecretContractShape(secrets, context) {
   );
 }
 
-const telegramSetupEntry = (await importBuiltModule("dist/extensions/telegram/setup-entry.js"))
-  .default;
-assert.equal(
-  telegramSetupEntry.kind,
-  "bundled-channel-setup-entry",
-  "telegram setup entry kind mismatch",
-);
-const telegramSetupPlugin = telegramSetupEntry.loadSetupPlugin();
-assert.equal(telegramSetupPlugin?.id, "telegram", "telegram setup plugin failed to load");
-assertSecretContractShape(
-  telegramSetupEntry.loadSetupSecrets?.(),
-  "telegram setup entry packaged secrets",
-);
+function assertEntryFileExists(entry) {
+  assert.ok(
+    fs.existsSync(entry.path),
+    `${entry.id} ${entry.kind} entry missing from packed dist: ${entry.path}`,
+  );
+}
 
-const telegramEntry = (await importBuiltModule("dist/extensions/telegram/index.js")).default;
-assert.equal(telegramEntry.kind, "bundled-channel-entry", "telegram entry kind mismatch");
-const telegramPlugin = telegramEntry.loadChannelPlugin();
-assert.equal(telegramPlugin?.id, "telegram", "telegram channel plugin failed to load");
-assertSecretContractShape(
-  telegramEntry.loadChannelSecrets?.(),
-  "telegram channel packaged secrets",
-);
+async function smokeChannelEntry(entryFile) {
+  assertEntryFileExists(entryFile);
+  const entry = (await importBuiltModule(entryFile.path)).default;
+  assert.equal(entry.kind, "bundled-channel-entry", `${entryFile.id} channel entry kind mismatch`);
+  assert.equal(
+    typeof entry.loadChannelPlugin,
+    "function",
+    `${entryFile.id} channel entry missing loadChannelPlugin`,
+  );
+  const plugin = entry.loadChannelPlugin();
+  assert.equal(plugin?.id, entryFile.id, `${entryFile.id} channel plugin failed to load`);
+  if (entry.loadChannelSecrets) {
+    assertSecretContractShape(
+      entry.loadChannelSecrets(),
+      `${entryFile.id} channel entry packaged secrets`,
+    );
+  }
+}
 
-const slackSetupEntry = (await importBuiltModule("dist/extensions/slack/setup-entry.js")).default;
-assert.equal(
-  slackSetupEntry.kind,
-  "bundled-channel-setup-entry",
-  "slack setup entry kind mismatch",
-);
-assertSecretContractShape(
-  slackSetupEntry.loadSetupSecrets?.(),
-  "slack setup entry packaged secrets",
-);
+async function smokeSetupEntry(entryFile) {
+  assertEntryFileExists(entryFile);
+  const entry = (await importBuiltModule(entryFile.path)).default;
+  if (entry?.kind !== "bundled-channel-setup-entry") {
+    return false;
+  }
+  assert.equal(
+    entry.kind,
+    "bundled-channel-setup-entry",
+    `${entryFile.id} setup entry kind mismatch`,
+  );
+  assert.equal(
+    typeof entry.loadSetupPlugin,
+    "function",
+    `${entryFile.id} setup entry missing loadSetupPlugin`,
+  );
+  const plugin = entry.loadSetupPlugin();
+  assert.equal(plugin?.id, entryFile.id, `${entryFile.id} setup plugin failed to load`);
+  if (entry.loadSetupSecrets) {
+    assertSecretContractShape(
+      entry.loadSetupSecrets(),
+      `${entryFile.id} setup entry packaged secrets`,
+    );
+  }
+  return true;
+}
 
-process.stdout.write("[build-smoke] bundled channel entry smoke passed\n");
+const entryFiles = collectBundledChannelEntryFiles();
+let channelCount = 0;
+let setupCount = 0;
+let legacySetupCount = 0;
+
+for (const entryFile of entryFiles) {
+  if (entryFile.kind === "channel") {
+    await smokeChannelEntry(entryFile);
+    channelCount += 1;
+    continue;
+  }
+  if (await smokeSetupEntry(entryFile)) {
+    setupCount += 1;
+  } else {
+    legacySetupCount += 1;
+  }
+}
+
+assert.ok(channelCount > 0, "no bundled channel entries found");
+process.stdout.write(
+  `[build-smoke] bundled channel entry smoke passed packageRoot=${packageRoot} channel=${channelCount} setup=${setupCount} legacySetup=${legacySetupCount}\n`,
+);
