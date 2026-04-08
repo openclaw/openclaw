@@ -46,15 +46,18 @@ function createRegistryPluginIdNormalizer(
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
+  registry?: PluginManifestRegistry;
 }): string[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
-    workspaceDir,
-    config: params.config,
-  });
+  const registry =
+    params.registry ??
+    loadPluginManifestRegistry({
+      workspaceDir,
+      config: params.config,
+    });
   if (registry.plugins.length === 0) {
     return [];
   }

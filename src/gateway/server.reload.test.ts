@@ -342,6 +342,7 @@ describe("gateway hot reload", () => {
           vault: {
             source: "exec",
             command: process.execPath,
+            allowInsecurePath: true,
           },
         },
       },
@@ -365,6 +366,7 @@ describe("gateway hot reload", () => {
           vault: {
             source: "exec",
             command: process.execPath,
+            allowInsecurePath: true,
             allowSymlinkCommand: true,
             args: [params.resolverScriptPath, params.modePath, params.tokenValue],
           },
@@ -1042,6 +1044,7 @@ process.stdin.on("end", () => {
           vault: {
             source: "exec",
             command: process.execPath,
+            allowInsecurePath: true,
             allowSymlinkCommand: true,
             args: [resolverScriptPath, tokenPath],
           },

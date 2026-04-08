@@ -1,17 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-
-const hoisted = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
-}));
-
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
-}));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
 
@@ -85,8 +77,8 @@ async function setupAcpxAndHelperRegistry() {
   const helperRoot = await tempDirs.make("openclaw-helper-plugin-");
   await fs.mkdir(path.join(acpxRoot, "skills"), { recursive: true });
   await fs.mkdir(path.join(helperRoot, "skills"), { recursive: true });
-  hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ acpxRoot, helperRoot }));
-  return { workspaceDir, acpxRoot, helperRoot };
+  const registry = buildRegistry({ acpxRoot, helperRoot });
+  return { workspaceDir, acpxRoot, helperRoot, registry };
 }
 
 async function setupPluginOutsideSkills() {
@@ -98,17 +90,12 @@ async function setupPluginOutsideSkills() {
 }
 
 afterEach(async () => {
-  hoisted.loadPluginManifestRegistry.mockReset();
   await tempDirs.cleanup();
 });
 
 describe("resolvePluginSkillDirs", () => {
   beforeAll(async () => {
     ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
-  });
-
-  beforeEach(() => {
-    hoisted.loadPluginManifestRegistry.mockReset();
   });
 
   it.each([
@@ -128,10 +115,11 @@ describe("resolvePluginSkillDirs", () => {
       ],
     },
   ])("$name", async ({ acpEnabled, expectedDirs }) => {
-    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    const { workspaceDir, acpxRoot, helperRoot, registry } = await setupAcpxAndHelperRegistry();
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
+      registry,
       config: {
         acp: { enabled: acpEnabled },
         plugins: {
@@ -152,15 +140,14 @@ describe("resolvePluginSkillDirs", () => {
     await fs.mkdir(outsideSkills, { recursive: true });
     const escapePath = path.relative(pluginRoot, outsideSkills);
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      createSinglePluginRegistry({
-        pluginRoot,
-        skills: ["./skills", escapePath],
-      }),
-    );
+    const registry = createSinglePluginRegistry({
+      pluginRoot,
+      skills: ["./skills", escapePath],
+    });
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
+      registry,
       config: {
         plugins: {
           entries: {
@@ -183,15 +170,14 @@ describe("resolvePluginSkillDirs", () => {
       process.platform === "win32" ? ("junction" as const) : ("dir" as const),
     );
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      createSinglePluginRegistry({
-        pluginRoot,
-        skills: ["./skills-link"],
-      }),
-    );
+    const registry = createSinglePluginRegistry({
+      pluginRoot,
+      skills: ["./skills-link"],
+    });
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
+      registry,
       config: {
         plugins: {
           entries: {
@@ -210,16 +196,15 @@ describe("resolvePluginSkillDirs", () => {
     await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
     await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      createSinglePluginRegistry({
-        pluginRoot,
-        format: "bundle",
-        skills: ["./skills", "./commands"],
-      }),
-    );
+    const registry = createSinglePluginRegistry({
+      pluginRoot,
+      format: "bundle",
+      skills: ["./skills", "./commands"],
+    });
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
+      registry,
       config: {
         plugins: {
           entries: {
@@ -240,16 +225,15 @@ describe("resolvePluginSkillDirs", () => {
     const pluginRoot = await tempDirs.make("openclaw-legacy-plugin-");
     await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      createSinglePluginRegistry({
-        pluginRoot,
-        skills: ["./skills"],
-        legacyPluginIds: ["helper-legacy"],
-      }),
-    );
+    const registry = createSinglePluginRegistry({
+      pluginRoot,
+      skills: ["./skills"],
+      legacyPluginIds: ["helper-legacy"],
+    });
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
+      registry,
       config: {
         plugins: {
           entries: {

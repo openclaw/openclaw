@@ -85,6 +85,9 @@ function isRichConsoleEnv(): boolean {
 }
 
 function getColorForConsole(): ChalkInstance {
+  if (process.env.VITEST === "true" && process.env.OPENCLAW_TEST_CONSOLE_COLOR !== "1") {
+    return new Chalk({ level: 0 });
+  }
   const hasForceColor =
     typeof process.env.FORCE_COLOR === "string" &&
     process.env.FORCE_COLOR.trim().length > 0 &&

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+  isRemoteEnvironment: vi.fn(() => false),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
@@ -73,6 +74,10 @@ vi.mock("../../config/logging.js", () => ({
 
 vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
+}));
+
+vi.mock("../oauth-env.js", () => ({
+  isRemoteEnvironment: mocks.isRemoteEnvironment,
 }));
 
 const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
@@ -142,6 +147,8 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
     mocks.upsertAuthProfile.mockReset();
+    mocks.isRemoteEnvironment.mockReset();
+    mocks.isRemoteEnvironment.mockReturnValue(false);
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
