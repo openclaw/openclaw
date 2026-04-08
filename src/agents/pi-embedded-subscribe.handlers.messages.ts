@@ -184,12 +184,55 @@ export function handleMessageStart(
     return;
   }
 
+  // WORKAROUND: Some providers (e.g., KimiCodingPlan) send malformed SSE streams where
+  // a new message_start arrives before the previous message_stop. Detect this and
+  // synthesize a message_end for the previous message to maintain stream integrity.
+  if (ctx.state.inAssistantMessage) {
+    const staleVisibleText = normalizeTextForComparison(
+      ctx.state.lastStreamedAssistantCleaned ??
+        ctx
+          .stripBlockTags(ctx.state.deltaBuffer, {
+            thinking: false,
+            final: false,
+            inlineCode: createInlineCodeState(),
+          })
+          .trim(),
+    );
+    if (staleVisibleText) {
+      ctx.state.staleSyntheticMessageEndTexts.push(staleVisibleText);
+      if (ctx.state.staleSyntheticMessageEndTexts.length > 8) {
+        ctx.state.staleSyntheticMessageEndTexts.splice(
+          0,
+          ctx.state.staleSyntheticMessageEndTexts.length - 8,
+        );
+      }
+    }
+    // Synthesize a message_end for the previous message to properly close it out.
+    // This prevents the "message_start before receiving message_stop" error.
+    // First flush any buffered block replies to ensure text is not lost.
+    void Promise.resolve(ctx.flushBlockReplyBuffer()).catch((err) => {
+      ctx.log.warn(`synthetic pre-end flush failed: ${String(err)}`);
+    });
+    const syntheticEndEvt = {
+      type: "message_end" as const,
+      // Minimal message object - content is intentionally empty since we already
+      // flushed buffered text above. Wrapped in try/catch below because downstream
+      // helpers are not contractually guaranteed to handle a bare role-only message.
+      message: { role: "assistant" } as AgentMessage,
+      synthetic: true,
+    };
+    void Promise.resolve(handleMessageEnd(ctx, syntheticEndEvt)).catch((err) => {
+      ctx.log.warn(`synthetic message_end failed: ${String(err)}`);
+    });
+  }
+
   // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
   // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
   // Start-of-message is a safer reset point than message_end: some providers
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  ctx.state.inAssistantMessage = true;
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -432,11 +475,33 @@ export function handleMessageUpdate(
 
 export function handleMessageEnd(
   ctx: EmbeddedPiSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage },
+  evt: AgentEvent & { message: AgentMessage; synthetic?: boolean },
 ) {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
+  }
+  if (!evt.synthetic && ctx.state.staleSyntheticMessageEndTexts.length > 0) {
+    const rawText = extractAssistantText(msg);
+    const normalizedVisibleText = normalizeTextForComparison(
+      (
+        parseReplyDirectives(
+          stripTrailingDirective(
+            ctx.stripBlockTags(rawText, {
+              thinking: false,
+              final: false,
+              inlineCode: createInlineCodeState(),
+            }),
+          ),
+        )?.text ?? rawText
+      ).trim(),
+    );
+    const staleIndex = ctx.state.staleSyntheticMessageEndTexts.indexOf(normalizedVisibleText);
+    if (staleIndex >= 0) {
+      ctx.state.staleSyntheticMessageEndTexts.splice(staleIndex, 1);
+      ctx.log.debug("Skipping stale assistant message_end after synthetic close");
+      return;
+    }
   }
 
   const assistantMessage = msg;
@@ -485,6 +550,7 @@ export function handleMessageEnd(
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;
     ctx.state.reasoningStreamOpen = false;
+    ctx.state.inAssistantMessage = false;
   };
 
   const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";
