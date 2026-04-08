@@ -201,7 +201,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   // Each buildLogger call gets its own fd state so stale logger instances cannot
   // corrupt the active logger's fd, byte counter, or rotation decisions.
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
-  const fdState: LogFileFd = { fd: null, path: null };
+  const fdState: LogFileFd = { fd: null, path: null, lastInodeCheckMs: 0 };
   latestLogFileFd = fdState;
   try {
     fdState.fd = fs.openSync(settings.file, "a");
@@ -237,6 +237,12 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      // Reopen the fd if the file was deleted or externally rotated since the last check.
+      // Must happen before pendingBytes is read so the byte counter stays accurate.
+      if (checkAndReopenFd(settings.file, fdState)) {
+        currentFileBytes = getCurrentLogFileBytes(settings.file);
+      }
+
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
@@ -315,12 +321,12 @@ function getCurrentLogFileBytes(file: string): number {
 
 // Per-logger-instance file descriptor state. Each buildLogger call owns one LogFileFd so
 // that stale logger instances can never read or mutate the active logger's fd or byte counters.
-type LogFileFd = { fd: number | null; path: string | null };
+type LogFileFd = { fd: number | null; path: string | null; lastInodeCheckMs: number };
 
 // Points to the fd state of the most recently built logger; used only by
 // releaseCurrentLogFileFd (called from setLoggerOverride / resetLogger / process-exit cleanup).
 // Stale loggers hold their own LogFileFd references and must not touch this pointer.
-let latestLogFileFd: LogFileFd = { fd: null, path: null };
+let latestLogFileFd: LogFileFd = { fd: null, path: null, lastInodeCheckMs: 0 };
 
 function releaseLogFileFd(state: LogFileFd): void {
   if (state.fd !== null) {
@@ -332,10 +338,60 @@ function releaseLogFileFd(state: LogFileFd): void {
     state.fd = null;
   }
   state.path = null;
+  state.lastInodeCheckMs = 0;
 }
 
 function releaseCurrentLogFileFd(): void {
   releaseLogFileFd(latestLogFileFd);
+}
+
+// How often to verify the open fd still points to the same inode as the path.
+// Catches external deletions and logrotate-style renames between checks.
+const INODE_CHECK_INTERVAL_MS = 5_000;
+
+/**
+ * Verify that the fd in fdState still refers to the same inode as `file`.
+ * If the file was deleted or externally rotated the fd is released and reopened
+ * to the current path.  Returns true when a reopen occurred so the caller can
+ * re-read currentFileBytes.
+ */
+function checkAndReopenFd(file: string, fdState: LogFileFd): boolean {
+  if (fdState.fd === null || file !== fdState.path) {
+    return false;
+  }
+  const now = Date.now();
+  if (now - fdState.lastInodeCheckMs < INODE_CHECK_INTERVAL_MS) {
+    return false;
+  }
+  fdState.lastInodeCheckMs = now;
+
+  let pathIno: number | null = null;
+  try {
+    pathIno = fs.statSync(file).ino;
+  } catch {
+    // path gone or inaccessible
+  }
+  let fdIno: number | null = null;
+  try {
+    fdIno = fs.fstatSync(fdState.fd).ino;
+  } catch {
+    // fd invalid
+  }
+
+  if (pathIno !== null && fdIno !== null && pathIno === fdIno) {
+    return false; // same inode — no reopen needed
+  }
+
+  // Inode mismatch or path/fd inaccessible: reopen to the current path.
+  releaseLogFileFd(fdState);
+  try {
+    fdState.fd = fs.openSync(file, "a");
+    fdState.path = file;
+    fdState.lastInodeCheckMs = Date.now();
+  } catch {
+    // reopen failed; subsequent writes fall back to appendFileSync
+  }
+  return true;
 }
 
 /**
