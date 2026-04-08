@@ -10,7 +10,6 @@
       "character": "sally",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["greeting", "reaction", "praise", "thanks"],
       "sticker_count": 40,
       "file": "package-789.json"
     },
@@ -22,7 +21,6 @@
       "character": "moon",
       "expression_style": "expressive",
       "animated": false,
-      "occasions": ["reaction", "humor", "emphasis"],
       "sticker_count": 40,
       "file": "package-1070.json"
     },
@@ -34,7 +32,6 @@
       "character": "mixed",
       "expression_style": "subtle",
       "animated": true,
-      "occasions": ["greeting", "reaction", "thanks", "praise"],
       "sticker_count": 40,
       "file": "package-11537.json"
     },
@@ -46,7 +43,6 @@
       "character": "choco",
       "expression_style": "expressive",
       "animated": true,
-      "occasions": ["reaction", "humor", "greeting"],
       "sticker_count": 40,
       "file": "package-11538.json"
     },
@@ -58,7 +54,6 @@
       "character": "bt21",
       "expression_style": "subtle",
       "animated": true,
-      "occasions": ["greeting", "reaction", "thanks"],
       "sticker_count": 40,
       "file": "package-11539.json"
     },
@@ -70,7 +65,6 @@
       "character": "mixed",
       "expression_style": "expressive",
       "animated": false,
-      "occasions": ["apology", "request", "thanks"],
       "sticker_count": 24,
       "file": "package-6136.json"
     },
@@ -82,7 +76,6 @@
       "character": "mixed",
       "expression_style": "expressive",
       "animated": false,
-      "occasions": ["apology", "request", "thanks"],
       "sticker_count": 24,
       "file": "package-6632.json"
     },
@@ -94,7 +87,6 @@
       "character": "brown",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["greeting", "reaction", "thanks", "apology"],
       "sticker_count": 24,
       "file": "package-6325.json"
     },
@@ -106,7 +98,6 @@
       "character": "brown",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["greeting", "reaction", "thanks", "apology"],
       "sticker_count": 24,
       "file": "package-6359.json"
     },
@@ -118,7 +109,6 @@
       "character": "brown",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["greeting", "reaction", "thanks", "apology"],
       "sticker_count": 24,
       "file": "package-6362.json"
     },
@@ -130,7 +120,6 @@
       "character": "brown",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["greeting", "reaction", "thanks", "apology"],
       "sticker_count": 24,
       "file": "package-6370.json"
     },
@@ -142,7 +131,6 @@
       "character": "mixed",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["apology", "thanks", "greeting", "request"],
       "sticker_count": 24,
       "file": "package-8515.json"
     },
@@ -154,7 +142,6 @@
       "character": "mixed",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["apology", "thanks", "greeting", "request"],
       "sticker_count": 24,
       "file": "package-8522.json"
     },
@@ -166,7 +153,6 @@
       "character": "mixed",
       "expression_style": "subtle",
       "animated": false,
-      "occasions": ["apology", "thanks", "greeting", "request"],
       "sticker_count": 24,
       "file": "package-8525.json"
     }

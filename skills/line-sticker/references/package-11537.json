@@ -6,211 +6,170 @@
   "character": "mixed",
   "expression_style": "subtle",
   "animated": true,
-  "occasions": ["greeting", "reaction", "thanks", "praise"],
   "stickers": [
     {
       "id": "11537:52002734",
-      "desc": "brown bear, 無表情のままクラッカーを鳴らし、色とりどりの紙吹雪が舞っている様子。, scene:お祝い、誕生日、記念日",
-      "occasions": ["praise", "reaction", "humor"]
+      "desc": "brown bear, 無表情のままクラッカーを鳴らし、色とりどりの紙吹雪が舞っている様子。, scene:お祝い、誕生日、記念日"
     },
     {
       "id": "11537:52002735",
-      "desc": "white rabbit, 満面の笑みで親指を立ててグッドポーズをしている。横にはキラキラとした輝きのマークがある。, scene:賞賛や同意を伝える時",
-      "occasions": ["praise", "reaction"]
+      "desc": "white rabbit, 満面の笑みで親指を立ててグッドポーズをしている。横にはキラキラとした輝きのマークがある。, scene:賞賛や同意を伝える時"
     },
     {
       "id": "11537:52002736",
-      "desc": "yellow chick, 手を合わせてこちらを見つめ、背後からハートが飛び出している。愛らしくおねだりや感謝を伝えるような表情。, scene:お願い事や愛情表現をする場面",
-      "occasions": ["request", "thanks"]
+      "desc": "yellow chick, 手を合わせてこちらを見つめ、背後からハートが飛び出している。愛らしくおねだりや感謝を伝えるような表情。, scene:お願い事や愛情表現をする場面"
     },
     {
       "id": "11537:52002737",
-      "desc": "brown bear/white rabbit, ブラウンとコニーが抱き合っており、コニーは目を閉じ頬を赤らめている。頭上には赤いハートが浮かんでいる。, scene:愛情表現や感謝、仲直りの時",
-      "occasions": ["thanks", "apology", "reaction"]
+      "desc": "brown bear/white rabbit, ブラウンとコニーが抱き合っており、コニーは目を閉じ頬を赤らめている。頭上には赤いハートが浮かんでいる。, scene:愛情表現や感謝、仲直りの時"
     },
     {
       "id": "11537:52002738",
-      "desc": "white rabbit/yellow chick, ピンクの壁から笑顔のコニーが手を振りながら現れ、サリーがその後ろからひょっこり覗いている姿。, scene:挨拶や会話に参加する時",
-      "occasions": ["greeting", "reaction"]
+      "desc": "white rabbit/yellow chick, ピンクの壁から笑顔のコニーが手を振りながら現れ、サリーがその後ろからひょっこり覗いている姿。, scene:挨拶や会話に参加する時"
     },
     {
       "id": "11537:52002739",
-      "desc": "brown bear, 無表情で深く頭を下げてお辞儀をしている。両手を体の前で揃えた、丁寧な姿勢。, scene:感謝や謝罪、挨拶をする時",
-      "occasions": ["greeting", "thanks", "apology"]
+      "desc": "brown bear, 無表情で深く頭を下げてお辞儀をしている。両手を体の前で揃えた、丁寧な姿勢。, scene:感謝や謝罪、挨拶をする時"
     },
     {
       "id": "11537:52002740",
       "desc": "white rabbit, 目を細めて嬉しそうに微笑みながら、両手で「OKAY!」と書かれた看板を高く掲げている。, scene:快諾や了解を伝える時, text:\"OKAY!\"",
-      "occasions": ["reaction"],
       "text": "OKAY!"
     },
     {
       "id": "11537:52002741",
-      "desc": "yellow chick, 両手を広げ片足を上げて、楽しそうに跳ねているようなポーズ。頭の横に動きを表す線がある。, scene:喜びや楽しさを伝える時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 両手を広げ片足を上げて、楽しそうに跳ねているようなポーズ。頭の横に動きを表す線がある。, scene:喜びや楽しさを伝える時"
     },
     {
       "id": "11537:52002742",
-      "desc": "white rabbit, 目を閉じ、口をすぼめて投げキッスを送るポーズ。周囲には大小様々なピンク色のハートが飛んでいる。, scene:愛情表現や感謝を伝える時",
-      "occasions": ["thanks", "reaction"]
+      "desc": "white rabbit, 目を閉じ、口をすぼめて投げキッスを送るポーズ。周囲には大小様々なピンク色のハートが飛んでいる。, scene:愛情表現や感謝を伝える時"
     },
     {
       "id": "11537:52002743",
-      "desc": "brown bear, たくさんのピンクのハートに囲まれ、幸せそうにハートを抱きしめて横たわっている。頬を赤らめている。, scene:愛情や感謝を伝えるとき",
-      "occasions": ["thanks", "reaction"]
+      "desc": "brown bear, たくさんのピンクのハートに囲まれ、幸せそうにハートを抱きしめて横たわっている。頬を赤らめている。, scene:愛情や感謝を伝えるとき"
     },
     {
       "id": "11537:52002744",
       "desc": "brown bear, 首をかしげ、頭の上に赤い疑問符（？）の吹き出しが2つ出ている、不思議そうな様子。, scene:疑問や不明点がある時, text:\"? ?\"",
-      "occasions": ["reaction"],
       "text": "? ?"
     },
     {
       "id": "11537:52002745",
-      "desc": "white rabbit, 目を閉じ口を大きく開けて喜ぶ表情。両手を上げて飛び跳ね、周囲に花やキラキラが舞っている幸せそうなポーズ。, scene:喜びや感謝を伝える時",
-      "occasions": ["thanks", "reaction"]
+      "desc": "white rabbit, 目を閉じ口を大きく開けて喜ぶ表情。両手を上げて飛び跳ね、周囲に花やキラキラが舞っている幸せそうなポーズ。, scene:喜びや感謝を伝える時"
     },
     {
       "id": "11537:52002746",
-      "desc": "brown bear, 膝を抱えて座り込み、無表情でニュートンのゆりかごを眺めている様子。, scene:退屈な時や考え事中",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 膝を抱えて座り込み、無表情でニュートンのゆりかごを眺めている様子。, scene:退屈な時や考え事中"
     },
     {
       "id": "11537:52002747",
-      "desc": "white rabbit, 目を細めて顔を赤らめ、両手を口元に当てて喜んでいる。周囲にたくさんの赤いハートが舞っている。, scene:愛情を伝える、大喜びする",
-      "occasions": ["reaction", "thanks"]
+      "desc": "white rabbit, 目を細めて顔を赤らめ、両手を口元に当てて喜んでいる。周囲にたくさんの赤いハートが舞っている。, scene:愛情を伝える、大喜びする"
     },
     {
       "id": "11537:52002748",
-      "desc": "white rabbit, 両手にタンバリンを持ち、目を細めて口を大きく開け、ノリノリで歌い踊っている様子。, scene:宴会やカラオケで盛り上がる時",
-      "occasions": ["reaction", "praise", "humor"]
+      "desc": "white rabbit, 両手にタンバリンを持ち、目を細めて口を大きく開け、ノリノリで歌い踊っている様子。, scene:宴会やカラオケで盛り上がる時"
     },
     {
       "id": "11537:52002749",
-      "desc": "brown bear, 無表情な顔の頭上に赤いビックリマークが表示されており、何かに気づいたり驚いたりしている様子。, scene:驚きや気づきの表現",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 無表情な顔の頭上に赤いビックリマークが表示されており、何かに気づいたり驚いたりしている様子。, scene:驚きや気づきの表現"
     },
     {
       "id": "11537:52002750",
-      "desc": "yellow chick, 横になりながら大粒の涙を流して、ひどく悲しんでいる様子。, scene:悲しい時や落ち込んだ時",
-      "occasions": ["reaction"]
+      "desc": "yellow chick, 横になりながら大粒の涙を流して、ひどく悲しんでいる様子。, scene:悲しい時や落ち込んだ時"
     },
     {
       "id": "11537:52002751",
-      "desc": "brown bear, 部屋の隅で膝を抱えて座り込み、しょんぼりとした表情で落ち込んでいる。, scene:落ち込んだ時、寂しい時",
-      "occasions": ["reaction"]
+      "desc": "brown bear, 部屋の隅で膝を抱えて座り込み、しょんぼりとした表情で落ち込んでいる。, scene:落ち込んだ時、寂しい時"
     },
     {
       "id": "11537:52002752",
-      "desc": "white rabbit, 目をキラキラと輝かせ、口を大きく開けて感激している表情。両手を顎の前で合わせ、周囲に星が飛んでいるポーズ。, scene:感動や喜びを伝える時",
-      "occasions": ["reaction", "praise", "thanks"]
+      "desc": "white rabbit, 目をキラキラと輝かせ、口を大きく開けて感激している表情。両手を顎の前で合わせ、周囲に星が飛んでいるポーズ。, scene:感動や喜びを伝える時"
     },
     {
       "id": "11537:52002753",
-      "desc": "brown bear, 横に寝そべりながら、無表情でスマートフォンを操作している様子。, scene:リラックス中や暇な時",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 横に寝そべりながら、無表情でスマートフォンを操作している様子。, scene:リラックス中や暇な時"
     },
     {
       "id": "11537:52002754",
       "desc": "brown bear, 腕を組んで立ち、頭の上に三つの点が表示されている。無表情で黙考、あるいは呆れているようなポーズ。, scene:言葉に詰まった時や沈黙, text:\"...\"",
-      "occasions": ["reaction", "humor"],
       "text": "..."
     },
     {
       "id": "11537:52002755",
-      "desc": "white rabbit, 目を閉じて涙を流し、両手を口元に添えて祈るように懇願している表情。, scene:お願い、謝罪、悲しい時",
-      "occasions": ["request", "apology", "reaction"]
+      "desc": "white rabbit, 目を閉じて涙を流し、両手を口元に添えて祈るように懇願している表情。, scene:お願い、謝罪、悲しい時"
     },
     {
       "id": "11537:52002756",
-      "desc": "yellow chick, 焦った表情で冷や汗を流しながら、複数のサリーが慌ててどこかへ駆け出しているポーズ。, scene:急いでいる時やパニック時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 焦った表情で冷や汗を流しながら、複数のサリーが慌ててどこかへ駆け出しているポーズ。, scene:急いでいる時やパニック時"
     },
     {
       "id": "11537:52002757",
-      "desc": "white rabbit, 横たわって力尽き、魂が微笑みながら体から抜け出している様子。, scene:極度の疲労や魂が抜けた時",
-      "occasions": ["reaction", "humor"]
+      "desc": "white rabbit, 横たわって力尽き、魂が微笑みながら体から抜け出している様子。, scene:極度の疲労や魂が抜けた時"
     },
     {
       "id": "11537:52002758",
-      "desc": "white rabbit, 片目を指で押し下げて舌を出し、相手をおどけてからかう「あっかんべー」の表情。, scene:相手をおちょくる時",
-      "occasions": ["humor", "reaction"]
+      "desc": "white rabbit, 片目を指で押し下げて舌を出し、相手をおどけてからかう「あっかんべー」の表情。, scene:相手をおちょくる時"
     },
     {
       "id": "11537:52002759",
-      "desc": "brown bear, 無表情なまま、手に持った札束を周囲に景気よくばらまいているポーズ。, scene:景気が良い時や、お金の話題",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 無表情なまま、手に持った札束を周囲に景気よくばらまいているポーズ。, scene:景気が良い時や、お金の話題"
     },
     {
       "id": "11537:52002760",
       "desc": "yellow chick, 赤いメガホンを使い、全力で「No!」と叫んで拒絶している表情とポーズ。, scene:否定や断りを伝える時, text:\"No!\"",
-      "occasions": ["reaction", "humor"],
       "text": "No!"
     },
     {
       "id": "11537:52002761",
-      "desc": "white rabbit、yellow chick, 二人並んで座り、口を大きく開けてあくびをしている。非常に眠たそうな表情とリラックスしたポーズ。, scene:眠い時、疲れた時",
-      "occasions": ["greeting", "reaction", "farewell"]
+      "desc": "white rabbit、yellow chick, 二人並んで座り、口を大きく開けてあくびをしている。非常に眠たそうな表情とリラックスしたポーズ。, scene:眠い時、疲れた時"
     },
     {
       "id": "11537:52002762",
-      "desc": "brown bear/yellow chick, 3Dメガネを着用し、並んで座りながらポップコーンを食べて映画を鑑賞しているポーズ。, scene:映画を観る時、娯楽中",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear/yellow chick, 3Dメガネを着用し、並んで座りながらポップコーンを食べて映画を鑑賞しているポーズ。, scene:映画を観る時、娯楽中"
     },
     {
       "id": "11537:52002763",
-      "desc": "white rabbit, 黄色い目で不敵に微笑み、ジト目で怪しげな表情を浮かべている。, scene:怪しい時や呆れた時",
-      "occasions": ["reaction", "humor"]
+      "desc": "white rabbit, 黄色い目で不敵に微笑み、ジト目で怪しげな表情を浮かべている。, scene:怪しい時や呆れた時"
     },
     {
       "id": "11537:52002764",
-      "desc": "brown bear, 眠たそうな表情で青い水玉模様の布団に入っている。周囲にキラキラした記号が描かれている。, scene:寝起きや就寝前、眠い時",
-      "occasions": ["greeting", "farewell"]
+      "desc": "brown bear, 眠たそうな表情で青い水玉模様の布団に入っている。周囲にキラキラした記号が描かれている。, scene:寝起きや就寝前、眠い時"
     },
     {
       "id": "11537:52002765",
-      "desc": "white rabbit, 背景に雷が走り、ショックで顔が暗く沈んでいる表情。絶望して四つん這いになり、打ちひしがれているポーズ。, scene:衝撃的な事実や絶望を表現する時",
-      "occasions": ["reaction", "humor"]
+      "desc": "white rabbit, 背景に雷が走り、ショックで顔が暗く沈んでいる表情。絶望して四つん這いになり、打ちひしがれているポーズ。, scene:衝撃的な事実や絶望を表現する時"
     },
     {
       "id": "11537:52002766",
-      "desc": "brown bear, 石になって横たわっている姿。無表情で体が岩のように硬直しており、周囲に破片が散らばっている。, scene:ショックで固まった時",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 石になって横たわっている姿。無表情で体が岩のように硬直しており、周囲に破片が散らばっている。, scene:ショックで固まった時"
     },
     {
       "id": "11537:52002767",
-      "desc": "brown bear, 背後に激しい炎を背負い、静かな決意や怒りを込めて拳を握りしめている様子。, scene:やる気や怒りを伝える時",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 背後に激しい炎を背負い、静かな決意や怒りを込めて拳を握りしめている様子。, scene:やる気や怒りを伝える時"
     },
     {
       "id": "11537:52002768",
-      "desc": "white rabbit, 穴の中からひょっこりと顔を出し、口を大きく開けて嬉しそうに笑っている表情。, scene:登場や挨拶の場面",
-      "occasions": ["greeting", "reaction", "humor"]
+      "desc": "white rabbit, 穴の中からひょっこりと顔を出し、口を大きく開けて嬉しそうに笑っている表情。, scene:登場や挨拶の場面"
     },
     {
       "id": "11537:52002769",
-      "desc": "brown bear, 無表情で直立し、頭に飛んできた小石のようなものが当たって衝撃を受けている様子。, scene:不意の災難や攻撃を受けた時",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 無表情で直立し、頭に飛んできた小石のようなものが当たって衝撃を受けている様子。, scene:不意の災難や攻撃を受けた時"
     },
     {
       "id": "11537:52002770",
-      "desc": "brown bear, 汗を飛ばしながら、両手の人差し指を合わせて申し訳なさそうにしているポーズ。, scene:謝罪やお願いをする時",
-      "occasions": ["apology", "request"]
+      "desc": "brown bear, 汗を飛ばしながら、両手の人差し指を合わせて申し訳なさそうにしているポーズ。, scene:謝罪やお願いをする時"
     },
     {
       "id": "11537:52002771",
-      "desc": "yellow chick, 青空を背景に、こちらを向いて片方の翼を挙げて挨拶している姿。, scene:挨拶、外出、別れの合図",
-      "occasions": ["greeting", "farewell"]
+      "desc": "yellow chick, 青空を背景に、こちらを向いて片方の翼を挙げて挨拶している姿。, scene:挨拶、外出、別れの合図"
     },
     {
       "id": "11537:52002772",
-      "desc": "yellow chick, 頭から湯気を出し、怒りマークを浮かべて歯を剥き出しにしている激怒した表情。, scene:激しく怒っている時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 頭から湯気を出し、怒りマークを浮かべて歯を剥き出しにしている激怒した表情。, scene:激しく怒っている時"
     },
     {
       "id": "11537:52002773",
-      "desc": "white rabbit, 激怒して目を黄色く光らせ、額に怒りマークを浮かべながら木製バットを手に持っている姿。, scene:怒りを伝える時や相手を脅す時",
-      "occasions": ["reaction", "humor"]
+      "desc": "white rabbit, 激怒して目を黄色く光らせ、額に怒りマークを浮かべながら木製バットを手に持っている姿。, scene:怒りを伝える時や相手を脅す時"
     }
   ]
 }

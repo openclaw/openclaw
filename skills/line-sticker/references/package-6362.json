@@ -6,140 +6,115 @@
   "character": "brown",
   "expression_style": "subtle",
   "animated": false,
-  "occasions": ["greeting", "reaction", "thanks", "apology"],
   "stickers": [
     {
       "id": "6362:11087920",
       "desc": "brown bear, 大きな赤い「OK」の文字の前で両手を挙げている。上から色鮮やかな紙吹雪が舞っている。, scene:承諾や了解、お祝いの場面, text:\"OK\"",
-      "occasions": ["reaction", "praise"],
       "text": "OK"
     },
     {
       "id": "6362:11087921",
-      "desc": "brown bear, スマートフォンの画面を突き破って出現し、無表情のまま両手を左右に広げているポーズ。, scene:勢いよく登場した時",
-      "occasions": ["greeting", "reaction", "humor"]
+      "desc": "brown bear, スマートフォンの画面を突き破って出現し、無表情のまま両手を左右に広げているポーズ。, scene:勢いよく登場した時"
     },
     {
       "id": "6362:11087922",
       "desc": "brown bear, 無表情でお箸に挟まれた玉子寿司の上に脱力して乗っているシュールなポーズ。, scene:食事の挨拶やいただきますの時, text:\"開動啦\"",
-      "occasions": ["greeting", "humor"],
       "text": "開動啦"
     },
     {
       "id": "6362:11087923",
       "desc": "yellow chick/brown bear, うつ伏せで鼻提灯を出して眠るサリーの背中に、小さなブラウンも一緒に乗ってぐったりとしている姿。, scene:疲れ果てて休みたい時, text:\"好累啊...\"",
-      "occasions": ["reaction", "humor"],
       "text": "好累啊..."
     },
     {
       "id": "6362:11087924",
       "desc": "brown bear, たこ焼きの箱に入り、たこ焼きを幸せそうに抱きしめている。頬を赤らめて温かさを感じ、ほっこりしている様子。, scene:心が温まった時や食事の話題, text:\"好温暖喔 Takoyaki\"",
-      "occasions": ["reaction", "thanks", "humor"],
       "text": "好温暖喔 Takoyaki"
     },
     {
       "id": "6362:11087925",
       "desc": "brown bear, スマートフォンに表示されたコニーからの着信に対して、受話ボタンを必死に押そうとしているブラウンの様子。, scene:電話に出る時、挨拶, text:\"哈囉哈囉\"",
-      "occasions": ["greeting", "humor"],
       "text": "哈囉哈囉"
     },
     {
       "id": "6362:11087926",
-      "desc": "brown bear, 桜模様の器に浸かり、頭に葉を乗せて頬を赤らめている。三色団子と一緒にリラックスしている様子。, scene:リラックス、春の訪れ",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear, 桜模様の器に浸かり、頭に葉を乗せて頬を赤らめている。三色団子と一緒にリラックスしている様子。, scene:リラックス、春の訪れ"
     },
     {
       "id": "6362:11087927",
       "desc": "brown bear, 小さなブラウンが人間の大きな手と指切りをしている姿。真面目な表情で約束を交わしており、指の間がキラキラと輝いている。, scene:約束を交わすとき, text:\"打勾勾\"",
-      "occasions": ["request", "reaction"],
       "text": "打勾勾"
     },
     {
       "id": "6362:11087928",
       "desc": "brown bear/white rabbit, プレゼント箱から飛び出し、紙吹雪の中で満面の笑みやバンザイをして大喜びしている様子。, scene:深い感謝やお祝いを伝える時, text:\"感激不盡\"",
-      "occasions": ["thanks", "reaction"],
       "text": "感激不盡"
     },
     {
       "id": "6362:11087929",
       "desc": "brown bear, 無表情なブラウンが「了解」という文字が入った大きな赤いスタンプを抱えている姿。, scene:メッセージを承諾・確認した時, text:\"了解\"",
-      "occasions": ["reaction"],
       "text": "了解"
     },
     {
       "id": "6362:11087930",
       "desc": "brown bear, 両手を挙げて伸びをするようなポーズ。和菓子を前にリラックスしている様子。, scene:休憩やティータイムの誘い, text:\"休息一下吧\"",
-      "occasions": ["request", "greeting"],
       "text": "休息一下吧"
     },
     {
       "id": "6362:11087931",
       "desc": "yellow chick/brown bear, サリーがブラウンを頭に乗せ、腕を組んで申し訳なさそうにしている。冷や汗の漫符が描かれている。, scene:相手に依頼や感謝を伝える時, text:\"麻烦你了\"",
-      "occasions": ["request", "thanks", "apology"],
       "text": "麻烦你了"
     },
     {
       "id": "6362:11087932",
-      "desc": "brown bear/white rabbit, ブラウンがフライパンを振り、具材と一緒にコニーが元気よく空中に飛び跳ねている楽しそうな姿。, scene:料理中や食事の誘い",
-      "occasions": ["request", "humor", "reaction"]
+      "desc": "brown bear/white rabbit, ブラウンがフライパンを振り、具材と一緒にコニーが元気よく空中に飛び跳ねている楽しそうな姿。, scene:料理中や食事の誘い"
     },
     {
       "id": "6362:11087933",
       "desc": "brown bear、white rabbit, ブラウンが持つ大きなメガホンに向かって、コニーが目一杯叫んで応援している様子。, scene:相手を熱烈に応援する時, text:\"加油! 加油!\"",
-      "occasions": ["praise", "reaction"],
       "text": "加油! 加油!"
     },
     {
       "id": "6362:11087934",
       "desc": "brown bear、white rabbit, ピンクのティーカップに入り、コニーは笑顔で口を開け、二人の周りには赤いハートが舞っている様子。, scene:愛情表現、好意を伝える時, text:\"I❤U\"",
-      "occasions": ["reaction", "thanks", "praise"],
       "text": "I❤U"
     },
     {
       "id": "6362:11087935",
-      "desc": "brown bear、white rabbit, 大きなパスタの皿越しにブラウンとコニーがハグをしている。頭上にはハートが浮かび、幸せそうな様子。, scene:愛情を伝える時や、食事に誘う時",
-      "occasions": ["request", "reaction"]
+      "desc": "brown bear、white rabbit, 大きなパスタの皿越しにブラウンとコニーがハグをしている。頭上にはハートが浮かび、幸せそうな様子。, scene:愛情を伝える時や、食事に誘う時"
     },
     {
       "id": "6362:11087936",
-      "desc": "yellow chick、brown bear, 巨大なサリーの横で、頭にたんこぶを作った小さなブラウンが焦りながら逃げ出している様子。, scene:怒られた時やピンチの時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick、brown bear, 巨大なサリーの横で、頭にたんこぶを作った小さなブラウンが焦りながら逃げ出している様子。, scene:怒られた時やピンチの時"
     },
     {
       "id": "6362:11087937",
-      "desc": "yellow chick、white rabbit, 無表情なサリーが、大泣きしている小さなコニーの耳を掴んでひょいと持ち上げているポーズ。, scene:相手を強引に連行する時、お仕置き",
-      "occasions": ["humor", "reaction"]
+      "desc": "yellow chick、white rabbit, 無表情なサリーが、大泣きしている小さなコニーの耳を掴んでひょいと持ち上げているポーズ。, scene:相手を強引に連行する時、お仕置き"
     },
     {
       "id": "6362:11087938",
-      "desc": "white rabbit、yellow chick, 巨大なサリーに見下ろされ、驚きと恐怖で目を見開き、口を大きく開けて地面に這いつくばるコニーの姿。, scene:驚愕や圧倒された時",
-      "occasions": ["reaction", "humor"]
+      "desc": "white rabbit、yellow chick, 巨大なサリーに見下ろされ、驚きと恐怖で目を見開き、口を大きく開けて地面に這いつくばるコニーの姿。, scene:驚愕や圧倒された時"
     },
     {
       "id": "6362:11087939",
       "desc": "brown bear、yellow chick, ドアの隙間からブラウンとサリーが縦に並んで、こちらをこっそり覗き見ている様子。, scene:こっそり様子を伺う時, text:\"偷看～\"",
-      "occasions": ["reaction", "humor"],
       "text": "偷看～"
     },
     {
       "id": "6362:11087940",
-      "desc": "brown bear、white rabbit, コニーが大きなクラッカーを抱え、ブラウンが紐を引いて紙吹雪を盛大に飛ばしている。二人とも楽しそうな表情。, scene:お祝い、パーティー、誕生日",
-      "occasions": ["reaction", "praise"]
+      "desc": "brown bear、white rabbit, コニーが大きなクラッカーを抱え、ブラウンが紐を引いて紙吹雪を盛大に飛ばしている。二人とも楽しそうな表情。, scene:お祝い、パーティー、誕生日"
     },
     {
       "id": "6362:11087941",
-      "desc": "brown bear、white rabbit, ブラウンが草でコニーを叩いており、コニーは涙を流しながら大口を開けて泣き叫んでいる様子。, scene:冗談交じりのお仕置き",
-      "occasions": ["reaction", "humor"]
+      "desc": "brown bear、white rabbit, ブラウンが草でコニーを叩いており、コニーは涙を流しながら大口を開けて泣き叫んでいる様子。, scene:冗談交じりのお仕置き"
     },
     {
       "id": "6362:11087942",
-      "desc": "brown bear/white rabbit, チアリーダーの衣装でポンポンを持ち、足を上げて踊るポーズ。無表情なブラウンと笑顔のコニー。, scene:応援や励ましを伝える時",
-      "occasions": ["praise", "humor"]
+      "desc": "brown bear/white rabbit, チアリーダーの衣装でポンポンを持ち、足を上げて踊るポーズ。無表情なブラウンと笑顔のコニー。, scene:応援や励ましを伝える時"
     },
     {
       "id": "6362:11087943",
       "desc": "brown bear、white rabbit, ブラウンとコニーが大きなオムライスを布団のようにして仲良く収まっている。コニーは目を閉じてキス顔をしている。, scene:就寝前の挨拶をするとき, text:\"晚安囉❤\"",
-      "occasions": ["greeting", "farewell"],
       "text": "晚安囉❤"
     }
   ]

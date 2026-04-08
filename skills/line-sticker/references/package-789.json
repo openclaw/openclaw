@@ -6,219 +6,178 @@
   "character": "sally",
   "expression_style": "subtle",
   "animated": false,
-  "occasions": ["greeting", "reaction", "praise", "thanks"],
   "stickers": [
     {
       "id": "789:10855",
       "desc": "yellow chick, 音符の吹き出しを出しながら、片手を軽く上げて楽しそうにしている様子。, scene:機嫌が良い時や鼻歌を歌う時, text:\"♪\"",
-      "occasions": ["greeting", "reaction", "humor"],
       "text": "♪"
     },
     {
       "id": "789:10856",
-      "desc": "yellow chick, 両手を顎に添えて嬉しそうに体を揺らし、周囲に多くの赤いハートが飛んでいる様子。, scene:愛情や喜びを表現する時",
-      "occasions": ["reaction", "thanks", "praise"]
+      "desc": "yellow chick, 両手を顎に添えて嬉しそうに体を揺らし、周囲に多くの赤いハートが飛んでいる様子。, scene:愛情や喜びを表現する時"
     },
     {
       "id": "789:10857",
-      "desc": "yellow chick, 満面の笑みで紙吹雪を撒き散らし、音符を浮かべながら陽気にステップを踏んで喜んでいる姿。, scene:お祝いや嬉しい報告の際",
-      "occasions": ["reaction", "praise", "humor"]
+      "desc": "yellow chick, 満面の笑みで紙吹雪を撒き散らし、音符を浮かべながら陽気にステップを踏んで喜んでいる姿。, scene:お祝いや嬉しい報告の際"
     },
     {
       "id": "789:10858",
       "desc": "yellow chick, 両羽を広げて元気にポーズを決め、明るく快諾している様子。横には小さなイモムシのエドワードがいる。, scene:承諾や返事をする時, text:\"OKAY!\"",
-      "occasions": ["reaction", "humor"],
       "text": "OKAY!"
     },
     {
       "id": "789:10859",
       "desc": "yellow chick, 大きな「YES!」と書かれた看板の後ろから、ひょっこりと顔を出している姿。, scene:返事や同意を力強く伝える際, text:\"YES!\"",
-      "occasions": ["reaction"],
       "text": "YES!"
     },
     {
       "id": "789:10860",
       "desc": "yellow chick, 「NO!」と書かれた大きな看板を掲げて、全身で拒絶のポーズをとっている。, scene:提案や依頼を断る時, text:\"NO!\"",
-      "occasions": ["reaction", "humor"],
       "text": "NO!"
     },
     {
       "id": "789:10861",
       "desc": "yellow chick, スマートフォンを片手に持ち、CALL MEと書かれた吹き出しを出して電話を待っているポーズ。, scene:電話を催促する時, text:\"CALL ME❤\"",
-      "occasions": ["request"],
       "text": "CALL ME❤"
     },
     {
       "id": "789:10862",
       "desc": "yellow chick, 白いシーツを被り、赤い枕を抱えて立っている。無表情な顔の周りに黄色い星が舞っている。, scene:就寝前の挨拶, text:\"GOOD NIGHT!\"",
-      "occasions": ["greeting", "farewell"],
       "text": "GOOD NIGHT!"
     },
     {
       "id": "789:10863",
-      "desc": "yellow chick, 枕に寝そべりながら飲み物を持ち、ハートの吹き出しを出してリラックスしている様子。, scene:休憩中や好意を伝える時",
-      "occasions": ["greeting", "reaction"]
+      "desc": "yellow chick, 枕に寝そべりながら飲み物を持ち、ハートの吹き出しを出してリラックスしている様子。, scene:休憩中や好意を伝える時"
     },
     {
       "id": "789:10864",
-      "desc": "yellow chick、エドワード, サリーとエドワードがテーブルを囲み、音符を出しながら楽しそうに過ごしている様子。, scene:休憩や食事、楽しい会話の最中",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick、エドワード, サリーとエドワードがテーブルを囲み、音符を出しながら楽しそうに過ごしている様子。, scene:休憩や食事、楽しい会話の最中"
     },
     {
       "id": "789:10865",
-      "desc": "yellow chick, コック帽とエプロン姿でフライパンとおたまを持ち、周囲に様々な食材が浮いている料理中の様子。, scene:料理中や食事の準備の報告",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, コック帽とエプロン姿でフライパンとおたまを持ち、周囲に様々な食材が浮いている料理中の様子。, scene:料理中や食事の準備の報告"
     },
     {
       "id": "789:10866",
-      "desc": "yellow chick, 両手に骨付き肉を持ち、水色のチェックのスタイを付けて喜んでいる。頭上にハートの吹き出しが出ているポーズ。, scene:食事に誘う時や空腹時",
-      "occasions": ["request", "reaction", "humor"]
+      "desc": "yellow chick, 両手に骨付き肉を持ち、水色のチェックのスタイを付けて喜んでいる。頭上にハートの吹き出しが出ているポーズ。, scene:食事に誘う時や空腹時"
     },
     {
       "id": "789:10867",
       "desc": "yellow chick, 逆立ちして頭を軸に回転しながらブレイクダンスを踊る様子。周囲に音符が舞い、横に緑色のラジカセがある。, scene:ノリノリな時やダンスの話題を出す時, text:\"DANCE\"",
-      "occasions": ["reaction", "humor"],
       "text": "DANCE"
     },
     {
       "id": "789:10868",
       "desc": "yellow chick, 体全体が真っ白な泡に包まれ、無表情で立ち尽くしている様子。足元には石鹸がある。, scene:入浴中、お風呂の時間, text:\"SOAP\"",
-      "occasions": ["humor", "reaction", "farewell"],
       "text": "SOAP"
     },
     {
       "id": "789:10869",
-      "desc": "yellow chick, パーティーハットを被り、ケーキとプレゼントを両手に抱えてお祝いしているポーズ。, scene:誕生日やお祝いの時",
-      "occasions": ["greeting", "praise"]
+      "desc": "yellow chick, パーティーハットを被り、ケーキとプレゼントを両手に抱えてお祝いしているポーズ。, scene:誕生日やお祝いの時"
     },
     {
       "id": "789:10870",
-      "desc": "yellow chick, 真顔でボウリングの球を投げ、ピンを弾き飛ばしている姿。頭上には驚いた様子のエドワードが舞っている。, scene:ストライクを出した時",
-      "occasions": ["reaction", "humor", "praise"]
+      "desc": "yellow chick, 真顔でボウリングの球を投げ、ピンを弾き飛ばしている姿。頭上には驚いた様子のエドワードが舞っている。, scene:ストライクを出した時"
     },
     {
       "id": "789:10871",
-      "desc": "yellow chick, 帽子とリュックを身につけ、晴天の下で音符を出しながら楽しそうに歩いている様子。, scene:ハイキングやお出かけの連絡",
-      "occasions": ["greeting", "reaction"]
+      "desc": "yellow chick, 帽子とリュックを身につけ、晴天の下で音符を出しながら楽しそうに歩いている様子。, scene:ハイキングやお出かけの連絡"
     },
     {
       "id": "789:10872",
-      "desc": "yellow chick, 赤い帽子を被り、草原で紫色の蝶を追いかけながら楽しそうにスキップをしている姿。, scene:暇な時や遊びの誘い",
-      "occasions": ["greeting", "request"]
+      "desc": "yellow chick, 赤い帽子を被り、草原で紫色の蝶を追いかけながら楽しそうにスキップをしている姿。, scene:暇な時や遊びの誘い"
     },
     {
       "id": "789:10873",
-      "desc": "yellow chick, 赤い帽子を被りスケートボードに乗って、チェッカーフラッグを振るアクティブなポーズ。表情はいつもの無表情。, scene:物事を始める時や、勢いをつける場面",
-      "occasions": ["reaction", "praise", "humor"]
+      "desc": "yellow chick, 赤い帽子を被りスケートボードに乗って、チェッカーフラッグを振るアクティブなポーズ。表情はいつもの無表情。, scene:物事を始める時や、勢いをつける場面"
     },
     {
       "id": "789:10874",
       "desc": "yellow chick, 踏み台に立ち、鼻歌を歌いながら楽しそうにジョウロで植物に水をあげているポーズ。, scene:植物の世話や日常のひととき, text:\"♪\"",
-      "occasions": ["reaction", "humor"],
       "text": "♪"
     },
     {
       "id": "789:10875",
       "desc": "yellow chick, 白いマスクと赤いマントの衣装をまとい、真顔で立っている。足元には自分の名前が書かれたノートとペンがある。, scene:勉強や調べものをする時, text:\"SALLY\"",
-      "occasions": ["reaction", "humor"],
       "text": "SALLY"
     },
     {
       "id": "789:10876",
-      "desc": "yellow chick, 木桶のお風呂に浸かり、頭にタオルを乗せてリラックスしている様子。, scene:入浴中やリラックスした時",
-      "occasions": ["reaction", "farewell", "humor"]
+      "desc": "yellow chick, 木桶のお風呂に浸かり、頭にタオルを乗せてリラックスしている様子。, scene:入浴中やリラックスした時"
     },
     {
       "id": "789:10877",
       "desc": "yellow chick, 首をかしげて、頭の上に2つの赤い疑問符を浮かべて不思議そうにしている様子。, scene:疑問や分からない事がある時, text:\"??\"",
-      "occasions": ["reaction"],
       "text": "??"
     },
     {
       "id": "789:10878",
-      "desc": "brown bear、yellow chick, 無表情なブラウンと、クマの着ぐるみを着てブラウンの手を握るサリー。二人で静かに並んで立っているポーズ。, scene:寄り添う時や静かな挨拶",
-      "occasions": ["greeting", "reaction"]
+      "desc": "brown bear、yellow chick, 無表情なブラウンと、クマの着ぐるみを着てブラウンの手を握るサリー。二人で静かに並んで立っているポーズ。, scene:寄り添う時や静かな挨拶"
     },
     {
       "id": "789:10879",
-      "desc": "yellow chick, 片目から涙を流し、ショックや悲しみで小刻みに震えている様子。, scene:悲しい時や落ち込んだ時",
-      "occasions": ["reaction"]
+      "desc": "yellow chick, 片目から涙を流し、ショックや悲しみで小刻みに震えている様子。, scene:悲しい時や落ち込んだ時"
     },
     {
       "id": "789:10880",
-      "desc": "yellow chick, 涙を流しながら走り、赤と白のチェック柄の布を大きく振っている。悲しみや別れを惜しんでいる表情。, scene:別れを惜しむ時や見送る時",
-      "occasions": ["farewell", "reaction"]
+      "desc": "yellow chick, 涙を流しながら走り、赤と白のチェック柄の布を大きく振っている。悲しみや別れを惜しんでいる表情。, scene:別れを惜しむ時や見送る時"
     },
     {
       "id": "789:10881",
       "desc": "yellow chick, 部屋の隅で無言で座り込み、寂しそうに落ち込んでいる表情。吹き出しには「....」と描かれている。, scene:落ち込んだ時、絶望した時, text:\"....\"",
-      "occasions": ["reaction", "humor"],
       "text": "...."
     },
     {
       "id": "789:10882",
-      "desc": "yellow chick, 頭から青い羽を生やし、胸の前で手を合わせて宙に浮いている。無表情で一生懸命に羽ばたいている姿。, scene:急いで向かっている時や浮かれている時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 頭から青い羽を生やし、胸の前で手を合わせて宙に浮いている。無表情で一生懸命に羽ばたいている姿。, scene:急いで向かっている時や浮かれている時"
     },
     {
       "id": "789:10883",
-      "desc": "yellow chick, 口を波打たせ、頭上の吹き出しにぐにゃぐにゃとした線が描かれており、不機嫌でイライラしている表情。, scene:不満やイライラを伝える時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 口を波打たせ、頭上の吹き出しにぐにゃぐにゃとした線が描かれており、不機嫌でイライラしている表情。, scene:不満やイライラを伝える時"
     },
     {
       "id": "789:10884",
-      "desc": "yellow chick, 怒りで頭から湯気を出し、地面に何かを叩きつけて悔しがっている表情とポーズ。, scene:怒りや不満を伝える時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 怒りで頭から湯気を出し、地面に何かを叩きつけて悔しがっている表情とポーズ。, scene:怒りや不満を伝える時"
     },
     {
       "id": "789:10885",
-      "desc": "yellow chick, 額に怒りマークを浮かべ、歯を食いしばりながら右手に木製バットを握りしめている様子。, scene:怒りや警告を伝えたい時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 額に怒りマークを浮かべ、歯を食いしばりながら右手に木製バットを握りしめている様子。, scene:怒りや警告を伝えたい時"
     },
     {
       "id": "789:10886",
-      "desc": "yellow chick, 頭に大きなたんこぶができ、ショックで呆然としている。背景にどんよりとした縦線のエフェクトがある。, scene:大失敗した時やショックな時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 頭に大きなたんこぶができ、ショックで呆然としている。背景にどんよりとした縦線のエフェクトがある。, scene:大失敗した時やショックな時"
     },
     {
       "id": "789:10887",
-      "desc": "yellow chick, 地面に突っ伏して、背後にどんよりとした縦線のエフェクトが描かれた、ひどく落ち込んでいるポーズ。, scene:ひどく落ち込んだ時",
-      "occasions": ["reaction", "apology", "humor"]
+      "desc": "yellow chick, 地面に突っ伏して、背後にどんよりとした縦線のエフェクトが描かれた、ひどく落ち込んでいるポーズ。, scene:ひどく落ち込んだ時"
     },
     {
       "id": "789:10888",
-      "desc": "yellow chick, 口を大きく開けて驚いたような表情をし、汗を流しながら猛スピードで走っているポーズ。, scene:急いでいる時や逃げる時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 口を大きく開けて驚いたような表情をし、汗を流しながら猛スピードで走っているポーズ。, scene:急いでいる時や逃げる時"
     },
     {
       "id": "789:10889",
-      "desc": "yellow chick, 焦った表情で汗を流しながら、木の枝を使ってイモムシを追いかけている様子。, scene:相手を追い込む時",
-      "occasions": ["humor", "reaction"]
+      "desc": "yellow chick, 焦った表情で汗を流しながら、木の枝を使ってイモムシを追いかけている様子。, scene:相手を追い込む時"
     },
     {
       "id": "789:10890",
-      "desc": "yellow chick, 口から青い液体を出し、周囲に渦巻模様が描かれた、意識が朦朧としてフラフラと歩く体調不良や混乱の様子。, scene:ひどい体調不良や混乱時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 口から青い液体を出し、周囲に渦巻模様が描かれた、意識が朦朧としてフラフラと歩く体調不良や混乱の様子。, scene:ひどい体調不良や混乱時"
     },
     {
       "id": "789:10891",
-      "desc": "yellow chick, シルクハットを被り、太い眉毛に付け鼻付きメガネで変装した、自信満々な表情。, scene:変装やいたずら、ドヤ顔の場面",
-      "occasions": ["humor", "reaction"]
+      "desc": "yellow chick, シルクハットを被り、太い眉毛に付け鼻付きメガネで変装した、自信満々な表情。, scene:変装やいたずら、ドヤ顔の場面"
     },
     {
       "id": "789:10892",
-      "desc": "yellow chick, 激しく燃え上がる炎を背負い、真剣な表情で猛烈に突き進んでいる様子。, scene:やる気を見せる時や急いでいる時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, 激しく燃え上がる炎を背負い、真剣な表情で猛烈に突き進んでいる様子。, scene:やる気を見せる時や急いでいる時"
     },
     {
       "id": "789:10893",
-      "desc": "yellow chick, カエルの形をした緑色のレインコートを着用し、雨の中でじっと無表情に立っている様子。, scene:雨が降っている時、憂鬱な時",
-      "occasions": ["reaction", "humor"]
+      "desc": "yellow chick, カエルの形をした緑色のレインコートを着用し、雨の中でじっと無表情に立っている様子。, scene:雨が降っている時、憂鬱な時"
     },
     {
       "id": "789:10894",
-      "desc": "yellow chick, マスクをして赤い毛布に包まり、頭の上に渦巻きが出ていて、風邪で体調が悪そうにしている姿。, scene:病気や体調不良を伝える時",
-      "occasions": ["apology", "request"]
+      "desc": "yellow chick, マスクをして赤い毛布に包まり、頭の上に渦巻きが出ていて、風邪で体調が悪そうにしている姿。, scene:病気や体調不良を伝える時"
     }
   ]
 }
