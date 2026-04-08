@@ -417,6 +417,11 @@ def derive_digest_bucket_ui_layouts(
         'badge': meta['badge_parts'],
         'leader': meta['leader_parts'],
     }
+    meta['summary_parts'] = {
+        'display': meta['display_parts'],
+        'percent': meta['percent'],
+        'share': meta['share'],
+    }
     return {
         'badge': badge,
         'hint': hint,
