@@ -94,6 +94,7 @@ async function ensureSharedClientStarted(params: {
   timeoutMs?: number;
   initialSyncLimit?: number;
   encryption?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   if (params.state.started) {
     return;
@@ -119,7 +120,7 @@ async function ensureSharedClientStarted(params: {
       }
     }
 
-    await client.start();
+    await client.start({ abortSignal: params.abortSignal });
     params.state.started = true;
   })();
 
@@ -138,6 +139,7 @@ async function resolveSharedMatrixClientState(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<SharedMatrixClientState> {
   const requestedAccountId = normalizeOptionalAccountId(params.accountId);
@@ -171,6 +173,7 @@ async function resolveSharedMatrixClientState(
         timeoutMs: params.timeoutMs,
         initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
+        abortSignal: params.abortSignal,
       });
     }
     return existingState;
@@ -185,6 +188,7 @@ async function resolveSharedMatrixClientState(
         timeoutMs: params.timeoutMs,
         initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
+        abortSignal: params.abortSignal,
       });
     }
     return pending;
@@ -205,6 +209,7 @@ async function resolveSharedMatrixClientState(
         timeoutMs: params.timeoutMs,
         initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
+        abortSignal: params.abortSignal,
       });
     }
     return created;
@@ -221,6 +226,7 @@ export async function resolveSharedMatrixClient(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<MatrixClient> {
   const state = await resolveSharedMatrixClientState(params);
@@ -235,6 +241,7 @@ export async function acquireSharedMatrixClient(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
+    abortSignal?: AbortSignal;
   } = {},
 ): Promise<MatrixClient> {
   const state = await resolveSharedMatrixClientState(params);

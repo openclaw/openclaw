@@ -172,18 +172,20 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     statusController,
     isStopping: () => cleanedUp || opts.abortSignal?.aborted === true,
   });
-  const cleanup = async () => {
+  const cleanup = async (mode: "persist" | "stop" = "persist") => {
     if (cleanedUp) {
       return;
     }
     cleanedUp = true;
     try {
       client.stopSyncWithoutPersist();
-      await client.drainPendingDecryptions("matrix monitor shutdown");
-      await monitorTaskRunner.waitForIdle();
+      if (mode === "persist") {
+        await client.drainPendingDecryptions("matrix monitor shutdown");
+        await monitorTaskRunner.waitForIdle();
+      }
       threadBindingManager?.stop();
       await inboundDeduper.stop();
-      await releaseSharedClientInstance(client, "persist");
+      await releaseSharedClientInstance(client, mode);
     } finally {
       syncLifecycle.dispose();
       statusController.markStopped();
@@ -356,6 +358,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       cfg,
       auth: authWithLimit,
       accountId: auth.accountId,
+      abortSignal: opts.abortSignal,
     });
     logVerboseMessage("matrix: client started");
 
@@ -408,6 +411,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       syncLifecycle.waitForFatalStop(),
     ]);
   } catch (err) {
+    if (opts.abortSignal?.aborted === true && err instanceof Error && err.name === "AbortError") {
+      await cleanup("stop");
+      return;
+    }
     await cleanup();
     throw err;
   }

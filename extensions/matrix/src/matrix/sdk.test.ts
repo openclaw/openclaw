@@ -113,7 +113,7 @@ type MatrixJsClientStub = EventEmitter & {
 };
 
 function createMatrixJsClientStub(): MatrixJsClientStub {
-  const client = new EventEmitter() as MatrixJsClientStub;
+  const client = new EventEmitter();
   client.startClient = vi.fn(async () => {
     queueMicrotask(() => {
       client.emit("sync", "PREPARED", null, undefined);
@@ -995,6 +995,36 @@ describe("MatrixClient event bridge", () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
 
     await expect(client.start()).rejects.toThrow("sync exploded");
+  });
+
+  it("allows transient startup ERROR to recover into PREPARED", async () => {
+    matrixJsClient.startClient = vi.fn(async () => {
+      queueMicrotask(() => {
+        matrixJsClient.emit("sync", "ERROR", null, new Error("temporary outage"));
+        queueMicrotask(() => {
+          matrixJsClient.emit("sync", "PREPARED", "ERROR", undefined);
+        });
+      });
+    });
+
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await expect(client.start()).resolves.toBeUndefined();
+  });
+
+  it("aborts startup when the readiness wait is canceled", async () => {
+    matrixJsClient.startClient = vi.fn(async () => {});
+
+    const abortController = new AbortController();
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    const startPromise = client.start({ abortSignal: abortController.signal });
+
+    abortController.abort();
+
+    await expect(startPromise).rejects.toMatchObject({
+      message: "Matrix startup aborted",
+      name: "AbortError",
+    });
   });
 
   it("times out startup when no ready sync state arrives", async () => {

@@ -21,6 +21,7 @@ export function isMatrixDisconnectedSyncState(
 
 export function isMatrixTerminalSyncState(
   state: MatrixSyncState | null | undefined,
-): state is "ERROR" | "STOPPED" {
-  return state === "ERROR" || state === "STOPPED";
+): state is "STOPPED" {
+  // matrix-js-sdk can recover from ERROR to PREPARED during initial sync.
+  return state === "STOPPED";
 }

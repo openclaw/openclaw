@@ -83,6 +83,20 @@ const hoisted = vi.hoisted(() => {
   };
   const stopThreadBindingManager = vi.fn();
   const releaseSharedClientInstance = vi.fn(async () => true);
+  const resolveSharedMatrixClient = vi.fn(async (params: { startClient?: boolean }) => {
+    if (params.startClient === false) {
+      callOrder.push("prepare-client");
+      return client;
+    }
+    if (!callOrder.includes("create-manager")) {
+      throw new Error("Matrix client started before thread bindings were registered");
+    }
+    if (state.startClientError) {
+      throw state.startClientError;
+    }
+    callOrder.push("start-client");
+    return client;
+  });
   const setActiveMatrixClient = vi.fn();
   const setMatrixRuntime = vi.fn();
   const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
@@ -100,6 +114,7 @@ const hoisted = vi.hoisted(() => {
     logger,
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
     releaseSharedClientInstance,
+    resolveSharedMatrixClient,
     resolveTextChunkLimit,
     setActiveMatrixClient,
     setMatrixRuntime,
@@ -267,20 +282,7 @@ vi.mock("../client.js", () => ({
   resolveMatrixAuthContext: vi.fn(() => ({
     accountId: "default",
   })),
-  resolveSharedMatrixClient: vi.fn(async (params: { startClient?: boolean }) => {
-    if (params.startClient === false) {
-      hoisted.callOrder.push("prepare-client");
-      return hoisted.client;
-    }
-    if (!hoisted.callOrder.includes("create-manager")) {
-      throw new Error("Matrix client started before thread bindings were registered");
-    }
-    if (hoisted.state.startClientError) {
-      throw hoisted.state.startClientError;
-    }
-    hoisted.callOrder.push("start-client");
-    return hoisted.client;
-  }),
+  resolveSharedMatrixClient: hoisted.resolveSharedMatrixClient,
 }));
 
 vi.mock("../client/shared.js", () => ({
@@ -391,6 +393,22 @@ describe("monitorMatrixProvider", () => {
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
+    hoisted.resolveSharedMatrixClient
+      .mockReset()
+      .mockImplementation(async (params: { startClient?: boolean }) => {
+        if (params.startClient === false) {
+          hoisted.callOrder.push("prepare-client");
+          return hoisted.client;
+        }
+        if (!hoisted.callOrder.includes("create-manager")) {
+          throw new Error("Matrix client started before thread bindings were registered");
+        }
+        if (hoisted.state.startClientError) {
+          throw hoisted.state.startClientError;
+        }
+        hoisted.callOrder.push("start-client");
+        return hoisted.client;
+      });
     hoisted.createDirectRoomTracker.mockReset().mockReturnValue({
       isDirectMessage: vi.fn(async () => false),
     });
@@ -534,6 +552,42 @@ describe("monitorMatrixProvider", () => {
         lastError: "sync exploded",
       }),
     );
+  });
+
+  it("aborts stalled startup promptly and releases the shared client without persist", async () => {
+    const abortController = new AbortController();
+    hoisted.resolveSharedMatrixClient.mockImplementation(
+      async (params: { startClient?: boolean; abortSignal?: AbortSignal }) => {
+        if (params.startClient === false) {
+          hoisted.callOrder.push("prepare-client");
+          return hoisted.client;
+        }
+        hoisted.callOrder.push("start-client");
+        return await new Promise<typeof hoisted.client>((_resolve, reject) => {
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("Matrix startup aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+    });
+
+    abortController.abort();
+
+    await expect(monitorPromise).resolves.toBeUndefined();
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "stop");
+    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
   });
 
   it("registers Matrix thread bindings before starting the client", async () => {

@@ -373,11 +373,21 @@ export class MatrixClient {
     }
   }
 
-  async start(): Promise<void> {
-    await this.startSyncSession({ bootstrapCrypto: true });
+  async start(opts: { abortSignal?: AbortSignal; readyTimeoutMs?: number } = {}): Promise<void> {
+    await this.startSyncSession({
+      bootstrapCrypto: true,
+      abortSignal: opts.abortSignal,
+      readyTimeoutMs: opts.readyTimeoutMs,
+    });
   }
 
-  private async waitForInitialSyncReady(timeoutMs = 30_000): Promise<void> {
+  private async waitForInitialSyncReady(
+    params: {
+      timeoutMs?: number;
+      abortSignal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    const timeoutMs = params.timeoutMs ?? 30_000;
     if (isMatrixReadySyncState(this.currentSyncState)) {
       return;
     }
@@ -388,10 +398,12 @@ export class MatrixClient {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const abortSignal = params.abortSignal;
 
       const cleanup = () => {
         this.off("sync.state", onSyncState);
         this.off("sync.unexpected_error", onUnexpectedError);
+        abortSignal?.removeEventListener("abort", onAbort);
         if (timeoutId) {
           clearTimeout(timeoutId);
           timeoutId = undefined;
@@ -436,8 +448,19 @@ export class MatrixClient {
         settleReject(error);
       };
 
+      const onAbort = () => {
+        const error = new Error("Matrix startup aborted");
+        error.name = "AbortError";
+        settleReject(error);
+      };
+
       this.on("sync.state", onSyncState);
       this.on("sync.unexpected_error", onUnexpectedError);
+      if (abortSignal?.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
       timeoutId = setTimeout(() => {
         settleReject(
           new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`),
@@ -447,7 +470,11 @@ export class MatrixClient {
     });
   }
 
-  private async startSyncSession(opts: { bootstrapCrypto: boolean }): Promise<void> {
+  private async startSyncSession(opts: {
+    bootstrapCrypto: boolean;
+    abortSignal?: AbortSignal;
+    readyTimeoutMs?: number;
+  }): Promise<void> {
     if (this.started) {
       return;
     }
@@ -459,7 +486,10 @@ export class MatrixClient {
     await this.client.startClient({
       initialSyncLimit: this.initialSyncLimit,
     });
-    await this.waitForInitialSyncReady();
+    await this.waitForInitialSyncReady({
+      abortSignal: opts.abortSignal,
+      timeoutMs: opts.readyTimeoutMs,
+    });
     if (opts.bootstrapCrypto && this.autoBootstrapCrypto) {
       await this.bootstrapCryptoIfNeeded();
     }
