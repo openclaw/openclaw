@@ -11,13 +11,33 @@ export type GeneratedVideoAsset = {
 
 export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
 
+/**
+ * Canonical semantic role hints for reference assets. The list covers the
+ * near-universal I2V vocabulary plus per-kind reference roles. Providers may
+ * accept additional role strings (extend the asset.role type with a plain
+ * string at call sites) — core forwards whatever value is set.
+ */
+export type VideoGenerationAssetRole =
+  | "first_frame"
+  | "last_frame"
+  | "reference_image"
+  | "reference_video"
+  | "reference_audio";
+
 export type VideoGenerationSourceAsset = {
   url?: string;
   buffer?: Buffer;
   mimeType?: string;
   fileName?: string;
-  /** Optional semantic role hint interpreted by the receiving provider (e.g. "first_frame", "last_frame", "style_ref"). Core does not validate or act on this value. */
-  role?: string;
+  /**
+   * Optional semantic role hint forwarded to the provider. Canonical values
+   * come from `VideoGenerationAssetRole`; plain strings are accepted for
+   * provider-specific extensions. Core does not validate the value beyond
+   * shape.
+   */
+  // Union with `(string & {})` keeps autocomplete on the canonical values while
+  // still accepting arbitrary provider-specific role strings.
+  role?: VideoGenerationAssetRole | (string & {});
   metadata?: Record<string, unknown>;
 };
 
@@ -62,6 +82,15 @@ export type VideoGenerationIgnoredOverride = {
 
 export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
 
+/**
+ * Primitive type tag for a declared `providerOptions` key. Core validates
+ * the agent-supplied value against this tag before forwarding it to the
+ * provider. Kept deliberately narrow — plugins that need richer shapes
+ * should keep those fields out of the typed contract and reinterpret the
+ * forwarded opaque value inside their own provider code.
+ */
+export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
+
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
@@ -80,6 +109,14 @@ export type VideoGenerationModeCapabilities = {
   /** Provider can generate audio in the output video. */
   supportsAudio?: boolean;
   supportsWatermark?: boolean;
+  /**
+   * Declared typed schema for the opaque `VideoGenerationRequest.providerOptions`
+   * bag. Keys listed here are accepted; any other keys the agent passes are
+   * rejected at the runtime fallback boundary so mis-typed or provider-specific
+   * options never silently reach the wrong provider. Plugins that currently
+   * accept no providerOptions should leave this undefined or set to `{}`.
+   */
+  providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
 };
 
 export type VideoGenerationTransformCapabilities = VideoGenerationModeCapabilities & {

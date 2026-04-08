@@ -7,11 +7,13 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   GeneratedVideoAsset as CoreGeneratedVideoAsset,
+  VideoGenerationAssetRole as CoreVideoGenerationAssetRole,
   VideoGenerationMode as CoreVideoGenerationMode,
   VideoGenerationModeCapabilities as CoreVideoGenerationModeCapabilities,
   VideoGenerationProvider as CoreVideoGenerationProvider,
   VideoGenerationProviderCapabilities as CoreVideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext as CoreVideoGenerationProviderConfiguredContext,
+  VideoGenerationProviderOptionType as CoreVideoGenerationProviderOptionType,
   VideoGenerationRequest as CoreVideoGenerationRequest,
   VideoGenerationResolution as CoreVideoGenerationResolution,
   VideoGenerationResult as CoreVideoGenerationResult,
@@ -28,13 +30,29 @@ export type GeneratedVideoAsset = {
 
 export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
 
+/**
+ * Canonical semantic role hints for reference assets (first/last frame,
+ * reference image/video/audio). Providers may accept additional role strings;
+ * the asset.role type accepts both canonical values and arbitrary strings.
+ */
+export type VideoGenerationAssetRole =
+  | "first_frame"
+  | "last_frame"
+  | "reference_image"
+  | "reference_video"
+  | "reference_audio";
+
 export type VideoGenerationSourceAsset = {
   url?: string;
   buffer?: Buffer;
   mimeType?: string;
   fileName?: string;
-  /** Semantic role hint forwarded to the provider as-is (e.g. "first_frame", "last_frame", "reference_video", "reference_audio"). */
-  role?: string;
+  /**
+   * Optional semantic role hint forwarded to the provider. Canonical values
+   * come from `VideoGenerationAssetRole`; plain strings are accepted for
+   * provider-specific extensions.
+   */
+  role?: VideoGenerationAssetRole | (string & {});
   metadata?: Record<string, unknown>;
 };
 
@@ -73,6 +91,13 @@ export type VideoGenerationResult = {
 
 export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
 
+/**
+ * Primitive type tag for a declared `providerOptions` key. Keep narrow —
+ * plugins that need richer shapes should leave them out of the typed contract
+ * and interpret the forwarded opaque value inside their own provider code.
+ */
+export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
+
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
@@ -90,6 +115,14 @@ export type VideoGenerationModeCapabilities = {
   supportsResolution?: boolean;
   supportsAudio?: boolean;
   supportsWatermark?: boolean;
+  /**
+   * Declared typed schema for `VideoGenerationRequest.providerOptions`. Keys
+   * listed here are accepted and validated against the declared primitive
+   * type before forwarding; unknown keys or type mismatches skip the
+   * candidate provider at runtime so mis-typed or provider-specific options
+   * never silently reach the wrong provider.
+   */
+  providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
 };
 
 export type VideoGenerationTransformCapabilities = VideoGenerationModeCapabilities & {
@@ -118,6 +151,10 @@ type AssertAssignable<_Left extends _Right, _Right> = true;
 type _VideoGenerationSdkCompat = [
   AssertAssignable<GeneratedVideoAsset, CoreGeneratedVideoAsset>,
   AssertAssignable<CoreGeneratedVideoAsset, GeneratedVideoAsset>,
+  AssertAssignable<VideoGenerationAssetRole, CoreVideoGenerationAssetRole>,
+  AssertAssignable<CoreVideoGenerationAssetRole, VideoGenerationAssetRole>,
+  AssertAssignable<VideoGenerationProviderOptionType, CoreVideoGenerationProviderOptionType>,
+  AssertAssignable<CoreVideoGenerationProviderOptionType, VideoGenerationProviderOptionType>,
   AssertAssignable<VideoGenerationMode, CoreVideoGenerationMode>,
   AssertAssignable<CoreVideoGenerationMode, VideoGenerationMode>,
   AssertAssignable<VideoGenerationModeCapabilities, CoreVideoGenerationModeCapabilities>,
