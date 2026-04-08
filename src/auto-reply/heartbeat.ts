@@ -20,10 +20,14 @@ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
  * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
- * A file is considered effectively empty if it contains only:
- * - Whitespace
- * - Comment lines (lines starting with #)
- * - Empty lines
+ * A file is considered effectively empty if, after dropping HTML comment blocks
+ * and any leading YAML frontmatter, every remaining line is one of:
+ * - Whitespace / empty
+ * - A markdown ATX header (`#`, `##`, ...) — including a leading `# ...` title
+ * - An empty list item stub (`- `, `- [ ]`, `* `, `+ `)
+ * - A bare `tasks:` declaration line (combined with the runner's
+ *   `parseHeartbeatTasks(content).length === 0` gate, this still requires
+ *   that no tasks were actually parsed before skipping)
  *
  * Note: A missing file returns false (not effectively empty) so the LLM can still
  * decide what to do. This function is only for when the file exists but has no content.
@@ -36,7 +40,18 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const lines = content.split("\n");
+  // Strip HTML comment blocks (including multi-line) so files that document
+  // themselves with `<!-- ... -->` instead of markdown headers still count
+  // as empty. Without this, a workspace template like
+  //   <!-- Add tasks below when you want periodic checks. -->
+  // would defeat the skip path and trigger a full heartbeat API call.
+  let stripped = content.replace(/<!--[\s\S]*?-->/g, "");
+
+  // Strip a leading YAML frontmatter block. Some templates wrap heartbeat
+  // metadata in `--- ... ---` even when there are no actionable tasks below.
+  stripped = stripped.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+
+  const lines = stripped.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
@@ -51,6 +66,13 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
+      continue;
+    }
+    // Skip a bare `tasks:` line. The runner additionally requires
+    // `parseHeartbeatTasks(content).length === 0` before skipping, so a
+    // declared-but-empty tasks block still routes to the skip path while
+    // any line that actually parses as a task keeps the LLM call.
+    if (/^tasks:\s*$/i.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content

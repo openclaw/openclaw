@@ -193,13 +193,72 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
   });
 
-  it("returns true for default template content (header + comment)", () => {
+  it("returns false when a template includes plain instructional prose", () => {
+    // Regression: this test used to be named "returns true for default template
+    // content" while asserting `false`, which obscured the real behavior. The
+    // heuristic does NOT skip plain-text instructional sentences because they
+    // are indistinguishable from actionable content.
     const defaultTemplate = `# HEARTBEAT.md
 
 Keep this file empty unless you want a tiny checklist. Keep it small.
 `;
-    // Note: The template has actual text content, so it's NOT effectively empty
     expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
+  });
+
+  it("returns true when an HTML comment is the only content (#61690)", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- nothing to do -->")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`# HEARTBEAT.md
+<!-- Add tasks below when you want periodic checks. -->
+`),
+    ).toBe(true);
+  });
+
+  it("returns true for a multi-line HTML comment block (#61690)", () => {
+    const content = `# HEARTBEAT.md
+<!--
+This file is intentionally empty.
+Add tasks below when you want the agent to check periodically.
+-->
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("returns false when an HTML comment is followed by real content", () => {
+    const content = `<!-- old note -->
+- Check email`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("returns true for an empty `tasks:` block (#61690)", () => {
+    // A bare `tasks:` declaration with nothing under it is the YAML
+    // equivalent of "no tasks". The runner additionally checks that
+    // parseHeartbeatTasks returned no entries before skipping, so this is
+    // safe even when other lines exist.
+    expect(isHeartbeatContentEffectivelyEmpty("tasks:")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`# HEARTBEAT.md
+
+tasks:
+`),
+    ).toBe(true);
+  });
+
+  it("returns false when `tasks:` is followed by actionable text on the same line", () => {
+    // A `tasks:` line with content on the same line is suspicious; only
+    // the bare declaration form is treated as comment-equivalent.
+    expect(isHeartbeatContentEffectivelyEmpty("tasks: do everything")).toBe(false);
+  });
+
+  it("returns true when leading YAML frontmatter is the only content (#61690)", () => {
+    const content = `---
+title: HEARTBEAT
+heartbeat: true
+---
+
+# HEARTBEAT.md
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
   it("returns true for header with only empty lines", () => {
