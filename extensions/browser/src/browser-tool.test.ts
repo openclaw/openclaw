@@ -2,6 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
+  browserDoctor: vi.fn(async (..._args: unknown[]) => ({
+    ok: true,
+    profile: "openclaw",
+    transport: "cdp",
+    checks: [],
+    status: {
+      enabled: true,
+      running: false,
+      pid: null,
+      cdpPort: 18792,
+      cdpUrl: "http://127.0.0.1:18792",
+      chosenBrowser: null,
+      userDataDir: "/tmp/openclaw",
+      color: "#FF4500",
+      headless: true,
+      attachOnly: false,
+    },
+  })),
   browserFocusTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserOpenTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserProfiles: vi.fn(
@@ -175,6 +193,7 @@ function resetBrowserToolMocks() {
     browserArmDialog: browserActionsMocks.browserArmDialog as never,
     browserArmFileChooser: browserActionsMocks.browserArmFileChooser as never,
     browserCloseTab: browserClientMocks.browserCloseTab as never,
+    browserDoctor: browserClientMocks.browserDoctor as never,
     browserFocusTab: browserClientMocks.browserFocusTab as never,
     browserNavigate: browserActionsMocks.browserNavigate as never,
     browserOpenTab: browserClientMocks.browserOpenTab as never,
@@ -430,6 +449,36 @@ describe("browser tool snapshot maxChars", () => {
       }),
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("returns the browser doctor report on host", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "doctor" });
+
+    expect(browserClientMocks.browserDoctor).toHaveBeenCalledWith(undefined, {
+      profile: undefined,
+    });
+  });
+
+  it("routes browser doctor through the node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "doctor", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/doctor",
+          timeoutMs: 20000,
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserDoctor).not.toHaveBeenCalled();
   });
 
   it("gives node.invoke extra slack beyond the default proxy timeout", async () => {

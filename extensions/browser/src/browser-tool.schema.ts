@@ -16,6 +16,7 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 const BROWSER_TOOL_ACTIONS = [
+  "doctor",
   "status",
   "start",
   "stop",
