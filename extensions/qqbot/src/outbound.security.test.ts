@@ -37,7 +37,7 @@ const audioConvertMocks = vi.hoisted(() => ({
     );
   }),
   shouldTranscodeVoice: vi.fn(() => false),
-  waitForFile: vi.fn(async () => 1024),
+  waitForFile: vi.fn<(filePath: string) => Promise<number>>(async (_filePath: string) => 1024),
 }));
 
 const fileUtilsMocks = vi.hoisted(() => ({
