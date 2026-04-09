@@ -330,6 +330,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         ctx.waitCalls.some((call) => call.runId === child.runId) &&
         ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
         Boolean(deletedKey),
+      5_000,
     );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
