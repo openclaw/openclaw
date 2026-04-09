@@ -284,6 +284,33 @@ describe("openai codex provider", () => {
     );
   });
 
+  it("augments gpt-5.4-pro from catalog gpt-5.4 when legacy codex rows are absent", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [
+        {
+          id: "gpt-5.4",
+          name: "gpt-5.4",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4-pro",
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      }),
+    );
+  });
+
   it("canonicalizes legacy gpt-5.4-codex models during resolved-model normalization", () => {
     const provider = buildOpenAICodexProviderPlugin();
 

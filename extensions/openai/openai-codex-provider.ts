@@ -67,6 +67,11 @@ const OPENAI_CODEX_GPT_54_MINI_COST = {
   cacheWrite: 0,
 } as const;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
+/** Legacy codex rows first; fall back to catalog `gpt-5.4` when the API omits 5.3/5.2. */
+const OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS = [
+  ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+] as const;
 const OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
   "gpt-5.1-codex-mini",
@@ -359,7 +364,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
-        templateIds: OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
+        templateIds: OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS,
       });
       const gpt54MiniTemplate = findCatalogTemplate({
         entries: ctx.entries,
