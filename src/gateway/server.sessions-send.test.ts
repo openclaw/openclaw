@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -12,29 +13,36 @@ import {
   testState,
 } from "./test-helpers.js";
 
-const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+const { __testing: openClawToolsTesting, createOpenClawTools } =
+  await import("../agents/openclaw-tools.js");
+const { callGateway } = await import("./call.js");
+const { loadConfig } = await import("../config/config.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let gatewayPort: number;
-const gatewayToken = "test-token";
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
-let cachedSessionsSendTool: SessionSendTool | null = null;
+
+function getGatewayToken(): string {
+  const token = (testState.gatewayAuth as { token?: unknown } | undefined)?.token;
+  if (typeof token !== "string" || !token.trim()) {
+    throw new Error("gateway test token missing");
+  }
+  return token;
+}
 
 function getSessionsSendTool(): SessionSendTool {
-  if (cachedSessionsSendTool) {
-    return cachedSessionsSendTool;
-  }
-  const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+  const tool = createOpenClawTools({
+    config: loadConfig(),
+  }).find((candidate) => candidate.name === "sessions_send");
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }
-  cachedSessionsSendTool = tool;
-  return cachedSessionsSendTool;
+  return tool;
 }
 
 async function emitLifecycleAssistantReply(params: {
@@ -78,6 +86,7 @@ async function emitLifecycleAssistantReply(params: {
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
   gatewayPort = await getFreePort();
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
@@ -94,21 +103,26 @@ beforeAll(async () => {
   await approveDevicePairing(pending.request.requestId, {
     callerScopes: pending.request.scopes ?? ["operator.admin"],
   });
-  testState.gatewayAuth = { mode: "token", token: gatewayToken };
-  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
   server = await startGatewayServer(gatewayPort);
 });
 
 beforeEach(() => {
-  testState.gatewayAuth = { mode: "token", token: gatewayToken };
-  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  openClawToolsTesting.setDepsForTest({
+    callGateway: async (opts) => {
+      return await callGateway({
+        config: loadConfig(),
+        token: getGatewayToken(),
+        scopes: ["operator.admin"],
+        ...opts,
+      });
+    },
+  });
 });
 
 afterAll(async () => {
   await server.close();
   envSnapshot.restore();
+  openClawToolsTesting.setDepsForTest();
 });
 
 describe("sessions_send gateway loopback", () => {
@@ -143,9 +157,11 @@ describe("sessions_send gateway loopback", () => {
       reply?: string;
       sessionKey?: string;
     };
-    expect(details.status).toBe("ok");
-    expect(details.reply).toBe("pong");
-    expect(details.sessionKey).toBe("main");
+    expect(details).toMatchObject({
+      status: "ok",
+      reply: "pong",
+      sessionKey: "main",
+    });
 
     const firstCall = spy.mock.calls[0]?.[0] as
       | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
@@ -163,18 +179,6 @@ describe("sessions_send label lookup", () => {
     "finds session by label and sends message",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
-      // This is an operator feature; enable broader session tool targeting for this test.
-      const configPath = process.env.OPENCLAW_CONFIG_PATH;
-      if (!configPath) {
-        throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
-      }
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ tools: { sessions: { visibility: "all" } } }, null, 2) + "\n",
-        "utf-8",
-      );
-
       const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
       spy.mockImplementation(async (opts: unknown) =>
         emitLifecycleAssistantReply({
@@ -185,17 +189,22 @@ describe("sessions_send label lookup", () => {
       );
 
       // First, create a session with a label via sessions.patch
-      const { callGateway } = await import("./call.js");
       await callGateway({
+        config: {} as OpenClawConfig,
+        token: getGatewayToken(),
         method: "sessions.patch",
         params: { key: "test-labeled-session", label: "my-test-worker" },
         timeoutMs: 5000,
       });
 
+      const baseConfig = loadConfig();
       const tool = createOpenClawTools({
         config: {
+          ...baseConfig,
           tools: {
+            ...baseConfig.tools,
             sessions: {
+              ...baseConfig.tools?.sessions,
               visibility: "all",
             },
           },
@@ -216,9 +225,11 @@ describe("sessions_send label lookup", () => {
         reply?: string;
         sessionKey?: string;
       };
-      expect(details.status).toBe("ok");
-      expect(details.reply).toBe("labeled response");
-      expect(details.sessionKey).toBe("agent:main:test-labeled-session");
+      expect(details).toMatchObject({
+        status: "ok",
+        reply: "labeled response",
+        sessionKey: "agent:main:test-labeled-session",
+      });
     },
   );
 });

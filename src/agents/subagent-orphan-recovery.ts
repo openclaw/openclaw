@@ -21,25 +21,14 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { replaceSubagentRunAfterSteer } from "./subagent-registry-runtime.js";
+import { replaceSubagentRunAfterSteer } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentStartupWaitTimeoutMs } from "./subagent-timeouts.js";
 
 const log = createSubsystemLogger("subagent-orphan-recovery");
 
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
-
-function isRestartAbortedTimeoutRun(
-  runRecord: SubagentRunRecord,
-  entry: SessionEntry | undefined,
-): boolean {
-  return (
-    entry?.abortedLastRun === true &&
-    runRecord.outcome?.status === "timeout" &&
-    typeof runRecord.endedAt === "number" &&
-    runRecord.endedAt > 0
-  );
-}
 
 /**
  * Build the resume message for an orphaned subagent.
@@ -102,6 +91,7 @@ async function resumeOrphanedSession(params: {
   }
 
   try {
+    const startupWaitTimeoutMs = resolveSubagentStartupWaitTimeoutMs(loadConfig());
     const result = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
@@ -111,7 +101,7 @@ async function resumeOrphanedSession(params: {
         deliver: false,
         lane: "subagent",
       },
-      timeoutMs: 10_000,
+      timeoutMs: startupWaitTimeoutMs,
     });
     const remapped = replaceSubagentRunAfterSteer({
       previousRunId: params.originalRunId,
@@ -162,6 +152,11 @@ export async function recoverOrphanedSubagentSessions(params: {
     const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {
+      // Only consider runs that haven't ended yet
+      if (typeof runRecord.endedAt === "number" && runRecord.endedAt > 0) {
+        continue;
+      }
+
       const childSessionKey = runRecord.childSessionKey?.trim();
       if (!childSessionKey) {
         continue;
@@ -183,17 +178,6 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         const entry = store[childSessionKey];
         if (!entry) {
-          result.skipped++;
-          continue;
-        }
-
-        // Restart-aborted subagents can be marked ended with a timeout outcome
-        // before the gateway comes back up to resume them.
-        if (
-          typeof runRecord.endedAt === "number" &&
-          runRecord.endedAt > 0 &&
-          !isRestartAbortedTimeoutRun(runRecord, entry)
-        ) {
           result.skipped++;
           continue;
         }

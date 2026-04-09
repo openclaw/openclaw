@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
@@ -43,4 +45,15 @@ export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = pro
     }
   }
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+}
+
+export function resolveConfiguredConnectChallengeTimeoutMs(
+  config?: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const envTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv(env);
+  if (envTimeoutMs !== DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS) {
+    return clampConnectChallengeTimeoutMs(envTimeoutMs);
+  }
+  return resolveConnectChallengeTimeoutMs(config?.gateway?.connectChallengeTimeoutMs);
 }

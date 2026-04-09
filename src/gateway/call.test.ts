@@ -28,6 +28,7 @@ let lastClientOptions: {
   password?: string;
   tlsFingerprint?: string;
   clientDisplayName?: string;
+  connectChallengeTimeoutMs?: number;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -60,6 +61,7 @@ vi.mock("./client.js", () => ({
       token?: string;
       password?: string;
       clientDisplayName?: string;
+      connectChallengeTimeoutMs?: number;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -98,6 +100,7 @@ class StubGatewayClient {
     token?: string;
     password?: string;
     clientDisplayName?: string;
+    connectChallengeTimeoutMs?: number;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
@@ -788,14 +791,74 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
   });
 
-  it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
+  it("uses the shared final-response timeout for expectFinal requests", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({ method: "health", expectFinal: true });
 
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
-    expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(90_000);
+    expect(lastClientOptions?.connectChallengeTimeoutMs).toBe(10_000);
+  });
+
+  it("uses configured gateway rpc timeout when callers do not pass one", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", timeoutMs: 12_000 },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "health" });
+
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(12_000);
+  });
+
+  it("uses configured final-response timeout for expectFinal calls", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        finalResponseTimeoutMs: 120_000,
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "health", expectFinal: true });
+
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(120_000);
+  });
+
+  it("keeps a short connect challenge timeout from shrinking rpc timeout", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        connectChallengeTimeoutMs: 500,
+        timeoutMs: 45_000,
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.connectChallengeTimeoutMs).toBe(500);
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("caps connect challenge timeout to the total call timeout", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        connectChallengeTimeoutMs: 9_000,
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "health", timeoutMs: 4_000 });
+
+    expect(lastClientOptions?.connectChallengeTimeoutMs).toBe(4_000);
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(4_000);
   });
 
   it("fails fast when remote mode is missing remote url", async () => {

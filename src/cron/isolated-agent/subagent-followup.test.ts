@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 
 // vi.hoisted runs before module imports, ensuring FAST_TEST_MODE is picked up.
 vi.hoisted(() => {
@@ -458,6 +459,45 @@ describe("waitForDescendantSubagentSummary", () => {
     });
 
     expect(result).toBe("Completed despite gateway error.");
+  });
+
+  it("adds configured session-settle headroom to descendant agent.wait transport timeouts", async () => {
+    const config = {
+      gateway: {
+        sessionSettleTimeoutMs: 9_000,
+      },
+    } satisfies OpenClawConfig;
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-pad",
+          childSessionKey: "child-pad",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "task-pad",
+          cleanup: "keep",
+          createdAt: 1000,
+        },
+      ])
+      .mockReturnValue([]);
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+    vi.mocked(readLatestAssistantReply).mockResolvedValue("Settled.");
+
+    await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+      config,
+    });
+
+    const waitCall = vi
+      .mocked(callGateway)
+      .mock.calls.find((call) => (call[0] as { method?: string }).method === "agent.wait")?.[0] as
+      | { params: { timeoutMs: number }; timeoutMs: number }
+      | undefined;
+    expect(waitCall).toBeDefined();
+    expect(waitCall!.timeoutMs - waitCall!.params.timeoutMs).toBe(9_000);
   });
 
   it("skips NO_REPLY synthesis and returns undefined", async () => {

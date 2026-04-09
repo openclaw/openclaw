@@ -17,15 +17,11 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
-    /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
-    videoGenerationModel: AgentModelSchema.optional(),
-    musicGenerationModel: AgentModelSchema.optional(),
-    mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -44,11 +40,8 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
-    skills: z.array(z.string()).optional(),
     repoRoot: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
-    contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z
@@ -95,23 +88,9 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
-    llm: z
-      .object({
-        idleTimeoutSeconds: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe(
-            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
-          ),
-      })
-      .strict()
-      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
-        provider: z.string().optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
@@ -150,7 +129,6 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
-        notifyUser: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -192,7 +170,6 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
-        allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z
           .number()
@@ -216,8 +193,11 @@ export const AgentDefaultsSchema = z
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
+        startupWaitTimeoutMs: z.number().int().positive().optional(),
+        controlTimeoutMs: z.number().int().positive().optional(),
+        completionAnnounceTimeoutMs: z.number().int().positive().optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
-        requireAgentId: z.boolean().optional(),
+        cleanupTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

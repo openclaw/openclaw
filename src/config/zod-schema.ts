@@ -664,6 +664,10 @@ export const OpenClawSchema = z
     gateway: z
       .object({
         port: z.number().int().positive().optional(),
+        connectChallengeTimeoutMs: z.number().int().positive().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        finalResponseTimeoutMs: z.number().int().positive().optional(),
+        sessionSettleTimeoutMs: z.number().int().positive().optional(),
         mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
         bind: z
           .union([

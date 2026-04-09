@@ -17,22 +17,39 @@ vi.mock("../../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("./commands-compact.runtime.js", () => ({
+vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
   compactEmbeddedPiSession: vi.fn(),
-  enqueueSystemEvent: vi.fn(),
-  formatContextUsageShort: vi.fn(() => "Context 12.1k"),
-  formatTokenCount: vi.fn((value: number) => `${value}`),
-  incrementCompactionCount: vi.fn(),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
-  resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-  resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, resolveSessionFilePathOptions } =
-  await import("./commands-compact.runtime.js");
+vi.mock("../../config/sessions.js", () => ({
+  resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
+  resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  resolveSessionFilePathOptions: vi.fn(() => ({})),
+}));
+
+vi.mock("../../infra/system-events.js", () => ({
+  enqueueSystemEvent: vi.fn(),
+}));
+
+vi.mock("../status.js", () => ({
+  formatContextUsageShort: vi.fn(() => "Context 12.1k"),
+  formatTokenCount: vi.fn((value: number) => `${value}`),
+}));
+
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: vi.fn(),
+}));
+
+const {
+  abortEmbeddedPiRun,
+  compactEmbeddedPiSession,
+  isEmbeddedPiRunActive,
+  waitForEmbeddedPiRunEnd,
+} = await import("../../agents/pi-embedded.js");
+const { resolveSessionFilePathOptions } = await import("../../config/sessions.js");
 
 function buildCompactParams(
   commandBodyNormalized: string,
@@ -227,5 +244,32 @@ describe("handleCompactCommand", () => {
       }),
     );
     expect(vi.mocked(resolveAgentDir)).toHaveBeenCalledWith(expect.any(Object), "target");
+  });
+
+  it("uses configured session-settle timeout when aborting an active embedded run", async () => {
+    vi.mocked(isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          gateway: { sessionSettleTimeoutMs: 7_000 },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith("session-1");
+    expect(vi.mocked(waitForEmbeddedPiRunEnd)).toHaveBeenCalledWith("session-1", 7_000);
   });
 });

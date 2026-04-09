@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveGatewayRpcTimeoutMs,
+  resolveGatewayWaitCallTimeoutMs,
+} from "../../gateway/call-timeouts.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { readLatestAssistantReply, waitForAgentRun } from "../run-wait.js";
-import { runAgentStep } from "./agent-step.js";
+import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   buildAgentToAgentAnnounceContext,
@@ -32,6 +36,7 @@ export async function runSessionsSendA2AFlow(params: {
   message: string;
   announceTimeoutMs: number;
   maxPingPongTurns: number;
+  config?: OpenClawConfig;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
@@ -42,12 +47,16 @@ export async function runSessionsSendA2AFlow(params: {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
-      const wait = await waitForAgentRun({
-        runId: params.waitRunId,
-        timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
-        callGateway: sessionsSendA2ADeps.callGateway,
+      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
+      const wait = await sessionsSendA2ADeps.callGateway<{ status: string }>({
+        method: "agent.wait",
+        params: {
+          runId: params.waitRunId,
+          timeoutMs: waitMs,
+        },
+        timeoutMs: resolveGatewayWaitCallTimeoutMs(params.config, waitMs),
       });
-      if (wait.status === "ok") {
+      if (wait?.status === "ok") {
         primaryReply = await readLatestAssistantReply({
           sessionKey: params.targetSessionKey,
         });
@@ -89,6 +98,7 @@ export async function runSessionsSendA2AFlow(params: {
           message: incomingMessage,
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
+          config: params.config,
           lane: AGENT_LANE_NESTED,
           sourceSessionKey: nextSessionKey,
           sourceChannel:
@@ -120,6 +130,7 @@ export async function runSessionsSendA2AFlow(params: {
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
+      config: params.config,
       lane: AGENT_LANE_NESTED,
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
@@ -134,10 +145,9 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
-            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
-          timeoutMs: 10_000,
+          timeoutMs: resolveGatewayRpcTimeoutMs(params.config),
         });
       } catch (err) {
         log.warn("sessions_send announce delivery failed", {
