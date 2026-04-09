@@ -36,6 +36,10 @@ export function classifyRiskyExplicitSafeBinTrustedDir(raw: string): string | nu
     return "relative/workspace-scoped directory is mutable and depends on process cwd";
   }
   const normalized = path.resolve(trimmed).replace(/\\/g, "/").toLowerCase();
+  const normalizedCwd = path.resolve(process.cwd()).replace(/\\/g, "/").toLowerCase();
+  if (normalized === normalizedCwd || normalized.startsWith(`${normalizedCwd}/`)) {
+    return "workspace-scoped directory is mutable and depends on project contents";
+  }
   if (normalized === "/usr/local/bin") {
     return "package-manager bin directory is mutable and not an immutable safe-bin root";
   }

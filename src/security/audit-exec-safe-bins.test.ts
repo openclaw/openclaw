@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectExecRuntimeFindings } from "./audit.js";
@@ -133,7 +134,7 @@ describe("security audit exec safe-bin findings", () => {
             id: "ops",
             tools: {
               exec: {
-                safeBinTrustedDirs: ["./relative-bin-dir"],
+                safeBinTrustedDirs: ["./relative-bin-dir", join(process.cwd(), "relative-bin-dir")],
               },
             },
           },

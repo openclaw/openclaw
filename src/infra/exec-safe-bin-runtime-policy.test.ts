@@ -131,6 +131,7 @@ describe("exec safe-bin runtime policy", () => {
           "/snap/bin",
           "/home/test/.nvm/versions/node/v22/bin",
           "./scripts",
+          path.join(process.cwd(), "scripts"),
         ],
       },
     });
@@ -141,6 +142,7 @@ describe("exec safe-bin runtime policy", () => {
       optedIn.trustedSafeBinDirs.has(path.resolve("/home/test/.nvm/versions/node/v22/bin")),
     ).toBe(false);
     expect(optedIn.trustedSafeBinDirs.has(path.resolve("./scripts"))).toBe(false);
+    expect(optedIn.trustedSafeBinDirs.has(path.join(process.cwd(), "scripts"))).toBe(false);
   });
 
   it("emits runtime warning when explicitly trusted dir is writable", async () => {
