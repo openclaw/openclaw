@@ -422,8 +422,9 @@ describe("POST /tools/invoke", () => {
         }),
       }),
     );
-    expect(auditMocks.appendGatewayToolAuditRecord).toHaveBeenCalledWith({
-      record: expect.objectContaining({
+    expect(auditMocks.appendGatewayToolAuditRecord).toHaveBeenCalledTimes(1);
+    expect(auditMocks.createGatewayToolAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
         tool: "agents_list",
         toolCallId: expect.any(String),
         ctx: expect.objectContaining({
@@ -431,7 +432,7 @@ describe("POST /tools/invoke", () => {
           sessionKey: "agent:main:main",
         }),
       }),
-    });
+    );
   });
 
   it("opts direct gateway tool invocation into gateway subagent binding", async () => {

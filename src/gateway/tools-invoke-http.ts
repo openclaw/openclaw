@@ -21,7 +21,6 @@ import {
   sendJson,
   sendMethodNotAllowed,
 } from "./http-common.js";
-import { appendGatewayToolAuditRecord, createGatewayToolAuditRecord } from "./tool-audit.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   getHeader,
@@ -29,6 +28,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { appendGatewayToolAuditRecord, createGatewayToolAuditRecord } from "./tool-audit.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
@@ -248,6 +248,12 @@ export async function handleToolsInvokeHttpRequest(
   // on this direct tool surface; SECURITY.md documents this as designed-as-is.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
+  const gatewayToolAudit = {
+    surface: "tools-invoke" as const,
+    sessionKey,
+    messageChannel: messageChannel ?? undefined,
+    model: null,
+  };
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
@@ -274,12 +280,7 @@ export async function handleToolsInvokeHttpRequest(
         agentId,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
-        gatewayToolAudit: {
-          surface: "tools-invoke",
-          sessionKey,
-          messageChannel: messageChannel ?? undefined,
-          model: null,
-        },
+        gatewayToolAudit,
       },
     });
     if (hookResult.blocked) {
@@ -293,12 +294,7 @@ export async function handleToolsInvokeHttpRequest(
       record: createGatewayToolAuditRecord({
         tool: toolName,
         args: hookResult.params,
-        ctx: {
-          surface: "tools-invoke",
-          sessionKey,
-          messageChannel: messageChannel ?? undefined,
-          model: null,
-        },
+        ctx: gatewayToolAudit,
         toolCallId,
       }),
     }).catch((err) => {

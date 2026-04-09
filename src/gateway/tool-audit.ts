@@ -41,7 +41,7 @@ export function sanitizeGatewayToolAuditArgs(args: unknown): unknown {
     const redacted = redactSensitiveText(raw, { mode: "tools" });
     return JSON.parse(redacted) as unknown;
   } catch {
-    return redactSensitiveText(String(args), { mode: "tools" });
+    return { _unserializable: true };
   }
 }
 
@@ -75,5 +75,10 @@ export async function appendGatewayToolAuditRecord(params: {
 }): Promise<void> {
   const auditPath = resolveGatewayToolAuditLogPath(params.env, params.homedir);
   await fs.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-  await fs.appendFile(auditPath, `${JSON.stringify(params.record)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.appendFile(auditPath, `${JSON.stringify(params.record)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await fs.chmod(path.dirname(auditPath), 0o700).catch(() => undefined);
+  await fs.chmod(auditPath, 0o600).catch(() => undefined);
 }
