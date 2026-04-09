@@ -94,10 +94,11 @@ export function createMatrixDraftStream(params: {
           accountId,
           msgtype: preview.msgtype,
           includeMentions: preview.includeMentions,
+          live: true,
         });
         currentEventId = result.messageId;
         lastSentText = preparedText.trimmedText;
-        log?.(`draft-stream: created message ${currentEventId}`);
+        log?.(`draft-stream: created message ${currentEventId} (MSC4357 live)`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
           client,
@@ -106,6 +107,7 @@ export function createMatrixDraftStream(params: {
           accountId,
           msgtype: preview.msgtype,
           includeMentions: preview.includeMentions,
+          live: true,
         });
         lastSentText = preparedText.trimmedText;
       }
@@ -137,6 +139,25 @@ export function createMatrixDraftStream(params: {
     // Flush before marking stopped so the loop can drain pending text.
     await loop.flush();
     stopped = true;
+    // Send a final edit without the MSC4357 live marker to signal that
+    // the stream is complete. Supporting clients will stop the streaming
+    // animation and display the final content.
+    if (currentEventId && lastSentText) {
+      try {
+        await editMessageMatrix(roomId, currentEventId, lastSentText, {
+          client,
+          cfg,
+          threadId,
+          accountId,
+          msgtype: preview.msgtype,
+          includeMentions: preview.includeMentions,
+          live: false,
+        });
+        log?.(`draft-stream: finalized ${currentEventId} (MSC4357 stream ended)`);
+      } catch (err) {
+        log?.(`draft-stream: finalize edit failed: ${String(err)}`);
+      }
+    }
     return currentEventId;
   };
 
