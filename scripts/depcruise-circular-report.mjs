@@ -4,7 +4,7 @@ import path from "node:path";
 
 const DEFAULT_OUTPUT_DIR = ".artifacts/dependency-cruiser";
 const TARGETS = ["src", "extensions", "scripts"];
-const TOP_SCOPE_COUNT = 15;
+const TOP_BOUNDARY_COUNT = 15;
 const TOP_DIRECTORY_COUNT = 20;
 const TOP_SCC_COUNT = 8;
 const TOP_PIE_COUNT = 10;
@@ -34,16 +34,16 @@ function isRuntimeDependency(dependency) {
   return !(dependency.dependencyTypes ?? []).includes("type-only");
 }
 
-function scopeOf(filePath) {
+function boundaryOf(filePath) {
   const segments = filePath.split("/");
   if (segments[0] === "extensions" && segments[1]) {
     return `extensions/${segments[1]}`;
   }
   if (segments[0] === "src" && segments[1] === "channels" && segments[2]) {
-    return `src/channels/${segments[2]}`;
+    return segments[2].includes(".") ? "src/channels" : `src/channels/${segments[2]}`;
   }
   if (segments[0] === "src" && segments[1] === "plugins" && segments[2]) {
-    return `src/plugins/${segments[2]}`;
+    return segments[2].includes(".") ? "src/plugins" : `src/plugins/${segments[2]}`;
   }
   if (segments[0] === "src" && segments[1]) {
     return `src/${segments[1]}`;
@@ -174,15 +174,16 @@ function findStronglyConnectedComponents(graph) {
 function summarizeSccs(components) {
   return components
     .map((modules, index) => {
-      const scopes = new Map();
+      const boundaries = new Map();
       for (const moduleName of modules) {
-        const scope = scopeOf(moduleName);
-        scopes.set(scope, (scopes.get(scope) ?? 0) + 1);
+        const boundary = boundaryOf(moduleName);
+        boundaries.set(boundary, (boundaries.get(boundary) ?? 0) + 1);
       }
       return {
         id: index + 1,
         moduleCount: modules.length,
-        scopes: summarizeCounts(scopes),
+        boundaryCount: boundaries.size,
+        boundaries: summarizeCounts(boundaries),
         modules: [...modules].toSorted((left, right) => left.localeCompare(right)),
       };
     })
@@ -196,16 +197,18 @@ function findSelfImportModules(graph) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function renderScopePie(scopeRows) {
-  const slices = scopeRows.slice(0, TOP_PIE_COUNT);
-  const otherCount = scopeRows.slice(TOP_PIE_COUNT).reduce((sum, row) => sum + row.moduleCount, 0);
+function renderBoundaryPie(boundaryRows) {
+  const slices = boundaryRows.slice(0, TOP_PIE_COUNT);
+  const otherCount = boundaryRows
+    .slice(TOP_PIE_COUNT)
+    .reduce((sum, row) => sum + row.moduleCount, 0);
   if (otherCount > 0) {
     slices.push({ name: "other", moduleCount: otherCount });
   }
   return [
     "```mermaid",
     "pie showData",
-    "  title Cycle modules by scope",
+    "  title Cross-boundary cycle modules by boundary",
     ...slices.map((row) => `  "${row.name}" : ${row.moduleCount}`),
     "```",
   ].join("\n");
@@ -216,12 +219,39 @@ function renderSccGraph(sccRows) {
   for (const scc of sccRows.slice(0, TOP_SCC_COUNT)) {
     const sccId = `scc_${scc.id}`;
     lines.push(`  ${sccId}["SCC ${scc.id}\\n${scc.moduleCount} modules"]`);
-    for (const [scopeIndex, scope] of scc.scopes.slice(0, 4).entries()) {
-      const scopeId = `${sccId}_scope_${scopeIndex + 1}`;
-      lines.push(`  ${scopeId}["${scope.name}\\n${scope.moduleCount} modules"]`);
-      lines.push(`  ${sccId} --> ${scopeId}`);
+    for (const [boundaryIndex, boundary] of scc.boundaries.slice(0, 4).entries()) {
+      const boundaryId = `${sccId}_boundary_${boundaryIndex + 1}`;
+      lines.push(`  ${boundaryId}["${boundary.name}\\n${boundary.moduleCount} modules"]`);
+      lines.push(`  ${sccId} --> ${boundaryId}`);
     }
   }
+  lines.push("```");
+  return lines.join("\n");
+}
+
+function renderBoundaryEdgeGraph(sccRows) {
+  const lines = ["```mermaid", "flowchart LR"];
+  const addedNodes = new Set();
+  let edgeIndex = 0;
+
+  for (const scc of sccRows.slice(0, TOP_SCC_COUNT)) {
+    const boundaries = scc.boundaries.map((boundary) => boundary.name);
+    for (const boundary of boundaries) {
+      const nodeId = boundary.replaceAll(/[^a-zA-Z0-9_]/g, "_");
+      if (addedNodes.has(nodeId)) continue;
+      addedNodes.add(nodeId);
+      lines.push(`  ${nodeId}["${boundary}"]`);
+    }
+    for (let index = 0; index < boundaries.length; index += 1) {
+      for (let nextIndex = index + 1; nextIndex < boundaries.length; nextIndex += 1) {
+        const left = boundaries[index].replaceAll(/[^a-zA-Z0-9_]/g, "_");
+        const right = boundaries[nextIndex].replaceAll(/[^a-zA-Z0-9_]/g, "_");
+        edgeIndex += 1;
+        lines.push(`  ${left} --- edge_${edgeIndex}["SCC ${scc.id}"] --- ${right}`);
+      }
+    }
+  }
+
   lines.push("```");
   return lines.join("\n");
 }
@@ -234,18 +264,27 @@ function formatCycleViolation(violation, index) {
   ].join("\n");
 }
 
+function boundariesForViolation(violation) {
+  const members = [violation.from, ...(violation.cycle ?? []).map((entry) => entry.name)];
+  return [...new Set(members.map((member) => boundaryOf(member)))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
 function main() {
   const { outputDir } = parseArgs(process.argv.slice(2));
   mkdirSync(outputDir, { recursive: true });
 
   const depcruiseBin = path.resolve(
     "node_modules",
-    ".bin",
-    process.platform === "win32" ? "depcruise.cmd" : "depcruise",
+    "dependency-cruiser",
+    "bin",
+    "dependency-cruise.mjs",
   );
   const depcruise = spawnSync(
-    depcruiseBin,
+    process.execPath,
     [
+      depcruiseBin,
       "--config",
       ".dependency-cruiser.mjs",
       "--output-type",
@@ -257,7 +296,6 @@ function main() {
     {
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 64,
-      shell: process.platform === "win32",
     },
   );
 
@@ -275,41 +313,72 @@ function main() {
   const { graph, runtimeEdgeCount } = buildGraph(depcruiseJson.modules ?? []);
   const selfImportModules = findSelfImportModules(graph);
   const selfImportModuleSet = new Set(selfImportModules);
-  const cyclicComponents = findStronglyConnectedComponents(graph).filter(
+  const allCyclicComponents = findStronglyConnectedComponents(graph).filter(
     // Treat self-imports as one-module SCCs so they still show up in the cycle summaries.
     (component) => component.length > 1 || selfImportModuleSet.has(component[0]),
   );
-  const sortedSccs = summarizeSccs(cyclicComponents);
+  const boundaryCrossingComponents = allCyclicComponents.filter((component) => {
+    const boundaries = new Set(component.map((moduleName) => boundaryOf(moduleName)));
+    return boundaries.size > 1;
+  });
+  const internalOnlyComponents = allCyclicComponents.filter((component) => {
+    const boundaries = new Set(component.map((moduleName) => boundaryOf(moduleName)));
+    return boundaries.size <= 1;
+  });
+  const boundaryCrossingViolations = cycleViolations.filter(
+    (violation) => new Set(boundariesForViolation(violation)).size > 1,
+  );
+  const internalOnlyViolations = cycleViolations.filter(
+    (violation) => new Set(boundariesForViolation(violation)).size <= 1,
+  );
+  const sortedSccs = summarizeSccs(boundaryCrossingComponents);
+  const internalOnlySccs = summarizeSccs(internalOnlyComponents);
   const cycleModules = new Set(sortedSccs.flatMap((component) => component.modules));
+  const internalOnlyModules = new Set(internalOnlySccs.flatMap((component) => component.modules));
 
-  const scopeCounts = new Map();
+  const boundaryCounts = new Map();
   const directoryCounts = new Map();
   for (const moduleName of cycleModules) {
-    const scope = scopeOf(moduleName);
+    const boundary = boundaryOf(moduleName);
     const directory = path.posix.dirname(moduleName);
-    scopeCounts.set(scope, (scopeCounts.get(scope) ?? 0) + 1);
+    boundaryCounts.set(boundary, (boundaryCounts.get(boundary) ?? 0) + 1);
     directoryCounts.set(directory, (directoryCounts.get(directory) ?? 0) + 1);
   }
+  const internalOnlyBoundaryCounts = new Map();
+  for (const moduleName of internalOnlyModules) {
+    const boundary = boundaryOf(moduleName);
+    internalOnlyBoundaryCounts.set(boundary, (internalOnlyBoundaryCounts.get(boundary) ?? 0) + 1);
+  }
 
-  const sortedScopes = summarizeCounts(scopeCounts);
+  const sortedBoundaries = summarizeCounts(boundaryCounts);
   const sortedDirectories = summarizeCounts(directoryCounts);
+  const sortedInternalOnlyBoundaries = summarizeCounts(internalOnlyBoundaryCounts);
   const largestSccSizes = sortedSccs.slice(0, 5).map((component) => component.moduleCount);
+  const hasExtensionBoundaryCrossingCycles = sortedBoundaries.some((row) =>
+    row.name.startsWith("extensions/"),
+  );
 
   const summary = {
-    cycleViolationCount: cycleViolations.length,
+    allCycleViolationCount: cycleViolations.length,
+    boundaryCrossingCycleViolationCount: boundaryCrossingViolations.length,
+    internalOnlyCycleViolationCount: internalOnlyViolations.length,
     cyclicComponentCount: sortedSccs.length,
+    internalOnlyCyclicComponentCount: internalOnlySccs.length,
     cycleModuleCount: cycleModules.size,
+    internalOnlyCycleModuleCount: internalOnlyModules.size,
     selfImportModuleCount: selfImportModules.length,
     selfImportModules,
     cruisedModuleCount: depcruiseJson.modules?.length ?? 0,
     runtimeEdgeCount,
     largestSccSizes,
-    scopes: sortedScopes,
+    boundaries: sortedBoundaries,
+    internalOnlyBoundaries: sortedInternalOnlyBoundaries,
     directories: sortedDirectories,
     sccs: sortedSccs.map((component) => ({
       id: component.id,
       moduleCount: component.moduleCount,
-      scopes: component.scopes,
+      boundaryCount: component.boundaryCount,
+      boundaries: component.boundaries,
       sampleModules: component.modules.slice(0, 8),
     })),
   };
@@ -318,31 +387,38 @@ function main() {
   writeFileSync(path.join(outputDir, "depcruise.stderr.txt"), depcruise.stderr ?? "", "utf8");
   writeFileSync(path.join(outputDir, "summary.json"), JSON.stringify(summary, null, 2), "utf8");
   writeFileSync(
-    path.join(outputDir, "cycle-violations.txt"),
-    cycleViolations.map(formatCycleViolation).join("\n\n"),
+    path.join(outputDir, "cycle-violations-cross-boundary.txt"),
+    boundaryCrossingViolations.map(formatCycleViolation).join("\n\n"),
+    "utf8",
+  );
+  writeFileSync(
+    path.join(outputDir, "cycle-violations-internal-only.txt"),
+    internalOnlyViolations.map(formatCycleViolation).join("\n\n"),
     "utf8",
   );
 
-  const fullScopeTable = renderTable(
-    ["Scope", "Modules In Cycles"],
-    sortedScopes.map((row) => [row.name, String(row.moduleCount)]),
+  const fullBoundaryTable = renderTable(
+    ["Boundary", "Modules In Cross-Boundary Cycles"],
+    sortedBoundaries.map((row) => [row.name, String(row.moduleCount)]),
   );
   const fullDirectoryTable = renderTable(
     ["Directory", "Modules In Cycles"],
     sortedDirectories.map((row) => [row.name, String(row.moduleCount)]),
   );
   const fullSccTable = renderTable(
-    ["SCC", "Modules", "Scopes", "Sample Modules"],
+    ["SCC", "Modules", "Boundaries", "Sample Modules"],
     sortedSccs.map((component) => [
       `SCC ${component.id}`,
       String(component.moduleCount),
-      component.scopes.map((scope) => `${scope.name} (${scope.moduleCount})`).join(", "),
+      component.boundaries
+        .map((boundary) => `${boundary.name} (${boundary.moduleCount})`)
+        .join(", "),
       component.modules.slice(0, 4).join("<br>"),
     ]),
   );
-  const fullSelfImportTable = renderTable(
-    ["Module", "Scope"],
-    selfImportModules.map((moduleName) => [moduleName, scopeOf(moduleName)]),
+  const fullInternalOnlyBoundaryTable = renderTable(
+    ["Boundary", "Modules In Internal-Only Cycles"],
+    sortedInternalOnlyBoundaries.map((row) => [row.name, String(row.moduleCount)]),
   );
 
   const reportLines = [
@@ -351,53 +427,50 @@ function main() {
     `- Targets: ${TARGETS.join(", ")}`,
     `- Cruised modules: ${depcruiseJson.modules?.length ?? 0}`,
     `- Runtime edges analyzed: ${runtimeEdgeCount}`,
-    `- dependency-cruiser cycle violations: ${cycleViolations.length}`,
-    `- Distinct cyclic strongly connected components: ${sortedSccs.length}`,
-    `- Modules participating in cycles: ${cycleModules.size}`,
-    `- Self-import cycles (super weird): ${selfImportModules.length}`,
-    `- Largest SCC sizes: ${largestSccSizes.join(", ") || "none"}`,
+    `- All dependency-cruiser cycle violations: ${cycleViolations.length}`,
+    `- Cross-boundary cycle violations: ${boundaryCrossingViolations.length}`,
+    `- Internal-only cycle violations hidden from this summary: ${internalOnlyViolations.length}`,
+    `- Distinct cross-boundary cyclic SCCs: ${sortedSccs.length}`,
+    `- Internal-only cyclic SCCs hidden from this summary: ${internalOnlySccs.length}`,
+    `- Modules participating in cross-boundary cycles: ${cycleModules.size}`,
+    `- Modules participating only in internal cycles: ${internalOnlyModules.size}`,
+    `- Self-import cycles (still weird, still internal): ${selfImportModules.length}`,
+    `- Largest cross-boundary SCC sizes: ${largestSccSizes.join(", ") || "none"}`,
     "",
-    "## Self-Import Cycles (Super Weird)",
+    "## What This Summary Counts",
     "",
-    "These are modules that resolve an import back to themselves. They are rare and usually worth investigating first.",
+    "This summary intentionally focuses on SCCs that cross a boundary bucket such as `extensions/xai`, `src/gateway`, or `src/cli`.",
     "",
-    ...(selfImportModules.length > 0
-      ? [
-          renderTable(
-            ["Module", "Scope"],
-            selfImportModules
-              .slice(0, TOP_SELF_IMPORT_COUNT)
-              .map((moduleName) => [moduleName, scopeOf(moduleName)]),
-          ),
+    "Intra-boundary cycles such as `extensions/xai/foo.ts <-> extensions/xai/bar.ts` are omitted from the headline tables because they do not usually collapse lazy-loading or package boundaries on their own.",
+    "",
+    ...(hasExtensionBoundaryCrossingCycles
+      ? []
+      : [
+          "No extension-to-core or extension-to-extension cross-boundary cycles were detected in this run.",
           "",
-          ...(selfImportModules.length > TOP_SELF_IMPORT_COUNT
-            ? [
-                "<details>",
-                "<summary>Full self-import list</summary>",
-                "",
-                fullSelfImportTable,
-                "",
-                "</details>",
-                "",
-              ]
-            : []),
-        ]
-      : ["None detected in this run.", ""]),
-    "## Scope Distribution",
+        ]),
     "",
-    renderScopePie(sortedScopes),
+    "## Boundary Distribution",
+    "",
+    renderBoundaryPie(sortedBoundaries),
     "",
     renderTable(
-      ["Scope", "Modules In Cycles"],
-      sortedScopes.slice(0, TOP_SCOPE_COUNT).map((row) => [row.name, String(row.moduleCount)]),
+      ["Boundary", "Modules In Cross-Boundary Cycles"],
+      sortedBoundaries
+        .slice(0, TOP_BOUNDARY_COUNT)
+        .map((row) => [row.name, String(row.moduleCount)]),
     ),
     "",
     "<details>",
-    "<summary>Full scope list</summary>",
+    "<summary>Full boundary list</summary>",
     "",
-    fullScopeTable,
+    fullBoundaryTable,
     "",
     "</details>",
+    "",
+    "## Boundary Relationship Graph",
+    "",
+    renderBoundaryEdgeGraph(sortedSccs),
     "",
     "## Exact Directories",
     "",
@@ -415,18 +488,20 @@ function main() {
     "",
     "</details>",
     "",
-    "## Largest SCCs",
+    "## Largest Cross-Boundary SCCs",
     "",
     renderSccGraph(sortedSccs),
     "",
     renderTable(
-      ["SCC", "Modules", "Scopes", "Sample Modules"],
+      ["SCC", "Modules", "Boundaries", "Sample Modules"],
       sortedSccs
         .slice(0, TOP_SCC_COUNT)
         .map((component) => [
           `SCC ${component.id}`,
           String(component.moduleCount),
-          component.scopes.map((scope) => `${scope.name} (${scope.moduleCount})`).join(", "),
+          component.boundaries
+            .map((boundary) => `${boundary.name} (${boundary.moduleCount})`)
+            .join(", "),
           component.modules.slice(0, 4).join("<br>"),
         ]),
     ),
@@ -438,39 +513,74 @@ function main() {
     "",
     "</details>",
     "",
+    "## Hidden Internal-Only Cycles",
+    "",
+    "These boundaries currently have cycles, but only within the same boundary bucket, so they are omitted from the main summary.",
+    "",
+    ...(sortedInternalOnlyBoundaries.length > 0
+      ? [
+          renderTable(
+            ["Boundary", "Modules In Internal-Only Cycles"],
+            sortedInternalOnlyBoundaries
+              .slice(0, TOP_BOUNDARY_COUNT)
+              .map((row) => [row.name, String(row.moduleCount)]),
+          ),
+          "",
+          ...(selfImportModules.length > 0
+            ? [
+                renderTable(
+                  ["Self-Import Module", "Boundary"],
+                  selfImportModules
+                    .slice(0, TOP_SELF_IMPORT_COUNT)
+                    .map((moduleName) => [moduleName, boundaryOf(moduleName)]),
+                ),
+                "",
+              ]
+            : []),
+          "<details>",
+          "<summary>Full internal-only boundary list</summary>",
+          "",
+          fullInternalOnlyBoundaryTable,
+          "",
+          "</details>",
+          "",
+        ]
+      : ["None detected in this run.", ""]),
+    "",
     "## Artifacts",
     "",
     `- Raw dependency-cruiser JSON: \`${path.posix.join(outputDir, "depcruise.json")}\``,
     `- Machine summary: \`${path.posix.join(outputDir, "summary.json")}\``,
-    `- Full cycle listing: \`${path.posix.join(outputDir, "cycle-violations.txt")}\``,
+    `- Cross-boundary cycle listing: \`${path.posix.join(outputDir, "cycle-violations-cross-boundary.txt")}\``,
+    `- Internal-only cycle listing: \`${path.posix.join(outputDir, "cycle-violations-internal-only.txt")}\``,
   ];
   writeFileSync(path.join(outputDir, "report.md"), `${reportLines.join("\n")}\n`, "utf8");
 
   const stepSummaryLines = [
     "## Circular Dependency Report",
     "",
-    `- Cycle violations: ${cycleViolations.length}`,
-    `- Distinct cyclic SCCs: ${sortedSccs.length}`,
-    `- Modules in cycles: ${cycleModules.size}`,
-    `- Self-import cycles (super weird): ${selfImportModules.length}`,
-    `- Largest SCC sizes: ${largestSccSizes.join(", ") || "none"}`,
+    `- Cross-boundary cycle violations: ${boundaryCrossingViolations.length}`,
+    `- Internal-only cycle violations hidden from this summary: ${internalOnlyViolations.length}`,
+    `- Distinct cross-boundary cyclic SCCs: ${sortedSccs.length}`,
+    `- Modules in cross-boundary cycles: ${cycleModules.size}`,
+    `- Internal-only cycle modules hidden from this summary: ${internalOnlyModules.size}`,
+    `- Self-import cycles (still weird, still internal): ${selfImportModules.length}`,
+    `- Largest cross-boundary SCC sizes: ${largestSccSizes.join(", ") || "none"}`,
     "",
-    ...(selfImportModules.length > 0
-      ? [
-          renderTable(
-            ["Module", "Scope"],
-            selfImportModules
-              .slice(0, TOP_SELF_IMPORT_COUNT)
-              .map((moduleName) => [moduleName, scopeOf(moduleName)]),
-          ),
-        ]
-      : ["No self-import cycles detected."]),
+    "The tables below intentionally omit cycles that stay inside a single boundary bucket.",
+    ...(hasExtensionBoundaryCrossingCycles
+      ? []
+      : [
+          "- No extension-to-core or extension-to-extension cross-boundary cycles were detected in this run.",
+        ]),
     "",
-    renderScopePie(sortedScopes),
+    renderBoundaryPie(sortedBoundaries),
     "",
     renderTable(
-      ["Scope", "Modules In Cycles"],
-      sortedScopes.slice(0, TOP_SCOPE_COUNT).map((row) => [row.name, String(row.moduleCount)]),
+      ["Boundary", "Modules In Cross-Boundary Cycles"],
+      sortedBoundaries
+        .slice(0, TOP_BOUNDARY_COUNT)
+        .map((row) => [row.name, String(row.moduleCount)]),
     ),
     "",
     renderTable(
@@ -479,13 +589,15 @@ function main() {
     ),
     "",
     renderTable(
-      ["SCC", "Modules", "Scopes"],
+      ["SCC", "Modules", "Boundaries"],
       sortedSccs
         .slice(0, TOP_SCC_COUNT)
         .map((component) => [
           `SCC ${component.id}`,
           String(component.moduleCount),
-          component.scopes.map((scope) => `${scope.name} (${scope.moduleCount})`).join(", "),
+          component.boundaries
+            .map((boundary) => `${boundary.name} (${boundary.moduleCount})`)
+            .join(", "),
         ]),
     ),
     "",
