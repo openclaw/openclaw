@@ -2,11 +2,13 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { basenameFromMediaSource, safeFileURLToPath } from "./local-file-access.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
-import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "./runtime-api.js";
+import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles } from "./send.js";
 
@@ -72,9 +74,9 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
     ? normalizedRoot
     : normalizedRoot + path.sep;
   if (process.platform === "win32") {
-    const candidateLower = normalizedCandidate.toLowerCase();
-    const rootLower = normalizedRoot.toLowerCase();
-    const rootWithSepLower = rootWithSep.toLowerCase();
+    const candidateLower = lowercasePreservingWhitespace(normalizedCandidate);
+    const rootLower = lowercasePreservingWhitespace(normalizedRoot);
+    const rootWithSepLower = lowercasePreservingWhitespace(rootWithSep);
     return candidateLower === rootLower || candidateLower.startsWith(rootWithSepLower);
   }
   return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootWithSep);
@@ -200,8 +202,8 @@ export async function sendBlueBubblesMedia(params: {
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.bluebubbles?.accounts?.[accountId]?.mediaMaxMb ??
-      cfg.channels?.bluebubbles?.mediaMaxMb,
+      (cfg.channels?.bluebubbles?.accounts?.[accountId] as { mediaMaxMb?: number } | undefined)
+        ?.mediaMaxMb ?? cfg.channels?.bluebubbles?.mediaMaxMb,
     accountId,
   });
   const mediaLocalRoots = resolveMediaLocalRoots({ cfg, accountId });

@@ -13,15 +13,15 @@ import {
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
-import {
-  sendDiscordComponentMessage,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendWebhookMessageDiscord,
-} from "./send.js";
+import { sendDiscordComponentMessage } from "./send.components.js";
+import { sendMessageDiscord, sendPollDiscord, sendWebhookMessageDiscord } from "./send.js";
 import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
@@ -60,7 +60,7 @@ function resolveDiscordOutboundTarget(params: {
   if (params.threadId == null) {
     return params.to;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return params.to;
   }
@@ -71,10 +71,10 @@ function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
   binding: ThreadBindingRecord;
 }): { username?: string; avatarUrl?: string } {
-  const usernameRaw = params.identity?.name?.trim();
-  const fallbackUsername = params.binding.label?.trim() || params.binding.agentId;
+  const usernameRaw = normalizeOptionalString(params.identity?.name);
+  const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
   const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
-  const avatarUrl = params.identity?.avatarUrl?.trim() || undefined;
+  const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
   return { username, avatarUrl };
 }
 
@@ -89,7 +89,7 @@ async function maybeSendDiscordWebhookText(params: {
   if (params.threadId == null) {
     return null;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   if (!threadId) {
     return null;
   }

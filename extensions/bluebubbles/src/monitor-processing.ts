@@ -3,6 +3,12 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
@@ -20,6 +26,25 @@ import {
   type NormalizedWebhookMessage,
   type NormalizedWebhookReaction,
 } from "./monitor-normalize.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  evictOldHistoryKeys,
+  evaluateSupplementalContextVisibility,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
+  resolveChannelContextVisibilityMode,
+  resolveDmGroupAccessWithLists,
+  resolveControlCommandGate,
+  stripMarkdown,
+  type HistoryEntry,
+} from "./monitor-processing-api.js";
 import {
   getShortIdForUuid,
   rememberBlueBubblesReplyCache,
@@ -39,23 +64,6 @@ import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-con
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import {
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  evictOldHistoryKeys,
-  logAckFailure,
-  logInboundDrop,
-  logTypingFailure,
-  mapAllowFromEntries,
-  readStoreAllowFromForDmPolicy,
-  recordPendingHistoryEntryIfEnabled,
-  resolveAckReaction,
-  resolveDmGroupAccessWithLists,
-  resolveControlCommandGate,
-  stripMarkdown,
-  type HistoryEntry,
-} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
@@ -88,13 +96,8 @@ type PendingOutboundMessageId = {
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
 
-function trimOrUndefined(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizeSnippet(value: string): string {
-  return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+  return normalizeOptionalLowercaseString(stripMarkdown(value).replace(/\s+/g, " ")) ?? "";
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
@@ -265,12 +268,12 @@ function rememberPendingOutboundMessageId(entry: {
     accountId: entry.accountId,
     sessionKey: entry.sessionKey,
     outboundTarget: entry.outboundTarget,
-    chatGuid: trimOrUndefined(entry.chatGuid),
-    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatGuid: normalizeOptionalString(entry.chatGuid),
+    chatIdentifier: normalizeOptionalString(entry.chatIdentifier),
     chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
     snippetRaw,
     snippetNorm,
-    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    isMediaSnippet: normalizeLowercaseStringOrEmpty(snippetRaw).startsWith("<media:"),
     createdAt: Date.now(),
   });
   return pendingOutboundMessageIdCounter;
@@ -287,14 +290,14 @@ function chatsMatch(
   left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
   right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
 ): boolean {
-  const leftGuid = trimOrUndefined(left.chatGuid);
-  const rightGuid = trimOrUndefined(right.chatGuid);
+  const leftGuid = normalizeOptionalString(left.chatGuid);
+  const rightGuid = normalizeOptionalString(right.chatGuid);
   if (leftGuid && rightGuid) {
     return leftGuid === rightGuid;
   }
 
-  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
-  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  const leftIdentifier = normalizeOptionalString(left.chatIdentifier);
+  const rightIdentifier = normalizeOptionalString(right.chatIdentifier);
   if (leftIdentifier && rightIdentifier) {
     return leftIdentifier === rightIdentifier;
   }
@@ -317,7 +320,7 @@ function consumePendingOutboundMessageId(params: {
 }): PendingOutboundMessageId | null {
   prunePendingOutboundMessageIds();
   const bodyNorm = normalizeSnippet(params.body);
-  const isMediaBody = params.body.trim().toLowerCase().startsWith("<media:");
+  const isMediaBody = normalizeLowercaseStringOrEmpty(params.body).startsWith("<media:");
 
   for (let i = 0; i < pendingOutboundMessageIds.length; i++) {
     const entry = pendingOutboundMessageIds[i];
@@ -393,7 +396,7 @@ function resolveBlueBubblesAckReaction(params: {
     normalizeBlueBubblesReactionInput(raw);
     return raw;
   } catch {
-    const key = raw.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(raw);
     if (!invalidAckReactions.has(key)) {
       invalidAckReactions.add(key);
       logVerbose(
@@ -729,7 +732,7 @@ export async function processMessage(
     chatId: message.chatId ?? undefined,
     chatIdentifier: message.chatIdentifier ?? undefined,
   });
-  const groupName = message.chatName?.trim() || undefined;
+  const groupName = normalizeOptionalString(message.chatName);
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
@@ -844,6 +847,11 @@ export async function processMessage(
     chatGuid,
     chatIdentifier,
   });
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: config,
+    channel: "bluebubbles",
+    accountId: account.accountId,
+  });
 
   // Mention gating for group chats (parity with iMessage/WhatsApp)
   const messageText = text;
@@ -927,7 +935,7 @@ export async function processMessage(
         chatGuid: message.chatGuid,
         chatId: message.chatId,
         chatIdentifier: message.chatIdentifier,
-        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
       });
       if (fetchedParticipants?.length) {
         message.participants = fetchedParticipants;
@@ -1048,11 +1056,45 @@ export async function processMessage(
   if (replyToId && !replyToShortId) {
     replyToShortId = getShortIdForUuid(replyToId);
   }
+  const hasReplyContext = Boolean(replyToId || replyToBody || replyToSender);
+  const replySenderAllowed =
+    !isGroup || effectiveGroupAllowFrom.length === 0
+      ? true
+      : replyToSender
+        ? isAllowedBlueBubblesSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender: replyToSender,
+            chatId: message.chatId ?? undefined,
+            chatGuid: message.chatGuid ?? undefined,
+            chatIdentifier: message.chatIdentifier ?? undefined,
+          })
+        : false;
+  const includeReplyContext =
+    !hasReplyContext ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: replySenderAllowed,
+    }).include;
+  if (hasReplyContext && !includeReplyContext && isGroup) {
+    logVerbose(
+      core,
+      runtime,
+      `bluebubbles: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
+    );
+  }
+  const visibleReplyToId = includeReplyContext ? replyToId : undefined;
+  const visibleReplyToShortId = includeReplyContext ? replyToShortId : undefined;
+  const visibleReplyToBody = includeReplyContext ? replyToBody : undefined;
+  const visibleReplyToSender = includeReplyContext ? replyToSender : undefined;
 
   // Use inline [[reply_to:N]] tag format
   // For tapbacks/reactions: append at end (e.g., "reacted with ❤️ [[reply_to:4]]")
   // For regular replies: prepend at start (e.g., "[[reply_to:4]] Awesome")
-  const replyTag = formatReplyTag({ replyToId, replyToShortId });
+  const replyTag = formatReplyTag({
+    replyToId: visibleReplyToId,
+    replyToShortId: visibleReplyToShortId,
+  });
   const baseBody = replyTag
     ? isTapbackMessage
       ? `${rawBody} ${replyTag}`
@@ -1063,11 +1105,11 @@ export async function processMessage(
   // The sender identity is included in the envelope body via formatInboundEnvelope.
   const senderLabel = message.senderName || `user:${message.senderId}`;
   const fromLabel = isGroup
-    ? `${message.chatName?.trim() || "Group"} id:${peerId}`
+    ? `${normalizeOptionalString(message.chatName) || "Group"} id:${peerId}`
     : senderLabel !== message.senderId
       ? `${senderLabel} id:${message.senderId}`
       : senderLabel;
-  const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
+  const groupSubject = isGroup ? normalizeOptionalString(message.chatName) : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
         participants: message.participants,
@@ -1106,7 +1148,7 @@ export async function processMessage(
           baseUrl,
           password,
           target: resolveTarget,
-          allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+          allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
     }
   }
@@ -1345,10 +1387,10 @@ export async function processMessage(
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
     // Use short ID for token savings (agent can use this to reference the message)
-    ReplyToId: replyToShortId || replyToId,
-    ReplyToIdFull: replyToId,
-    ReplyToBody: replyToBody,
-    ReplyToSender: replyToSender,
+    ReplyToId: visibleReplyToShortId || visibleReplyToId,
+    ReplyToIdFull: visibleReplyToId,
+    ReplyToBody: visibleReplyToBody,
+    ReplyToSender: visibleReplyToSender,
     GroupSubject: groupSubject,
     GroupMembers: groupMembers,
     SenderName: message.senderName || undefined,

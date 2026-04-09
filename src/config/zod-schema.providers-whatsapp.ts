@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -6,6 +7,7 @@ import {
 } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
+  ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -48,6 +50,7 @@ const WhatsAppSharedSchema = z.object({
   defaultTo: z.string().optional(),
   groupAllowFrom: z.array(z.string()).optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -73,9 +76,7 @@ function enforceOpenDmPolicyAllowFromStar(params: {
   if (params.dmPolicy !== "open") {
     return;
   }
-  const allow = (Array.isArray(params.allowFrom) ? params.allowFrom : [])
-    .map((v) => String(v).trim())
-    .filter(Boolean);
+  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
   if (allow.includes("*")) {
     return;
   }
@@ -96,9 +97,7 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   if (params.dmPolicy !== "allowlist") {
     return;
   }
-  const allow = (Array.isArray(params.allowFrom) ? params.allowFrom : [])
-    .map((v) => String(v).trim())
-    .filter(Boolean);
+  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
   if (allow.length > 0) {
     return;
   }

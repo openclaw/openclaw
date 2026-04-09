@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   isInterpreterLikeSafeBin,
   listInterpreterLikeSafeBins,
@@ -136,29 +136,29 @@ describe("exec safe-bin runtime policy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safe-bin-runtime-"));
-    try {
-      await fs.chmod(dir, 0o777);
-      const onWarning = vi.fn();
-      const policy = resolveExecSafeBinRuntimePolicy({
-        global: {
-          safeBinTrustedDirs: [dir],
-        },
-        onWarning,
-      });
+    await withTempDir({ prefix: "openclaw-safe-bin-runtime-" }, async (dir) => {
+      try {
+        await fs.chmod(dir, 0o777);
+        const onWarning = vi.fn();
+        const policy = resolveExecSafeBinRuntimePolicy({
+          global: {
+            safeBinTrustedDirs: [dir],
+          },
+          onWarning,
+        });
 
-      expect(policy.writableTrustedSafeBinDirs).toEqual([
-        {
-          dir: path.resolve(dir),
-          groupWritable: true,
-          worldWritable: true,
-        },
-      ]);
-      expect(onWarning).toHaveBeenCalledWith(expect.stringContaining(path.resolve(dir)));
-      expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("world-writable"));
-    } finally {
-      await fs.chmod(dir, 0o755).catch(() => undefined);
-      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-    }
+        expect(policy.writableTrustedSafeBinDirs).toEqual([
+          {
+            dir: path.resolve(dir),
+            groupWritable: true,
+            worldWritable: true,
+          },
+        ]);
+        expect(onWarning).toHaveBeenCalledWith(expect.stringContaining(path.resolve(dir)));
+        expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("world-writable"));
+      } finally {
+        await fs.chmod(dir, 0o755).catch(() => undefined);
+      }
+    });
   });
 });

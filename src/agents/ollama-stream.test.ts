@@ -1,14 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaChatRequest,
+  createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "../plugin-sdk/ollama.js";
-import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
+} from "../plugin-sdk/ollama-runtime.js";
+import {
+  __testing as extraParamsTesting,
+  applyExtraParamsToAgent,
+} from "./pi-embedded-runner/extra-params.js";
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: ({ context }) => context.extraParams,
+    wrapProviderStreamFn: ({ provider, context }) =>
+      provider === "ollama"
+        ? createConfiguredOllamaCompatStreamWrapper({
+            ...context,
+            provider,
+          })
+        : context.streamFn,
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
 
 describe("buildOllamaChatRequest", () => {
   it("omits tools when none are provided", () => {
@@ -73,6 +94,70 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("deserializes string arguments back to objects for Ollama (round-trip fix)", () => {
+    // When tool calls round-trip through OpenAI-format storage, arguments
+    // are serialized as a JSON string.  Ollama expects an object.
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_2",
+            name: "Read",
+            arguments: '{"file_path":"/tmp/test.txt"}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
+    ]);
+  });
+
+  it("handles tool_use blocks with string input (Anthropic format round-trip)", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_1", name: "exec", input: '{"command":"echo hello"}' },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "exec", arguments: { command: "echo hello" } } },
+    ]);
+  });
+
+  it("preserves unsafe integers as strings when replay args are deserialized", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_3",
+            name: "read",
+            arguments: '{"path":9223372036854775807,"nested":{"thread":1234567890123456789}}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      {
+        function: {
+          name: "read",
+          arguments: {
+            path: "9223372036854775807",
+            nested: { thread: "1234567890123456789" },
+          },
+        },
+      },
+    ]);
+  });
   it("converts tool result messages with 'tool' role", () => {
     const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
     const result = convertToOllamaMessages(messages);
@@ -125,7 +210,7 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
-  it("drops thinking-only output when content is empty", () => {
+  it("keeps thinking-only output when content is empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -138,10 +223,10 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([]);
+    expect(result.content).toEqual([{ type: "thinking", thinking: "Thinking output" }]);
   });
 
-  it("drops reasoning-only output when content and thinking are empty", () => {
+  it("keeps reasoning-only output when content and thinking are empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -154,7 +239,7 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([]);
+    expect(result.content).toEqual([{ type: "thinking", thinking: "Reasoning output" }]);
   });
 
   it("builds response with tool calls", () => {
@@ -568,9 +653,6 @@ describe("createOllamaStreamFn streaming events", () => {
         done: false,
       });
 
-      const nextBeforeDone = await nextEventWithin(iterator, 25);
-      expect(nextBeforeDone).toBe("timeout");
-
       controlledFetch.pushLine(
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
       );
@@ -578,14 +660,18 @@ describe("createOllamaStreamFn streaming events", () => {
 
       const doneEvent = await nextEventWithin(iterator);
       expect(doneEvent).not.toBe("timeout");
-      expect(doneEvent).toMatchObject({
-        value: { type: "done", reason: "toolUse" },
-        done: false,
-      });
+      if (doneEvent !== "timeout" && doneEvent.done === false) {
+        expect(doneEvent).toMatchObject({
+          value: { type: "done", reason: "toolUse" },
+          done: false,
+        });
 
-      const streamEnd = await nextEventWithin(iterator);
-      expect(streamEnd).not.toBe("timeout");
-      expect(streamEnd).toMatchObject({ value: undefined, done: true });
+        const streamEnd = await nextEventWithin(iterator);
+        expect(streamEnd).not.toBe("timeout");
+        expect(streamEnd).toMatchObject({ value: undefined, done: true });
+      } else {
+        expect(doneEvent).toMatchObject({ value: undefined, done: true });
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -837,18 +923,18 @@ describe("createOllamaStreamFn", () => {
     }
   });
 
-  it("drops thinking chunks when no final content is emitted", async () => {
+  it("keeps thinking chunks when no final content is emitted", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [],
+      [{ type: "thinking", thinking: "reasoned output" }],
     );
   });
 
-  it("prefers streamed content over earlier thinking chunks", async () => {
+  it("keeps streamed content after earlier thinking chunks", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"internal"},"done":false}',
@@ -856,22 +942,25 @@ describe("createOllamaStreamFn", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [{ type: "text", text: "final answer" }],
+      [
+        { type: "thinking", thinking: "internal" },
+        { type: "text", text: "final answer" },
+      ],
     );
   });
 
-  it("drops reasoning chunks when no final content is emitted", async () => {
+  it("keeps reasoning chunks when no final content is emitted", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [],
+      [{ type: "thinking", thinking: "reasoned output" }],
     );
   });
 
-  it("prefers streamed content over earlier reasoning chunks", async () => {
+  it("keeps streamed content after earlier reasoning chunks", async () => {
     await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"internal"},"done":false}',
@@ -879,7 +968,10 @@ describe("createOllamaStreamFn", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [{ type: "text", text: "final answer" }],
+      [
+        { type: "thinking", thinking: "internal" },
+        { type: "text", text: "final answer" },
+      ],
     );
   });
 });

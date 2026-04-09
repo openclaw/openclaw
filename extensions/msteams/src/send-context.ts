@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -9,6 +10,7 @@ import type {
   MSTeamsConversationStore,
   StoredConversationReference,
 } from "./conversation-store.js";
+import { formatUnknownError } from "./errors.js";
 import { resolveGraphChatId } from "./graph-upload.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -138,7 +140,9 @@ export async function resolveMSTeamsSendContext(params: {
   const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);
 
   // Determine conversation type from stored reference
-  const storedConversationType = ref.conversation?.conversationType?.toLowerCase() ?? "";
+  const storedConversationType = normalizeLowercaseStringOrEmpty(
+    ref.conversation?.conversationType ?? "",
+  );
   let conversationType: MSTeamsConversationType;
   if (storedConversationType === "personal") {
     conversationType = "personal";
@@ -190,7 +194,7 @@ export async function resolveMSTeamsSendContext(params: {
         "failed to resolve Graph chat ID; file uploads may fall back to Bot Framework ID",
         {
           conversationId,
-          error: String(err),
+          error: formatUnknownError(err),
         },
       );
       graphChatId = null;

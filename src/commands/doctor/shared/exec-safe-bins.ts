@@ -10,6 +10,7 @@ import {
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../../../infra/exec-safe-bin-trust.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
@@ -42,7 +43,7 @@ function normalizeConfiguredSafeBins(entries: unknown): string[] {
   return Array.from(
     new Set(
       entries
-        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
         .filter((entry) => entry.length > 0),
     ),
   ).toSorted();

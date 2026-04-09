@@ -153,6 +153,107 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("suppresses assistant streaming while deterministic exec approval delivery is pending", async () => {
+    let resolveToolResult: (() => void) | undefined;
+    const onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveToolResult = resolve;
+        }),
+    );
+    const onPartialReply = vi.fn();
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onPartialReply,
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      args: { command: "echo hi" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-pending",
+          approvalId: "12345678-1234-1234-1234-123456789012",
+          approvalSlug: "12345678",
+          host: "gateway",
+          command: "echo hi",
+        },
+      },
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "After tool");
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+    });
+    expect(onPartialReply).not.toHaveBeenCalled();
+
+    expect(resolveToolResult).toBeTypeOf("function");
+    resolveToolResult?.();
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          announceType: "music generation task",
+          taskLabel: "lobster boss theme",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/lobster-boss.mp3",
+          mediaUrls: ["/tmp/lobster-boss.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "Here it is.");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here it is." }],
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here it is.",
+        mediaUrls: ["/tmp/lobster-boss.mp3"],
+      }),
+    );
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {

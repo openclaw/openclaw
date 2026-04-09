@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  collectPublishablePluginPackages,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   parsePluginReleaseArgs,
@@ -10,6 +13,13 @@ import {
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
 import { bundledPluginFile, bundledPluginRoot } from "./helpers/bundled-plugin-paths.js";
+import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
 
 describe("parsePluginReleaseSelection", () => {
   it("returns an empty list for blank input", () => {
@@ -113,6 +123,38 @@ describe("collectPublishablePluginPackageErrors", () => {
       "package.json private must not be true.",
       'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
+    ]);
+  });
+});
+
+describe("collectPublishablePluginPackages", () => {
+  it("collects publishable npm plugins from extension package manifests", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.9",
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(collectPublishablePluginPackages(repoDir)).toEqual([
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        version: "2026.4.9",
+        channel: "stable",
+        publishTag: "latest",
+        installNpmSpec: "@openclaw/demo-plugin",
+      },
     ]);
   });
 });

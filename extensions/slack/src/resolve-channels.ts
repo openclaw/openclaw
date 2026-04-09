@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 import {
   collectSlackCursorItems,
@@ -81,11 +82,13 @@ function resolveByName(
   name: string,
   channels: SlackChannelLookup[],
 ): SlackChannelLookup | undefined {
-  const target = name.trim().toLowerCase();
+  const target = normalizeLowercaseStringOrEmpty(name);
   if (!target) {
     return undefined;
   }
-  const matches = channels.filter((channel) => channel.name.toLowerCase() === target);
+  const matches = channels.filter(
+    (channel) => normalizeLowercaseStringOrEmpty(channel.name) === target,
+  );
   if (matches.length === 0) {
     return undefined;
   }

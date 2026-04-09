@@ -1,12 +1,29 @@
-import { describe, expect, it } from "vitest";
-import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
-import {
-  GCP_VERTEX_CREDENTIALS_MARKER,
-  isKnownEnvApiKeyMarker,
-  isNonSecretApiKeyMarker,
-  NON_ENV_SECRETREF_MARKER,
-  resolveOAuthApiKeyMarker,
-} from "./model-auth-markers.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+let listKnownProviderEnvApiKeyNames: typeof import("./model-auth-env-vars.js").listKnownProviderEnvApiKeyNames;
+let GCP_VERTEX_CREDENTIALS_MARKER: typeof import("./model-auth-markers.js").GCP_VERTEX_CREDENTIALS_MARKER;
+let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvApiKeyMarker;
+let isNonSecretApiKeyMarker: typeof import("./model-auth-markers.js").isNonSecretApiKeyMarker;
+let resolveOAuthApiKeyMarker: typeof import("./model-auth-markers.js").resolveOAuthApiKeyMarker;
+
+async function loadMarkerModules() {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  vi.resetModules();
+  const [envVarsModule, markersModule] = await Promise.all([
+    import("./model-auth-env-vars.js"),
+    import("./model-auth-markers.js"),
+  ]);
+  listKnownProviderEnvApiKeyNames = envVarsModule.listKnownProviderEnvApiKeyNames;
+  GCP_VERTEX_CREDENTIALS_MARKER = markersModule.GCP_VERTEX_CREDENTIALS_MARKER;
+  NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
+  isKnownEnvApiKeyMarker = markersModule.isKnownEnvApiKeyMarker;
+  isNonSecretApiKeyMarker = markersModule.isNonSecretApiKeyMarker;
+  resolveOAuthApiKeyMarker = markersModule.resolveOAuthApiKeyMarker;
+}
+
+beforeAll(loadMarkerModules);
 
 describe("model auth markers", () => {
   it("recognizes explicit non-secret markers", () => {

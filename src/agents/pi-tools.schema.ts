@@ -2,6 +2,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
 import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
@@ -67,6 +68,66 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   return existing;
 }
 
+type FlattenableVariantKey = "anyOf" | "oneOf";
+type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
+
+function hasTopLevelArrayKeyword(
+  schemaRecord: Record<string, unknown>,
+  key: TopLevelConditionalKey,
+): boolean {
+  return Array.isArray(schemaRecord[key]);
+}
+
+function getFlattenableVariantKey(
+  schemaRecord: Record<string, unknown>,
+): FlattenableVariantKey | null {
+  if (hasTopLevelArrayKeyword(schemaRecord, "anyOf")) {
+    return "anyOf";
+  }
+  if (hasTopLevelArrayKeyword(schemaRecord, "oneOf")) {
+    return "oneOf";
+  }
+  return null;
+}
+
+function getTopLevelConditionalKey(
+  schemaRecord: Record<string, unknown>,
+): TopLevelConditionalKey | null {
+  return (
+    getFlattenableVariantKey(schemaRecord) ??
+    (hasTopLevelArrayKeyword(schemaRecord, "allOf") ? "allOf" : null)
+  );
+}
+
+function hasTopLevelObjectSchema(
+  schemaRecord: Record<string, unknown>,
+  conditionalKey: TopLevelConditionalKey | null,
+): boolean {
+  return "type" in schemaRecord && "properties" in schemaRecord && conditionalKey === null;
+}
+
+function isObjectLikeSchemaMissingType(
+  schemaRecord: Record<string, unknown>,
+  conditionalKey: TopLevelConditionalKey | null,
+): boolean {
+  return (
+    !("type" in schemaRecord) &&
+    (typeof schemaRecord.properties === "object" || Array.isArray(schemaRecord.required)) &&
+    conditionalKey === null
+  );
+}
+
+function isTypedSchemaMissingProperties(
+  schemaRecord: Record<string, unknown>,
+  conditionalKey: TopLevelConditionalKey | null,
+): boolean {
+  return "type" in schemaRecord && !("properties" in schemaRecord) && conditionalKey === null;
+}
+
+function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
+  return Object.keys(schemaRecord).length === 0;
+}
+
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
@@ -85,10 +146,10 @@ export function normalizeToolParameterSchema(
   // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const isGeminiProvider =
-    options?.modelProvider?.toLowerCase().includes("google") ||
-    options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
+    normalizedProvider.includes("google") || normalizedProvider.includes("gemini");
+  const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): unknown {
@@ -101,41 +162,34 @@ export function normalizeToolParameterSchema(
     return s;
   }
 
-  if (
-    "type" in schemaRecord &&
-    "properties" in schemaRecord &&
-    !Array.isArray(schemaRecord.anyOf)
-  ) {
+  const conditionalKey = getTopLevelConditionalKey(schemaRecord);
+  const flattenableVariantKey = getFlattenableVariantKey(schemaRecord);
+
+  if (hasTopLevelObjectSchema(schemaRecord, conditionalKey)) {
     return applyProviderCleaning(schemaRecord);
   }
 
-  if (
-    !("type" in schemaRecord) &&
-    (typeof schemaRecord.properties === "object" || Array.isArray(schemaRecord.required)) &&
-    !Array.isArray(schemaRecord.anyOf) &&
-    !Array.isArray(schemaRecord.oneOf)
-  ) {
+  if (isObjectLikeSchemaMissingType(schemaRecord, conditionalKey)) {
     return applyProviderCleaning({ ...schemaRecord, type: "object" });
   }
 
-  if (
-    "type" in schemaRecord &&
-    !("properties" in schemaRecord) &&
-    !Array.isArray(schemaRecord.anyOf) &&
-    !Array.isArray(schemaRecord.oneOf)
-  ) {
+  if (isTypedSchemaMissingProperties(schemaRecord, conditionalKey)) {
     return applyProviderCleaning({ ...schemaRecord, properties: {} });
   }
 
-  const variantKey = Array.isArray(schemaRecord.anyOf)
-    ? "anyOf"
-    : Array.isArray(schemaRecord.oneOf)
-      ? "oneOf"
-      : null;
-  if (!variantKey) {
+  if (!flattenableVariantKey) {
+    if (isTrulyEmptySchema(schemaRecord)) {
+      // Handle the proven MCP no-parameter case: a truly empty schema object.
+      return applyProviderCleaning({ type: "object", properties: {} });
+    }
+    if (conditionalKey === "allOf") {
+      // Top-level `allOf` is not safely flattenable with the same heuristics we
+      // use for unions. Keep it explicit rather than silently rewriting it.
+      return schema;
+    }
     return schema;
   }
-  const variants = schemaRecord[variantKey] as unknown[];
+  const variants = schemaRecord[flattenableVariantKey] as unknown[];
   const mergedProperties: Record<string, unknown> = {};
   const requiredCounts = new Map<string, number>();
   let objectVariants = 0;

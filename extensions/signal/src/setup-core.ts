@@ -4,24 +4,26 @@ import {
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  createTopLevelChannelDmPolicy,
+  DEFAULT_ACCOUNT_ID,
+  mergeAllowFromEntries,
   parseSetupEntriesAllowingWildcard,
+  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
-  type OpenClawConfig,
-  type WizardPrompter,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type ChannelSetupWizardTextInput,
+  type OpenClawConfig,
+  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "./accounts.js";
+  normalizeE164,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
@@ -31,7 +33,7 @@ const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
 
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return null;
   }
@@ -52,7 +54,7 @@ function isUuidLike(value: string): boolean {
 
 export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
   return parseSetupEntriesAllowingWildcard(raw, (entry) => {
-    if (entry.toLowerCase().startsWith("uuid:")) {
+    if (normalizeLowercaseStringOrEmpty(entry).startsWith("uuid:")) {
       const id = entry.slice("uuid:".length).trim();
       if (!id) {
         return { error: "Invalid uuid entry" };
@@ -120,14 +122,49 @@ export async function promptSignalAllowFrom(params: {
   });
 }
 
-export const signalDmPolicy = createTopLevelChannelDmPolicy({
+export const signalDmPolicy = {
   label: "Signal",
   channel,
   policyKey: "channels.signal.dmPolicy",
   allowFromKey: "channels.signal.allowFrom",
-  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.signal?.dmPolicy ?? "pairing",
+  resolveConfigKeys: (cfg: OpenClawConfig, accountId?: string) =>
+    (accountId ?? resolveDefaultSignalAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.signal.dmPolicy",
+          allowFromKey: "channels.signal.allowFrom",
+        },
+  getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
+    resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }).config
+      .dmPolicy ?? "pairing",
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: "pairing" | "allowlist" | "open" | "disabled",
+    accountId?: string,
+  ) =>
+    patchChannelConfigForAccount({
+      cfg,
+      channel,
+      accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
+      patch:
+        policy === "open"
+          ? {
+              dmPolicy: "open",
+              allowFrom: mergeAllowFromEntries(
+                resolveSignalAccount({
+                  cfg,
+                  accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
+                }).config.allowFrom,
+                ["*"],
+              ),
+            }
+          : { dmPolicy: policy },
+    }),
   promptAllowFrom: promptSignalAllowFrom,
-});
+};
 
 function resolveSignalCliPath(params: {
   cfg: OpenClawConfig;

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
 function okDispatchResponse(): BrowserDispatchResponse {
@@ -22,8 +22,8 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
@@ -49,7 +49,7 @@ vi.mock("./routes/dispatcher.js", () => ({
   })),
 }));
 
-let fetchBrowserJson: typeof import("./client-fetch.js").fetchBrowserJson;
+const { fetchBrowserJson } = await import("./client-fetch.js");
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -85,11 +85,6 @@ async function expectThrownBrowserFetchError(
 }
 
 describe("fetchBrowserJson loopback auth", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ fetchBrowserJson } = await import("./client-fetch.js"));
-  });
-
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "loopback-token");

@@ -18,10 +18,26 @@ if (shouldWarnCompatImport) {
 }
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export type {
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+} from "../plugins/memory-state.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
-export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "../context-engine/delegate.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export {
+  applyAuthProfileConfig,
+  buildApiKeyCredential,
+  upsertApiKeyProfile,
+  writeOAuthCredentials,
+  type ApiKeyStorageOptions,
+  type WriteOAuthCredentialsOptions,
+} from "../plugins/provider-auth-helpers.js";
 
 export { createAccountStatusSink } from "./channel-lifecycle.core.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
@@ -49,4 +65,4 @@ export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./bluebubbles-policy.js";
-export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
+export { collectBlueBubblesStatusIssues } from "./bluebubbles.js";

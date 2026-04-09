@@ -100,6 +100,7 @@ export function registerBrowserAgentActHookRoutes(
             await pw.clickViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               ref,
             });
           }
