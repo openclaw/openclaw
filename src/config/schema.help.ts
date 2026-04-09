@@ -878,6 +878,12 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+  "agents.defaults.memorySearch.inputType":
+    "Optional provider-specific `input_type` forwarded to memory embedding requests when a single shared label should apply to both query and document embeddings.",
+  "agents.defaults.memorySearch.queryInputType":
+    "Optional provider-specific `input_type` override for query-time memory embeddings only.",
+  "agents.defaults.memorySearch.documentInputType":
+    "Optional provider-specific `input_type` override for document and indexing memory embeddings only.",
   "agents.defaults.memorySearch.outputDimensionality":
     "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "agents.defaults.memorySearch.remote.baseUrl":

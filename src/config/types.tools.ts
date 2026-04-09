@@ -380,6 +380,9 @@ export type MemorySearchConfig = {
   fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.
