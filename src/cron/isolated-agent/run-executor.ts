@@ -1,3 +1,4 @@
+import type { FallbackAttempt } from "../../agents/model-fallback.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -55,6 +56,8 @@ export type CronExecutionResult = {
   configuredProvider: string;
   /** Model from config/model-selection before any fallback. Updated on LiveSessionModelSwitchError. */
   configuredModel: string;
+  /** Fallback attempts from the last runWithModelFallback call. */
+  fallbackAttempts: FallbackAttempt[];
   runStartedAt: number;
   runEndedAt: number;
   liveSelection: CronLiveSelection;
@@ -107,6 +110,7 @@ export function createCronPromptExecutor(params: {
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
+  let fallbackAttempts: FallbackAttempt[] = [];
   let runEndedAt = Date.now();
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
@@ -229,6 +233,7 @@ export function createCronPromptExecutor(params: {
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
+    fallbackAttempts = fallbackResult.attempts;
     params.liveSelection.provider = fallbackResult.provider;
     params.liveSelection.model = fallbackResult.model;
     runEndedAt = Date.now();
@@ -240,6 +245,7 @@ export function createCronPromptExecutor(params: {
       runResult,
       fallbackProvider,
       fallbackModel,
+      fallbackAttempts,
       runEndedAt,
       liveSelection: params.liveSelection,
     }),
@@ -362,7 +368,8 @@ export async function executeCronRun(params: {
     }
   }
 
-  let { runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState();
+  let { runResult, fallbackProvider, fallbackModel, fallbackAttempts, runEndedAt } =
+    executor.getState();
   if (!runResult) {
     throw new Error("cron isolated run returned no result");
   }
@@ -409,7 +416,8 @@ export async function executeCronRun(params: {
         "Use tools when needed, including sessions_spawn for parallel subtasks, wait for spawned subagents to finish, then return only the final summary.",
       ].join(" ");
       await executor.runPrompt(continuationPrompt);
-      ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
+      ({ runResult, fallbackProvider, fallbackModel, fallbackAttempts, runEndedAt } =
+        executor.getState());
     }
   }
 
@@ -420,6 +428,7 @@ export async function executeCronRun(params: {
     runResult,
     fallbackProvider,
     fallbackModel,
+    fallbackAttempts,
     configuredProvider,
     configuredModel,
     runStartedAt,
