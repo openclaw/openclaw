@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-support.js";
 import * as cdpModule from "./cdp.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
 
@@ -155,13 +156,9 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
-    await expect(openclaw.listTabs()).rejects.toThrow(/private\/internal\/special-use ip address/i);
-    await expect(openclaw.focusTab("T1")).rejects.toThrow(
-      /private\/internal\/special-use ip address/i,
-    );
-    await expect(openclaw.closeTab("T1")).rejects.toThrow(
-      /private\/internal\/special-use ip address/i,
-    );
+    await expect(openclaw.listTabs()).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    await expect(openclaw.focusTab("T1")).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    await expect(openclaw.closeTab("T1")).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

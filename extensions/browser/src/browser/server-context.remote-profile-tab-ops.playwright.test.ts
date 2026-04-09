@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import {
   installRemoteProfileTestLifecycle,
   loadRemoteProfileTestDeps,
@@ -172,13 +173,9 @@ describe("browser remote profile tab ops via Playwright", () => {
     const ctx = deps.createBrowserRouteContext({ getState: () => state });
     const remote = ctx.forProfile("remote");
 
-    await expect(remote.listTabs()).rejects.toThrow(/private\/internal\/special-use ip address/i);
-    await expect(remote.focusTab("T1")).rejects.toThrow(
-      /private\/internal\/special-use ip address/i,
-    );
-    await expect(remote.closeTab("T1")).rejects.toThrow(
-      /private\/internal\/special-use ip address/i,
-    );
+    await expect(remote.listTabs()).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    await expect(remote.focusTab("T1")).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    await expect(remote.closeTab("T1")).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
     expect(listPagesViaPlaywright).not.toHaveBeenCalled();
     expect(focusPageByTargetIdViaPlaywright).not.toHaveBeenCalled();
     expect(closePageByTargetIdViaPlaywright).not.toHaveBeenCalled();
