@@ -41,6 +41,14 @@ const QQBotSttSchema = z
   .strict()
   .optional();
 
+const QQBotStreamingSchema = z
+  .object({
+    /** "partial" (default) enables block streaming; "off" disables it. */
+    mode: z.enum(["off", "partial"]).default("partial"),
+  })
+  .strict()
+  .optional();
+
 const QQBotAccountSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -56,6 +64,7 @@ const QQBotAccountSchema = z
     urlDirectUpload: z.boolean().optional(),
     upgradeUrl: z.string().optional(),
     upgradeMode: z.enum(["doc", "hot-reload"]).optional(),
+    streaming: QQBotStreamingSchema,
   })
   .strict();
 
