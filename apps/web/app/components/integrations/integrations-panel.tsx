@@ -61,7 +61,7 @@ export function IntegrationsPanel({ embedded }: { embedded?: boolean } = {}) {
             <img
               src="/logo/composio.webp"
               alt="Composio"
-              className="h-10 w-auto"
+              className="h-10 w-auto dark:invert"
             />
           </a>
         </div>
