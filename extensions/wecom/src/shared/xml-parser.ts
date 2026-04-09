@@ -6,6 +6,7 @@
 import { XMLParser } from "fast-xml-parser";
 import type { WecomAgentInboundMessage } from "../types/index.js";
 
+import { toStr } from "./to-str.js";
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   trimValues: true,
@@ -27,14 +28,14 @@ export function parseXml(xml: string): WecomAgentInboundMessage {
  * Extracts the message type from XML
  */
 export function extractMsgType(msg: WecomAgentInboundMessage): string {
-  return String(msg.MsgType ?? "").toLowerCase();
+  return toStr(msg.MsgType).toLowerCase();
 }
 
 /**
  * Extracts the sender ID from XML
  */
 export function extractFromUser(msg: WecomAgentInboundMessage): string {
-  return String(msg.FromUserName ?? "");
+  return toStr(msg.FromUserName);
 }
 
 /**
@@ -53,7 +54,7 @@ export function extractFileName(msg: WecomAgentInboundMessage): string | undefin
     return raw.trim() || undefined;
   }
   if (typeof raw === "number" || typeof raw === "boolean" || typeof raw === "bigint") {
-    return String(raw);
+    return toStr(raw);
   }
   if (Array.isArray(raw)) {
     const merged = raw
@@ -76,8 +77,7 @@ export function extractFileName(msg: WecomAgentInboundMessage): string | undefin
       return text.trim();
     }
   }
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-  const s = String(raw);
+  const s = toStr(raw);
   return s.trim() || undefined;
 }
 
@@ -85,7 +85,7 @@ export function extractFileName(msg: WecomAgentInboundMessage): string | undefin
  * Extracts the receiver ID (CorpID) from XML
  */
 export function extractToUser(msg: WecomAgentInboundMessage): string {
-  return String(msg.ToUserName ?? "");
+  return toStr(msg.ToUserName);
 }
 
 /**
@@ -113,8 +113,7 @@ export function extractAgentId(msg: WecomAgentInboundMessage): string | number |
   if (typeof raw === "number") {
     return raw;
   }
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-  const asString = String(raw).trim();
+  const asString = toStr(raw).trim();
   return asString || undefined;
 }
 
@@ -132,7 +131,7 @@ export function extractContent(msg: WecomAgentInboundMessage): string {
       return value;
     }
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      return String(value);
+      return toStr(value);
     }
     if (Array.isArray(value)) {
       return value.map(asText).filter(Boolean).join("\n");
@@ -152,12 +151,10 @@ export function extractContent(msg: WecomAgentInboundMessage): string {
       try {
         return JSON.stringify(obj);
       } catch {
-        // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-        return String(value);
+        return toStr(value);
       }
     }
-    // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-    return String(value);
+    return toStr(value);
   };
 
   switch (msgType) {
@@ -200,7 +197,7 @@ export function extractMediaId(msg: WecomAgentInboundMessage): string | undefine
     return raw.trim() || undefined;
   }
   if (typeof raw === "number" || typeof raw === "boolean" || typeof raw === "bigint") {
-    return String(raw);
+    return toStr(raw);
   }
   if (Array.isArray(raw)) {
     const merged = raw
@@ -226,13 +223,11 @@ export function extractMediaId(msg: WecomAgentInboundMessage): string | undefine
       const s = JSON.stringify(obj);
       return s.trim() || undefined;
     } catch {
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-      const s = String(raw);
+      const s = toStr(raw);
       return s.trim() || undefined;
     }
   }
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-  const s = String(raw);
+  const s = toStr(raw);
   return s.trim() || undefined;
 }
 
@@ -252,7 +247,7 @@ export function extractMsgId(msg: WecomAgentInboundMessage): string | undefined 
     return raw.trim() || undefined;
   }
   if (typeof raw === "number" || typeof raw === "boolean" || typeof raw === "bigint") {
-    return String(raw);
+    return toStr(raw);
   }
   if (Array.isArray(raw)) {
     const merged = raw
@@ -278,12 +273,10 @@ export function extractMsgId(msg: WecomAgentInboundMessage): string | undefined 
       const s = JSON.stringify(obj);
       return s.trim() || undefined;
     } catch {
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-      const s = String(raw);
+      const s = toStr(raw);
       return s.trim() || undefined;
     }
   }
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-  const s = String(raw);
+  const s = toStr(raw);
   return s.trim() || undefined;
 }

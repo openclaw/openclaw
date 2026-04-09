@@ -1,6 +1,7 @@
 import type { Dispatcher } from "undici";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
+import { toStr } from "./shared/to-str.js";
 type ProxyDispatcher = Dispatcher;
 
 const proxyDispatchers = new Map<string, ProxyDispatcher>();
@@ -93,8 +94,7 @@ export async function wecomFetch(
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "TypeError" && err.message === "fetch failed") {
       const cause = (err as { cause?: unknown }).cause;
-      // oxlint-disable-next-line typescript/no-base-to-string -- cause is unknown; best-effort stringification
-      const causeStr = cause instanceof Error ? cause.message : String(cause ?? "");
+      const causeStr = cause instanceof Error ? cause.message : toStr(cause);
       console.error(
         `[wecom-http] fetch failed: ${input} (proxy: ${proxyUrl || "none"})${causeStr ? ` - cause: ${causeStr}` : ""}`,
       );

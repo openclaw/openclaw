@@ -18,6 +18,7 @@ import type { ResolvedAgentAccount } from "../types/index.js";
 import { handleAgentWebhook } from "./index.js";
 import { extractEncryptFromXml } from "./xml.js";
 
+import { toStr } from "../shared/to-str.js";
 // ============================================================================
 // Types
 // ============================================================================
@@ -105,7 +106,7 @@ async function readTextBody(
       resolve({ ok: true as const, value: Buffer.concat(chunks).toString("utf8") });
     });
     req.on("error", (err) => {
-      resolve({ ok: false as const, error: err instanceof Error ? err.message : String(err) });
+      resolve({ ok: false as const, error: err instanceof Error ? err.message : toStr(err) });
     });
   });
 }
@@ -114,8 +115,7 @@ function normalizeAgentIdValue(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-  const raw = String(value ?? "").trim();
+  const raw = toStr(value).trim();
   if (!raw) {
     return undefined;
   }

@@ -87,6 +87,12 @@ describe("production lint suppressions", () => {
       "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/slack/src/monitor/provider.ts|typescript/no-unnecessary-type-parameters|1",
+      "extensions/wecom/index.ts|typescript/no-explicit-any|1",
+      "extensions/wecom/src/channel.ts|typescript/no-explicit-any|2",
+      "extensions/wecom/src/mcp/interceptors/types.ts|typescript/no-redundant-type-constituents|1",
+      "extensions/wecom/src/message-sender.ts|typescript/no-redundant-type-constituents|1",
+      "extensions/wecom/src/openclaw-compat.ts|typescript/no-explicit-any|4",
+      "extensions/wecom/src/webhook/helpers.ts|no-control-regex|1",
       "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
       "scripts/lib/extension-package-boundary.ts|typescript/no-unnecessary-type-parameters|1",
       "scripts/lib/plugin-npm-release.ts|typescript/no-unnecessary-type-parameters|1",
@@ -137,6 +143,34 @@ describe("production lint suppressions", () => {
     );
 
     expect(anySuppressions).toEqual([
+      {
+        file: "extensions/wecom/index.ts",
+        rule: "typescript/no-explicit-any",
+      },
+      {
+        file: "extensions/wecom/src/channel.ts",
+        rule: "typescript/no-explicit-any",
+      },
+      {
+        file: "extensions/wecom/src/channel.ts",
+        rule: "typescript/no-explicit-any",
+      },
+      {
+        file: "extensions/wecom/src/openclaw-compat.ts",
+        rule: "typescript/no-explicit-any",
+      },
+      {
+        file: "extensions/wecom/src/openclaw-compat.ts",
+        rule: "typescript/no-explicit-any",
+      },
+      {
+        file: "extensions/wecom/src/openclaw-compat.ts",
+        rule: "typescript/no-explicit-any",
+      },
+      {
+        file: "extensions/wecom/src/openclaw-compat.ts",
+        rule: "typescript/no-explicit-any",
+      },
       {
         file: "src/agents/tools/common.ts",
         rule: "typescript/no-explicit-any",

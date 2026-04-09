@@ -12,6 +12,7 @@
 import { VALID_CARD_TYPES } from "./const.js";
 import type { ExtractedTemplateCard, TemplateCardExtractionResult } from "./interface.js";
 
+import { toStr } from "./shared/to-str.js";
 // ============================================================================
 // LLM Output Field Type Correction
 // ============================================================================
@@ -503,10 +504,8 @@ function transformVoteInteraction(
     question_key: questionKey,
     mode,
     option_list: clampedOptions.map((opt) => ({
-      // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-      id: String(opt.id ?? opt.value ?? `opt_${Math.random().toString(36).slice(2, 6)}`),
-      // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-      text: String(opt.text ?? opt.label ?? opt.name ?? ""),
+      id: toStr(opt.id ?? opt.value, `opt_${Math.random().toString(36).slice(2, 6)}`),
+      text: toStr(opt.text ?? opt.label ?? opt.name),
     })),
   };
   delete card.options;
@@ -597,13 +596,10 @@ function transformMultipleInteraction(
     const selectorOptions = ((sel.options as Array<Record<string, unknown>>) ?? []).slice(0, 10);
     return {
       question_key: generateKey(`sel_${idx}`),
-      // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-      title: String(sel.title ?? sel.label ?? `选择${idx + 1}`),
+      title: toStr(sel.title ?? sel.label, `选择${idx + 1}`),
       option_list: selectorOptions.map((opt) => ({
-        // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-        id: String(opt.id ?? opt.value ?? `opt_${Math.random().toString(36).slice(2, 6)}`),
-        // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-        text: String(opt.text ?? opt.label ?? opt.name ?? ""),
+        id: toStr(opt.id ?? opt.value, `opt_${Math.random().toString(36).slice(2, 6)}`),
+        text: toStr(opt.text ?? opt.label ?? opt.name),
       })),
     };
   });

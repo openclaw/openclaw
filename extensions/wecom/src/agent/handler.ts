@@ -29,6 +29,7 @@ import type { ResolvedAgentAccount } from "../types/index.js";
 import type { WecomAgentInboundMessage } from "../types/index.js";
 import { sendText, downloadMedia, uploadMedia, sendMedia as sendAgentMedia } from "./api-client.js";
 
+import { toStr } from "../shared/to-str.js";
 function resolveWecomMediaMaxBytes(config: OpenClawConfig): number {
   return (
     (config.channels?.wecom?.media?.maxBytes as number | undefined) ??
@@ -170,12 +171,12 @@ export function shouldProcessAgentInboundMessage(params: {
   fromUser: string;
   eventType?: string;
 }): AgentInboundProcessDecision {
-  const msgType = String(params.msgType ?? "")
+  const msgType = toStr(params.msgType)
     .trim()
     .toLowerCase();
-  const fromUser = String(params.fromUser ?? "").trim();
+  const fromUser = toStr(params.fromUser).trim();
   const normalizedFromUser = fromUser.toLowerCase();
-  const eventType = String(params.eventType ?? "")
+  const eventType = toStr(params.eventType)
     .trim()
     .toLowerCase();
 
@@ -210,8 +211,7 @@ function normalizeAgentId(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-  const raw = String(value ?? "").trim();
+  const raw = toStr(value).trim();
   if (!raw) {
     return undefined;
   }
@@ -277,8 +277,7 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
     const fromUser = extractFromUser(msg);
     const chatId = extractChatId(msg);
     const msgId = extractMsgId(msg);
-    // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-    const eventType = String((msg as Record<string, unknown>).Event ?? "")
+    const eventType = toStr((msg as Record<string, unknown>).Event)
       .trim()
       .toLowerCase();
     if (msgId) {
@@ -330,12 +329,12 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
       log,
       error,
     }).catch((err) => {
-      error?.(`[wecom-agent] process failed: ${String(err)}`);
+      error?.(`[wecom-agent] process failed: ${toStr(err)}`);
     });
 
     return true;
   } catch (err) {
-    error?.(`[wecom-agent] callback failed: ${String(err)}`);
+    error?.(`[wecom-agent] callback failed: ${toStr(err)}`);
     res.statusCode = 400;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end(`error - 回调处理失败${ERROR_HELP}`);
@@ -471,11 +470,11 @@ async function processAgentMessage(params: {
           `[wecom-agent] file preview: enabled=${looksText} finalContentLen=${finalContent.length} attachments=${attachments.length}`,
         );
       } catch (err) {
-        error?.(`[wecom-agent] media processing failed: ${String(err)}`);
+        error?.(`[wecom-agent] media processing failed: ${toStr(err)}`);
         finalContent = [
           content,
           "",
-          `媒体处理失败：${String(err)}`,
+          `媒体处理失败：${toStr(err)}`,
           `提示：可在 OpenClaw 配置中提高 channels.wecom.media.maxBytes（当前=${mediaMaxBytes}）`,
           `例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
         ].join("\n");
@@ -557,7 +556,7 @@ async function processAgentMessage(params: {
       await sendText({ agent, toUser: fromUser, chatId: undefined, text: prompt });
       log?.(`[wecom-agent] unauthorized command: replied via DM to ${fromUser}`);
     } catch (err: unknown) {
-      error?.(`[wecom-agent] unauthorized command reply failed: ${String(err)}`);
+      error?.(`[wecom-agent] unauthorized command reply failed: ${toStr(err)}`);
     }
     return;
   }
@@ -596,7 +595,7 @@ async function processAgentMessage(params: {
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
     onRecordError: (err: unknown) => {
-      error?.(`[wecom-agent] session record failed: ${String(err)}`);
+      error?.(`[wecom-agent] session record failed: ${toStr(err)}`);
     },
   });
 
@@ -655,9 +654,8 @@ async function processAgentMessage(params: {
           } catch (err: unknown) {
             const message =
               err instanceof Error
-                ? // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-                  `${err.message}${err.cause ? ` (cause: ${String(String(err.cause))})` : ""}`
-                : String(err);
+                ? `${err.message}${err.cause ? ` (cause: ${toStr(err.cause)})` : ""}`
+                : toStr(err);
             error?.(`[wecom-agent] reply failed: ${message}`);
           }
         }
@@ -738,9 +736,8 @@ async function processAgentMessage(params: {
           } catch (err: unknown) {
             const message =
               err instanceof Error
-                ? // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-                  `${err.message}${err.cause ? ` (cause: ${String(String(err.cause))})` : ""}`
-                : String(err);
+                ? `${err.message}${err.cause ? ` (cause: ${toStr(err.cause)})` : ""}`
+                : toStr(err);
             error?.(`[wecom-agent] media send failed: ${mediaPath}: ${message}`);
             // Fallback: send text notification to user
             try {
@@ -759,7 +756,7 @@ async function processAgentMessage(params: {
         // 如果既没有文本也没有媒体，不做任何事（防止空回复）
       },
       onError: (err: unknown, info: { kind: string }) => {
-        error?.(`[wecom-agent] ${info.kind} reply error: ${String(err)}`);
+        error?.(`[wecom-agent] ${info.kind} reply error: ${toStr(err)}`);
       },
     },
   });

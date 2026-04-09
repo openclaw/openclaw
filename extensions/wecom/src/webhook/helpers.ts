@@ -7,6 +7,7 @@
 
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { toStr } from "../shared/to-str.js";
 import type {
   StreamState,
   WecomWebhookTarget,
@@ -14,11 +15,9 @@ import type {
   WebhookInboundQuote,
 } from "./types.js";
 
-/* oxlint-disable typescript/no-explicit-any -- helper to safely access dynamic SDK properties on loosely-typed objects */
-function asRec(val: unknown): Record<string, any> {
-  return (val ?? {}) as Record<string, any>;
+function asRec(val: unknown): Record<string, unknown> {
+  return (val ?? {}) as Record<string, unknown>;
 }
-/* oxlint-enable typescript/no-explicit-any */
 
 // ============================================================================
 // Constants
@@ -209,7 +208,7 @@ export function computeTaskKey(
   if (!msgid) {
     return undefined;
   }
-  const aibotid = String(msg.aibotid ?? "unknown").trim() || "unknown";
+  const aibotid = toStr(msg.aibotid, "unknown").trim() || "unknown";
   return `bot:${target.account.accountId}:${aibotid}:${msgid}`;
 }
 
@@ -321,7 +320,7 @@ export async function processInboundMessage(
   const { decryptWecomMediaWithMeta } = await import("./media.js");
   const { resolveWecomEgressProxyUrl } = await import("../utils.js");
 
-  const msgtype = String(msg.msgtype ?? "").toLowerCase();
+  const msgtype = toStr(msg.msgtype).toLowerCase();
   const globalAesKey = target.account.encodingAESKey;
   const maxBytes = resolveWecomMediaMaxBytes(target.config);
   const proxyUrl = resolveWecomEgressProxyUrl(target.config);
@@ -353,9 +352,9 @@ export async function processInboundMessage(
           },
         };
       } catch (err) {
-        target.runtime.error?.(`Failed to decrypt inbound image: ${String(err)}`);
+        target.runtime.error?.(`Failed to decrypt inbound image: ${toStr(err)}`);
         target.runtime.error?.(
-          `图片解密失败: ${String(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
+          `图片解密失败: ${toStr(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
         );
         const errorMessage = formatDecryptError(err);
         return { body: `[image] (decryption failed: ${errorMessage})` };
@@ -391,7 +390,7 @@ export async function processInboundMessage(
         };
       } catch (err) {
         target.runtime.error?.(
-          `Failed to decrypt inbound file: ${String(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
+          `Failed to decrypt inbound file: ${toStr(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
         );
         const errorMessage = formatDecryptError(err);
         return { body: `[file] (decryption failed: ${errorMessage})` };
@@ -427,7 +426,7 @@ export async function processInboundMessage(
         };
       } catch (err) {
         target.runtime.error?.(
-          `Failed to decrypt inbound video: ${String(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
+          `Failed to decrypt inbound video: ${toStr(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
         );
         const errorMessage = formatDecryptError(err);
         return { body: `[video] (decryption failed: ${errorMessage})` };
@@ -443,9 +442,9 @@ export async function processInboundMessage(
       const bodyParts: string[] = [];
 
       for (const item of items) {
-        const t = String(item.msgtype ?? "").toLowerCase();
+        const t = toStr(item.msgtype).toLowerCase();
         if (t === "text") {
-          const content = String(item.text?.content ?? "").trim();
+          const content = toStr(item.text?.content).trim();
           if (content) {
             bodyParts.push(content);
           }
@@ -476,7 +475,7 @@ export async function processInboundMessage(
               bodyParts.push(`[${t}]`);
             } catch (err) {
               target.runtime.error?.(
-                `Failed to decrypt mixed ${t}: ${String(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
+                `Failed to decrypt mixed ${t}: ${toStr(err)}; 可调大 channels.wecom.media.maxBytes（当前=${maxBytes}）例如：openclaw config set channels.wecom.media.maxBytes ${50 * 1024 * 1024}`,
               );
               const errorMessage = formatDecryptError(err);
               bodyParts.push(`[${t}] (decryption failed: ${errorMessage})`);
@@ -506,13 +505,11 @@ export async function processInboundMessage(
 /** Format decryption error message (aligned with original format: message + cause) */
 function formatDecryptError(err: unknown): string {
   if (typeof err === "object" && err) {
-    // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-    const msg = (err as Record<string, unknown>).message ?? String(err);
+    const msg = toStr((err as Record<string, unknown>).message) || toStr(err);
     const cause = (err as Record<string, unknown>).cause;
-    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- best-effort stringification of dynamic SDK data
-    return cause ? `${msg} (cause: ${String(cause)})` : String(msg);
+    return cause ? `${toStr(msg)} (cause: ${toStr(cause)})` : toStr(msg);
   }
-  return String(err);
+  return toStr(err);
 }
 
 /** Extract explicit filename from message (aligned with original pickBotFileName) */
@@ -543,14 +540,13 @@ function pickBotFileName(
 }
 
 function resolveInlineFileName(input: unknown): string | undefined {
-  // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-  const raw = String(input ?? "").trim();
+  const raw = toStr(input).trim();
   return sanitizeInboundFilename(raw);
 }
 
 /** Sanitize filename (remove illegal characters) */
 function sanitizeInboundFilename(raw?: string): string | undefined {
-  const s = String(raw ?? "").trim();
+  const s = toStr(raw).trim();
   if (!s) {
     return undefined;
   }
@@ -565,7 +561,7 @@ function sanitizeInboundFilename(raw?: string): string | undefined {
 
 /** Extract filename from URL */
 function extractFileNameFromUrl(rawUrl?: string): string | undefined {
-  const s = String(rawUrl ?? "").trim();
+  const s = toStr(rawUrl).trim();
   if (!s) {
     return undefined;
   }
@@ -588,7 +584,7 @@ function hasLikelyExtension(name?: string): boolean {
 
 /** Normalize Content-Type */
 function normalizeContentType(raw?: string | null): string | undefined {
-  const normalized = String(raw ?? "")
+  const normalized = toStr(raw)
     .trim()
     .split(";")[0]
     ?.trim()
@@ -889,8 +885,7 @@ export function resolveWecomSenderUserId(msg: WebhookInboundMessage): string | u
     return direct;
   }
   const rawMsg = msg as unknown as Record<string, unknown>;
-  // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-  const legacy = String(rawMsg.fromuserid ?? rawMsg.from_userid ?? rawMsg.fromUserId ?? "").trim();
+  const legacy = toStr(rawMsg.fromuserid ?? rawMsg.from_userid ?? rawMsg.fromUserId).trim();
   return legacy || undefined;
 }
 
@@ -915,7 +910,7 @@ export function resolveWecomSenderUserId(msg: WebhookInboundMessage): string | u
  */
 export function buildInboundBody(msg: WebhookInboundMessage): string {
   let body = "";
-  const msgtype = String(msg.msgtype ?? "").toLowerCase();
+  const msgtype = toStr(msg.msgtype).toLowerCase();
 
   if (msgtype === "text") {
     body = msg.text?.content || "";
@@ -926,7 +921,7 @@ export function buildInboundBody(msg: WebhookInboundMessage): string {
     if (Array.isArray(items)) {
       body = items
         .map((item) => {
-          const t = String(item?.msgtype ?? "").toLowerCase();
+          const t = toStr(item?.msgtype).toLowerCase();
           if (t === "text") {
             return item?.text?.content || "";
           }

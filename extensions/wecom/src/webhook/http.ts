@@ -1,5 +1,6 @@
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
+import { toStr } from "../shared/to-str.js";
 const proxyDispatchers = new Map<string, ProxyAgent>();
 
 /**
@@ -75,8 +76,7 @@ export async function wecomFetch(
     headers.set("User-Agent", "OpenClaw/2.0 (WeCom-Agent)");
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const nextInit: any = {
+  const nextInit: Record<string, unknown> = {
     ...init,
     ...(signal ? { signal } : {}),
     ...(dispatcher ? { dispatcher } : {}),
@@ -92,8 +92,7 @@ export async function wecomFetch(
     if (err instanceof Error && err.name === "TypeError" && err.message === "fetch failed") {
       const cause = (err as unknown as Record<string, unknown>).cause;
       console.error(
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-        `[wecom-http] fetch failed: ${input} (proxy: ${proxyUrl || "none"})${cause ? ` - cause: ${String(cause)}` : ""}`,
+        `[wecom-http] fetch failed: ${input} (proxy: ${proxyUrl || "none"})${cause ? ` - cause: ${toStr(cause)}` : ""}`,
       );
     }
     throw err;

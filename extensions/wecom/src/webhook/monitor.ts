@@ -43,6 +43,7 @@ import {
 } from "./helpers.js";
 import { wecomFetch } from "./http.js";
 import type { WecomWebhookTarget, WebhookInboundMessage } from "./types.js";
+import { toStr } from "../shared/to-str.js";
 import {
   STREAM_MAX_BYTES,
   BOT_WINDOW_MS,
@@ -96,7 +97,7 @@ export async function handleInboundMessage(
   }
 
   const userid = msgFilterData?.senderUserId ?? "";
-  const chatType = String(message.chattype ?? "")
+  const chatType = toStr(message.chattype)
     .trim()
     .toLowerCase();
   const chatId = msgFilterData?.chatId ?? message.chatid ?? "";
@@ -148,7 +149,7 @@ export async function handleInboundMessage(
   if (status === "queued_new") {
     // Entered queue batch, return queue prompt
     target.runtime.log?.(
-      `[webhook] queue: 已进入下一批次 streamId=${streamId} msgid=${String(message.msgid ?? "")}`,
+      `[webhook] queue: 已进入下一批次 streamId=${streamId} msgid=${toStr(message.msgid)}`,
     );
     return buildStreamPlaceholderReply(streamId, queuedPlaceholder);
   }
@@ -168,7 +169,7 @@ export async function handleInboundMessage(
   }
   streamStore.addAckStreamForBatch({ batchStreamId: streamId, ackStreamId });
   target.runtime.log?.(
-    `[webhook] queue: 已合并排队（回执流）ackStreamId=${ackStreamId} mergedIntoStreamId=${streamId} msgid=${String(message.msgid ?? "")}`,
+    `[webhook] queue: 已合并排队（回执流）ackStreamId=${ackStreamId} mergedIntoStreamId=${streamId} msgid=${toStr(message.msgid)}`,
   );
   return buildStreamTextPlaceholderReply(ackStreamId, mergedQueuedPlaceholder);
 }
@@ -188,7 +189,7 @@ export async function handleStreamRefresh(
 ): Promise<Record<string, unknown> | null> {
   const state = getMonitorState();
 
-  const streamId = String(message.stream?.id ?? "").trim();
+  const streamId = toStr(message.stream?.id).trim();
   if (!streamId) {
     target.runtime.log?.("[webhook] stream_refresh 缺少 stream_id");
     return null;
@@ -279,8 +280,7 @@ export async function handleTemplateCardEvent(
 
   // 2. Parse card interaction data
   const cardEvent = message.event?.template_card_event;
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-  let interactionDesc = `[卡片交互] 按钮: ${String(cardEvent?.event_key ?? "unknown")}`;
+  let interactionDesc = `[卡片交互] 按钮: ${toStr(cardEvent?.event_key, "unknown")}`;
 
   // Parse selected items (selected_items.selected_item)
   const selectedItems = cardEvent?.selected_items as Record<string, unknown> | undefined;
@@ -289,11 +289,9 @@ export async function handleTemplateCardEvent(
     | undefined;
   if (Array.isArray(selectedItemList) && selectedItemList.length > 0) {
     const selects = selectedItemList.map((i) => {
-      // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-      const questionKey = String(i.question_key ?? "");
+      const questionKey = toStr(i.question_key);
       const optionIds = (i.option_ids as Record<string, unknown> | undefined)?.option_id;
-      // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-      const optionStr = Array.isArray(optionIds) ? optionIds.join(",") : String(optionIds ?? "");
+      const optionStr = Array.isArray(optionIds) ? optionIds.join(",") : toStr(optionIds);
       return `${questionKey}=${optionStr}`;
     });
     interactionDesc += ` 选择: ${selects.join("; ")}`;
@@ -301,13 +299,11 @@ export async function handleTemplateCardEvent(
 
   // Parse task ID
   if (cardEvent?.task_id) {
-    // oxlint-disable-next-line typescript/no-base-to-string -- best-effort stringification of dynamic SDK data
-    interactionDesc += ` (任务ID: ${String(cardEvent?.task_id)})`;
+    interactionDesc += ` (任务ID: ${toStr(cardEvent?.task_id)})`;
   }
 
   target.runtime.log?.(
-    // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-    `[webhook] template_card_event (event_key=${String(String(cardEvent?.event_key ?? "N/A"))}, msgid=${msgid ?? "N/A"})`,
+    `[webhook] template_card_event (event_key=${String(toStr(cardEvent?.event_key, "N/A"))}, msgid=${msgid ?? "N/A"})`,
   );
 
   // 3. Create stream and mark as started
@@ -335,7 +331,7 @@ export async function handleTemplateCardEvent(
     mergedContents: undefined,
     mergedMsgids: undefined,
   }).catch((err) => {
-    target.runtime.error?.(`[webhook] template_card_event Agent failed: ${String(err)}`);
+    target.runtime.error?.(`[webhook] template_card_event Agent failed: ${toStr(err)}`);
   });
 
   // 6. Return empty reply immediately (non-blocking, original returns {} encrypted)
@@ -386,7 +382,7 @@ export async function startAgentForStream(params: {
   const chatType = msg.chattype === "group" ? "group" : "direct";
   const chatId = msg.chattype === "group" ? msg.chatid?.trim() || "unknown" : userid;
   const taskKey = computeTaskKey(target, msg);
-  const aibotid = String(msg.aibotid ?? "").trim() || undefined;
+  const aibotid = toStr(msg.aibotid).trim() || undefined;
 
   // Update Stream status: record context info (userId, ChatType, etc.)
   streamStore.updateStream(streamId, (s) => {
@@ -447,7 +443,7 @@ export async function startAgentForStream(params: {
           const md5 = computeMd5(buf);
           loaded.push({ base64, md5, path: p });
         } catch (err) {
-          target.runtime.error?.(`[webhook] local-path: 读取图片失败 path=${p}: ${String(err)}`);
+          target.runtime.error?.(`[webhook] local-path: 读取图片失败 path=${p}: ${toStr(err)}`);
         }
       }
 
@@ -488,7 +484,7 @@ export async function startAgentForStream(params: {
             );
           } catch (err) {
             target.runtime.error?.(
-              `[webhook] local-path: Bot 主动推送图片失败（将依赖 stream_refresh 拉取）: ${String(err)}`,
+              `[webhook] local-path: Bot 主动推送图片失败（将依赖 stream_refresh 拉取）: ${toStr(err)}`,
             );
           }
         } else {
@@ -527,7 +523,7 @@ export async function startAgentForStream(params: {
         target.runtime.log?.(`[webhook] local-path: 图片读取失败后已推送兜底提示`);
       } catch (err) {
         target.runtime.error?.(
-          `[webhook] local-path: 图片读取失败后的兜底提示推送失败: ${String(err)}`,
+          `[webhook] local-path: 图片读取失败后的兜底提示推送失败: ${toStr(err)}`,
         );
       }
       // TODO: agent兜底这里需要有agent对象，待对齐lh版本
@@ -550,7 +546,7 @@ export async function startAgentForStream(params: {
             );
           } catch (err) {
             target.runtime.error?.(
-              `[webhook] local-path: 图片 Agent 私信兜底失败 path=${p}: ${String(err)}`,
+              `[webhook] local-path: 图片 Agent 私信兜底失败 path=${p}: ${toStr(err)}`,
             );
           }
         }
@@ -584,7 +580,7 @@ export async function startAgentForStream(params: {
         await sendBotFallbackPromptNow({ streamId, text: prompt });
         target.runtime.log?.(`[webhook] local-path: 文件兜底提示已推送`);
       } catch (err) {
-        target.runtime.error?.(`[webhook] local-path: 文件兜底提示推送失败: ${String(err)}`);
+        target.runtime.error?.(`[webhook] local-path: 文件兜底提示推送失败: ${toStr(err)}`);
       }
 
       if (!agentOk) {
@@ -622,7 +618,7 @@ export async function startAgentForStream(params: {
           );
         } catch (err) {
           target.runtime.error?.(
-            `[webhook] local-path: Agent 私信发送文件失败 path=${p}: ${String(err)}`,
+            `[webhook] local-path: Agent 私信发送文件失败 path=${p}: ${toStr(err)}`,
           );
         }
       }
@@ -650,7 +646,7 @@ export async function startAgentForStream(params: {
       mediaType = saved.contentType;
       target.runtime.log?.(`[webhook] 入站媒体已保存: ${mediaPath} (${mediaType})`);
     } catch (err) {
-      target.runtime.error?.(`[webhook] 入站媒体保存失败: ${String(err)}`);
+      target.runtime.error?.(`[webhook] 入站媒体保存失败: ${toStr(err)}`);
     }
   }
 
@@ -664,7 +660,7 @@ export async function startAgentForStream(params: {
         target.runtime.log?.(`[webhook] video: 第一帧提取成功 ${videoFirstFramePath}`);
       }
     } catch (err) {
-      target.runtime.log?.(`[webhook] video: 第一帧提取失败（ffmpeg 可能不可用）: ${String(err)}`);
+      target.runtime.log?.(`[webhook] video: 第一帧提取失败（ffmpeg 可能不可用）: ${toStr(err)}`);
     }
   }
 
@@ -748,7 +744,7 @@ export async function startAgentForStream(params: {
       target.runtime.log?.(`[webhook] authz: 未授权命令已提示用户 streamId=${streamId}`);
     } catch (err) {
       target.runtime.error?.(
-        `[webhook] authz: 未授权命令提示推送失败 streamId=${streamId}: ${String(err)}`,
+        `[webhook] authz: 未授权命令提示推送失败 streamId=${streamId}: ${toStr(err)}`,
       );
     }
     streamStore.onStreamFinished(streamId);
@@ -822,7 +818,7 @@ export async function startAgentForStream(params: {
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
     onRecordError: (err: unknown) => {
-      target.runtime.error?.(`[webhook] session meta update failed: ${String(err)}`);
+      target.runtime.error?.(`[webhook] session meta update failed: ${toStr(err)}`);
     },
   });
 
@@ -974,7 +970,7 @@ export async function startAgentForStream(params: {
                 current.images.push({ base64, md5 });
               } catch (err) {
                 target.runtime.error?.(
-                  `[webhook] media: 读取本机图片失败 path=${p}: ${String(err)}`,
+                  `[webhook] media: 读取本机图片失败 path=${p}: ${toStr(err)}`,
                 );
               }
             }
@@ -1015,7 +1011,7 @@ export async function startAgentForStream(params: {
             target.runtime.log?.(`[webhook] fallback(timeout): 群内提示已推送`);
           } catch (err) {
             target.runtime.error?.(
-              `[webhook] fallback(timeout) prompt push failed streamId=${streamId}: ${String(err)}`,
+              `[webhook] fallback(timeout) prompt push failed streamId=${streamId}: ${toStr(err)}`,
             );
           }
           return;
@@ -1108,7 +1104,7 @@ export async function startAgentForStream(params: {
                     s.agentMediaKeys = Array.from(new Set([...(s.agentMediaKeys ?? []), mPath]));
                   });
                 } catch (err) {
-                  target.runtime.error?.(`[webhook] Agent DM 媒体发送失败: ${String(err)}`);
+                  target.runtime.error?.(`[webhook] Agent DM 媒体发送失败: ${toStr(err)}`);
                 }
               }
 
@@ -1131,14 +1127,14 @@ export async function startAgentForStream(params: {
                   target.runtime.log?.(`[webhook] fallback(media): 群内提示已推送`);
                 } catch (err) {
                   target.runtime.error?.(
-                    `[webhook] fallback(media) prompt push failed streamId=${streamId}: ${String(err)}`,
+                    `[webhook] fallback(media) prompt push failed streamId=${streamId}: ${toStr(err)}`,
                   );
                 }
               }
               return;
             }
           } catch (err) {
-            target.runtime.error?.(`[webhook] 媒体处理失败: ${mPath}: ${String(err)}`);
+            target.runtime.error?.(`[webhook] 媒体处理失败: ${mPath}: ${toStr(err)}`);
             // Webhook 模式：Agent 私信兜底
             const agentOk = isAgentConfigured(target);
             const fallbackFilename = filename || mPath.split("/").pop() || "attachment";
@@ -1211,7 +1207,7 @@ export async function startAgentForStream(params: {
 
       onError: (err: unknown) => {
         target.runtime.error?.(
-          `[webhook] Agent reply failed (streamId=${streamId}): ${String(err)}`,
+          `[webhook] Agent reply failed (streamId=${streamId}): ${toStr(err)}`,
         );
       },
     },
@@ -1269,7 +1265,7 @@ export async function startAgentForStream(params: {
             `[webhook] fallback(timeout): Agent 私信发送完成 user=${finishedState.userId}`,
           );
         } catch (err) {
-          target.runtime.error?.(`[webhook] fallback(timeout): Agent 私信发送失败: ${String(err)}`);
+          target.runtime.error?.(`[webhook] fallback(timeout): Agent 私信发送失败: ${toStr(err)}`);
         }
       }
       streamStore.updateStream(streamId, (s) => {
@@ -1291,7 +1287,7 @@ export async function startAgentForStream(params: {
       );
     } catch (err) {
       target.runtime.error?.(
-        `[webhook] final stream push via response_url failed streamId=${streamId}: ${String(err)}`,
+        `[webhook] final stream push via response_url failed streamId=${streamId}: ${toStr(err)}`,
       );
     }
   }

@@ -24,6 +24,7 @@ import { getRegisteredTargets, getWebhookTargetsMap, parseWebhookPath } from "./
 import { hasActiveTargets } from "./target.js";
 import type { WecomWebhookTarget, WebhookInboundMessage } from "./types.js";
 
+import { toStr } from "../shared/to-str.js";
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -76,7 +77,7 @@ function shouldProcessBotInboundMessage(msg: WebhookInboundMessage): {
   }
 
   // In WeCom Bot callbacks, chattype is a flat field (not nested inside chat_info)
-  const chatType = String(msg.chattype ?? "")
+  const chatType = toStr(msg.chattype)
     .trim()
     .toLowerCase();
   if (chatType === "group") {
@@ -150,7 +151,7 @@ function readBody(
       resolve({ ok: true, value: raw });
     });
     req.on("error", (err) => {
-      resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      resolve({ ok: false, error: err instanceof Error ? err.message : toStr(err) });
     });
   });
 }
@@ -389,7 +390,7 @@ export async function handleWecomWebhookRequest(
       sendText(res, 200, plaintext);
     } catch (err) {
       target.runtime.log?.(
-        `[webhook] echostr 解密失败: ${err instanceof Error ? err.message : String(err)}`,
+        `[webhook] echostr 解密失败: ${err instanceof Error ? err.message : toStr(err)}`,
       );
       sendText(res, 403, "decryption failed");
     }
@@ -421,8 +422,7 @@ export async function handleWecomWebhookRequest(
     }
 
     // Support both encrypt / Encrypt casing (WeCom uses different field names in different scenarios)
-    // oxlint-disable-next-line typescript/no-base-to-string -- SDK response fields have unknown shape
-    const encrypt = String(body.encrypt ?? body.Encrypt ?? "");
+    const encrypt = toStr(body.encrypt ?? body.Encrypt);
 
     // POST body diagnostic logging (does not output encrypt content)
     console.log(
@@ -475,7 +475,7 @@ export async function handleWecomWebhookRequest(
       message = JSON.parse(plaintext) as WebhookInboundMessage;
     } catch (err) {
       target.runtime.log?.(
-        `[webhook] 消息解密失败: ${err instanceof Error ? err.message : String(err)}`,
+        `[webhook] 消息解密失败: ${err instanceof Error ? err.message : toStr(err)}`,
       );
       // Return 400 with a readable error message on decryption failure (consistent with original, helps troubleshoot EncodingAESKey config errors)
       sendText(res, 400, "decrypt failed - 解密失败，请检查 EncodingAESKey");
@@ -485,7 +485,7 @@ export async function handleWecomWebhookRequest(
     // aibotid identity verification (safety fallback: verify aibotid in message even if signature matches)
     const expectedBotIds = resolveBotIdentitySet(target);
     if (expectedBotIds.size > 0) {
-      const inboundAibotId = String(message.aibotid ?? "").trim();
+      const inboundAibotId = toStr(message.aibotid).trim();
       if (!inboundAibotId || !expectedBotIds.has(inboundAibotId)) {
         target.runtime.error?.(
           `[webhook] aibotid_mismatch: accountId=${target.account.accountId} expected=${Array.from(expectedBotIds).join(",")} actual=${inboundAibotId || "N/A"}`,
@@ -513,7 +513,7 @@ export async function handleWecomWebhookRequest(
       }
     } catch (err) {
       target.runtime.error?.(
-        `[webhook] 消息处理异常: ${err instanceof Error ? err.message : String(err)}`,
+        `[webhook] 消息处理异常: ${err instanceof Error ? err.message : toStr(err)}`,
       );
       // Aligned with original: return 200 to avoid WeCom retry storms, while providing a visible error text
       const errorResponse = {
@@ -553,7 +553,7 @@ async function dispatchMessage(
 
   // Event handling
   if (msgtype === "event") {
-    const eventType = String(message.event?.eventtype ?? "").toLowerCase();
+    const eventType = toStr(message.event?.eventtype).toLowerCase();
     if (eventType === "enter_chat") {
       return handleEnterChat(target, message);
     }
@@ -570,7 +570,7 @@ async function dispatchMessage(
     const filterResult = shouldProcessBotInboundMessage(message);
     if (!filterResult.shouldProcess) {
       target.runtime.log?.(
-        `[webhook] 消息过滤: msgtype=${msgtype} reason=${filterResult.reason} from=${resolveWecomSenderUserId(message) ?? "N/A"} chatType=${String(message.chattype ?? "N/A")}`,
+        `[webhook] 消息过滤: msgtype=${msgtype} reason=${filterResult.reason} from=${resolveWecomSenderUserId(message) ?? "N/A"} chatType=${toStr(message.chattype, "N/A")}`,
       );
       return null;
     }
