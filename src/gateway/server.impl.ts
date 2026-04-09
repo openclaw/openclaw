@@ -37,6 +37,10 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  ensureGlobalUndiciEnvProxyDispatcher,
+  ensureGlobalUndiciStreamTimeouts,
+} from "../infra/net/undici-global-dispatcher.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
@@ -593,6 +597,10 @@ export async function startGatewayServer(
     });
   }
   initSubagentRegistry();
+  // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
+  // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
+  ensureGlobalUndiciEnvProxyDispatcher();
+  ensureGlobalUndiciStreamTimeouts();
   const gatewayPluginConfigAtStart = minimalTestGateway
     ? cfgAtStart
     : applyPluginAutoEnable({
