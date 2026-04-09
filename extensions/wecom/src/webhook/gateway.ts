@@ -16,7 +16,7 @@ import { hasMultiAccounts } from "../accounts.js";
 import { DEFAULT_ACCOUNT_ID } from "../openclaw-compat.js";
 import { getWeComRuntime } from "../runtime.js";
 import { startAgentForStream } from "./monitor.js";
-import { monitorState, WebhookMonitorState } from "./state.js";
+import { monitorState } from "./state.js";
 import { registerWecomWebhookTarget, hasActiveTargets } from "./target.js";
 import type { WebhookGatewayContext, WecomWebhookTarget, PendingInbound } from "./types.js";
 import { PRUNE_INTERVAL_MS, WEBHOOK_PATHS } from "./types.js";
@@ -75,14 +75,8 @@ function resolveBotRegistrationPaths(params: { accountId: string; matrixMode: bo
 // Public API
 // ============================================================================
 
-/**
- * Get the current MonitorState instance (global singleton)
- *
- * Used by monitor.ts and other internal modules to access StreamStore and ActiveReplyStore.
- */
-export function getMonitorState(): WebhookMonitorState {
-  return monitorState;
-}
+// Re-export getMonitorState for backward compatibility (now defined in state.ts)
+export { getMonitorState } from "./state.js";
 
 /**
  * Start the Webhook Gateway

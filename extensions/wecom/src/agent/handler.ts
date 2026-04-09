@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { CHANNEL_ID, DEFAULT_MEDIA_MAX_MB } from "../const.js";
 import { processDynamicRouting } from "../dynamic-routing.js";
 import {
@@ -679,13 +680,21 @@ async function processAgentMessage(params: {
             let filename: string;
 
             if (isRemoteUrl) {
-              const res = await fetch(mediaPath, { signal: AbortSignal.timeout(30_000) });
-              if (!res.ok) {
-                throw new Error(`download failed: ${res.status}`);
+              const { response: res, release } = await fetchWithSsrFGuard({
+                url: mediaPath,
+                timeoutMs: 30_000,
+                auditContext: "wecom-agent-media-download",
+              });
+              try {
+                if (!res.ok) {
+                  throw new Error(`download failed: ${res.status}`);
+                }
+                buf = Buffer.from(await res.arrayBuffer());
+                contentType = res.headers.get("content-type") || "application/octet-stream";
+                filename = new URL(mediaPath).pathname.split("/").pop() || "media";
+              } finally {
+                await release();
               }
-              buf = Buffer.from(await res.arrayBuffer());
-              contentType = res.headers.get("content-type") || "application/octet-stream";
-              filename = new URL(mediaPath).pathname.split("/").pop() || "media";
             } else {
               const fs = await import("node:fs/promises");
               const pathModule = await import("node:path");

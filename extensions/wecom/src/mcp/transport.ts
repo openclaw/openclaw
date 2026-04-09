@@ -11,6 +11,7 @@
  */
 
 import { generateReqId } from "@wecom/aibot-node-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { MCP_GET_CONFIG_CMD, MCP_CONFIG_FETCH_TIMEOUT_MS } from "../const.js";
 import { getWeComWebSocket } from "../state-manager.js";
 import { withTimeout } from "../timeout.js";
@@ -235,13 +236,21 @@ async function sendRawJsonRpc(
   }
 
   let response: Response;
+  let releaseGuard: (() => Promise<void>) | undefined;
   try {
-    response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
+    const result = await fetchWithSsrFGuard({
+      url,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      },
+      timeoutMs: timeoutMs,
       signal: controller.signal,
+      auditContext: "wecom-mcp-rpc",
     });
+    response = result.response;
+    releaseGuard = result.release;
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new Error(`MCP 请求超时 (${timeoutMs}ms)`, { cause: err });
@@ -257,6 +266,7 @@ async function sendRawJsonRpc(
   const newSessionId = response.headers.get("mcp-session-id");
 
   if (!response.ok) {
+    await releaseGuard?.();
     throw new McpHttpError(
       response.status,
       `MCP HTTP 请求失败: ${response.status} ${response.statusText}`,
@@ -266,6 +276,7 @@ async function sendRawJsonRpc(
   // Streamable HTTP: notification responses may have no body (204 or content-length: 0)
   const contentLength = response.headers.get("content-length");
   if (response.status === 204 || contentLength === "0") {
+    await releaseGuard?.();
     return { response, rpcResult: undefined, newSessionId };
   }
 
@@ -273,11 +284,14 @@ async function sendRawJsonRpc(
 
   // Handle SSE streaming response
   if (contentType.includes("text/event-stream")) {
-    return { response, rpcResult: await parseSseResponse(response), newSessionId };
+    const rpcResult = await parseSseResponse(response);
+    await releaseGuard?.();
+    return { response, rpcResult, newSessionId };
   }
 
   // Plain JSON response — read text first to prevent JSON.parse error on empty content
   const text = await response.text();
+  await releaseGuard?.();
   if (!text.trim()) {
     return { response, rpcResult: undefined, newSessionId };
   }

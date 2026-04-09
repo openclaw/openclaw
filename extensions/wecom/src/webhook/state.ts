@@ -594,3 +594,12 @@ export class WebhookMonitorState {
  * 导出全局唯一的 MonitorState 实例，供整个应用共享状态。
  */
 export const monitorState = new WebhookMonitorState();
+
+/**
+ * Get the current MonitorState instance (global singleton)
+ *
+ * Used by monitor.ts and other internal modules to access StreamStore and ActiveReplyStore.
+ */
+export function getMonitorState(): WebhookMonitorState {
+  return monitorState;
+}

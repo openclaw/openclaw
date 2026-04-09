@@ -7,6 +7,7 @@
 
 import os from "node:os";
 import { pathToFileURL } from "node:url";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   sendText as sendAgentText,
   uploadMedia,
@@ -17,7 +18,6 @@ import {
   resolveWecomCommandAuthorization,
   buildWecomUnauthorizedCommandPrompt,
 } from "../shared/command-auth.js";
-import { getMonitorState } from "./gateway.js";
 import {
   truncateUtf8Bytes,
   appendDmContent,
@@ -42,6 +42,7 @@ import {
   buildStreamTextPlaceholderReply,
 } from "./helpers.js";
 import { wecomFetch } from "./http.js";
+import { getMonitorState } from "./state.js";
 import type { WecomWebhookTarget, WebhookInboundMessage } from "./types.js";
 import { toStr } from "../shared/to-str.js";
 import {
@@ -114,7 +115,9 @@ export async function handleInboundMessage(
     msgContent: msgContent ?? "",
     nonce,
     timestamp,
-    debounceMs: (target.account.config as unknown as Record<string, unknown>)?.debounceMs as number | undefined,
+    debounceMs: (target.account.config as unknown as Record<string, unknown>)?.debounceMs as
+      | number
+      | undefined,
   });
 
   const { streamId, status } = result;
@@ -137,7 +140,8 @@ export async function handleInboundMessage(
   });
 
   // Return different placeholder responses based on status (aligned with original status branch handling)
-  const defaultPlaceholder = (target.account.config as unknown as Record<string, unknown>)?.streamPlaceholderContent as string | undefined;
+  const defaultPlaceholder = (target.account.config as unknown as Record<string, unknown>)
+    ?.streamPlaceholderContent as string | undefined;
   const queuedPlaceholder = "已收到，已排队处理中...";
   const mergedQueuedPlaceholder = "已收到，已合并排队处理中...";
 
@@ -934,7 +938,9 @@ export async function startAgentForStream(params: {
                 const cardTitle = parsed.template_card.main_title?.title || "交互卡片";
                 const cardDesc = parsed.template_card.main_title?.desc || "";
                 const buttons =
-                  parsed.template_card.button_list?.map((b: Record<string, unknown>) => b.text).join(" / ") || "";
+                  parsed.template_card.button_list
+                    ?.map((b: Record<string, unknown>) => b.text)
+                    .join(" / ") || "";
                 text = `📋 **${cardTitle}**${cardDesc ? `\n${cardDesc}` : ""}${buttons ? `\n\n选项: ${buttons}` : ""}`;
               }
             }
@@ -1491,13 +1497,21 @@ async function agentDmMedia(params: {
 
   const looksLikeUrl = /^https?:\/\//i.test(mediaUrlOrPath);
   if (looksLikeUrl) {
-    const res = await fetch(mediaUrlOrPath, { signal: AbortSignal.timeout(30_000) });
-    if (!res.ok) {
-      throw new Error(`media download failed: ${res.status}`);
+    const { response: res, release } = await fetchWithSsrFGuard({
+      url: mediaUrlOrPath,
+      timeoutMs: 30_000,
+      auditContext: "wecom-webhook-media-download",
+    });
+    try {
+      if (!res.ok) {
+        throw new Error(`media download failed: ${res.status}`);
+      }
+      buffer = Buffer.from(await res.arrayBuffer());
+      inferredContentType =
+        inferredContentType || res.headers.get("content-type") || "application/octet-stream";
+    } finally {
+      await release();
     }
-    buffer = Buffer.from(await res.arrayBuffer());
-    inferredContentType =
-      inferredContentType || res.headers.get("content-type") || "application/octet-stream";
   } else {
     const fs = await import("node:fs/promises");
     const pathMod = await import("node:path");

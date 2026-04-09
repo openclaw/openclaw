@@ -1,5 +1,6 @@
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 import { type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   listWeComAccountIds,
   resolveWeComAccountMulti,
@@ -7,13 +8,13 @@ import {
   hasMultiAccounts,
 } from "./accounts.js";
 import type { WeComMultiAccountConfig } from "./accounts.js";
-import { wecomChannelConfigSchema } from "./config-schema.js";
 import {
   sendText as sendAgentText,
   sendMedia as sendAgentMedia,
   uploadMedia as uploadAgentMedia,
 } from "./agent/api-client.js";
 import { registerAgentWebhookTarget, deregisterAgentWebhookTarget } from "./agent/webhook.js";
+import { wecomChannelConfigSchema } from "./config-schema.js";
 import { CHANNEL_ID, TEXT_CHUNK_LIMIT, WEBHOOK_PATHS } from "./const.js";
 import { uploadAndSendMedia } from "./media-uploader.js";
 import { monitorWeComProvider } from "./monitor.js";
@@ -420,12 +421,19 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         let filename: string;
 
         if (/^https?:\/\//i.test(mediaUrl)) {
-          const mediaResponse = await fetch(mediaUrl);
-          if (!mediaResponse.ok) {
-            throw new Error(`download failed: ${mediaResponse.status}`);
+          const { response: mediaResponse, release: releaseMedia } = await fetchWithSsrFGuard({
+            url: mediaUrl,
+            auditContext: "wecom-agent-media-fallback",
+          });
+          try {
+            if (!mediaResponse.ok) {
+              throw new Error(`download failed: ${mediaResponse.status}`);
+            }
+            buffer = Buffer.from(await mediaResponse.arrayBuffer());
+            filename = mediaUrl.split("/").pop() || "file.bin";
+          } finally {
+            await releaseMedia();
           }
-          buffer = Buffer.from(await mediaResponse.arrayBuffer());
-          filename = mediaUrl.split("/").pop() || "file.bin";
         } else {
           // Local path — validate against allowed media roots
           const pathMod = await import("node:path");
@@ -460,16 +468,16 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           });
           if (text) {
             await sendAgentText({
-              agent,
-              toUser: target.touser,
-              toParty: target.toparty,
-              toTag: target.totag,
-              chatId: target.chatid,
-              text,
-            });
+                agent,
+                toUser: target.touser,
+                toParty: target.toparty,
+                toTag: target.totag,
+                chatId: target.chatid,
+                text,
+              });
+            }
+            return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
           }
-          return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
-        }
       } catch (err) {
         console.warn(`[wecom-outbound] Agent media upload failed, falling back to text:`, err);
       }
@@ -707,7 +715,12 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         const wecomConfig = (cfg.channels?.[CHANNEL_ID] ?? {}) as WeComMultiAccountConfig;
         const accountCfg = wecomConfig.accounts?.[resolvedAccountId];
 
-        if (accountCfg?.botId || accountCfg?.secret || accountCfg?.token || accountCfg?.encodingAESKey) {
+        if (
+          accountCfg?.botId ||
+          accountCfg?.secret ||
+          accountCfg?.token ||
+          accountCfg?.encodingAESKey
+        ) {
           const nextAccount = { ...accountCfg };
           delete nextAccount.botId;
           delete nextAccount.secret;

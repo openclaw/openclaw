@@ -18,35 +18,35 @@ export default defineBundledChannelEntry({
   description: "WeCom channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./src/channel.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "wecomPlugin",
   },
   runtime: {
-    specifier: "./src/runtime.js",
+    specifier: "./runtime-api.js",
     exportName: "setWeComRuntime",
   },
   configSchema: () => {
     return loadBundledEntryExportSync<
-      typeof import("./src/config-schema.js").wecomChannelConfigSchema
+      typeof import("./config-schema-api.js").wecomChannelConfigSchema
     >(import.meta.url, {
-      specifier: "./src/config-schema.js",
+      specifier: "./config-schema-api.js",
       exportName: "wecomChannelConfigSchema",
     });
   },
   registerFull(api: OpenClawPluginApi) {
     // Register wecom_mcp tool: invoke WeCom MCP Server via HTTP
     const createWeComMcpTool = loadBundledEntryExportSync<
-      typeof import("./src/mcp/index.js").createWeComMcpTool
+      typeof import("./mcp-api.js").createWeComMcpTool
     >(import.meta.url, {
-      specifier: "./src/mcp/index.js",
+      specifier: "./mcp-api.js",
       exportName: "createWeComMcpTool",
     });
     api.registerTool(createWeComMcpTool() as unknown as Parameters<typeof api.registerTool>[0], { name: "wecom_mcp" });
 
     const createWecomAgentWebhookHandler = loadBundledEntryExportSync<
-      typeof import("./src/agent/webhook.js").createWecomAgentWebhookHandler
+      typeof import("./agent-webhook-api.js").createWecomAgentWebhookHandler
     >(import.meta.url, {
-      specifier: "./src/agent/webhook.js",
+      specifier: "./agent-webhook-api.js",
       exportName: "createWecomAgentWebhookHandler",
     });
     const agentWebhookHandler = createWecomAgentWebhookHandler(api.runtime);
@@ -67,9 +67,9 @@ export default defineBundledChannelEntry({
 
     // Register bot webhook HTTP routes (prefix match)
     const handleWecomWebhookRequest = loadBundledEntryExportSync<
-      typeof import("./src/webhook/index.js").handleWecomWebhookRequest
+      typeof import("./webhook-api.js").handleWecomWebhookRequest
     >(import.meta.url, {
-      specifier: "./src/webhook/index.js",
+      specifier: "./webhook-api.js",
       exportName: "handleWecomWebhookRequest",
     });
     const webhookRoutes = [WEBHOOK_PATHS.BOT_PLUGIN, WEBHOOK_PATHS.BOT_ALT, WEBHOOK_PATHS.BOT];
