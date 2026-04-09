@@ -132,12 +132,8 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
     state.logsEntries = shouldReset
       ? entries
       : [...state.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);
-    if (typeof payload.cursor === "number") {
-      state.logsCursor = payload.cursor;
-    }
-    if (typeof payload.file === "string") {
-      state.logsFile = payload.file;
-    }
+    state.logsCursor = typeof payload.cursor === "number" ? payload.cursor : state.logsCursor;
+    state.logsFile = typeof payload.file === "string" ? payload.file : state.logsFile;
     state.logsTruncated = Boolean(payload.truncated);
     state.logsLastFetchAt = Date.now();
   } catch (err) {
