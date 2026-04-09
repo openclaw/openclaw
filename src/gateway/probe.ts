@@ -40,6 +40,90 @@ function formatProbeCloseError(close: GatewayProbeClose): string {
   return `gateway closed (${close.code}): ${close.reason}`;
 }
 
+// Device-required rejections happen when the CLI probe connects to a gateway
+// that is configured to require device pairing but the calling process has no
+// device identity (e.g. `openclaw status` invoked by a short-lived cron session,
+// or any script that re-spawns the CLI repeatedly). Each new CLI process starts
+// a fresh `GatewayClient` instance which cannot learn from prior rejections, so
+// upstream observers see tight bursts of `handshake failed cause=device-required`
+// log entries (see #63427 — 1127 rejections in 24h from 73 sessions).
+//
+// To dampen the log noise without changing the reachability semantics, track
+// recent device-required rejections per URL at module scope. Once a URL has
+// been rejected `DEVICE_REQUIRED_FAILURE_THRESHOLD` times within
+// `DEVICE_REQUIRED_TTL_MS`, subsequent probes for the same URL short-circuit
+// with a synthetic rejected result for the rest of the TTL window instead of
+// opening another WebSocket. Any successful probe clears the cache entry so a
+// newly-paired gateway reverts to normal probing immediately.
+const DEVICE_REQUIRED_FAILURE_THRESHOLD = 3;
+const DEVICE_REQUIRED_TTL_MS = 5 * 60_000;
+
+type DeviceRequiredCacheEntry = {
+  failures: number;
+  firstFailureAt: number;
+};
+
+const deviceRequiredCache = new Map<string, DeviceRequiredCacheEntry>();
+
+function isDeviceRequiredClose(close: GatewayProbeClose | null): boolean {
+  if (!close || close.code !== 1008) {
+    return false;
+  }
+  return close.reason.includes("device identity");
+}
+
+function noteDeviceRequiredFailure(url: string, now: number): void {
+  const existing = deviceRequiredCache.get(url);
+  if (!existing || now - existing.firstFailureAt >= DEVICE_REQUIRED_TTL_MS) {
+    deviceRequiredCache.set(url, { failures: 1, firstFailureAt: now });
+    return;
+  }
+  existing.failures += 1;
+}
+
+function shouldSkipProbeForDeviceRequired(url: string, now: number): boolean {
+  const entry = deviceRequiredCache.get(url);
+  if (!entry) {
+    return false;
+  }
+  if (now - entry.firstFailureAt >= DEVICE_REQUIRED_TTL_MS) {
+    deviceRequiredCache.delete(url);
+    return false;
+  }
+  return entry.failures >= DEVICE_REQUIRED_FAILURE_THRESHOLD;
+}
+
+function clearDeviceRequiredCacheFor(url: string): void {
+  deviceRequiredCache.delete(url);
+}
+
+/**
+ * Test-only helper: reset the module-level device-required cache so tests can
+ * run in isolation without carrying state across suites.
+ */
+export function __resetDeviceRequiredCacheForTests(): void {
+  deviceRequiredCache.clear();
+}
+
+function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
+  return {
+    ok: false,
+    url,
+    connectLatencyMs: null,
+    error:
+      "gateway closed (1008): device identity required (cached short-circuit — retry after pairing)",
+    close: {
+      code: 1008,
+      reason: "device identity required",
+      hint: "probe short-circuited by recent device-required rejections",
+    },
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+  };
+}
+
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
@@ -49,6 +133,11 @@ export async function probeGateway(opts: {
   tlsFingerprint?: string;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
+  // Short-circuit repeated device-required rejections to dampen CLI log noise
+  // when many short-lived processes probe the same unpaired gateway in a burst.
+  if (shouldSkipProbeForDeviceRequired(opts.url, startedAt)) {
+    return makeDeviceRequiredShortCircuitResult(opts.url);
+  }
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
@@ -98,6 +187,15 @@ export async function probeGateway(opts: {
       settled = true;
       clearProbeTimer();
       client.stop();
+      // Track device-required rejections at the probe boundary so bursts of
+      // CLI probes against an unpaired gateway stop spamming handshake-failed
+      // logs. Any successful probe clears the entry so a newly-paired gateway
+      // resumes normal probing immediately.
+      if (result.ok) {
+        clearDeviceRequiredCacheFor(opts.url);
+      } else if (isDeviceRequiredClose(result.close)) {
+        noteDeviceRequiredFailure(opts.url, Date.now());
+      }
       resolve({ url: opts.url, ...result });
     };
 
