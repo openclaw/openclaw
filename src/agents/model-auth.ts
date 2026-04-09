@@ -472,7 +472,7 @@ export async function resolveApiKeyForProvider(params: {
 
   const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
-    const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+    const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN") || envResolved.source === "gcloud adc"
       ? "oauth"
       : "api-key";
     const result: ResolvedProviderAuth = {
@@ -585,7 +585,7 @@ export function resolveModelAuthMode(
 
   const envKey = resolveEnvApiKey(resolved);
   if (envKey?.apiKey) {
-    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+    return envKey.source.includes("OAUTH_TOKEN") || envKey.source === "gcloud adc" ? "oauth" : "api-key";
   }
 
   if (hasUsableCustomProviderApiKey(cfg, resolved)) {

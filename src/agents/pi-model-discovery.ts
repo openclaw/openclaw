@@ -17,6 +17,7 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-au
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { installGoogleVertexAdcFix } from "./custom-api-registry.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
@@ -285,5 +286,6 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
+  installGoogleVertexAdcFix();
   return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
 }

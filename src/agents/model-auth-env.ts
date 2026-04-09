@@ -43,7 +43,7 @@ export function resolveEnvApiKey(
     if (!envKey) {
       return null;
     }
-    return { apiKey: envKey, source: "gcloud adc" };
+    return { apiKey: envKey === "<authenticated>" ? "" : envKey, source: "gcloud adc" };
   }
 
   const setupProvider = resolvePluginSetupProvider({
