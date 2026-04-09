@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
+import { buildBareSessionResetPrompt, buildBareSessionResetReply } from "./session-reset-prompt.js";
 
 describe("buildBareSessionResetPrompt", () => {
   it("includes the core session startup instruction", () => {
@@ -31,5 +31,9 @@ describe("buildBareSessionResetPrompt", () => {
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
     const prompt = buildBareSessionResetPrompt(undefined, nowMs);
     expect(prompt).toContain("Current time:");
+  });
+
+  it("returns a fixed fast reply for bare reset commands", () => {
+    expect(buildBareSessionResetReply()).toBe("新会话已开始。请直接告诉我你要做什么。");
   });
 });

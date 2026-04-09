@@ -27,6 +27,7 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
+      authToken?: string;
     };
   }
 
@@ -195,10 +196,44 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
+        expect(parsed.authToken).toBeUndefined();
         expect(parsed).not.toHaveProperty("assistantAgentId");
         expect(parsed).not.toHaveProperty("serverVersion");
       },
     });
+  });
+
+  it("includes auth token for loopback bootstrap requests", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token-123";
+    try {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            {
+              url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+              method: "GET",
+              socket: { remoteAddress: "127.0.0.1" },
+            } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: { agents: { defaults: { workspace: tmp } } },
+            },
+          );
+          expect(handled).toBe(true);
+          const parsed = parseBootstrapPayload(end);
+          expect(parsed.authToken).toBe("loopback-token-123");
+        },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
   });
 
   it("serves bootstrap config JSON under basePath", async () => {

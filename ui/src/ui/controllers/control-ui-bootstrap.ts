@@ -11,6 +11,8 @@ export type ControlUiBootstrapState = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  settings: { token: string; gatewayUrl: string };
+  applySettings: (next: ControlUiBootstrapState["settings"]) => void;
 };
 
 export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
@@ -42,6 +44,10 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     });
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
+    const authToken = typeof parsed.authToken === "string" ? parsed.authToken.trim() : "";
+    if (authToken && authToken !== state.settings.token) {
+      state.applySettings({ ...state.settings, token: authToken });
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

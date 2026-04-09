@@ -12,8 +12,9 @@ import {
 } from "./transcript.js";
 
 // Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.
+const generateSlugViaLLMMock = vi.fn().mockResolvedValue("simple-math");
 vi.mock("../../llm-slug-generator.js", () => ({
-  generateSlugViaLLM: vi.fn().mockResolvedValue("simple-math"),
+  generateSlugViaLLM: generateSlugViaLLMMock,
 }));
 
 let handler: typeof import("./handler.js").default;
@@ -186,6 +187,27 @@ function expectMemoryConversation(params: {
 }
 
 describe("session-memory hook", () => {
+  it("falls back quickly when llm slug generation exceeds the latency budget", async () => {
+    generateSlugViaLLMMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve("slow-slug"), 5_000);
+        }),
+    );
+    const startedAt = Date.now();
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Start a fresh session quickly" },
+      { role: "assistant", content: "Keep this reset fast" },
+    ]);
+
+    const { files } = await runNewWithPreviousSession({ sessionContent });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(files.length).toBe(1);
+    expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+    expect(elapsedMs).toBeLessThan(3_000);
+  });
+
   it("skips non-command events", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 

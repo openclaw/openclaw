@@ -77,15 +77,44 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const configured =
     typeof window !== "undefined" &&
     normalizeOptionalString(window.__OPENCLAW_CONTROL_UI_BASE_PATH__);
-  const basePath = configured
+  const inferredBasePath = configured
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);
+  const basePath =
+    inferredBasePath === "/web/control-ui" || inferredBasePath.startsWith("/web/control-ui/")
+      ? ""
+      : inferredBasePath;
   const pageUrl = `${proto}://${location.host}${basePath}`;
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   const effectiveUrl = `${proto}://${formatHostWithPort(location.hostname, "18789")}`;
   return { pageUrl, effectiveUrl };
+}
+
+function normalizeLegacyHostedControlUiGatewayUrl(rawGatewayUrl: string, defaultGatewayUrl: string) {
+  const normalized = normalizeOptionalString(rawGatewayUrl) ?? "";
+  if (!normalized || typeof location === "undefined") {
+    return normalized;
+  }
+  const hostedControlUiPath = "/web/control-ui";
+  if (
+    location.pathname !== hostedControlUiPath &&
+    !location.pathname.startsWith(`${hostedControlUiPath}/`)
+  ) {
+    return normalized;
+  }
+  try {
+    const parsed = new URL(normalized, `${location.protocol}//${location.host}/`);
+    const expectedProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+    if (parsed.host === location.host && parsed.protocol === expectedProtocol && normalizedPath === hostedControlUiPath) {
+      return defaultGatewayUrl;
+    }
+  } catch {
+    // Preserve the original value when it cannot be parsed.
+  }
+  return normalized;
 }
 
 function getSessionStorage(): Storage | null {
@@ -208,7 +237,10 @@ export function loadSettings(): UiSettings {
       return defaults;
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
-    const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
+    const parsedGatewayUrl = normalizeLegacyHostedControlUiGatewayUrl(
+      normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl,
+      defaults.gatewayUrl,
+    );
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const { theme, mode } = parseThemeSelection(

@@ -74,6 +74,16 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
+  it("treats /web/control-ui as a hosted page path, not a gateway websocket base path", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      pathname: "/web/control-ui",
+    });
+
+    expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl(""));
+  });
+
   it("skips node sessionStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());
@@ -139,6 +149,23 @@ describe("loadSettings default gateway URL derivation", () => {
       },
     });
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("migrates persisted hosted control-ui websocket URLs back to the gateway root", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      pathname: "/web/control-ui",
+    });
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://127.0.0.1:18789/web/control-ui",
+        sessionKey: "main",
+      }),
+    );
+
+    expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl(""));
   });
 
   it("loads the current-tab token from sessionStorage", async () => {

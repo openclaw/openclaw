@@ -49,6 +49,9 @@ export async function ensureLoaded(
     if (typeof job.enabled !== "boolean") {
       job.enabled = true;
     }
+    if (!job.state || typeof job.state !== "object") {
+      job.state = {};
+    }
   }
   state.store = {
     version: 1,

@@ -133,4 +133,49 @@ describe("cron service store seam coverage", () => {
     expect(raw.jobs[0]?.jobId).toBe("repro-stable-id");
     expect(raw.jobs[0]?.id).toBeUndefined();
   });
+
+  it("normalizes missing job state in memory for legacy stored jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "missing-state",
+              name: "missing state",
+              enabled: false,
+              createdAtMs: now - 60_000,
+              updatedAtMs: now - 60_000,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "ping" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await ensureLoaded(state);
+
+    expect(state.store?.jobs[0]?.state).toEqual({});
+  });
 });

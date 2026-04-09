@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
@@ -109,6 +110,43 @@ export type ControlUiAvatarResolution =
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
+
+function isLoopbackRemoteAddress(value: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "::ffff:127.0.0.1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function readGatewayTokenFromKeychain(): string {
+  try {
+    return execFileSync("/usr/bin/security", ["find-generic-password", "-w", "-s", "openclaw/gateway/token"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function resolveLocalControlUiAuthToken(req: IncomingMessage, config?: OpenClawConfig): string {
+  if (!isLoopbackRemoteAddress(req.socket?.remoteAddress)) {
+    return "";
+  }
+  const runtimeToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ?? "";
+  if (runtimeToken) {
+    return runtimeToken;
+  }
+  const configToken = config?.gateway?.auth?.token;
+  const normalizedConfigToken = typeof configToken === "string" ? configToken.trim() : "";
+  if (normalizedConfigToken && !/^\$\{[A-Z0-9_]+\}$/.test(normalizedConfigToken)) {
+    return normalizedConfigToken;
+  }
+  return readGatewayTokenFromKeychain();
+}
 
 function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("X-Frame-Options", "DENY");
@@ -365,6 +403,9 @@ export function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      ...(resolveLocalControlUiAuthToken(req, config)
+        ? { authToken: resolveLocalControlUiAuthToken(req, config) }
+        : {}),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

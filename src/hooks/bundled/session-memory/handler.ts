@@ -27,6 +27,7 @@ import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const DEFAULT_LLM_SLUG_TIMEOUT_MS = 1200;
 
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
@@ -152,8 +153,22 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        const slugTimeoutMs =
+          typeof hookConfig?.llmSlugTimeoutMs === "number" && hookConfig.llmSlugTimeoutMs >= 0
+            ? hookConfig.llmSlugTimeoutMs
+            : DEFAULT_LLM_SLUG_TIMEOUT_MS;
+        // /new should reply quickly; bound slug generation and fall back to timestamp.
+        slug = await Promise.race([
+          generateSlugViaLLM({ sessionContent, cfg }),
+          new Promise<null>((resolve) => {
+            setTimeout(() => {
+              log.debug("LLM slug generation timed out; using fallback slug", {
+                timeoutMs: slugTimeoutMs,
+              });
+              resolve(null);
+            }, slugTimeoutMs);
+          }),
+        ]);
         log.debug("Generated slug", { slug });
       }
     }

@@ -18,6 +18,7 @@ import {
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -40,6 +41,8 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  settings: UiSettings;
+  applySettings: (next: UiSettings) => void;
 };
 
 export function handleConnected(host: LifecycleHost) {
