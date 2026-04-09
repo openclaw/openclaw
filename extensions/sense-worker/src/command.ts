@@ -5,6 +5,8 @@ import { formatSlackDigestNotification } from "./slack-digest.js";
 
 const NEMOCLAW_HELP_TEXT = [
   "NemoClaw commands",
+  "Use /nemoclaw <command> to view current state.",
+  "Use /nemoclaw run <task> to launch a safe read-only check.",
   "- /nemoclaw digest      latest digest",
   "- /nemoclaw recent      recent jobs",
   "- /nemoclaw failures    recent failed jobs",
@@ -15,6 +17,7 @@ const NEMOCLAW_HELP_TEXT = [
 
 const NEMOCLAW_RUN_HELP_TEXT = [
   "NemoClaw run tasks",
+  "Run launches a safe read-only check.",
   "- /nemoclaw run health",
   "- /nemoclaw run digest",
   "- /nemoclaw run recent",

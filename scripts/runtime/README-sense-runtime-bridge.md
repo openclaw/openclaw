@@ -1077,6 +1077,16 @@ digest formatter; non-digest failures prefer `error`, then `summary`, then minim
 Slack commands (`digest`, `recent`, `failures`, `job <id>`, and `gpu`) as a short fixed-text guide
 so the first Slack surface can stay shallow and discoverable.
 
+Current operator-facing meaning is intentionally split:
+
+- `/nemoclaw ...`
+  - view current state
+  - inspect digest, jobs, recent lists, failures, and GPU/runtime status
+- `/nemoclaw run ...`
+  - launch a safe read-only check
+  - currently aliases only low-risk status-oriented tasks
+  - keeps room for future execute / probe / refresh style task entrypoints without changing the current read-only contract
+
 `/nemoclaw gpu` is the matching shallow runtime-status view: it reads the existing runner
 service state, worker health, model hint, and a thin busy/idle/unknown signal from recent
 runner journal activity. If any of that is unavailable, it still returns a minimal text

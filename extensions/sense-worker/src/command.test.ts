@@ -54,6 +54,8 @@ describe("handleNemoClawCommand", () => {
     await expect(handleNemoClawCommand("help")).resolves.toEqual({
       text:
         "NemoClaw commands\n" +
+        "Use /nemoclaw <command> to view current state.\n" +
+        "Use /nemoclaw run <task> to launch a safe read-only check.\n" +
         "- /nemoclaw digest      latest digest\n" +
         "- /nemoclaw recent      recent jobs\n" +
         "- /nemoclaw failures    recent failed jobs\n" +
@@ -304,6 +306,7 @@ describe("handleNemoClawCommand", () => {
     await expect(handleNemoClawCommand("run")).resolves.toEqual({
       text:
         "NemoClaw run tasks\n" +
+        "Run launches a safe read-only check.\n" +
         "- /nemoclaw run health\n" +
         "- /nemoclaw run digest\n" +
         "- /nemoclaw run recent\n" +
@@ -438,6 +441,8 @@ describe("handleNemoClawCommand", () => {
     await expect(handleNemoClawCommand("unknown")).resolves.toEqual({
       text:
         "NemoClaw commands\n" +
+        "Use /nemoclaw <command> to view current state.\n" +
+        "Use /nemoclaw run <task> to launch a safe read-only check.\n" +
         "- /nemoclaw digest      latest digest\n" +
         "- /nemoclaw recent      recent jobs\n" +
         "- /nemoclaw failures    recent failed jobs\n" +
@@ -452,6 +457,7 @@ describe("handleNemoClawCommand", () => {
     await expect(handleNemoClawCommand("run unknown")).resolves.toEqual({
       text:
         "NemoClaw run tasks\n" +
+        "Run launches a safe read-only check.\n" +
         "- /nemoclaw run health\n" +
         "- /nemoclaw run digest\n" +
         "- /nemoclaw run recent\n" +
