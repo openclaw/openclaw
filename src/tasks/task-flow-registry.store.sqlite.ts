@@ -227,6 +227,100 @@ function hasFlowRunsColumn(db: DatabaseSync, columnName: string): boolean {
   return rows.some((row) => row.name === columnName);
 }
 
+function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
+  db.exec(`BEGIN IMMEDIATE`);
+  try {
+    db.exec(`DROP TABLE IF EXISTS flow_runs__rebuilt;`);
+    db.exec(`
+      CREATE TABLE flow_runs__rebuilt (
+        flow_id TEXT PRIMARY KEY,
+        shape TEXT,
+        sync_mode TEXT NOT NULL DEFAULT 'managed',
+        owner_key TEXT NOT NULL,
+        requester_origin_json TEXT,
+        controller_id TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        current_step TEXT,
+        blocked_task_id TEXT,
+        blocked_summary TEXT,
+        state_json TEXT,
+        wait_json TEXT,
+        cancel_requested_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        ended_at INTEGER
+      );
+    `);
+    db.exec(`
+      INSERT INTO flow_runs__rebuilt (
+        flow_id,
+        shape,
+        sync_mode,
+        owner_key,
+        requester_origin_json,
+        controller_id,
+        revision,
+        status,
+        notify_policy,
+        goal,
+        current_step,
+        blocked_task_id,
+        blocked_summary,
+        state_json,
+        wait_json,
+        cancel_requested_at,
+        created_at,
+        updated_at,
+        ended_at
+      )
+      SELECT
+        flow_id,
+        shape,
+        COALESCE(NULLIF(sync_mode, ''), CASE
+          WHEN shape = 'single_task' THEN 'task_mirrored'
+          ELSE 'managed'
+        END),
+        COALESCE(NULLIF(trim(owner_key), ''), owner_session_key),
+        requester_origin_json,
+        CASE
+          WHEN controller_id IS NOT NULL AND trim(controller_id) <> '' THEN controller_id
+          WHEN COALESCE(NULLIF(sync_mode, ''), CASE
+            WHEN shape = 'single_task' THEN 'task_mirrored'
+            ELSE 'managed'
+          END) = 'managed' THEN 'core/legacy-restored'
+          ELSE NULL
+        END,
+        COALESCE(revision, 0),
+        status,
+        notify_policy,
+        goal,
+        current_step,
+        blocked_task_id,
+        blocked_summary,
+        state_json,
+        wait_json,
+        cancel_requested_at,
+        created_at,
+        updated_at,
+        ended_at
+      FROM flow_runs
+    `);
+    db.exec(`DROP TABLE flow_runs;`);
+    db.exec(`ALTER TABLE flow_runs__rebuilt RENAME TO flow_runs;`);
+    db.exec(`COMMIT`);
+  } catch (error) {
+    try {
+      db.exec(`ROLLBACK`);
+    } catch {
+      // Ignore rollback failures after partial transaction teardown.
+    }
+    throw error;
+  }
+}
+
 function ensureSchema(db: DatabaseSync) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS flow_runs (
@@ -312,6 +406,9 @@ function ensureSchema(db: DatabaseSync) {
   }
   if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
+  }
+  if (hasFlowRunsColumn(db, "owner_session_key")) {
+    rebuildLegacyFlowRunsTable(db);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);

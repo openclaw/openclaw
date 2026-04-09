@@ -1,6 +1,5 @@
-import { statSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
   getTaskFlowById,
@@ -185,6 +184,122 @@ describe("task-flow-registry store runtime", () => {
         stateJson: null,
         waitJson: null,
       });
+    });
+  });
+
+  it("rebuilds legacy flow_runs tables that still require owner_session_key", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      const registryDir = resolveTaskFlowRegistryDir(process.env);
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      mkdirSync(registryDir, { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(sqlitePath);
+      db.exec(`DROP TABLE IF EXISTS flow_runs;`);
+      db.exec(`
+        CREATE TABLE flow_runs (
+          flow_id TEXT PRIMARY KEY,
+          owner_session_key TEXT NOT NULL,
+          requester_origin_json TEXT,
+          status TEXT NOT NULL,
+          notify_policy TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          current_step TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          ended_at INTEGER
+        );
+      `);
+      db.prepare(`
+        INSERT INTO flow_runs (
+          flow_id,
+          owner_session_key,
+          requester_origin_json,
+          status,
+          notify_policy,
+          goal,
+          current_step,
+          created_at,
+          updated_at,
+          ended_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "legacy-flow",
+        "agent:test:legacy",
+        null,
+        "queued",
+        "done_only",
+        "Legacy flow",
+        null,
+        10,
+        10,
+        null,
+      );
+      db.close();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      expect(getTaskFlowById("legacy-flow")).toMatchObject({
+        flowId: "legacy-flow",
+        ownerKey: "agent:test:legacy",
+        syncMode: "managed",
+        controllerId: "core/legacy-restored",
+        revision: 0,
+        status: "queued",
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:test:fresh",
+        controllerId: "tests/migrated-flow",
+        goal: "Writable after migration",
+      });
+      expect(created).toMatchObject({
+        ownerKey: "agent:test:fresh",
+        syncMode: "managed",
+        controllerId: "tests/migrated-flow",
+      });
+
+      const verifyDb = new DatabaseSync(sqlitePath);
+      const columns = verifyDb.prepare(`PRAGMA table_info(flow_runs)`).all() as Array<{
+        name?: string;
+        notnull?: number;
+      }>;
+      expect(columns.some((column) => column.name === "owner_session_key")).toBe(false);
+      expect(columns.find((column) => column.name === "owner_key")?.notnull).toBe(1);
+      const rows = verifyDb
+        .prepare(`
+        SELECT flow_id, owner_key, sync_mode, controller_id, revision, status
+        FROM flow_runs
+        ORDER BY created_at ASC, flow_id ASC
+      `)
+        .all() as Array<{
+        flow_id: string;
+        owner_key: string;
+        sync_mode: string;
+        controller_id: string | null;
+        revision: number;
+        status: string;
+      }>;
+      verifyDb.close();
+
+      expect(rows).toEqual([
+        {
+          flow_id: "legacy-flow",
+          owner_key: "agent:test:legacy",
+          sync_mode: "managed",
+          controller_id: "core/legacy-restored",
+          revision: 0,
+          status: "queued",
+        },
+        {
+          flow_id: created.flowId,
+          owner_key: "agent:test:fresh",
+          sync_mode: "managed",
+          controller_id: "tests/migrated-flow",
+          revision: 0,
+          status: "queued",
+        },
+      ]);
     });
   });
 
