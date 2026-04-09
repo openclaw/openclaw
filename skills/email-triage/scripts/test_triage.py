@@ -48,6 +48,14 @@ class TestState(TestCase):
         loaded = triage.get_state()
         self.assertEqual(loaded, data)
 
+    def test_get_state_corrupt_json(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            f.write("{bad json")
+        state = triage.get_state()
+        self.assertEqual(state["cursor"]["last_ingested_id"], 0)
+        self.assertEqual(state["pending_attention"], [])
+
 
 class TestCheckDb(TestCase):
     def setUp(self):
@@ -147,6 +155,12 @@ class TestDismiss(TestCase):
 
     def test_dismiss_nonexistent(self):
         result = triage.dismiss(999)
+        self.assertFalse(result)
+        state = triage.get_state()
+        self.assertEqual(len(state["pending_attention"]), 2)
+
+    def test_dismiss_invalid_id(self):
+        result = triage.dismiss("not-a-number")
         self.assertFalse(result)
         state = triage.get_state()
         self.assertEqual(len(state["pending_attention"]), 2)

@@ -20,11 +20,17 @@ STATE_PATH = os.environ.get(
 )
 
 
+_DEFAULT_STATE = {"cursor": {"last_ingested_id": 0}, "pending_attention": []}
+
+
 def get_state():
     if os.path.exists(STATE_PATH):
-        with open(STATE_PATH, "r") as f:
-            return json.load(f)
-    return {"cursor": {"last_ingested_id": 0}, "pending_attention": []}
+        try:
+            with open(STATE_PATH, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return dict(_DEFAULT_STATE, pending_attention=[])
+    return dict(_DEFAULT_STATE, pending_attention=[])
 
 
 def save_state(state):
@@ -124,10 +130,14 @@ def pending():
 
 
 def dismiss(email_id):
+    try:
+        email_id = int(email_id)
+    except (ValueError, TypeError):
+        return False
     state = get_state()
     original_len = len(state["pending_attention"])
     state["pending_attention"] = [
-        item for item in state["pending_attention"] if item["id"] != int(email_id)
+        item for item in state["pending_attention"] if item["id"] != email_id
     ]
     if len(state["pending_attention"]) < original_len:
         save_state(state)
