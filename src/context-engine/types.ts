@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
 
@@ -83,7 +84,52 @@ export type TranscriptRewriteResult = {
 
 export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
 
+export type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
+
+export type ContextEnginePromptCacheUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+export type ContextEnginePromptCacheObservationChangeCode =
+  | "cacheRetention"
+  | "model"
+  | "streamStrategy"
+  | "systemPrompt"
+  | "tools"
+  | "transport";
+
+export type ContextEnginePromptCacheObservationChange = {
+  code: ContextEnginePromptCacheObservationChangeCode;
+  detail: string;
+};
+
+export type ContextEnginePromptCacheObservation = {
+  broke: boolean;
+  previousCacheRead?: number;
+  cacheRead?: number;
+  changes?: ContextEnginePromptCacheObservationChange[];
+};
+
+export type ContextEnginePromptCacheInfo = {
+  /** Runtime-resolved retention for the actual provider/model/request path. */
+  retention?: ContextEnginePromptCacheRetention;
+  /** Usage from the most recent API call, not accumulated retry/tool-loop totals. */
+  lastCallUsage?: ContextEnginePromptCacheUsage;
+  /** Result from the runtime's prompt-cache observability heuristic. */
+  observation?: ContextEnginePromptCacheObservation;
+  /** Last known cache-touch timestamp from runtime-managed cache-TTL bookkeeping. */
+  lastCacheTouchAt?: number;
+  /** Known cache expiry time when the runtime can source it confidently. */
+  expiresAt?: number;
+};
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /** Optional prompt-cache telemetry for cache-aware engines. */
+  promptCache?: ContextEnginePromptCacheInfo;
   /**
    * Safe transcript rewrite helper implemented by the runtime.
    *
@@ -180,6 +226,10 @@ export interface ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** Tool names available for this run so engines can align prompt guidance with runtime tool access. */
+    availableTools?: Set<string>;
+    /** Active memory citation mode when engines want to mirror memory prompt guidance. */
+    citationsMode?: MemoryCitationsMode;
     /** Current model identifier (e.g. "claude-opus-4", "gpt-4o", "qwen2.5-7b").
      *  Allows context engine plugins to adapt formatting per model. */
     model?: string;

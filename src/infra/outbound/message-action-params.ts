@@ -311,12 +311,11 @@ export async function hydrateAttachmentParamsForAction(params: {
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  const shouldHydrateBlueBubblesUploadFile =
-    params.action === "upload-file" && params.channel === "bluebubbles";
+  const shouldHydrateUploadFile = params.action === "upload-file";
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
-    !shouldHydrateBlueBubblesUploadFile
+    !shouldHydrateUploadFile
   ) {
     return;
   }
@@ -327,8 +326,7 @@ export async function hydrateAttachmentParamsForAction(params: {
     args: params.args,
     dryRun: params.dryRun,
     mediaPolicy: params.mediaPolicy,
-    allowMessageCaptionFallback:
-      params.action === "sendAttachment" || shouldHydrateBlueBubblesUploadFile,
+    allowMessageCaptionFallback: params.action === "sendAttachment" || shouldHydrateUploadFile,
   });
 }
 

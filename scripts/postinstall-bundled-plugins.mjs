@@ -1,19 +1,22 @@
 #!/usr/bin/env node
-// Runs after `npm i -g` to restore bundled extension runtime deps.
+// Runs after install to restore bundled extension runtime deps.
 // Installed builds can lazy-load bundled plugin code through root dist chunks,
 // so runtime dependencies declared in dist/extensions/*/package.json must also
-// resolve from the package root node_modules after a global install.
-// This script is a no-op outside of a global npm install context.
-import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+// resolve from the package root node_modules. Source checkouts resolve bundled
+// plugin deps from the workspace root, so stale plugin-local node_modules must
+// not linger under extensions/* and shadow the root graph.
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
+const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -96,20 +99,87 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
 export function createNestedNpmInstallEnv(env = process.env) {
   const nextEnv = { ...env };
   delete nextEnv.npm_config_global;
+  delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
 }
 
-export function runBundledPluginPostinstall(params = {}) {
-  const env = params.env ?? process.env;
-  if (env.npm_config_global !== "true") {
+export function isSourceCheckoutRoot(params) {
+  const pathExists = params.existsSync ?? existsSync;
+  return (
+    pathExists(join(params.packageRoot, ".git")) &&
+    pathExists(join(params.packageRoot, "src")) &&
+    pathExists(join(params.packageRoot, "extensions"))
+  );
+}
+
+export function pruneBundledPluginSourceNodeModules(params = {}) {
+  const extensionsDir = params.extensionsDir ?? join(DEFAULT_PACKAGE_ROOT, "extensions");
+  const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
+  const removePath = params.rmSync ?? rmSync;
+
+  if (!pathExists(extensionsDir)) {
     return;
   }
+
+  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      continue;
+    }
+
+    const pluginDir = join(extensionsDir, entry.name);
+    if (!pathExists(join(pluginDir, "package.json"))) {
+      continue;
+    }
+
+    removePath(join(pluginDir, "node_modules"), { recursive: true, force: true });
+  }
+}
+
+function shouldRunBundledPluginPostinstall(params) {
+  if (params.env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
+    return false;
+  }
+  if (!params.existsSync(params.extensionsDir)) {
+    return false;
+  }
+  return true;
+}
+
+export function runBundledPluginPostinstall(params = {}) {
+  const env = params.env ?? process.env;
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const exec = params.execSync ?? execSync;
+  const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
+  if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
+    return;
+  }
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    try {
+      pruneBundledPluginSourceNodeModules({
+        extensionsDir: join(packageRoot, "extensions"),
+        existsSync: pathExists,
+        readdirSync: params.readdirSync,
+        rmSync: params.rmSync,
+      });
+    } catch (e) {
+      log.warn(`[postinstall] could not prune bundled plugin source node_modules: ${String(e)}`);
+    }
+    return;
+  }
+  if (
+    !shouldRunBundledPluginPostinstall({
+      env,
+      extensionsDir,
+      packageRoot,
+      existsSync: pathExists,
+    })
+  ) {
+    return;
+  }
   const runtimeDeps =
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
@@ -122,11 +192,29 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 
   try {
-    exec(`npm install --omit=dev --no-save --package-lock=false ${missingSpecs.join(" ")}`, {
+    const nestedEnv = createNestedNpmInstallEnv(env);
+    const npmRunner =
+      params.npmRunner ??
+      resolveNpmRunner({
+        env: nestedEnv,
+        execPath: params.execPath,
+        existsSync: pathExists,
+        platform: params.platform,
+        comSpec: params.comSpec,
+        npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
+      });
+    const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,
-      env: createNestedNpmInstallEnv(env),
+      encoding: "utf8",
+      env: npmRunner.env ?? nestedEnv,
       stdio: "pipe",
+      shell: npmRunner.shell,
+      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });
+    if (result.status !== 0) {
+      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      throw new Error(output || "npm install failed");
+    }
     log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
   } catch (e) {
     // Non-fatal: gateway will surface the missing dep via doctor.

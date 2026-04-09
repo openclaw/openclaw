@@ -1,31 +1,64 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../api.js";
-import { tlonPlugin } from "./channel.js";
 import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";
-import { resolveTlonOutboundTarget } from "./targets.js";
+import { tlonSetupWizard } from "./setup-surface.js";
+import { normalizeShip, resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
-const tlonConfigure = createPluginSetupWizardConfigure(tlonPlugin);
+const tlonTestPlugin = {
+  id: "tlon",
+  meta: { label: "Tlon" },
+  setupWizard: tlonSetupWizard,
+  config: {
+    listAccountIds: listTlonAccountIds,
+    defaultAccountId: () => "default",
+    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+      resolveTlonAccount(cfg, accountId).dmAllowlist,
+    formatAllowFrom: ({
+      allowFrom,
+    }: {
+      cfg: OpenClawConfig;
+      allowFrom: Array<string | number> | undefined | null;
+    }) => (allowFrom ?? []).map((entry) => normalizeShip(String(entry))).filter(Boolean),
+  },
+  setup: {
+    resolveAccountId: ({ accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+      accountId ?? "default",
+  },
+};
+
+const tlonConfigure = createPluginSetupWizardConfigure(tlonTestPlugin);
+const tlonStatus = createPluginSetupWizardStatus(tlonTestPlugin);
 
 describe("tlon core", () => {
   it("formats dm allowlist entries through the shared hybrid adapter", () => {
     expect(
-      tlonPlugin.config.formatAllowFrom?.({
+      tlonTestPlugin.config.formatAllowFrom?.({
         cfg: {} as OpenClawConfig,
         allowFrom: ["zod", " ~nec "],
       }),
     ).toEqual(["~zod", "~nec"]);
   });
 
+  it("returns an empty dm allowlist when the default account is unconfigured", () => {
+    expect(
+      tlonTestPlugin.config.resolveAllowFrom?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "default",
+      }),
+    ).toEqual([]);
+  });
+
   it("resolves dm allowlist from the default account", () => {
     expect(
-      tlonPlugin.config.resolveAllowFrom?.({
+      tlonTestPlugin.config.resolveAllowFrom?.({
         cfg: {
           channels: {
             tlon: {
@@ -120,7 +153,7 @@ describe("tlon core", () => {
     ]);
     expect(result.cfg.channels?.tlon?.dmAllowlist).toEqual(["~zod", "~nec"]);
     expect(result.cfg.channels?.tlon?.autoDiscoverChannels).toBe(true);
-    expect(result.cfg.channels?.tlon?.allowPrivateNetwork).toBe(false);
+    expect(result.cfg.channels?.tlon?.network?.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
   it("resolves dm targets to normalized ships", () => {
@@ -220,5 +253,26 @@ describe("tlon core", () => {
 
     expect(resolved.ship).toBe("~zod");
     expect(resolved.code).toBe("base-code");
+  });
+
+  it("setup status labels the selected account", async () => {
+    const status = await tlonStatus({
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~zod",
+            url: "https://urbit.example.com",
+            code: "base-code",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: { tlon: "work" },
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.statusLines).toEqual(["Tlon (work): configured"]);
   });
 });

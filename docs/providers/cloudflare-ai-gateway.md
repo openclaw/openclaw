@@ -12,7 +12,7 @@ Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics,
 
 - Provider: `cloudflare-ai-gateway`
 - Base URL: `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/anthropic`
-- Default model: `cloudflare-ai-gateway/claude-sonnet-4-6`
+- Default model: `cloudflare-ai-gateway/claude-sonnet-4-5`
 - API key: `CLOUDFLARE_AI_GATEWAY_API_KEY` (your provider API key for requests through the Gateway)
 
 For Anthropic models, use your Anthropic API key.
@@ -31,7 +31,7 @@ openclaw onboard --auth-choice cloudflare-ai-gateway-api-key
 {
   agents: {
     defaults: {
-      model: { primary: "cloudflare-ai-gateway/claude-sonnet-4-6" },
+      model: { primary: "cloudflare-ai-gateway/claude-sonnet-4-5" },
     },
   },
 }

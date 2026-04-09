@@ -123,6 +123,7 @@ describe("extractDeliveryInfo", () => {
       to: "group:98765",
       accountId: "main",
     });
+    storeState.store[baseKey].lastThreadId = "55";
 
     const result = extractDeliveryInfo(topicKey);
 
@@ -131,8 +132,33 @@ describe("extractDeliveryInfo", () => {
         channel: "telegram",
         to: "group:98765",
         accountId: "main",
+        threadId: "55",
       },
       threadId: "55",
+    });
+  });
+
+  it("falls back to session metadata thread ids when deliveryContext.threadId is missing", () => {
+    const sessionKey = "agent:main:telegram:group:98765";
+    storeState.store[sessionKey] = {
+      ...buildEntry({
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+      }),
+      origin: { threadId: 77 },
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+        threadId: "77",
+      },
+      threadId: undefined,
     });
   });
 });

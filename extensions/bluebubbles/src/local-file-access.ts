@@ -1,8 +1,10 @@
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 function isLocalFileUrlHost(hostname: string): boolean {
-  return hostname === "" || hostname.toLowerCase() === "localhost";
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
+  return normalized === "" || normalized === "localhost";
 }
 
 function assertNoWindowsNetworkPath(filePath: string, label = "Path"): void {

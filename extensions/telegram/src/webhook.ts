@@ -1,8 +1,8 @@
-import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import * as grammy from "grammy";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -12,6 +12,7 @@ import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
+  normalizeOptionalString,
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -102,16 +103,11 @@ function hasValidTelegramWebhookSecret(
   secretHeader: string | undefined,
   expectedSecret: string,
 ): boolean {
-  if (typeof secretHeader !== "string") {
-    return false;
-  }
-  const actual = Buffer.from(secretHeader, "utf-8");
-  const expected = Buffer.from(expectedSecret, "utf-8");
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+  return safeEqualSecret(secretHeader, expectedSecret);
 }
 
 function parseIpLiteral(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -143,7 +139,7 @@ function isTrustedProxyAddress(
   }
   const blockList = new net.BlockList();
   for (const proxy of trustedProxies) {
-    const trimmed = proxy.trim();
+    const trimmed = normalizeOptionalString(proxy) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -255,7 +251,7 @@ export async function startTelegramWebhook(opts: {
   const healthPath = opts.healthPath ?? "/healthz";
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
-  const secret = typeof opts.secret === "string" ? opts.secret.trim() : "";
+  const secret = normalizeOptionalString(opts.secret) ?? "";
   if (!secret) {
     throw new Error(
       "Telegram webhook mode requires a non-empty secret token. " +

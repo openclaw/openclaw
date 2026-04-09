@@ -43,6 +43,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
 
     const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
@@ -54,6 +57,9 @@ describe("browser control server", () => {
     expect(lastCall).toEqual({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
   });
 
@@ -91,6 +97,9 @@ describe("browser control server", () => {
       doubleClick: false,
       button: "left",
       modifiers: ["Shift"],
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
 
     const clickSelector = await realFetch(`${base}/act`, {
@@ -105,6 +114,9 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       selector: "button.save",
       doubleClick: false,
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
 
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -120,6 +132,9 @@ describe("browser control server", () => {
       text: "",
       submit: false,
       slowly: false,
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
 
     const press = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -131,6 +146,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       key: "Enter",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
 
     const hover = await postJson<{ ok: boolean }>(`${base}/act`, {

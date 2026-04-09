@@ -5,7 +5,7 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import type { CronJob } from "../types.js";
-import { run, start, stop } from "./ops.js";
+import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -65,7 +65,7 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
-  it("start clears stale running markers, skips startup replay, persists, and arms the timer", async () => {
+  it("start clears stale running markers, replays interrupted recurring jobs, persists, and arms the timer (#60495)", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
@@ -93,8 +93,9 @@ describe("cron service ops seam coverage", () => {
       expect.objectContaining({ jobId: "startup-interrupted" }),
       "cron: clearing stale running marker on startup",
     );
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    // Interrupted recurring jobs are now replayed on first restart (#60495)
+    expect(enqueueSystemEvent).toHaveBeenCalled();
+    expect(requestHeartbeatNow).toHaveBeenCalled();
     expect(state.timer).not.toBeNull();
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
@@ -103,7 +104,7 @@ describe("cron service ops seam coverage", () => {
     const job = persisted.jobs[0];
     expect(job).toBeDefined();
     expect(job?.state.runningAtMs).toBeUndefined();
-    expect(job?.state.lastStatus).toBeUndefined();
+    expect(job?.state.lastStatus).toBe("ok");
     expect((job?.state.nextRunAtMs ?? 0) > now).toBe(true);
 
     const delays = timeoutSpy.mock.calls
@@ -244,6 +245,84 @@ describe("cron service ops seam coverage", () => {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
     resetTaskRegistryForTests();
+  });
+
+  it("non-schedule edit preserves nextRunAtMs (#63499)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-04-09T08:00:00.000Z");
+    const originalNextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "daily-report",
+          name: "daily report",
+          enabled: true,
+          createdAtMs: now - 86_400_000,
+          updatedAtMs: now - 3_600_000,
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "daily" },
+          state: { nextRunAtMs: originalNextRunAtMs },
+        },
+      ],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const updated = await update(state, "daily-report", { description: "edited" });
+
+    expect(updated.description).toBe("edited");
+    expect(updated.state.nextRunAtMs).toBe(originalNextRunAtMs);
+  });
+
+  it("repairs nextRunAtMs=0 on non-schedule edit (#63499)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-04-09T08:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "broken-job",
+          name: "broken",
+          enabled: true,
+          createdAtMs: now - 86_400_000,
+          updatedAtMs: now - 3_600_000,
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "test" },
+          state: { nextRunAtMs: 0 },
+        },
+      ],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const updated = await update(state, "broken-job", { description: "fixed" });
+
+    expect(updated.description).toBe("fixed");
+    expect(updated.state.nextRunAtMs).toBeGreaterThan(0);
+    expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
   it("records startup catch-up timeouts as timed_out in the shared task registry", async () => {

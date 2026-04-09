@@ -17,8 +17,8 @@ let setActiveWebListener: typeof import("./active-listener.js").setActiveWebList
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
     ...actual,
     loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,
@@ -32,7 +32,6 @@ describe("web outbound", () => {
   const sendReaction = vi.fn(async () => {});
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
     ({ setActiveWebListener } = await import("./active-listener.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
@@ -82,6 +81,36 @@ describe("web outbound", () => {
       toJid: "1555@s.whatsapp.net",
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("uses configured defaultAccount when outbound accountId is omitted", async () => {
+    setActiveWebListener(null);
+    setActiveWebListener("work", {
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    const result = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 

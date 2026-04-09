@@ -8,6 +8,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -128,7 +132,7 @@ type ToolPolicyConfig = {
 };
 
 function normalizeProviderKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
@@ -167,7 +171,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
-  return { channel: channel.trim().toLowerCase(), groupId };
+  return { channel: normalizeLowercaseStringOrEmpty(channel), groupId };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -195,7 +199,7 @@ function resolveProviderToolPolicy(params: {
   }
 
   const normalizedProvider = normalizeProviderKey(provider);
-  const rawModelId = params.modelId?.trim().toLowerCase();
+  const rawModelId = normalizeOptionalLowercaseString(params.modelId);
   const fullModelId =
     rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
 

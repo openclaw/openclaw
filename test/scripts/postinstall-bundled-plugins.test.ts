@@ -1,24 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
   discoverBundledPluginRuntimeDeps,
+  pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const cleanupDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const { createTempDirAsync } = createScriptTestHarness();
 
 async function createExtensionsDir() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-postinstall-"));
-  cleanupDirs.push(root);
+  const root = await createTempDirAsync("openclaw-postinstall-");
   const extensionsDir = path.join(root, "dist", "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
   return extensionsDir;
@@ -38,10 +32,45 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
+  function createNpmInstallArgs(...packages: string[]) {
+    return ["install", "--omit=dev", "--no-save", "--package-lock=false", ...packages];
+  }
+
+  function createBareNpmRunner(packages: string[]) {
+    return {
+      command: "npm",
+      args: createNpmInstallArgs(...packages),
+      env: {
+        HOME: "/tmp/home",
+        PATH: "/tmp/node/bin",
+      },
+      shell: false as const,
+    };
+  }
+
+  function expectNpmInstallSpawn(
+    spawnSync: ReturnType<typeof vi.fn>,
+    packageRoot: string,
+    packages: string[],
+  ) {
+    expect(spawnSync).toHaveBeenCalledWith("npm", createNpmInstallArgs(...packages), {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp/home",
+        PATH: "/tmp/node/bin",
+      },
+      shell: false,
+      stdio: "pipe",
+      windowsVerbatimArguments: undefined,
+    });
+  }
+
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       }),
@@ -50,22 +79,99 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("installs bundled plugin deps only during global installs", async () => {
+  it("installs bundled plugin deps outside of source checkouts", async () => {
     const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
-      env: { npm_config_global: "false" },
+      env: { HOME: "/tmp/home" },
       extensionsDir,
-      execSync,
+      packageRoot,
+      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalled();
+  });
+
+  it("prunes source-checkout bundled plugin node_modules", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-source-checkout-");
+    const extensionsDir = path.join(packageRoot, "extensions");
+    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
+    await fs.mkdir(extensionsDir, { recursive: true });
+    await writePluginPackage(extensionsDir, "acpx", {
+      dependencies: {
+        acpx: "0.5.2",
+      },
+    });
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules", "acpx"), { recursive: true });
+    await fs.writeFile(
+      path.join(extensionsDir, "acpx", "node_modules", "acpx", "package.json"),
+      JSON.stringify({ name: "acpx", version: "0.4.1" }),
+    );
+    const spawnSync = vi.fn();
+
+    runBundledPluginPostinstall({
+      env: { HOME: "/tmp/home" },
+      packageRoot,
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps source-checkout prune non-fatal", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-source-checkout-prune-error-");
+    const extensionsDir = path.join(packageRoot, "extensions");
+    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
+    await fs.mkdir(path.join(extensionsDir, "acpx"), { recursive: true });
+    await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
+    const warn = vi.fn();
+
+    expect(() =>
+      runBundledPluginPostinstall({
+        env: { HOME: "/tmp/home" },
+        packageRoot,
+        rmSync: vi.fn(() => {
+          throw new Error("locked");
+        }),
+        log: { log: vi.fn(), warn },
+      }),
+    ).not.toThrow();
+
+    expect(warn).toHaveBeenCalledWith(
+      "[postinstall] could not prune bundled plugin source node_modules: Error: locked",
+    );
+  });
+
+  it("honors disable env before source-checkout pruning", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-source-checkout-disabled-");
+    const extensionsDir = path.join(packageRoot, "extensions");
+    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(extensionsDir, "acpx", "package.json"), "{}\n");
+
+    runBundledPluginPostinstall({
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
+      packageRoot,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
   });
 
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
@@ -73,33 +179,26 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false acpx@0.4.0",
-      {
-        cwd: packageRoot,
-        env: {
-          HOME: "/tmp/home",
-        },
-        stdio: "pipe",
-      },
-    );
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["acpx@0.4.1"]);
   });
 
   it("skips reinstall when the bundled sentinel package already exists", async () => {
@@ -107,7 +206,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
@@ -116,16 +215,16 @@ describe("bundled plugin postinstall", () => {
       "{}\n",
       "utf8",
     );
-    const execSync = vi.fn();
+    const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
       env: { npm_config_global: "true" },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
     });
 
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("discovers bundled plugin runtime deps from extension manifests", async () => {
@@ -197,30 +296,23 @@ describe("bundled plugin postinstall", () => {
         grammy: "1.38.4",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner(["@slack/web-api@7.11.0", "grammy@1.38.4"]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false @slack/web-api@7.11.0 grammy@1.38.4",
-      {
-        cwd: packageRoot,
-        env: {
-          HOME: "/tmp/home",
-        },
-        stdio: "pipe",
-      },
-    );
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["@slack/web-api@7.11.0", "grammy@1.38.4"]);
   });
 
   it("installs only missing bundled plugin runtime deps", async () => {
@@ -243,29 +335,84 @@ describe("bundled plugin postinstall", () => {
       path.join(packageRoot, "node_modules", "@slack", "web-api", "package.json"),
       "{}\n",
     );
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
-        npm_config_global: "true",
+        HOME: "/tmp/home",
+      },
+      extensionsDir,
+      packageRoot,
+      npmRunner: createBareNpmRunner(["grammy@1.38.4"]),
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["grammy@1.38.4"]);
+  });
+
+  it("installs bundled plugin deps when npm location is global", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.38.4",
+      },
+    });
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    runBundledPluginPostinstall({
+      env: {
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner(["grammy@1.38.4"]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
-      {
-        cwd: packageRoot,
-        env: {
-          HOME: "/tmp/home",
-        },
-        stdio: "pipe",
-      },
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["grammy@1.38.4"]);
+  });
+
+  it("prunes only bundled plugin package node_modules in source checkouts", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-source-prune-");
+    const extensionsDir = path.join(packageRoot, "extensions");
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules"), { recursive: true });
+    await fs.mkdir(path.join(extensionsDir, "fixtures", "node_modules"), { recursive: true });
+    await fs.writeFile(
+      path.join(extensionsDir, "acpx", "package.json"),
+      JSON.stringify({ name: "@openclaw/acpx" }),
     );
+
+    pruneBundledPluginSourceNodeModules({ extensionsDir });
+
+    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      fs.stat(path.join(extensionsDir, "fixtures", "node_modules")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("skips symlink entries when pruning source-checkout bundled plugin node_modules", () => {
+    const removePath = vi.fn();
+
+    pruneBundledPluginSourceNodeModules({
+      extensionsDir: "/repo/extensions",
+      existsSync: vi.fn((value) => value === "/repo/extensions"),
+      readdirSync: vi.fn(() => [
+        {
+          name: "acpx",
+          isDirectory: () => true,
+          isSymbolicLink: () => true,
+        },
+      ]),
+      rmSync: removePath,
+    });
+
+    expect(removePath).not.toHaveBeenCalled();
   });
 });

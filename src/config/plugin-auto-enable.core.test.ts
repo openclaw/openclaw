@@ -1,0 +1,405 @@
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  applyPluginAutoEnable,
+  detectPluginAutoEnableCandidates,
+  resolvePluginAutoEnableCandidateReason,
+} from "./plugin-auto-enable.js";
+import {
+  makeIsolatedEnv,
+  makeRegistry,
+  makeTempDir,
+  resetPluginAutoEnableTestState,
+  writePluginManifestFixture,
+} from "./plugin-auto-enable.test-helpers.js";
+import { validateConfigObject } from "./validation.js";
+
+afterEach(() => {
+  resetPluginAutoEnableTestState();
+});
+
+describe("applyPluginAutoEnable core", () => {
+  it("detects typed channel-configured candidates", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { slack: { botToken: "x" } },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(candidates).toEqual([
+      {
+        pluginId: "slack",
+        kind: "channel-configured",
+        channelId: "slack",
+      },
+    ]);
+  });
+
+  it("formats typed provider-auth candidates into stable reasons", () => {
+    expect(
+      resolvePluginAutoEnableCandidateReason({
+        pluginId: "google",
+        kind: "provider-auth-configured",
+        providerId: "google",
+      }),
+    ).toBe("google auth configured");
+  });
+
+  it("treats an undefined config as empty", () => {
+    const result = applyPluginAutoEnable({
+      config: undefined,
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
+  it("auto-enables built-in channels without appending to plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+        plugins: { allow: ["telegram"] },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.channels?.slack?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.slack).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.autoEnabledReasons).toEqual({
+      slack: ["slack configured"],
+    });
+    expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
+  });
+
+  it("does not create plugins.allow when allowlist is unset", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.channels?.slack?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toBeUndefined();
+  });
+
+  it("stores auto-enable reasons in a null-prototype dictionary", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
+  });
+
+  it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        browser: {
+          defaultProfile: "openclaw",
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser configured, enabled automatically.");
+  });
+
+  it("auto-enables browser when tools.alsoAllow references browser", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          alsoAllow: ["browser"],
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser tool referenced, enabled automatically.");
+  });
+
+  it("keeps restrictive plugins.allow unchanged when browser is not referenced", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.entries?.browser).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable or allowlist non-bundled web fetch providers from config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "evilfetch",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([
+        {
+          id: "evil-plugin",
+          channels: [],
+          contracts: { webFetchProviders: ["evilfetch"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["evil-plugin"]).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("auto-enables bundled firecrawl when plugin-owned webFetch config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: "firecrawl-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "firecrawl"]);
+    expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
+  });
+
+  it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "ok",
+          },
+        },
+        agents: {
+          list: [{ id: "pi" }],
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config).toEqual({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "ok",
+        },
+      },
+      agents: {
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(result.changes).toEqual([]);
+  });
+
+  it("ignores channels.modelByChannel for plugin auto-enable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          modelByChannel: {
+            openai: {
+              whatsapp: "openai/gpt-5.4",
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
+    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("keeps auto-enabled WhatsApp config schema-valid", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(true);
+    expect(validateConfigObject(result.config).ok).toBe(true);
+  });
+
+  it("does not append built-in WhatsApp to plugins.allow during auto-enable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(validateConfigObject(result.config).ok).toBe(true);
+  });
+
+  it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {
+    const first = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    const second = applyPluginAutoEnable({
+      config: first.config,
+      env: makeIsolatedEnv(),
+    });
+
+    expect(first.changes).toHaveLength(1);
+    expect(second.changes).toEqual([]);
+    expect(second.config).toEqual(first.config);
+  });
+
+  it("respects explicit disable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+        plugins: { entries: { slack: { enabled: false } } },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("respects built-in channel explicit disable via channels.<id>.enabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x", enabled: false } },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.channels?.slack?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.slack).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable plugin channels when only enabled=false is set", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { matrix: { enabled: false } },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([{ id: "matrix", channels: ["matrix"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.matrix).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("auto-enables irc when configured via env", () => {
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: {
+        ...makeIsolatedEnv(),
+        IRC_HOST: "irc.libera.chat",
+        IRC_NICK: "openclaw-bot",
+      },
+    });
+
+    expect(result.config.channels?.irc?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
+  });
+
+  it("uses the provided env when loading plugin manifests automatically", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "apn-channel");
+    writePluginManifestFixture({
+      rootDir: pluginDir,
+      id: "apn-channel",
+      channels: ["apn"],
+    });
+
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { apn: { someKey: "value" } },
+      },
+      env: {
+        ...makeIsolatedEnv(),
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    });
+
+    expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.apn).toBeUndefined();
+  });
+
+  it("skips when plugins are globally disabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+        plugins: { enabled: false },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+});

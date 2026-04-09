@@ -4,7 +4,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
-import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -103,6 +103,28 @@ export function buildApiKeyCredential(
   };
 }
 
+export function upsertApiKeyProfile(params: {
+  provider: string;
+  input: SecretInput;
+  agentDir?: string;
+  options?: ApiKeyStorageOptions;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}): string {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir),
+  });
+  return profileId;
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -114,7 +136,7 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = normalizeProviderIdForAuth(params.provider);
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -126,13 +148,16 @@ export function applyAuthProfileConfig(
   };
 
   const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === normalizedProvider)
+    .filter(
+      ([, profile]) =>
+        resolveProviderIdForAuth(profile.provider, { config: cfg }) === normalizedProvider,
+    )
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
   // Maintain `auth.order` when it already exists. Additionally, if we detect
   // mixed auth modes for the same provider, keep the newly selected profile first.
   const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
-    ([providerId]) => normalizeProviderIdForAuth(providerId) === normalizedProvider,
+    ([providerId]) => resolveProviderIdForAuth(providerId, { config: cfg }) === normalizedProvider,
   );
   const existingProviderOrder =
     matchingProviderOrderEntries.length > 0
@@ -162,7 +187,8 @@ export function applyAuthProfileConfig(
     matchingProviderOrderEntries.length > 0
       ? Object.fromEntries(
           Object.entries(cfg.auth?.order ?? {}).filter(
-            ([providerId]) => normalizeProviderIdForAuth(providerId) !== normalizedProvider,
+            ([providerId]) =>
+              resolveProviderIdForAuth(providerId, { config: cfg }) !== normalizedProvider,
           ),
         )
       : cfg.auth?.order;

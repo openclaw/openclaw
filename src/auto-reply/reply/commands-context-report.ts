@@ -4,7 +4,11 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -73,7 +77,7 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
-  const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
+  const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).filter(Boolean)[0]);
 
   if (!sub || sub === "help") {
     return {
@@ -93,8 +97,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const report = await resolveContextReport(params);
+  const cachedContextUsageTokens = resolveFreshSessionTotalTokens(params.sessionEntry);
   const session = {
     totalTokens: params.sessionEntry?.totalTokens ?? null,
+    totalTokensFresh: params.sessionEntry?.totalTokensFresh ?? null,
     inputTokens: params.sessionEntry?.inputTokens ?? null,
     outputTokens: params.sessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
@@ -187,10 +193,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ]
       : [];
 
+  const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine =
-    session.totalTokens != null
-      ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
-      : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
+    cachedContextUsageTokens != null
+      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
+      : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
   const sharedContextLines = [
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
@@ -225,6 +232,25 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       .slice(0, 30)
       .map((t) => `- ${t.name}: ${t.propertiesCount} params`);
 
+    // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
+    // Add only tool schemas here so the tracked estimate stays disjoint.
+    const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
+    const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
+    const actualContextLine =
+      cachedContextUsageTokens != null
+        ? `Actual context usage (cached): ${formatInt(cachedContextUsageTokens)} tok`
+        : "Actual context usage (cached): unavailable";
+    const overheadTokens =
+      cachedContextUsageTokens != null
+        ? cachedContextUsageTokens - estimateTokensFromChars(trackedPromptChars)
+        : null;
+    const overheadLine =
+      overheadTokens == null
+        ? null
+        : overheadTokens > 0
+          ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
+          : "Untracked provider/runtime overhead: not observed in cached usage";
+
     return {
       text: [
         "🧠 Context breakdown (detailed)",
@@ -243,6 +269,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ...perToolSummary.lines,
         ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
         ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
+        "",
+        trackedPromptLine,
+        actualContextLine,
+        ...(overheadLine ? [overheadLine] : []),
         "",
         totalsLine,
         "",

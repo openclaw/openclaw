@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({
   performMatrixRequestMock: vi.fn(),
@@ -11,9 +11,11 @@ vi.mock("./transport.js", () => ({
 let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
 
 describe("MatrixAuthedHttpClient", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ MatrixAuthedHttpClient } = await import("./http-client.js"));
+  });
+
+  beforeEach(() => {
     performMatrixRequestMock.mockReset();
   });
 
