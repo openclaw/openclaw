@@ -84,7 +84,7 @@ function resolveProviderDiscoveryFilter(params: {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
   if (!live) {
-    return undefined;
+    return resolveExplicitProviderDiscoveryFilter(params);
   }
   const rawValues = [
     env.OPENCLAW_LIVE_PROVIDERS?.trim(),
