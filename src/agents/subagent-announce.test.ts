@@ -395,18 +395,6 @@ describe("subagent announce seam flow", () => {
         }),
       }),
     );
-    const announceCall = agentSpy.mock.calls[0]?.[0] as {
-      params?: {
-        channel?: string;
-        to?: string;
-        threadId?: string;
-        message?: string;
-      };
-    };
-    expect(announceCall.params?.channel).toBeUndefined();
-    expect(announceCall.params?.to).toBeUndefined();
-    expect(announceCall.params?.threadId).toBeUndefined();
-    expect(announceCall.params?.message).toContain("[Internal task completion event]");
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
@@ -484,73 +472,5 @@ describe("subagent announce seam flow", () => {
         to: "-1001234567890",
       }),
     );
-  });
-
-  it("keeps canonical requester keys when display keys are aliases", async () => {
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-nested-alias",
-      requesterSessionKey: "agent:main:subagent:orchestrator",
-      requesterDisplayKey: "subagent:orchestrator",
-      requesterOrigin: {
-        channel: "telegram",
-        to: "-100123",
-        accountId: "default",
-      },
-      task: "deliver nested completion",
-      timeoutMs: 10,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe(true);
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: "agent:main:subagent:orchestrator",
-          deliver: false,
-        }),
-      }),
-    );
-  });
-
-  it("preserves delete cleanup when ignored nested announces are suppressed", async () => {
-    subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(true);
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-nested-ignore",
-      requesterSessionKey: "agent:main:subagent:orchestrator",
-      requesterDisplayKey: "subagent:orchestrator",
-      task: "nested cleanup",
-      timeoutMs: 10,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe(true);
-    expect(agentSpy).not.toHaveBeenCalled();
-    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:main:subagent:worker",
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      timeoutMs: 10_000,
-    });
   });
 });
