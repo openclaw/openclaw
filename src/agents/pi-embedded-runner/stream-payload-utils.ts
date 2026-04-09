@@ -11,10 +11,11 @@ export function streamWithPayloadPatch(
   return underlying(model, context, {
     ...options,
     onPayload: (payload) => {
+      const result = originalOnPayload?.(payload, model);
       if (payload && typeof payload === "object") {
         patchPayload(payload as Record<string, unknown>);
       }
-      return originalOnPayload?.(payload, model);
+      return result;
     },
   });
 }
