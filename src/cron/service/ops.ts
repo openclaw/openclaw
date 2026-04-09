@@ -329,9 +329,9 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     } else if (isJobEnabled(job)) {
       // Non-schedule edits should not mutate other jobs, but still repair a
-      // missing/corrupt nextRunAtMs for the updated job.
+      // missing/corrupt/zero nextRunAtMs for the updated job.
       const nextRun = job.state.nextRunAtMs;
-      if (typeof nextRun !== "number" || !Number.isFinite(nextRun)) {
+      if (typeof nextRun !== "number" || !Number.isFinite(nextRun) || nextRun <= 0) {
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       }
     }
