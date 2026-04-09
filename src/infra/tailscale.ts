@@ -330,7 +330,7 @@ export async function ensureFunnel(
   try {
     const tailscaleBin = await getTailscaleBinary();
     const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
-    const parsed = statusOut ? (() => { try { return JSON.parse(statusOut) as Record<string, unknown>; } catch { return {}; } })() : {};
+    const parsed = statusOut ? parsePossiblyNoisyJsonObject(statusOut) : {};
     if (!parsed || Object.keys(parsed).length === 0) {
       runtime.error(danger("Tailscale Funnel is not enabled on this tailnet/device."));
       runtime.error(
