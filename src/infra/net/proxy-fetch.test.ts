@@ -13,10 +13,11 @@ const ORIGINAL_PROXY_ENV = Object.fromEntries(
   PROXY_ENV_KEYS.map((key) => [key, process.env[key]]),
 ) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
 
-const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, getLastAgent } =
+const { ProxyAgent, Socks5ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, socks5AgentSpy, envAgentSpy, getLastAgent, getLastSocksAgent } =
   vi.hoisted(() => {
     const undiciFetch = vi.fn();
     const proxyAgentSpy = vi.fn();
+    const socks5AgentSpy = vi.fn();
     const envAgentSpy = vi.fn();
     class ProxyAgent {
       static lastCreated: ProxyAgent | undefined;
@@ -25,6 +26,15 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
         this.proxyUrl = proxyUrl;
         ProxyAgent.lastCreated = this;
         proxyAgentSpy(proxyUrl);
+      }
+    }
+    class Socks5ProxyAgent {
+      static lastCreated: Socks5ProxyAgent | undefined;
+      uri: string;
+      constructor(opts: { uri: string }) {
+        this.uri = opts.uri;
+        Socks5ProxyAgent.lastCreated = this;
+        socks5AgentSpy(opts.uri);
       }
     }
     class EnvHttpProxyAgent {
@@ -37,11 +47,14 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
 
     return {
       ProxyAgent,
+      Socks5ProxyAgent,
       EnvHttpProxyAgent,
       undiciFetch,
       proxyAgentSpy,
+      socks5AgentSpy,
       envAgentSpy,
       getLastAgent: () => ProxyAgent.lastCreated,
+      getLastSocksAgent: () => Socks5ProxyAgent.lastCreated,
     };
   });
 
@@ -49,6 +62,7 @@ const mockedModuleIds = ["undici"] as const;
 
 vi.mock("undici", () => ({
   ProxyAgent,
+  Socks5ProxyAgent,
   EnvHttpProxyAgent,
   fetch: undiciFetch,
 }));
@@ -111,6 +125,52 @@ describe("makeProxyFetch", () => {
 
     expect(proxyAgentSpy).toHaveBeenCalledOnce();
     expect(secondDispatcher).toBe(firstDispatcher);
+  });
+
+  it("uses Socks5ProxyAgent for socks5:// proxy URLs", async () => {
+    const proxyUrl = "socks5://127.0.0.1:1080";
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch(proxyUrl);
+    expect(socks5AgentSpy).not.toHaveBeenCalled();
+    await proxyFetch("https://api.telegram.org/file/bot123/photo.jpg");
+
+    expect(socks5AgentSpy).toHaveBeenCalledWith(proxyUrl);
+    expect(proxyAgentSpy).not.toHaveBeenCalled();
+    expect(undiciFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/file/bot123/photo.jpg",
+      expect.objectContaining({ dispatcher: getLastSocksAgent() }),
+    );
+  });
+
+  it("uses Socks5ProxyAgent for socks4:// proxy URLs", async () => {
+    const proxyUrl = "socks4://127.0.0.1:1080";
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch(proxyUrl);
+    await proxyFetch("https://api.telegram.org/file/bot123/photo.jpg");
+
+    expect(socks5AgentSpy).toHaveBeenCalledWith(proxyUrl);
+    expect(proxyAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("reuses the same Socks5ProxyAgent across calls", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch("socks5://127.0.0.1:1080");
+
+    await proxyFetch("https://api.telegram.org/one");
+    const firstDispatcher = undiciFetch.mock.calls[0]?.[1]?.dispatcher;
+    await proxyFetch("https://api.telegram.org/two");
+    const secondDispatcher = undiciFetch.mock.calls[1]?.[1]?.dispatcher;
+
+    expect(socks5AgentSpy).toHaveBeenCalledOnce();
+    expect(secondDispatcher).toBe(firstDispatcher);
+  });
+
+  it("preserves proxyUrl metadata on socks5 proxy fetch", () => {
+    const proxyUrl = "socks5://127.0.0.1:1080";
+    expect(getProxyUrlFromFetch(makeProxyFetch(proxyUrl))).toBe(proxyUrl);
   });
 });
 

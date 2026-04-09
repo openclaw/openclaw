@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { EnvHttpProxyAgent, ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
@@ -8,15 +8,28 @@ type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
 };
 
+/** Returns true when the given URL uses a SOCKS4 or SOCKS5 scheme. */
+function isSocksProxyUrl(url: string): boolean {
+  try {
+    const scheme = new URL(url).protocol;
+    return scheme === "socks5:" || scheme === "socks5h:" || scheme === "socks4:" || scheme === "socks4a:" || scheme === "socks:";
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Create a fetch function that routes requests through the given HTTP proxy.
- * Uses undici's ProxyAgent under the hood.
+ * Create a fetch function that routes requests through the given proxy.
+ * Supports HTTP/HTTPS proxies via undici's ProxyAgent and SOCKS5/SOCKS4
+ * proxies via undici's Socks5ProxyAgent — no additional dependencies required.
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
-  let agent: ProxyAgent | null = null;
-  const resolveAgent = (): ProxyAgent => {
+  let agent: ProxyAgent | Socks5ProxyAgent | null = null;
+  const resolveAgent = (): ProxyAgent | Socks5ProxyAgent => {
     if (!agent) {
-      agent = new ProxyAgent(proxyUrl);
+      agent = isSocksProxyUrl(proxyUrl)
+        ? new Socks5ProxyAgent({ uri: proxyUrl })
+        : new ProxyAgent(proxyUrl);
     }
     return agent;
   };
