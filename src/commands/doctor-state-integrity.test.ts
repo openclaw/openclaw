@@ -75,7 +75,7 @@ async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
   return stateIntegrityText();
 }
 
-describe("doctor state integrity oauth dir checks", () => {
+describe("doctor state integrity checks", () => {
   let envSnapshot: EnvSnapshot;
   let tempHome = "";
 
@@ -255,5 +255,23 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).toContain("sessionId=sid-dup:");
     expect(text).toContain("agent:main:beta");
     expect(text).toContain("agent:main:alpha");
+  });
+
+  it("does not merge differently cased sessionIds into one ambiguity warning", async () => {
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:beta": {
+        sessionId: "sid-dup",
+        updatedAt: 10,
+      },
+      "agent:main:alpha": {
+        sessionId: "SID-DUP",
+        updatedAt: 10,
+      },
+    });
+
+    const text = await runStateIntegrityText(cfg);
+
+    expect(text).not.toContain("Session isolation risk:");
   });
 });
