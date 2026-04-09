@@ -1,3 +1,8 @@
+import type {
+  ControlUiMeContextResponse,
+  PrivacyMode,
+  ScopeRef,
+} from "../../../src/gateway/control-ui-contract.js";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
@@ -61,6 +66,14 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  meContextLoading: boolean;
+  meContextError: string | null;
+  currentUser: ControlUiMeContextResponse["user"] | null;
+  visibleScopes: ScopeRef[];
+  launchableSessionTypes: ControlUiMeContextResponse["launchableSessionTypes"];
+  shareTargets: ScopeRef[];
+  selectedScope: ScopeRef | null;
+  selectedPrivacyMode: PrivacyMode | null;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -349,6 +362,8 @@ export type AppViewState = {
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
+    loadMeContext: () => Promise<void>;
+    selectMeContextScope: (scopeId: string) => void;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;
     handleWhatsAppWait: () => Promise<void>;

@@ -1,5 +1,10 @@
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
+import type {
+  ControlUiMeContextResponse,
+  PrivacyMode,
+  ScopeRef,
+} from "../../../src/gateway/control-ui-contract.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -63,6 +68,10 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { DreamingStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import {
+  loadMeContext as loadMeContextInternal,
+  selectMeContextScope as selectMeContextScopeInternal,
+} from "./controllers/me-context.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -156,6 +165,14 @@ export class OpenClawApp extends LitElement {
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
   @state() serverVersion: string | null = null;
+  @state() meContextLoading = false;
+  @state() meContextError: string | null = null;
+  @state() currentUser: ControlUiMeContextResponse["user"] | null = null;
+  @state() visibleScopes: ScopeRef[] = [];
+  @state() launchableSessionTypes: ControlUiMeContextResponse["launchableSessionTypes"] = [];
+  @state() shareTargets: ScopeRef[] = [];
+  @state() selectedScope: ScopeRef | null = null;
+  @state() selectedPrivacyMode: PrivacyMode | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -599,6 +616,14 @@ export class OpenClawApp extends LitElement {
 
   async loadAssistantIdentity() {
     await loadAssistantIdentityInternal(this);
+  }
+
+  async loadMeContext() {
+    await loadMeContextInternal(this);
+  }
+
+  selectMeContextScope(scopeId: string) {
+    selectMeContextScopeInternal(this, scopeId);
   }
 
   applySettings(next: UiSettings) {

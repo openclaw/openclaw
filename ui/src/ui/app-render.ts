@@ -1659,6 +1659,15 @@ export function renderApp(state: AppViewState) {
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
               basePath: state.basePath ?? "",
+              meContextLoading: state.meContextLoading,
+              meContextError: state.meContextError,
+              currentUser: state.currentUser,
+              visibleScopes: state.visibleScopes,
+              selectedScope: state.selectedScope,
+              selectedPrivacyMode: state.selectedPrivacyMode,
+              launchableSessionTypes: state.launchableSessionTypes,
+              onLoadMeContext: () => void state.loadMeContext(),
+              onScopeChange: (scopeId: string) => state.selectMeContextScope(scopeId),
             })
           : nothing}
         ${state.tab === "config"

@@ -14,6 +14,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_ME_CONTEXT_PATH,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -22,6 +23,7 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import { buildControlUiMeContextResponse } from "./control-ui-me-context.js";
 import { classifyControlUiRequest } from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
@@ -344,6 +346,20 @@ export function handleControlUiHttpRequest(
   const bootstrapConfigPath = basePath
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
+  const meContextPath = basePath
+    ? `${basePath}${CONTROL_UI_ME_CONTEXT_PATH}`
+    : CONTROL_UI_ME_CONTEXT_PATH;
+  if (pathname === meContextPath) {
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.end();
+      return true;
+    }
+    sendJson(res, 200, buildControlUiMeContextResponse(req));
+    return true;
+  }
   if (pathname === bootstrapConfigPath) {
     const config = opts?.config;
     const identity = config
