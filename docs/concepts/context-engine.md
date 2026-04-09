@@ -278,6 +278,13 @@ OpenClaw resolves when it needs a context engine.
 See also: [Compaction](/concepts/compaction), [Context](/concepts/context),
 [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest).
 
+## Available context engine plugins
+
+- [Lossless-Claw](https://github.com/Martian-Engineering/lossless-claw) —
+  DAG-based summarization that preserves every message
+- [ByteRover](/concepts/context-engine-byterover) — retrieval-augmented
+  curation via the brv CLI
+
 ## Related
 
 - [Context](/concepts/context) — how context is built for agent turns
