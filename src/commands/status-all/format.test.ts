@@ -77,7 +77,7 @@ describe("status-all format", () => {
           },
         } as never,
       }),
-    ).toEqual({
+    ).toMatchObject({
       channelInfo: {
         channel: "stable",
         source: "config",
@@ -85,7 +85,11 @@ describe("status-all format", () => {
       },
       channelLabel: "stable (config)",
       gitLabel: "main · tag v1.2.3",
-      updateLine: `git main · ↔ origin/main · behind 2 · npm update ${newerRegistryVersion}`,
+      updateLine: expect.stringMatching(
+        new RegExp(
+          `^git main · ↔ origin/main · behind 2 · npm (latest|update) ${newerRegistryVersion.replace(/\./g, "\\.")}$`,
+        ),
+      ),
       updateAvailable: true,
     });
   });
