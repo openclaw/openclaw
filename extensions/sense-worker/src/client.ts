@@ -42,6 +42,14 @@ export type SenseRecentJobRef = {
   source: "completed" | "picked";
 };
 
+export type NemoClawGpuStatus = {
+  runner: "up" | "down" | "unknown";
+  worker: string;
+  workerHealth: "up" | "down" | "unknown";
+  model?: string;
+  gpu: "busy" | "idle" | "unknown" | "unavailable";
+};
+
 const DEFAULT_BASE_URL = "http://192.168.11.11:8787";
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_TOKEN_ENV = "SENSE_WORKER_TOKEN";
@@ -50,6 +58,7 @@ const DEFAULT_RECENT_JOB_JOURNAL_LINES = 4000;
 const RUNNER_SYSTEMD_UNIT = "openclaw-nemoclaw-runner.service";
 const JOB_ID_PATTERN =
   /\b(completed|picked)\s+job_id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i;
+const RUNNER_ACTIVITY_PATTERN = /\b(picked\s+job_id=|completed\s+job_id=|no queued jobs)\b/i;
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
@@ -268,6 +277,106 @@ export async function getRecentSenseJobRefs(
   }
 }
 
+function parseSystemdEnvironment(stdout: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  const line = stdout.trim();
+  if (!line) {
+    return values;
+  }
+  for (const token of line.split(/\s+/)) {
+    const idx = token.indexOf("=");
+    if (idx <= 0) {
+      continue;
+    }
+    values[token.slice(0, idx)] = token.slice(idx + 1);
+  }
+  return values;
+}
+
+function resolveGpuStateFromJournal(stdout: string): NemoClawGpuStatus["gpu"] {
+  const lines = stdout.split(/\r?\n/).reverse();
+  for (const line of lines) {
+    if (!RUNNER_ACTIVITY_PATTERN.test(line)) {
+      continue;
+    }
+    if (line.includes("picked job_id=")) {
+      return "busy";
+    }
+    if (line.includes("completed job_id=") || line.includes("no queued jobs")) {
+      return "idle";
+    }
+  }
+  return "unknown";
+}
+
+export async function getNemoClawGpuStatus(
+  config: SenseClientConfig = {},
+): Promise<NemoClawGpuStatus> {
+  const worker = config.baseUrl?.trim() || DEFAULT_BASE_URL;
+  let runner: NemoClawGpuStatus["runner"] = "unknown";
+  let model: string | undefined;
+  let gpu: NemoClawGpuStatus["gpu"] = "unknown";
+
+  try {
+    const [serviceState, envState, journalState, healthState] = await Promise.allSettled([
+      execFileAsync(
+        "systemctl",
+        ["--user", "is-active", RUNNER_SYSTEMD_UNIT],
+        { encoding: "utf8", maxBuffer: 1024 * 1024 },
+      ),
+      execFileAsync(
+        "systemctl",
+        ["--user", "show", RUNNER_SYSTEMD_UNIT, "--property=Environment", "--value"],
+        { encoding: "utf8", maxBuffer: 1024 * 1024 },
+      ),
+      execFileAsync(
+        "journalctl",
+        ["--user", "-u", RUNNER_SYSTEMD_UNIT, "-n", "50", "--no-pager", "-o", "cat"],
+        { encoding: "utf8", maxBuffer: 1024 * 1024 },
+      ),
+      checkSenseHealth(config),
+    ]);
+
+    if (serviceState.status === "fulfilled") {
+      const state = serviceState.value.stdout.trim();
+      runner = state === "active" ? "up" : state ? "down" : "unknown";
+    } else {
+      runner = "unknown";
+    }
+
+    if (envState.status === "fulfilled") {
+      const env = parseSystemdEnvironment(envState.value.stdout);
+      model = env.OLLAMA_MODEL || undefined;
+    }
+
+    if (journalState.status === "fulfilled") {
+      gpu = resolveGpuStateFromJournal(journalState.value.stdout);
+    }
+
+    const workerHealth =
+      healthState.status === "fulfilled"
+        ? healthState.value.ok
+          ? "up"
+          : "down"
+        : "down";
+
+    return {
+      runner,
+      worker,
+      workerHealth,
+      model,
+      gpu: runner === "down" && workerHealth === "down" ? "unavailable" : gpu,
+    };
+  } catch {
+    return {
+      runner: "unknown",
+      worker,
+      workerHealth: "unknown",
+      gpu: "unavailable",
+    };
+  }
+}
+
 export const __testing = {
   DEFAULT_BASE_URL,
   DEFAULT_TIMEOUT_MS,
@@ -276,4 +385,6 @@ export const __testing = {
   RUNNER_SYSTEMD_UNIT,
   resolveToken,
   normalizeJobEnvelope,
+  parseSystemdEnvironment,
+  resolveGpuStateFromJournal,
 };

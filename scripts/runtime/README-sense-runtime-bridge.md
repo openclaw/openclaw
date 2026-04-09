@@ -1074,8 +1074,13 @@ job-status lookup as `/nemoclaw recent`, but keeps only jobs with `result.error`
 digest formatter; non-digest failures prefer `error`, then `summary`, then minimal status.
 
 `/nemoclaw help` is the minimal operator entrypoint: it returns the currently supported
-Slack commands (`digest`, `recent`, `failures`, and `job <id>`) as a short fixed-text guide
+Slack commands (`digest`, `recent`, `failures`, `job <id>`, and `gpu`) as a short fixed-text guide
 so the first Slack surface can stay shallow and discoverable.
+
+`/nemoclaw gpu` is the matching shallow runtime-status view: it reads the existing runner
+service state, worker health, model hint, and a thin busy/idle/unknown signal from recent
+runner journal activity. If any of that is unavailable, it still returns a minimal text
+response instead of failing.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

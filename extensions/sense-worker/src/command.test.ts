@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const readLatestNemoClawDigestCacheMock = vi.fn();
 const getSenseJobStatusMock = vi.fn();
 const getRecentSenseJobRefsMock = vi.fn();
+const getNemoClawGpuStatusMock = vi.fn();
 
 vi.mock("./latest-digest-cache.js", () => ({
   readLatestNemoClawDigestCache: readLatestNemoClawDigestCacheMock,
@@ -11,6 +12,7 @@ vi.mock("./latest-digest-cache.js", () => ({
 vi.mock("./client.js", () => ({
   getSenseJobStatus: getSenseJobStatusMock,
   getRecentSenseJobRefs: getRecentSenseJobRefsMock,
+  getNemoClawGpuStatus: getNemoClawGpuStatusMock,
 }));
 
 describe("handleNemoClawCommand", () => {
@@ -18,6 +20,7 @@ describe("handleNemoClawCommand", () => {
     readLatestNemoClawDigestCacheMock.mockReset();
     getSenseJobStatusMock.mockReset();
     getRecentSenseJobRefsMock.mockReset();
+    getNemoClawGpuStatusMock.mockReset();
   });
 
   it("returns formatted latest digest text", async () => {
@@ -54,7 +57,8 @@ describe("handleNemoClawCommand", () => {
         "- /nemoclaw digest      latest digest\n" +
         "- /nemoclaw recent      recent jobs\n" +
         "- /nemoclaw failures    recent failed jobs\n" +
-        "- /nemoclaw job <id>    show one job",
+        "- /nemoclaw job <id>    show one job\n" +
+        "- /nemoclaw gpu         runner and GPU status",
     });
   });
 
@@ -274,6 +278,44 @@ describe("handleNemoClawCommand", () => {
     });
   });
 
+  it("returns gpu status text", async () => {
+    getNemoClawGpuStatusMock.mockResolvedValue({
+      runner: "up",
+      worker: "http://192.168.11.11:8787",
+      workerHealth: "up",
+      model: "gpt-oss:20b",
+      gpu: "idle",
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("gpu")).resolves.toEqual({
+      text:
+        "NemoClaw GPU status\n" +
+        "- runner: up\n" +
+        "- worker: http://192.168.11.11:8787\n" +
+        "- worker health: up\n" +
+        "- model: gpt-oss:20b\n" +
+        "- gpu: idle",
+    });
+  });
+
+  it("returns unavailable gpu status text", async () => {
+    getNemoClawGpuStatusMock.mockResolvedValue({
+      runner: "unknown",
+      worker: "http://192.168.11.11:8787",
+      workerHealth: "unknown",
+      gpu: "unavailable",
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("gpu")).resolves.toEqual({
+      text:
+        "NemoClaw GPU status\n" +
+        "- runner: unknown\n" +
+        "- worker: http://192.168.11.11:8787\n" +
+        "- worker health: unknown\n" +
+        "- gpu: unavailable",
+    });
+  });
+
   it("returns help text for an unknown subcommand", async () => {
     const { handleNemoClawCommand } = await import("./command.js");
     await expect(handleNemoClawCommand("unknown")).resolves.toEqual({
@@ -282,7 +324,8 @@ describe("handleNemoClawCommand", () => {
         "- /nemoclaw digest      latest digest\n" +
         "- /nemoclaw recent      recent jobs\n" +
         "- /nemoclaw failures    recent failed jobs\n" +
-        "- /nemoclaw job <id>    show one job",
+        "- /nemoclaw job <id>    show one job\n" +
+        "- /nemoclaw gpu         runner and GPU status",
     });
   });
 });

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { getRecentSenseJobRefs, getSenseJobStatus } from "./client.js";
+import { getNemoClawGpuStatus, getRecentSenseJobRefs, getSenseJobStatus } from "./client.js";
 import { readLatestNemoClawDigestCache } from "./latest-digest-cache.js";
 import { formatSlackDigestNotification } from "./slack-digest.js";
 
@@ -9,6 +9,7 @@ const NEMOCLAW_HELP_TEXT = [
   "- /nemoclaw recent      recent jobs",
   "- /nemoclaw failures    recent failed jobs",
   "- /nemoclaw job <id>    show one job",
+  "- /nemoclaw gpu         runner and GPU status",
 ].join("\n");
 
 function normalizeArgs(value: string | undefined): string {
@@ -135,6 +136,17 @@ async function formatJobList(params: {
   return index === 1 ? params.emptyText : lines.join("\n").trimEnd();
 }
 
+async function formatGpuStatus(config: OpenClawConfig | undefined): Promise<string> {
+  const status = await getNemoClawGpuStatus(resolveSenseWorkerConfig(config));
+  const lines = ["NemoClaw GPU status", `- runner: ${status.runner}`, `- worker: ${status.worker}`];
+  lines.push(`- worker health: ${status.workerHealth}`);
+  if (status.model) {
+    lines.push(`- model: ${status.model}`);
+  }
+  lines.push(`- gpu: ${status.gpu}`);
+  return lines.join("\n");
+}
+
 export async function handleNemoClawCommand(
   args: string | undefined,
   config?: OpenClawConfig,
@@ -171,6 +183,9 @@ export async function handleNemoClawCommand(
         filter: isFailedJob,
       }),
     };
+  }
+  if (normalized === "gpu") {
+    return { text: await formatGpuStatus(config) };
   }
   if (normalized === "job") {
     return { text: "Usage: /nemoclaw job <id>" };
