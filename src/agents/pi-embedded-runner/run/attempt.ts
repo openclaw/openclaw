@@ -997,6 +997,11 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      // Hoisted so installContextEngineLoopHook can read the same fence value
+      // that finalizeAttemptContextEngineTurn uses at end-of-attempt. The
+      // initial value is reassigned in the prompt-build phase below, after
+      // any heartbeat message filtering.
+      let prePromptMessageCount = 0;
       if (params.contextEngine?.info?.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -1016,6 +1021,7 @@ export async function runEmbeddedAttempt(
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
+          getPrePromptMessageCount: () => prePromptMessageCount,
         });
       }
       const cacheTrace = createCacheTrace({
@@ -1662,7 +1668,7 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
       let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
-      let prePromptMessageCount = activeSession.messages.length;
+      prePromptMessageCount = activeSession.messages.length;
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();

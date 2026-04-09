@@ -197,11 +197,20 @@ export function installContextEngineLoopHook(params: {
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
+  /**
+   * Returns the message count that should be used as the initial
+   * `prePromptMessageCount` fence on the first `transformContext` call.
+   * Should match the value `finalizeAttemptContextEngineTurn` will eventually
+   * pass to `afterTurn` so the loop hook does not report pre-attempt history
+   * as new on its first invocation.
+   */
+  getPrePromptMessageCount?: () => number;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
-  let lastSeenLength = 0;
+  let lastSeenLength: number | null = null;
+  let hasAssembledBefore = false;
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
@@ -209,6 +218,11 @@ export function installContextEngineLoopHook(params: {
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
 
+    if (lastSeenLength === null) {
+      lastSeenLength = params.getPrePromptMessageCount?.() ?? 0;
+    }
+
+    let didCallAfterTurn = false;
     try {
       if (sourceMessages.length > lastSeenLength && typeof contextEngine.afterTurn === "function") {
         const prePromptCount = lastSeenLength;
@@ -221,20 +235,27 @@ export function installContextEngineLoopHook(params: {
           tokenBudget,
         });
         lastSeenLength = sourceMessages.length;
+        didCallAfterTurn = true;
       }
-      const assembled = await contextEngine.assemble({
-        sessionId,
-        sessionKey,
-        messages: sourceMessages,
-        tokenBudget,
-        model: modelId,
-      });
-      if (
-        assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages.length !== sourceMessages.length
-      ) {
-        return assembled.messages;
+      // Skip assemble when nothing has changed since the last call AND we
+      // already returned an assembled view at least once. The engine's view
+      // cannot have changed without new messages arriving via afterTurn.
+      if (didCallAfterTurn || !hasAssembledBefore) {
+        const assembled = await contextEngine.assemble({
+          sessionId,
+          sessionKey,
+          messages: sourceMessages,
+          tokenBudget,
+          model: modelId,
+        });
+        hasAssembledBefore = true;
+        if (
+          assembled &&
+          Array.isArray(assembled.messages) &&
+          assembled.messages.length !== sourceMessages.length
+        ) {
+          return assembled.messages;
+        }
       }
     } catch {
       // Best-effort: any engine failure falls through to the raw source
