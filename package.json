@@ -1319,14 +1319,14 @@
     "@aws-sdk/client-bedrock-runtime": "3.1024.0",
     "@aws-sdk/credential-provider-node": "3.972.29",
     "@aws/bedrock-token-generator": "^1.1.0",
-    "@buape/carbon": "0.14.0",
+    "@buape/carbon": "^0.5.0",
     "@clack/prompts": "^1.2.0",
     "@google/genai": "^1.48.0",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.6",
     "@lancedb/lancedb": "^0.27.2",
-    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@larksuiteoapi/node-sdk": "^1.7.0",
     "@line/bot-sdk": "^11.0.0",
     "@lydell/node-pty": "1.2.0-beta.10",
     "@mariozechner/pi-agent-core": "0.65.2",
@@ -1418,7 +1418,7 @@
     }
   },
   "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0",
+    "@discordjs/opus": "^0.2.1",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "openshell": "0.1.0"
   },
@@ -1427,11 +1427,14 @@
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
+    "minimumReleaseAgeExclude": [
+      "axios"
+    ],
     "overrides": {
       "@anthropic-ai/sdk": "0.81.0",
       "hono": "4.12.12",
       "@hono/node-server": "1.19.13",
-      "axios": "^1.15.0",
+      "axios": "1.13.5",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
