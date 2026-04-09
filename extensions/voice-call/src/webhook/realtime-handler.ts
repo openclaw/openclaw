@@ -3,6 +3,7 @@ import http from "node:http";
 import type { Duplex } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
+  RealtimeVoiceBridge,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -58,17 +59,16 @@ type CallRegistration = {
   initialGreetingInstructions?: string;
 };
 
-// Keep this local seam narrow because the SDK bridge type currently degrades to `any`
-// under the commit-time lint/type pass in this file.
-type ActiveRealtimeVoiceBridge = {
-  connect(): Promise<void>;
-  sendAudio(audio: Buffer): void;
-  setMediaTimestamp(ts: number): void;
-  submitToolResult(callId: string, result: unknown): void;
-  acknowledgeMark(): void;
-  close(): void;
-  triggerGreeting?(instructions?: string): void;
-};
+type ActiveRealtimeVoiceBridge = Pick<
+  RealtimeVoiceBridge,
+  | "connect"
+  | "sendAudio"
+  | "setMediaTimestamp"
+  | "submitToolResult"
+  | "acknowledgeMark"
+  | "close"
+  | "triggerGreeting"
+>;
 
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
@@ -141,7 +141,8 @@ export class RealtimeCallHandler {
       maxPayload: MAX_REALTIME_MESSAGE_BYTES,
     });
     wss.handleUpgrade(request, socket, head, (ws) => {
-      let bridge: ActiveRealtimeVoiceBridge | null = null;
+      let bridge!: ActiveRealtimeVoiceBridge;
+      let hasBridge = false;
       let initialized = false;
 
       ws.on("message", (data: Buffer) => {
@@ -156,10 +157,15 @@ export class RealtimeCallHandler {
             const streamSid =
               typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
             const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
-            bridge = this.handleCall(streamSid, callSid, ws, callerMeta);
+            const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
+            if (!nextBridge) {
+              return;
+            }
+            bridge = nextBridge;
+            hasBridge = true;
             return;
           }
-          if (!bridge) {
+          if (!hasBridge) {
             return;
           }
           const mediaData =
@@ -188,7 +194,9 @@ export class RealtimeCallHandler {
       });
 
       ws.on("close", () => {
-        bridge?.close();
+        if (hasBridge) {
+          bridge.close();
+        }
       });
 
       ws.on("error", (error) => {
@@ -233,7 +241,7 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
-  ): ActiveRealtimeVoiceBridge | null {
+  ) {
     const registration = this.registerCallInManager(callSid, callerMeta);
     if (!registration) {
       ws.close(1008, "Caller rejected by policy");
@@ -241,7 +249,6 @@ export class RealtimeCallHandler {
     }
 
     const { callId, initialGreetingInstructions } = registration;
-    let bridge: ActiveRealtimeVoiceBridge | null = null;
     let callEndEmitted = false;
     const emitCallEnd = (reason: "completed" | "error") => {
       if (callEndEmitted) {
@@ -251,7 +258,7 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
-    bridge = this.realtimeProvider.createBridge({
+    const bridge = this.realtimeProvider.createBridge({
       providerConfig: this.providerConfig,
       instructions: this.config.instructions,
       tools: this.config.tools,
@@ -306,9 +313,6 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent) => {
-        if (!bridge) {
-          return;
-        }
         void this.executeToolCall(
           bridge,
           callId,
