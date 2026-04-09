@@ -231,6 +231,29 @@ class TestSync(TestCase):
         self.assertEqual(state["pending_attention"][0]["subject"], "Test")
 
     @patch("triage.subprocess.run")
+    def test_sync_filters_non_high_priority(self, mock_run):
+        """Only high-priority emails should be enqueued."""
+        ingest_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        query_data = {
+            "results": [
+                {"id": 1, "subject": "Urgent", "priority": "High", "sender": "a@b.com"},
+                {"id": 2, "subject": "FYI", "priority": "Low", "sender": "c@d.com"},
+                {"id": 3, "subject": "Normal", "priority": "Normal", "sender": "e@f.com"},
+            ],
+            "meta": {"max_id": 3},
+        }
+        query_result = type(
+            "R", (), {"returncode": 0, "stdout": json.dumps(query_data), "stderr": ""}
+        )()
+        mock_run.side_effect = [ingest_result, query_result]
+
+        triage.sync()
+
+        state = triage.get_state()
+        self.assertEqual(len(state["pending_attention"]), 1)
+        self.assertEqual(state["pending_attention"][0]["subject"], "Urgent")
+
+    @patch("triage.subprocess.run")
     def test_sync_bad_json(self, mock_run):
         """Sync should not crash on malformed JSON output."""
         ingest_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()

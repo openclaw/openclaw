@@ -112,6 +112,8 @@ def sync():
 
     new_emails = data.get("results", [])
     for email in new_emails:
+        if email.get("priority", "").lower() != "high":
+            continue
         if not any(item["id"] == email["id"] for item in state["pending_attention"]):
             state["pending_attention"].append(
                 {
