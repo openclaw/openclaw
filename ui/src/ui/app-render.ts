@@ -745,7 +745,16 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                switchChatSession(state, next);
+                state.sessionKey = next;
+                state.chatMessage = "";
+                state.chatMessages = [];
+                state.chatToolMessages = [];
+                state.resetToolStream();
+                state.applySettings({
+                  ...state.settings,
+                  sessionKey: next,
+                  lastActiveSessionKey: next,
+                });
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
