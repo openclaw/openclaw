@@ -16,6 +16,18 @@ import {
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
 
+const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
+
+function seedActiveEmbeddedRun(sessionId: string, sessionKey: string) {
+  (globalThis as Record<PropertyKey, unknown>)[EMBEDDED_RUN_STATE_KEY] = {
+    activeRuns: new Map([[sessionId, {}]]),
+    snapshots: new Map(),
+    sessionIdsByKey: new Map([[sessionKey, sessionId]]),
+    waiters: new Map(),
+    modelSwitchRequests: new Map(),
+  };
+}
+
 describe("diagnostic session state pruning", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -95,6 +107,7 @@ describe("stuck session diagnostics threshold", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticStateForTest();
+    delete (globalThis as Record<PropertyKey, unknown>)[EMBEDDED_RUN_STATE_KEY];
     vi.useRealTimers();
   });
 
@@ -110,6 +123,7 @@ describe("stuck session diagnostics threshold", () => {
           stuckSessionWarnMs: 30_000,
         },
       });
+      seedActiveEmbeddedRun("s1", "main");
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       vi.advanceTimersByTime(61_000);
     } finally {
@@ -126,6 +140,7 @@ describe("stuck session diagnostics threshold", () => {
     });
     try {
       startDiagnosticHeartbeat();
+      seedActiveEmbeddedRun("s2", "main");
       logSessionStateChange({ sessionId: "s2", sessionKey: "main", state: "processing" });
       vi.advanceTimersByTime(31_000);
     } finally {
@@ -139,5 +154,35 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+  });
+
+  it("reconciles ghost processing sessions back to idle", () => {
+    const events: Array<{ type: string; reason?: string }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push({
+        type: event.type,
+        reason: "reason" in event ? String(event.reason ?? "") : "",
+      });
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logSessionStateChange({ sessionId: "ghost", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(31_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(getDiagnosticSessionState({ sessionId: "ghost" }).state).toBe("idle");
+    expect(
+      events.some(
+        (event) => event.type === "session.state" && event.reason === "stale_processing_reconciled",
+      ),
+    ).toBe(true);
+    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
   });
 });
