@@ -162,7 +162,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import { dropGithubCopilotThinkingBlocks, dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import {
   installContextEngineLoopHook,
@@ -1284,19 +1284,24 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Anthropic Claude endpoints can reject replayed `thinking` blocks
-      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
-      // call, including tool continuations. Wrap the stream function so every
+      // Some providers reject replayed thinking blocks on follow-up calls,
+      // including tool continuations. Wrap the stream function so every
       // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
         const inner = activeSession.agent.streamFn;
+        const sanitizeReplayThinking =
+          params.provider === "github-copilot"
+            ? dropGithubCopilotThinkingBlocks
+            : dropThinkingBlocks;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
           const messages = ctx?.messages;
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          const sanitized = sanitizeReplayThinking(
+            messages as unknown as AgentMessage[],
+          ) as unknown;
           if (sanitized === messages) {
             return inner(model, context, options);
           }
