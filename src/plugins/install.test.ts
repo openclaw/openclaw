@@ -1009,6 +1009,35 @@ describe("installPluginFromArchive", () => {
     ).toBe(true);
   });
 
+  it("blocks bundle installs when a vendored manifest uses a blocked package name", async () => {
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Blocked Vendored Package Name Bundle",
+    });
+    fs.mkdirSync(path.join(pluginDir, "vendor", "plain-crypto-js"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "vendor", "plain-crypto-js", "package.json"),
+      JSON.stringify({
+        name: "plain-crypto-js",
+        version: "4.2.1",
+      }),
+    );
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        'Bundle "blocked-vendored-package-name-bundle" installation blocked',
+      );
+      expect(result.error).toContain('"plain-crypto-js" as package name');
+      expect(result.error).toContain(
+        "declared in plain-crypto-js (vendor/plain-crypto-js/package.json)",
+      );
+    }
+  });
+
   it("surfaces plugin scanner findings from before_install", async () => {
     const handler = vi.fn().mockReturnValue({
       findings: [

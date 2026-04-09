@@ -7,11 +7,13 @@ export const blockedInstallDependencyPackageNames = [
 export type BlockedManifestDependencyFinding = {
   dependencyName: string;
   declaredAs?: string;
-  field: "dependencies" | "optionalDependencies" | "peerDependencies";
+  field: "dependencies" | "name" | "optionalDependencies" | "peerDependencies";
 };
 
-type PackageDependencyFields = Partial<
-  Record<BlockedManifestDependencyFinding["field"], Record<string, string>>
+type PackageDependencyFields = {
+  name?: string;
+} & Partial<
+  Record<Exclude<BlockedManifestDependencyFinding["field"], "name">, Record<string, string>>
 >;
 
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET = new Set<string>(
@@ -46,6 +48,9 @@ export function findBlockedManifestDependencies(
   manifest: PackageDependencyFields,
 ): BlockedManifestDependencyFinding[] {
   const findings: BlockedManifestDependencyFinding[] = [];
+  if (manifest.name && BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(manifest.name)) {
+    findings.push({ dependencyName: manifest.name, field: "name" });
+  }
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
     const dependencyMap = manifest[field];
     if (!dependencyMap) {

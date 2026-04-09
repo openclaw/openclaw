@@ -85,7 +85,7 @@ function buildBlockedDependencyReason(params: {
   findings: Array<{
     dependencyName: string;
     declaredAs?: string;
-    field: "dependencies" | "optionalDependencies" | "peerDependencies";
+    field: "dependencies" | "name" | "optionalDependencies" | "peerDependencies";
   }>;
   manifestPackageName?: string;
   manifestRelativePath: string;
@@ -97,9 +97,11 @@ function buildBlockedDependencyReason(params: {
   });
   const findingSummary = params.findings
     .map((finding) =>
-      finding.declaredAs
-        ? `"${finding.dependencyName}" via alias "${finding.declaredAs}" in ${finding.field}`
-        : `"${finding.dependencyName}" in ${finding.field}`,
+      finding.field === "name"
+        ? `"${finding.dependencyName}" as package name`
+        : finding.declaredAs
+          ? `"${finding.dependencyName}" via alias "${finding.declaredAs}" in ${finding.field}`
+          : `"${finding.dependencyName}" in ${finding.field}`,
     )
     .join(", ");
   return `${params.targetLabel} blocked: blocked dependencies ${findingSummary} declared in ${manifestLabel}.`;

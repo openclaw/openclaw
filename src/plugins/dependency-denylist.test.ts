@@ -26,6 +26,19 @@ function readRootLockfile(): string {
 }
 
 describe("dependency denylist guardrails", () => {
+  it("finds blocked package names on vendored manifests", () => {
+    expect(
+      findBlockedManifestDependencies({
+        name: "plain-crypto-js",
+      }),
+    ).toEqual([
+      {
+        dependencyName: "plain-crypto-js",
+        field: "name",
+      },
+    ]);
+  });
+
   it("finds blocked packages declared through npm alias specs", () => {
     expect(
       findBlockedManifestDependencies({
