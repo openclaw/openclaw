@@ -776,6 +776,18 @@ export const dispatchTelegramMessage = async ({
                 // stream starts. Splitting at reasoning-end can orphan the active
                 // preview and cause duplicate reasoning sends on reasoning final.
                 if (splitReasoningOnNextStream) {
+                  // Archive the current reasoning bubble's message ID before forceNewMessage()
+                  // discards it. Mirrors the pattern used in
+                  // rotateAnswerLaneForNewAssistantMessage for the answer lane.
+                  if (reasoningLane.hasStreamedMessage) {
+                    const prevReasoningMessageId = reasoningLane.stream?.messageId();
+                    if (
+                      typeof prevReasoningMessageId === "number" &&
+                      !archivedReasoningPreviewIds.includes(prevReasoningMessageId)
+                    ) {
+                      archivedReasoningPreviewIds.push(prevReasoningMessageId);
+                    }
+                  }
                   reasoningLane.stream?.forceNewMessage();
                   resetDraftLaneState(reasoningLane);
                   splitReasoningOnNextStream = false;
