@@ -7,7 +7,7 @@ import {
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
@@ -153,7 +153,10 @@ export async function sendMessageMSTeams(
         thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
       })
     ) {
-      const { activity, uploadId } = prepareFileConsentActivity({
+      // Use the FS-backed store so the monitor webhook (typically a
+      // different process than the CLI sender) can honor the accept callback.
+      // See #55386.
+      const { activity, uploadId } = await prepareFileConsentActivityFs({
         media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
         conversationId,
         description: messageText || undefined,

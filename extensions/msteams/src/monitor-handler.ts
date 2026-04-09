@@ -10,6 +10,7 @@ import type { MSTeamsAdapter } from "./messenger.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { getDefaultPendingUploadFsStore, type PendingUploadFsStore } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
@@ -48,6 +49,13 @@ export type MSTeamsMessageHandlerDeps = {
   conversationStore: MSTeamsConversationStore;
   pollStore: MSTeamsPollStore;
   log: MSTeamsMonitorLogger;
+  /**
+   * Optional override for the cross-process pending-upload store. Falls back
+   * to the process-wide default (which writes under the msteams state dir).
+   * Tests supply a temp-dir-backed store to avoid touching the real state
+   * dir.
+   */
+  pendingUploadFsStore?: PendingUploadFsStore;
 };
 
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
@@ -110,13 +118,115 @@ async function isFeedbackInvokeAuthorized(
   return true;
 }
 
+/** Source of a resolved pending upload, so we remove from the correct store. */
+type PendingUploadSource = "memory" | "fs";
+type ResolvedPendingUpload = {
+  source: PendingUploadSource;
+  filename: string;
+  contentType?: string;
+  conversationId: string;
+  buffer: Buffer;
+};
+
+/**
+ * Look up a pending upload in both the in-memory store and the FS-backed
+ * store. The FS store is the cross-process fallback used by the CLI
+ * `message send --media` path (see #55386), since that sender runs in a
+ * different process than the monitor webhook handler.
+ *
+ * FS store errors are intentionally swallowed (logged at debug): the FS
+ * store is an opportunistic fallback, and a misconfigured state dir or a
+ * transient read error should never prevent the in-memory fast path or
+ * crash the invoke handler.
+ */
+async function resolvePendingUpload(
+  uploadId: string | undefined,
+  fsStore: PendingUploadFsStore,
+  log: MSTeamsMonitorLogger,
+): Promise<ResolvedPendingUpload | undefined> {
+  if (!uploadId) {
+    return undefined;
+  }
+
+  const memoryHit = getPendingUpload(uploadId);
+  if (memoryHit) {
+    return {
+      source: "memory",
+      filename: memoryHit.filename,
+      contentType: memoryHit.contentType,
+      conversationId: memoryHit.conversationId,
+      buffer: memoryHit.buffer,
+    };
+  }
+
+  try {
+    const fsHit = await fsStore.get(uploadId);
+    if (fsHit) {
+      return {
+        source: "fs",
+        filename: fsHit.entry.filename,
+        contentType: fsHit.entry.contentType,
+        conversationId: fsHit.entry.conversationId,
+        buffer: fsHit.buffer,
+      };
+    }
+  } catch (err) {
+    log.debug?.("fs-backed pending upload lookup failed", {
+      uploadId,
+      error: formatUnknownError(err),
+    });
+  }
+
+  return undefined;
+}
+
+async function removeResolvedPendingUpload(
+  uploadId: string | undefined,
+  source: PendingUploadSource | undefined,
+  fsStore: PendingUploadFsStore,
+  log: MSTeamsMonitorLogger,
+): Promise<void> {
+  if (!uploadId) {
+    return;
+  }
+  const safeFsRemove = async () => {
+    try {
+      await fsStore.remove(uploadId);
+    } catch (err) {
+      log.debug?.("fs-backed pending upload removal failed", {
+        uploadId,
+        error: formatUnknownError(err),
+      });
+    }
+  };
+  if (source === "fs") {
+    await safeFsRemove();
+    return;
+  }
+  if (source === "memory") {
+    removePendingUpload(uploadId);
+    return;
+  }
+  // Source unknown (e.g. decline with no prior lookup) — clear both stores so
+  // no stale entry survives either side.
+  removePendingUpload(uploadId);
+  await safeFsRemove();
+}
+
+export type MSTeamsFileConsentInvokeDeps = {
+  log: MSTeamsMonitorLogger;
+  fsStore?: PendingUploadFsStore;
+};
+
 /**
  * Handle fileConsent/invoke activities for large file uploads.
  */
 async function handleFileConsentInvoke(
   context: MSTeamsTurnContext,
-  log: MSTeamsMonitorLogger,
+  deps: MSTeamsFileConsentInvokeDeps,
 ): Promise<boolean> {
+  const { log } = deps;
+  const fsStore = deps.fsStore ?? getDefaultPendingUploadFsStore();
   const expiredUploadMessage =
     "The file upload request has expired. Please try sending the file again.";
   const activity = context.activity;
@@ -134,7 +244,7 @@ async function handleFileConsentInvoke(
     typeof consentResponse.context?.uploadId === "string"
       ? consentResponse.context.uploadId
       : undefined;
-  const pendingFile = getPendingUpload(uploadId);
+  const pendingFile = await resolvePendingUpload(uploadId, fsStore, log);
   if (pendingFile) {
     const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
     const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -157,6 +267,7 @@ async function handleFileConsentInvoke(
         uploadId,
         filename: pendingFile.filename,
         size: pendingFile.buffer.length,
+        source: pendingFile.source,
       });
 
       try {
@@ -189,7 +300,7 @@ async function handleFileConsentInvoke(
         log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
-        removePendingUpload(uploadId);
+        await removeResolvedPendingUpload(uploadId, pendingFile.source, fsStore, log);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
@@ -198,7 +309,7 @@ async function handleFileConsentInvoke(
   } else {
     // User declined
     log.debug?.("user declined file consent", { uploadId });
-    removePendingUpload(uploadId);
+    await removeResolvedPendingUpload(uploadId, pendingFile?.source, fsStore, log);
   }
 
   return true;
@@ -398,7 +509,11 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
 
         try {
           await withRevokedProxyFallback({
-            run: async () => await handleFileConsentInvoke(ctx, deps.log),
+            run: async () =>
+              await handleFileConsentInvoke(ctx, {
+                log: deps.log,
+                fsStore: deps.pendingUploadFsStore,
+              }),
             onRevoked: async () => true,
             onRevokedLog: () => {
               deps.log.debug?.(
