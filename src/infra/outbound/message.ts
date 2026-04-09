@@ -15,6 +15,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import { stageLocalMediaPathsForGatewayRpc } from "./message-gateway-media.js";
 import type { OutboundMirror } from "./mirror.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
@@ -236,7 +237,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const mirrorMediaUrls = normalizedPayloads.flatMap(
     (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
   );
-  const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
+  let primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
   if (params.dryRun) {
     return {
@@ -302,14 +303,24 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
+  const stagedMedia = await stageLocalMediaPathsForGatewayRpc({
+    cfg,
+    agentId: params.agentId,
+    mediaUrl: params.mediaUrl,
+    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+  });
+  const stagedMediaUrls =
+    stagedMedia.mediaUrls ?? (stagedMedia.mediaUrl ? [stagedMedia.mediaUrl] : undefined);
+  primaryMediaUrl = stagedMediaUrls?.[0] ?? stagedMedia.mediaUrl ?? primaryMediaUrl;
+
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
     params: {
       to: params.to,
       message: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      mediaUrl: stagedMedia.mediaUrl,
+      mediaUrls: stagedMedia.mediaUrls,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,
@@ -324,7 +335,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     to: params.to,
     via: "gateway",
     mediaUrl: primaryMediaUrl,
-    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+    mediaUrls: stagedMediaUrls,
     result,
   };
 }
