@@ -91,15 +91,12 @@ func parseTaggedDocument(text string) (string, string, error) {
 	}
 	bodyStart += frontEnd + len(bodyTagStart)
 
-	body := ""
-	suffix := ""
-	if bodyEnd := strings.Index(text[bodyStart:], bodyTagEnd); bodyEnd != -1 {
-		bodyEnd += bodyStart
-		body = trimTagNewlines(text[bodyStart:bodyEnd])
-		suffix = strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
-	} else {
+	bodyEnd := strings.LastIndex(text, bodyTagEnd)
+	if bodyEnd == -1 || bodyEnd < bodyStart {
 		return "", "", fmt.Errorf("missing %s", bodyTagEnd)
 	}
+	body := trimTagNewlines(text[bodyStart:bodyEnd])
+	suffix := strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
 
 	prefix := strings.TrimSpace(text[:frontStart-len(frontmatterTagStart)])
 	if prefix != "" || suffix != "" {

@@ -261,6 +261,43 @@ func TestSplitDocBodyIntoBlocksKeepsNestedTripleBackticksInsideFourBacktickFence
 	}
 }
 
+func TestSanitizeDocChunkProtocolWrappersStripsOuterWrapperAroundBodyExamples(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"Paragraph mentioning literal tokens `<body>` and `</body>`.",
+		"",
+		"<html>",
+		"  <body>",
+		"    literal example",
+		"  </body>",
+		"</html>",
+	}, "\n")
+	translated := strings.Join([]string{
+		"<frontmatter>",
+		"title: leaked",
+		"</frontmatter>",
+		"",
+		"<body>",
+		"提到字面量 `<body>` 和 `</body>` 的段落。",
+		"",
+		"<html>",
+		"  <body>",
+		"    literal example",
+		"  </body>",
+		"</html>",
+		"</body>",
+	}, "\n")
+
+	sanitized := sanitizeDocChunkProtocolWrappers(source, translated)
+	if strings.Contains(sanitized, frontmatterTagStart) || strings.HasPrefix(strings.TrimSpace(sanitized), bodyTagStart) {
+		t.Fatalf("expected outer wrapper stripped, got:\n%s", sanitized)
+	}
+	if !strings.Contains(sanitized, "<html>") || !strings.Contains(sanitized, "<body>") || !strings.Contains(sanitized, "</body>") {
+		t.Fatalf("expected inner HTML example preserved, got:\n%s", sanitized)
+	}
+}
+
 func TestTranslateDocBodyChunkedFallsBackToSmallerChunks(t *testing.T) {
 	body := strings.Join([]string{
 		"<Accordion title=\"Alpha block\">",
