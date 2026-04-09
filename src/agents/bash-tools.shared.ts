@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
-import { homedir } from "node:os";
+import os from "node:os";
 import path from "node:path";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -168,28 +168,21 @@ function normalizeContainerPath(input: string): string {
   return path.posix.normalize(normalized);
 }
 
-export function resolveWorkdir(workdir: string, warnings: string[]) {
-  const current = safeCwd();
-  const fallback = current ?? homedir();
-  try {
-    const stats = statSync(workdir);
-    if (stats.isDirectory()) {
-      return workdir;
-    }
-  } catch {
-    // ignore, fallback below
-  }
-  warnings.push(`Warning: workdir "${workdir}" is unavailable; using "${fallback}".`);
-  return fallback;
-}
+export function resolveWorkdir(workdir: string): string {
+  // Expand ~ to the home directory
+  const expandedWorkdir = workdir.startsWith("~")
+    ? path.join(os.homedir(), workdir.slice(1))
+    : workdir;
 
-function safeCwd() {
-  try {
-    const cwd = process.cwd();
-    return existsSync(cwd) ? cwd : null;
-  } catch {
-    return null;
+  // Validate that the workdir exists and is a directory
+  if (!existsSync(expandedWorkdir)) {
+    throw new Error(`workdir "${workdir}" does not exist`);
   }
+  const stats = statSync(expandedWorkdir);
+  if (!stats.isDirectory()) {
+    throw new Error(`workdir "${workdir}" is not a directory`);
+  }
+  return expandedWorkdir;
 }
 
 /**
