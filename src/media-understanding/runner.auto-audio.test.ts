@@ -65,6 +65,7 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 async function runAutoAudioCase(params: {
   transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
+  activeModel?: { provider: string; model?: string };
 }) {
   let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
   await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
@@ -77,6 +78,7 @@ async function runAutoAudioCase(params: {
       attachments: cache,
       media,
       providerRegistry,
+      activeModel: params.activeModel,
     });
   });
   if (!runResult) {
@@ -93,6 +95,20 @@ describe("runCapability auto audio entries", () => {
         seenModel = req.model;
         return { text: "ok", model: req.model ?? "unknown" };
       },
+    });
+    expect(result.outputs[0]?.text).toBe("ok");
+    expect(seenModel).toBe("gpt-4o-transcribe");
+    expect(result.decision.outcome).toBe("success");
+  });
+
+  it("does not pass the active chat model id to auto audio transcription", async () => {
+    let seenModel: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenModel = req.model;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      activeModel: { provider: "openai", model: "gpt-5.4" },
     });
     expect(result.outputs[0]?.text).toBe("ok");
     expect(seenModel).toBe("gpt-4o-transcribe");

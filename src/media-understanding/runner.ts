@@ -623,6 +623,8 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
+  // Audio transcription must use a speech-capable model (see bundled defaults), not the
+  // active chat model id (e.g. gpt-5.4), which is invalid for /audio/transcriptions.
   const model =
     params.capability === "image"
       ? await resolveAutoImageModelId({
@@ -630,7 +632,9 @@ async function resolveActiveModelEntry(params: {
           providerId,
           explicitModel: params.activeModel?.model,
         })
-      : params.activeModel?.model;
+      : params.capability === "audio"
+        ? undefined
+        : params.activeModel?.model;
   if (params.capability === "image" && !model) {
     return null;
   }
