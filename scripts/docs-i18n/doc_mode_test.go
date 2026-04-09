@@ -235,6 +235,32 @@ func TestSplitDocBodyIntoBlocksKeepsFenceTogether(t *testing.T) {
 	}
 }
 
+func TestSplitDocBodyIntoBlocksKeepsNestedTripleBackticksInsideFourBacktickFence(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		"````md",
+		"```ts",
+		"console.log('nested example')",
+		"```",
+		"````",
+		"",
+		"Outside paragraph",
+		"",
+	}, "\n")
+
+	blocks := splitDocBodyIntoBlocks(body)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	}
+	if !strings.Contains(blocks[0], "console.log('nested example')") || !strings.Contains(blocks[0], "````") {
+		t.Fatalf("expected the full fenced example to stay in one block:\n%s", blocks[0])
+	}
+	if !strings.Contains(blocks[1], "Outside paragraph") {
+		t.Fatalf("expected trailing paragraph in second block:\n%s", blocks[1])
+	}
+}
+
 func TestTranslateDocBodyChunkedFallsBackToSmallerChunks(t *testing.T) {
 	body := strings.Join([]string{
 		"<Accordion title=\"Alpha block\">",

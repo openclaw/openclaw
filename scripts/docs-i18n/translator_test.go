@@ -114,6 +114,20 @@ func TestIsRetryableTranslateErrorRetriesTerminatedStopReason(t *testing.T) {
 	}
 }
 
+func TestIsRetryableTranslateErrorRetriesCanceledStopReasons(t *testing.T) {
+	t.Parallel()
+
+	for _, message := range []string{
+		"pi error: stopReason=cancelled; assistant=partial output",
+		"pi error: stopReason=canceled; assistant=partial output",
+		"pi error: stopReason=aborted; assistant=partial output",
+	} {
+		if !isRetryableTranslateError(errors.New(message)) {
+			t.Fatalf("expected retryable stop reason for %q", message)
+		}
+	}
+}
+
 func TestRunPromptIncludesStderr(t *testing.T) {
 	t.Parallel()
 
@@ -292,6 +306,50 @@ func TestPiTranslatorRestartsClientAfterTerminatedStopReason(t *testing.T) {
 	}
 	if len(clients) != 2 {
 		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	if !clients[0].closed {
+		t.Fatal("expected first client to close before retry")
+	}
+	if clients[1].closed {
+		t.Fatal("expected replacement client to remain open")
+	}
+}
+
+func TestPiTranslatorRestartsClientAfterCanceledStopReason(t *testing.T) {
+	t.Parallel()
+
+	clients := []*fakePiPromptClient{}
+	factoryCalls := 0
+	factory := func(context.Context) (docsPiPromptClient, error) {
+		factoryCalls++
+		index := factoryCalls
+		client := &fakePiPromptClient{
+			prompt: func(context.Context, string) (string, error) {
+				if index == 1 {
+					return "", errors.New("pi error: stopReason=aborted; assistant=partial output")
+				}
+				return "translated", nil
+			},
+		}
+		clients = append(clients, client)
+		return client, nil
+	}
+
+	client, err := factory(context.Background())
+	if err != nil {
+		t.Fatalf("factory failed: %v", err)
+	}
+	translator := &PiTranslator{client: client, clientFactory: factory}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "translated" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("expected factory to run twice, got %d", factoryCalls)
 	}
 	if !clients[0].closed {
 		t.Fatal("expected first client to close before retry")

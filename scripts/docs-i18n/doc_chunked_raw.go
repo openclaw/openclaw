@@ -139,12 +139,11 @@ func splitDocBodyIntoBlocks(body string) []string {
 	lines := strings.SplitAfter(body, "\n")
 	blocks := make([]string, 0, len(lines))
 	var current strings.Builder
-	inFence := false
+	fenceDelimiter := ""
 	for _, line := range lines {
 		current.WriteString(line)
-		if togglesFence(line) {
-			inFence = !inFence
-		}
+		fenceDelimiter, _ = updateFenceDelimiter(fenceDelimiter, line)
+		inFence := fenceDelimiter != ""
 		if !inFence && strings.TrimSpace(line) == "" {
 			blocks = append(blocks, current.String())
 			current.Reset()
@@ -279,8 +278,11 @@ func logDocChunkSplit(chunkID string, blockCount int, err error) {
 func summarizeDocChunkStructure(text string) docChunkStructure {
 	counts := map[string]int{}
 	lines := strings.Split(text, "\n")
+	fenceDelimiter := ""
 	for _, line := range lines {
-		if togglesFence(line) {
+		var toggled bool
+		fenceDelimiter, toggled = updateFenceDelimiter(fenceDelimiter, line)
+		if toggled {
 			counts["__fence_toggle__"]++
 		}
 		for _, match := range docsComponentTagRE.FindAllStringSubmatch(line, -1) {
@@ -325,8 +327,39 @@ func sortedKeys(counts map[string]int) []string {
 	return keys
 }
 
-func togglesFence(line string) bool {
-	return docsFenceRE.MatchString(line)
+func updateFenceDelimiter(current, line string) (string, bool) {
+	delimiter := leadingFenceDelimiter(line)
+	if delimiter == "" {
+		return current, false
+	}
+	if current == "" {
+		return delimiter, true
+	}
+	if delimiter[0] == current[0] && len(delimiter) >= len(current) {
+		return "", true
+	}
+	return current, false
+}
+
+func leadingFenceDelimiter(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	if len(trimmed) < 3 {
+		return ""
+	}
+	switch trimmed[0] {
+	case '`', '~':
+	default:
+		return ""
+	}
+	marker := trimmed[0]
+	index := 0
+	for index < len(trimmed) && trimmed[index] == marker {
+		index++
+	}
+	if index < 3 {
+		return ""
+	}
+	return trimmed[:index]
 }
 
 func docsI18nDocChunkMaxBytes() int {
