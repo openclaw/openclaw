@@ -44,9 +44,15 @@ export function formatSlackDigestSummaryItem(item: unknown): string {
 
 export function formatSlackDigestNotification(body: unknown): string | undefined {
   const record = asRecord(body);
+  const result = asRecord(record?.result);
+  const completion = asRecord(record?.completion);
   const digestSummary = Array.isArray(record?.notification_digest_summary)
     ? record.notification_digest_summary
-    : undefined;
+    : Array.isArray(result?.notification_digest_summary)
+      ? result.notification_digest_summary
+      : Array.isArray(completion?.notification_digest_summary)
+        ? completion.notification_digest_summary
+        : undefined;
   if (!digestSummary || digestSummary.length === 0) {
     return undefined;
   }

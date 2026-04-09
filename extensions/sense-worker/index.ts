@@ -14,9 +14,9 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     api.registerCommand({
       name: "nemoclaw",
-      description: "Show the latest NemoClaw digest summary.",
+      description: "Show the latest NemoClaw digest summary or inspect a job.",
       acceptsArgs: true,
-      handler: async (ctx) => await handleNemoClawCommand(ctx.args),
+      handler: async (ctx) => await handleNemoClawCommand(ctx.args, ctx.config),
     });
     api.registerTool(
       (ctx) => {

@@ -1047,6 +1047,10 @@ The first `/nemoclaw digest` command stays intentionally shallow: it reads the l
 and returns that text directly. This keeps the post-notification check path aligned with the
 same `summary_parts` contract used by preview and Slack notifications.
 
+`/nemoclaw job <id>` is the matching per-job check path: it reads the existing Sense job
+status source, formats `notification_digest_summary` through the same Slack digest formatter
+when present, and otherwise returns a minimal `status / exit_code / error / summary` text.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

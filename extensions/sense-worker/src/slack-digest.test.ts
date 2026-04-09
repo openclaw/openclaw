@@ -86,4 +86,31 @@ describe("slack digest formatter", () => {
     expect(text).toContain("MAJ | 50.0% | Leader ★");
     expect(text).toContain("+1 more");
   });
+
+  it("reads notification_digest_summary from nested result payloads", () => {
+    const text = formatSlackDigestNotification({
+      status: "done",
+      result: {
+        notification_digest_summary: [
+          {
+            digest_title: "Auth failures (immediate)",
+            digest_bucket_ui_layouts: {
+              meta: {
+                summary_parts: {
+                  display: {
+                    badge: { short: "MAJ" },
+                    leader: { compact: "Leader ★" },
+                  },
+                  percent: "50.0%",
+                  share: 0.5,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(text).toBe("Auth failures (immediate)\nMAJ | 50.0% | Leader ★ | share=0.5");
+  });
 });
