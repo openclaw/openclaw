@@ -47,6 +47,8 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
     privateKeyPem: "private",
   })),
 );
+const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn());
+const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn());
 const parseMessageWithAttachmentsMock = vi.hoisted(() => vi.fn());
 const normalizeChannelIdMock = vi.hoisted(() =>
   vi.fn((channel?: string | null) => channel ?? null),
@@ -86,6 +88,8 @@ const runtimeMocks = vi.hoisted(() => ({
   ),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
+  updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+  updatePairedNodeMetadata: updatePairedNodeMetadataMock,
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
@@ -145,6 +149,8 @@ const updateSessionStoreMock = runtimeMocks.updateSessionStore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
+const updatePairedDeviceMetadataVi = runtimeMocks.updatePairedDeviceMetadata;
+const updatePairedNodeMetadataVi = runtimeMocks.updatePairedNodeMetadata;
 
 function buildCtx(): NodeEventContext {
   return {
@@ -176,6 +182,8 @@ describe("node exec events", () => {
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
+    updatePairedDeviceMetadataVi.mockClear();
+    updatePairedNodeMetadataVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
   });
@@ -462,6 +470,71 @@ describe("node exec events", () => {
     });
 
     expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
+  });
+
+  it("stores durable node last-seen metadata from alive beacons", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(
+      ctx,
+      "node-alive",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({
+          displayName: "Sim iPhone",
+          version: "2026.4.8",
+          platform: "iOS 26.0",
+          deviceFamily: "iPhone",
+          modelIdentifier: "iPhone17,1",
+          trigger: "bg_app_refresh",
+          pushTransport: "direct",
+          sentAtMs: 123,
+        }),
+      },
+      { deviceId: "device-alive" },
+    );
+
+    expect(updatePairedNodeMetadataVi).toHaveBeenCalledTimes(1);
+    expect(updatePairedDeviceMetadataVi).toHaveBeenCalledTimes(1);
+    expect(updatePairedNodeMetadataVi).toHaveBeenCalledWith("node-alive", {
+      lastSeenReason: "bg_app_refresh",
+      lastSeenAtMs: expect.any(Number),
+    });
+    expect(updatePairedDeviceMetadataVi).toHaveBeenCalledWith("device-alive", {
+      lastSeenReason: "bg_app_refresh",
+      lastSeenAtMs: expect.any(Number),
+    });
+  });
+
+  it("does not update paired device metadata without an authenticated device id", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-no-device", {
+      event: "node.presence.alive",
+      payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+    });
+
+    expect(updatePairedNodeMetadataVi).toHaveBeenCalledTimes(1);
+    expect(updatePairedDeviceMetadataVi).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeated alive beacons before persisting again", async () => {
+    const ctx = buildCtx();
+    const payloadJSON = JSON.stringify({ trigger: "bg_app_refresh" });
+
+    await handleNodeEvent(
+      ctx,
+      "node-throttle",
+      { event: "node.presence.alive", payloadJSON },
+      { deviceId: "device-throttle" },
+    );
+    await handleNodeEvent(
+      ctx,
+      "node-throttle",
+      { event: "node.presence.alive", payloadJSON },
+      { deviceId: "device-throttle" },
+    );
+
+    expect(updatePairedNodeMetadataVi).toHaveBeenCalledTimes(1);
+    expect(updatePairedDeviceMetadataVi).toHaveBeenCalledTimes(1);
   });
 });
 

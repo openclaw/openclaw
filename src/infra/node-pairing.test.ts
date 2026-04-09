@@ -5,6 +5,7 @@ import {
   getPairedNode,
   listNodePairing,
   requestNodePairing,
+  updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
 
@@ -255,6 +256,28 @@ describe("node pairing tokens", () => {
         ],
         paired: [],
       });
+    });
+  });
+
+  test("persists last-seen metadata updates for paired nodes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      await updatePairedNodeMetadata(
+        "node-1",
+        {
+          lastSeenAtMs: 123_456,
+          lastSeenReason: "bg_app_refresh",
+        },
+        baseDir,
+      );
+
+      await expect(getPairedNode("node-1", baseDir)).resolves.toEqual(
+        expect.objectContaining({
+          nodeId: "node-1",
+          lastSeenAtMs: 123_456,
+          lastSeenReason: "bg_app_refresh",
+        }),
+      );
     });
   });
 });

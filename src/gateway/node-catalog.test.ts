@@ -94,6 +94,8 @@ describe("gateway/node-catalog", () => {
           commands: ["system.run"],
           createdAtMs: 1,
           approvedAtMs: 100,
+          lastSeenAtMs: 111,
+          lastSeenReason: "bg_app_refresh",
         },
       ],
       connectedNodes: [
@@ -135,6 +137,8 @@ describe("gateway/node-catalog", () => {
         pathEnv: "/usr/bin:/bin",
         approvedAtMs: 100,
         connectedAtMs,
+        lastSeenAtMs: connectedAtMs,
+        lastSeenReason: "connect",
         paired: true,
         connected: true,
       }),
@@ -173,6 +177,8 @@ describe("gateway/node-catalog", () => {
           commands: ["system.run"],
           createdAtMs: 1,
           approvedAtMs: 123,
+          lastSeenAtMs: 456,
+          lastSeenReason: "silent_push",
         },
       ],
       connectedNodes: [],
@@ -193,6 +199,102 @@ describe("gateway/node-catalog", () => {
         caps: ["system"],
         commands: ["system.run"],
         approvedAtMs: 123,
+        lastSeenAtMs: 456,
+        lastSeenReason: "silent_push",
+        paired: true,
+        connected: false,
+      }),
+    );
+  });
+
+  it("prefers the newest last-seen source consistently", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        {
+          deviceId: "ios-1",
+          publicKey: "public-key",
+          displayName: "iPhone",
+          clientId: "openclaw-ios",
+          clientMode: "node",
+          role: "node",
+          roles: ["node"],
+          lastSeenAtMs: 900,
+          lastSeenReason: "silent_push",
+          tokens: {
+            node: {
+              token: "device-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
+          },
+          createdAtMs: 1,
+          approvedAtMs: 99,
+        },
+      ],
+      pairedNodes: [
+        {
+          nodeId: "ios-1",
+          token: "node-token",
+          platform: "ios",
+          caps: ["device"],
+          commands: ["device.status"],
+          createdAtMs: 1,
+          approvedAtMs: 123,
+          lastSeenAtMs: 800,
+          lastSeenReason: "bg_app_refresh",
+        },
+      ],
+      connectedNodes: [],
+    });
+
+    expect(getKnownNode(catalog, "ios-1")).toEqual(
+      expect.objectContaining({
+        nodeId: "ios-1",
+        lastSeenAtMs: 900,
+        lastSeenReason: "silent_push",
+        paired: true,
+        connected: false,
+      }),
+    );
+  });
+
+  it("surfaces device-pair last-seen metadata when node pairing is absent", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        {
+          deviceId: "ios-1",
+          publicKey: "public-key",
+          displayName: "iPhone",
+          clientId: "openclaw-ios",
+          clientMode: "node",
+          role: "node",
+          roles: ["node"],
+          lastSeenAtMs: 789,
+          lastSeenReason: "background-alive-test",
+          tokens: {
+            node: {
+              token: "device-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
+          },
+          createdAtMs: 1,
+          approvedAtMs: 99,
+        },
+      ],
+      pairedNodes: [],
+      connectedNodes: [],
+    });
+
+    expect(getKnownNode(catalog, "ios-1")).toEqual(
+      expect.objectContaining({
+        nodeId: "ios-1",
+        clientId: "openclaw-ios",
+        clientMode: "node",
+        lastSeenAtMs: 789,
+        lastSeenReason: "background-alive-test",
         paired: true,
         connected: false,
       }),

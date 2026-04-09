@@ -1131,10 +1131,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         logGateway: { warn: context.logGateway.warn },
       };
-      await handleNodeEvent(nodeContext, nodeId, {
-        event: p.event,
-        payloadJSON,
-      });
+      await handleNodeEvent(
+        nodeContext,
+        nodeId,
+        {
+          event: p.event,
+          payloadJSON,
+        },
+        { deviceId: client?.connect?.device?.id },
+      );
       respond(true, { ok: true }, undefined);
     });
   },

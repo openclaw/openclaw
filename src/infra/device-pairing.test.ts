@@ -16,6 +16,7 @@ import {
   requestDevicePairing,
   revokeDeviceToken,
   rotateDeviceToken,
+  updatePairedDeviceMetadata,
   verifyDeviceToken,
   type PairedDevice,
   type RotateDeviceTokenResult,
@@ -901,6 +902,50 @@ describe("device pairing tokens", () => {
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
 
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("updates paired device metadata using the normalized device id key", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+
+    await updatePairedDeviceMetadata(
+      "  node-1  ",
+      {
+        lastSeenAtMs: 123_456,
+        lastSeenReason: "bg_app_refresh",
+      },
+      baseDir,
+    );
+
+    await expect(getPairedDevice("node-1", baseDir)).resolves.toEqual(
+      expect.objectContaining({
+        deviceId: "node-1",
+        lastSeenAtMs: 123_456,
+        lastSeenReason: "bg_app_refresh",
+      }),
+    );
+
+    const { pairedPath } = resolvePairingPaths(baseDir, "devices");
+    const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
+      string,
+      PairedDevice
+    >;
+    expect(Object.keys(pairedByDeviceId)).toEqual(["node-1"]);
+  });
+
+  test("rejects reserved paired device ids for metadata updates", async () => {
+    const baseDir = await makeDevicePairingDir();
+
+    await expect(
+      updatePairedDeviceMetadata(
+        "__proto__",
+        {
+          lastSeenAtMs: 1,
+          lastSeenReason: "connect",
+        },
+        baseDir,
+      ),
+    ).rejects.toThrow("reserved device pairing id");
   });
 
   test("clears paired device state by device id", async () => {
