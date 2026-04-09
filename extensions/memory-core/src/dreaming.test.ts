@@ -114,6 +114,22 @@ function createCronHarness(
   return { cron, jobs, addCalls, updateCalls, removeCalls };
 }
 
+function getBeforeAgentReplyHandler(
+  onMock: ReturnType<typeof vi.fn>,
+): (
+  event: { cleanedBody: string },
+  ctx: { trigger?: string; workspaceDir?: string },
+) => Promise<unknown> {
+  const call = onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply");
+  if (!call) {
+    throw new Error("before_agent_reply hook was not registered");
+  }
+  return call[1] as (
+    event: { cleanedBody: string },
+    ctx: { trigger?: string; workspaceDir?: string },
+  ) => Promise<unknown>;
+}
+
 describe("short-term dreaming config", () => {
   it("uses defaults and user timezone fallback", () => {
     const cfg = {
@@ -719,6 +735,230 @@ describe("gateway startup reconciliation", () => {
       expect(logger.info).toHaveBeenCalledWith(
         expect.stringContaining("created managed dreaming cron job"),
       );
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("reconciles disabled->enabled config changes during runtime", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    } as never;
+
+    try {
+      registerShortTermPromotionDreaming(api);
+      const deps = { cron: harness.cron };
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps,
+        }),
+      );
+
+      expect(harness.addCalls).toHaveLength(0);
+
+      api.config = {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "30 6 * * *",
+                  timezone: "America/New_York",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.addCalls[0]?.schedule).toMatchObject({
+        kind: "cron",
+        expr: "30 6 * * *",
+        tz: "America/New_York",
+      });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("reconciles cadence/timezone updates against the active cron service after startup", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const startupHarness = createCronHarness();
+    const onMock = vi.fn();
+    const api = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 1 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    } as never;
+
+    try {
+      registerShortTermPromotionDreaming(api);
+      const deps = { cron: startupHarness.cron };
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps,
+        }),
+      );
+
+      expect(startupHarness.addCalls).toHaveLength(1);
+      const managed = startupHarness.jobs.find((job) =>
+        job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
+      );
+      expect(managed).toBeDefined();
+
+      const reloadedHarness = createCronHarness(
+        managed
+          ? [
+              {
+                ...managed,
+                schedule: managed.schedule ? { ...managed.schedule } : undefined,
+                payload: managed.payload ? { ...managed.payload } : undefined,
+              },
+            ]
+          : [],
+      );
+      deps.cron = reloadedHarness.cron;
+      api.config = {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "45 8 * * *",
+                  timezone: "America/Los_Angeles",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+
+      expect(startupHarness.updateCalls).toHaveLength(0);
+      expect(reloadedHarness.updateCalls).toHaveLength(1);
+      expect(reloadedHarness.updateCalls[0]?.patch.schedule).toMatchObject({
+        kind: "cron",
+        expr: "45 8 * * *",
+        tz: "America/Los_Angeles",
+      });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("recreates the managed cron job when it is removed after startup", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    } as never;
+
+    try {
+      registerShortTermPromotionDreaming(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: { cron: harness.cron },
+        }),
+      );
+      expect(harness.addCalls).toHaveLength(1);
+
+      harness.jobs.splice(
+        0,
+        harness.jobs.length,
+        ...harness.jobs.filter(
+          (job) => !job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
+        ),
+      );
+      expect(harness.jobs).toHaveLength(0);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+
+      expect(harness.addCalls).toHaveLength(2);
+      expect(harness.addCalls[1]?.schedule).toMatchObject({
+        kind: "cron",
+        expr: "0 2 * * *",
+        tz: "UTC",
+      });
     } finally {
       clearInternalHooks();
     }
