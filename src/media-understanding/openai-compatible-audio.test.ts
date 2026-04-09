@@ -133,7 +133,7 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       });
 
       const bodyStr = decodeBody(getRequest().init?.body);
-      expect(bodyStr).toContain('filename="bad\\"nameInjected: header"');
+      expect(bodyStr).toContain('filename="bad%22nameInjected: header"');
     });
 
     it("strips CR/LF from mime type", async () => {

@@ -55,7 +55,7 @@ export async function transcribeOpenAiCompatibleAudio(
     "application/octet-stream";
   const boundary = `----FormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
   const enc = new TextEncoder();
-  const safeFileName = fileName.replace(/[\r\n"]/g, (c) => (c === '"' ? '\\"' : ""));
+  const safeFileName = fileName.replace(/[\r\n"]/g, (c) => (c === '"' ? "%22" : ""));
   const parts: Uint8Array[] = [
     enc.encode(
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${safeFileName}"\r\nContent-Type: ${mime}\r\n\r\n`,
