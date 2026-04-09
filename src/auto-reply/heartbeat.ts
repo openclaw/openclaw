@@ -49,7 +49,10 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
 
   // Strip a leading YAML frontmatter block. Some templates wrap heartbeat
   // metadata in `--- ... ---` even when there are no actionable tasks below.
-  stripped = stripped.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  // Allow leading whitespace so frontmatter is still detected when an HTML
+  // comment was stripped above (which can leave a leading blank line) or when
+  // the file starts with blank lines before the `---` fence.
+  stripped = stripped.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
 
   const lines = stripped.split("\n");
   for (const line of lines) {

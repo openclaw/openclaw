@@ -261,6 +261,32 @@ heartbeat: true
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
+  it("returns true when an HTML comment precedes YAML frontmatter (#61690)", () => {
+    // After stripping the HTML comment we are left with a leading newline
+    // before the `---` fence. The frontmatter regex must tolerate that
+    // leading whitespace, otherwise the comment-then-frontmatter layout
+    // (a common template shape) is misclassified as non-empty and the
+    // preflight gate keeps making LLM calls.
+    const content = `<!-- note -->
+---
+title: HEARTBEAT
+---
+
+# HEARTBEAT.md
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("returns true when blank lines precede YAML frontmatter", () => {
+    const content = `
+
+---
+title: HEARTBEAT
+---
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
   it("returns true for header with only empty lines", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n\n\n")).toBe(true);
   });
