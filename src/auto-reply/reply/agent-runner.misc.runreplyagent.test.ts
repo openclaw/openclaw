@@ -22,8 +22,8 @@ function createCliBackendTestConfig() {
     agents: {
       defaults: {
         cliBackends: {
-          "claude-cli": {},
-          "google-gemini-cli": {},
+          "claude-cli": { command: "claude" },
+          "google-gemini-cli": { command: "gemini" },
         },
       },
     },
