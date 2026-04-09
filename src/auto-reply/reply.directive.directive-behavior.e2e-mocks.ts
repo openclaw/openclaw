@@ -1,7 +1,6 @@
 import { vi, type Mock } from "vitest";
 
 export const runEmbeddedPiAgentMock: Mock = vi.fn();
-export const compactEmbeddedPiSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
 export const compactEmbeddedPiSessionMock: Mock = vi.fn().mockResolvedValue({
   ok: true,
