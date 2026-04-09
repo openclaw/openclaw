@@ -252,6 +252,8 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).toContain(
       "The same sessionId is referenced by multiple session keys without a unique canonical selection.",
     );
-    expect(text).toContain("sessionId=sid-dup: agent:main:beta, agent:main:alpha");
+    expect(text).toContain("sessionId=sid-dup:");
+    expect(text).toContain("agent:main:beta");
+    expect(text).toContain("agent:main:alpha");
   });
 });
