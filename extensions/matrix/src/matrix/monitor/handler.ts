@@ -1652,7 +1652,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Stop the draft stream timer so partial drafts don't leak if the
       // model run throws or times out mid-stream.
       if (draftStreamRef) {
-        await draftStreamRef.stop().catch(() => {});
+        const draftEventId = await draftStreamRef.stop().catch(() => undefined);
+        if (draftEventId && draftStreamRef.mustDeliverFinalNormally()) {
+          await redactMatrixDraftEvent(client, roomId, draftEventId);
+        }
       }
       if (claimedInboundEvent && inboundDeduper && eventId) {
         inboundDeduper.releaseEvent({ roomId, eventId });
