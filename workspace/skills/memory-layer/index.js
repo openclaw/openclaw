@@ -59,11 +59,12 @@ export class SimpleMemory {
     try {
       console.log('⏳ 正在初始化记忆宫殿...');
 
-      // 迁移旧数据
-      await this.migrateLegacyData();
-
-      // 构建宫殿结构
+      // 构建宫殿结构（先建宫殿）
       await this.buildPalace();
+
+      // 暂时禁用自动迁移（用户可手动触发）
+      // await this.migrateLegacyData();
+      console.log('💡 如需迁移旧数据，请运行: memory.migrateLegacyData()');
 
       // 初始化向量DB
       await this.initChroma();
@@ -92,28 +93,56 @@ export class SimpleMemory {
       console.log(`📦 发现旧数据: ${this.legacyData.memories.length} 条记忆`);
 
       // 迁移记忆到宫殿
+      console.log(`📦 正在迁移 ${this.legacyData.memories.length} 条记忆...`);
+      let migratedCount = 0;
       for (const memory of this.legacyData.memories) {
-        await this.migrateMemory(memory);
+        try {
+          await this.migrateMemory(memory);
+          migratedCount++;
+          if (migratedCount % 10 === 0) {
+            console.log(`   已迁移 ${migratedCount}/${this.legacyData.memories.length}...`);
+          }
+        } catch (e) {
+          console.log(`⚠️  迁移失败: ${memory.id} - ${e.message}`);
+        }
       }
+      console.log(`✅ 记忆迁移完成: ${migratedCount}/${this.legacyData.memories.length}`);
 
       // 迁移偏好
-      for (const [key, value] of Object.entries(this.legacyData.profile)) {
-        if (!key.endsWith('_updated')) {
-          await this.storeMemory('user', 'preferences', {
-            key,
-            value,
-            migrated: true
-          });
+      const prefKeys = Object.keys(this.legacyData.profile).filter(k => !k.endsWith('_updated'));
+      if (prefKeys.length > 0) {
+        console.log(`📦 正在迁移 ${prefKeys.length} 条偏好...`);
+        for (const [key, value] of Object.entries(this.legacyData.profile)) {
+          if (!key.endsWith('_updated')) {
+            try {
+              await this.storeMemory('user', 'preferences', {
+                key,
+                value,
+                migrated: true
+              });
+            } catch (e) {
+              console.log(`⚠️  偏好迁移失败: ${key} - ${e.message}`);
+            }
+          }
         }
+        console.log('✅ 偏好迁移完成');
       }
 
       // 迁移反思
-      for (const reflection of this.legacyData.reflections) {
-        await this.storeMemory('user', 'discoveries', {
-          discovery: reflection.content,
-          significance: reflection.significance,
-          migrated: true
-        });
+      if (this.legacyData.reflections.length > 0) {
+        console.log(`📦 正在迁移 ${this.legacyData.reflections.length} 条反思...`);
+        for (const reflection of this.legacyData.reflections) {
+          try {
+            await this.storeMemory('user', 'discoveries', {
+              discovery: reflection.content,
+              significance: reflection.significance,
+              migrated: true
+            });
+          } catch (e) {
+            console.log(`⚠️  反思迁移失败: ${e.message}`);
+          }
+        }
+        console.log('✅ 反思迁移完成');
       }
 
       // 备份旧文件
@@ -261,6 +290,16 @@ export class SimpleMemory {
 
     if (wingType === 'user') {
       wingPath = this.structure.wings.user;
+      // 确保走廊存在
+      if (!fs.existsSync(wingPath)) {
+        fs.mkdirSync(wingPath, { recursive: true });
+      }
+      for (const hallName of Object.values(this.structure.halls)) {
+        const hallPath = path.join(wingPath, `hall-${hallName}`);
+        if (!fs.existsSync(hallPath)) {
+          fs.mkdirSync(hallPath, { recursive: true });
+        }
+      }
     } else if (wingType === 'projects') {
       const projectName = data.project || 'default';
       wingPath = path.join(this.structure.wings.projects, projectName);

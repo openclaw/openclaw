@@ -34,6 +34,12 @@ npm test
 - 新数据: `~/.openclaw/memory-palace/`
 - 备份: `~/.openclaw/memory.json.backup`
 
+**如需手动迁移**：
+```javascript
+import { memory } from './index.js';
+await memory.migrateLegacyData();
+```
+
 ## 📖 在OpenClaw中使用
 
 ### 方法1: 作为技能加载
