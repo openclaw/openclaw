@@ -1244,6 +1244,17 @@ describe("runWithModelFallback", () => {
     expect(result.result).toEqual(payload);
     expect(run).toHaveBeenCalledTimes(1);
   });
+
+  it("throws EmptyResponseError when the only candidate returns empty content", async () => {
+    const cfg = makeCfg({
+      agents: { defaults: { model: { primary: "openai/gpt-4.1-mini" } } },
+    });
+    const run = vi.fn().mockResolvedValueOnce({ content: [] });
+    await expect(
+      runWithModelFallback({ cfg, provider: "openai", model: "gpt-4.1-mini", run }),
+    ).rejects.toBeInstanceOf(EmptyResponseError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("EmptyResponseError", () => {

@@ -153,6 +153,9 @@ async function runFallbackAttempt<T>(params: {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  /** Predicate to distinguish raw provider responses from wrapper types (e.g. EmbeddedPiRunResult).
+   *  Only raw responses with empty content trigger EmptyResponseError. */
+  isRawProviderResult?: (result: T) => boolean;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -160,18 +163,19 @@ async function runFallbackAttempt<T>(params: {
     model: params.model,
   });
   if (runResult.ok) {
-    // Check for empty raw provider response content array (treat as failure)
+    // Check for empty raw provider response content array (treat as failure).
     // Do NOT check EmbeddedPiRunResult payloads here - that should be handled upstream
-    // to avoid breaking valid use cases like memory flush which intentionally return empty
+    // to avoid breaking valid use cases like memory flush which intentionally return empty.
     const result = runResult.result;
+    const isRaw =
+      params.isRawProviderResult?.(result) ??
+      (typeof result === "object" && result !== null && !("meta" in result));
+    const resultObj = isRaw && typeof result === "object" && result !== null ? result : null;
     if (
-      result &&
-      typeof result === "object" &&
-      "content" in result &&
-      Array.isArray(result.content) &&
-      result.content.length === 0 &&
-      // Only apply to raw provider responses (not wrapped in EmbeddedPiRunResult)
-      !("meta" in result)
+      resultObj &&
+      "content" in resultObj &&
+      Array.isArray((resultObj as { content: unknown }).content) &&
+      (resultObj as { content: unknown[] }).content.length === 0
     ) {
       return {
         error: new EmptyResponseError(),
@@ -465,6 +469,10 @@ export async function runWithModelFallback<T>(params: {
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  /** Predicate to distinguish raw provider responses from wrapper types.
+   *  Only raw responses with empty content trigger EmptyResponseError.
+   *  Defaults to checking absence of `meta` field. */
+  isRawProviderResult?: (result: T) => boolean;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -524,7 +532,12 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      isRawProviderResult: params.isRawProviderResult,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }
@@ -547,7 +560,7 @@ export async function runWithModelFallback<T>(params: {
       // Even unrecognized errors should not abort the fallback loop when
       // there are remaining candidates.  Only abort/context-overflow errors
       // (handled above) are truly non-retryable.
-      const isKnownFailover = isFailoverError(normalized);
+      const isKnownFailover = isFailoverError(normalized) || err instanceof EmptyResponseError;
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
       }
@@ -589,6 +602,8 @@ export async function runWithImageModelFallback<T>(params: {
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  /** @inheritDoc runWithModelFallback */
+  isRawProviderResult?: (result: T) => boolean;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
@@ -606,7 +621,12 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      isRawProviderResult: params.isRawProviderResult,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }

@@ -798,6 +798,11 @@ export const dispatchTelegramMessage = async ({
 
   if (!hasFinalResponse) {
     clearGroupHistory();
+    // Re-throw dispatcher crashes even on the no-response early-return path
+    // so callers still see the failure for logging/alerting.
+    if (caughtDispatchError) {
+      throw caughtDispatchError;
+    }
     return;
   }
 
