@@ -38,6 +38,7 @@ typedef enum {
     GW_CFG_ERR_AUTH_MODE_UNSUPPORTED,
     GW_CFG_ERR_TOKEN_MISSING,
     GW_CFG_ERR_PASSWORD_MISSING,
+    GW_CFG_ERR_BIND_INVALID,
     GW_CFG_ERR_READ_FAILED,
     GW_CFG_ERR_SECRET_REF_UNSUPPORTED,
 } GatewayConfigError;
@@ -50,7 +51,7 @@ typedef struct {
 
 typedef struct {
     gchar *mode;           /* gateway.mode: "local" or other (NULL treated as local) */
-    gchar *host;           /* effective bind host (default 127.0.0.1) */
+    gchar *host;           /* effective client endpoint host (default 127.0.0.1) */
     gint port;             /* effective port (default 18789) */
     gboolean tls_enabled;  /* L6: TLS enablement from gateway.tls or gateway.security.tls */
     gchar *auth_mode;      /* gateway.auth.mode: "token", "password", "none" */

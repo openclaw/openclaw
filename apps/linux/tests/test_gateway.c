@@ -59,6 +59,19 @@ static void clear_env(void) {
     g_unsetenv("OPENCLAW_HOME");
 }
 
+static gboolean is_bind_mode_token_for_test(const gchar *value) {
+    return g_strcmp0(value, "auto") == 0 ||
+           g_strcmp0(value, "lan") == 0 ||
+           g_strcmp0(value, "loopback") == 0 ||
+           g_strcmp0(value, "tailnet") == 0 ||
+           g_strcmp0(value, "custom") == 0;
+}
+
+static void assert_host_not_bind_mode_token(const gchar *host) {
+    g_assert_nonnull(host);
+    g_assert_false(is_bind_mode_token_for_test(host));
+}
+
 static void test_config_defaults_no_token_is_invalid(void) {
     /*
      * With no config file and no env overrides, auth_mode defaults to "token"
@@ -79,6 +92,27 @@ static void test_config_defaults_no_token_is_invalid(void) {
     g_assert_null(config->token);
     gateway_config_free(config);
 
+    clear_env();
+}
+
+static void test_config_host_from_config_wins_over_bind_mode(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"host\":\"192.168.1.100\",\"bind\":\"lan\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "192.168.1.100");
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
     clear_env();
 }
 
@@ -1076,6 +1110,7 @@ static void test_config_bind_fallback_ignores_0_0_0_0(void) {
     g_assert_true(config->valid);
     /* 0.0.0.0 should fall back to default loopback */
     g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    assert_host_not_bind_mode_token(config->host);
     
     gateway_config_free(config);
 
@@ -1099,9 +1134,140 @@ static void test_config_bind_normalizes_loopback(void) {
     g_assert_nonnull(config);
     g_assert_true(config->valid);
     g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    assert_host_not_bind_mode_token(config->host);
     
     gateway_config_free(config);
 
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_mode_auto_maps_to_loopback_host(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"auto\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    assert_host_not_bind_mode_token(config->host);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_mode_lan_maps_to_loopback_host(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"lan\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    assert_host_not_bind_mode_token(config->host);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_mode_tailnet_maps_to_loopback_host(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"tailnet\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    assert_host_not_bind_mode_token(config->host);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_mode_custom_uses_custom_bind_host(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"custom\",\"customBindHost\":\"100.64.0.10\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "100.64.0.10");
+    assert_host_not_bind_mode_token(config->host);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_mode_custom_without_custom_bind_host_is_invalid(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"custom\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_BIND_INVALID);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_invalid_literal_is_rejected(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"not a host value\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_BIND_INVALID);
+
+    gateway_config_free(config);
     g_unlink(config_path);
     g_rmdir(tmpdir);
     clear_env();
@@ -1727,7 +1893,75 @@ static void test_config_bind_ipv4_literal_used(void) {
     g_assert_true(config->valid);
     /* bind = specific IPv4 should be used as host */
     g_assert_cmpstr(config->host, ==, "192.168.1.50");
+    assert_host_not_bind_mode_token(config->host);
     
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_hostname_literal_used(void) {
+    /* A valid hostname literal bind should be usable as host fallback */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"gateway.internal\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "gateway.internal");
+    assert_host_not_bind_mode_token(config->host);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_mode_custom_with_mode_token_custom_bind_host_is_invalid(void) {
+    /* bind=custom with customBindHost as a bind mode token must be rejected */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"custom\",\"customBindHost\":\"lan\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_BIND_INVALID);
+
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_invalid_hostname_literal_is_rejected(void) {
+    /* Invalid hostname label (leading '-') must be rejected */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"-bad.host\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_BIND_INVALID);
+
     gateway_config_free(config);
     g_unlink(config_path);
     g_rmdir(tmpdir);
@@ -1750,6 +1984,7 @@ static void test_config_bind_ipv6_unspecified_rejected(void) {
     g_assert_true(config->valid);
     /* :: should fall back to default loopback */
     g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    assert_host_not_bind_mode_token(config->host);
     
     gateway_config_free(config);
     g_unlink(config_path);
@@ -2171,8 +2406,15 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/config/tls_disabled_uses_http_ws", test_config_tls_disabled_uses_http_ws);
     g_test_add_func("/gateway/config/tls_enabled_uses_https_wss", test_config_tls_enabled_uses_https_wss);
     g_test_add_func("/gateway/config/host_from_config", test_config_host_from_config);
+    g_test_add_func("/gateway/config/host_from_config_wins_over_bind_mode", test_config_host_from_config_wins_over_bind_mode);
     g_test_add_func("/gateway/config/bind_fallback_ignores_0_0_0_0", test_config_bind_fallback_ignores_0_0_0_0);
     g_test_add_func("/gateway/config/bind_normalizes_loopback", test_config_bind_normalizes_loopback);
+    g_test_add_func("/gateway/config/bind_mode_auto_maps_to_loopback_host", test_config_bind_mode_auto_maps_to_loopback_host);
+    g_test_add_func("/gateway/config/bind_mode_lan_maps_to_loopback_host", test_config_bind_mode_lan_maps_to_loopback_host);
+    g_test_add_func("/gateway/config/bind_mode_tailnet_maps_to_loopback_host", test_config_bind_mode_tailnet_maps_to_loopback_host);
+    g_test_add_func("/gateway/config/bind_mode_custom_uses_custom_bind_host", test_config_bind_mode_custom_uses_custom_bind_host);
+    g_test_add_func("/gateway/config/bind_mode_custom_without_custom_bind_host_is_invalid", test_config_bind_mode_custom_without_custom_bind_host_is_invalid);
+    g_test_add_func("/gateway/config/bind_invalid_literal_is_rejected", test_config_bind_invalid_literal_is_rejected);
     g_test_add_func("/gateway/config/tls_object_form", test_config_tls_object_form);
     g_test_add_func("/gateway/config/tls_from_security_block", test_config_tls_from_security_block);
 
@@ -2186,6 +2428,9 @@ int main(int argc, char **argv) {
 
     /* gateway.bind safety tests */
     g_test_add_func("/gateway/config/bind_ipv4_literal_used", test_config_bind_ipv4_literal_used);
+    g_test_add_func("/gateway/config/bind_hostname_literal_used", test_config_bind_hostname_literal_used);
+    g_test_add_func("/gateway/config/bind_mode_custom_with_mode_token_custom_bind_host_is_invalid", test_config_bind_mode_custom_with_mode_token_custom_bind_host_is_invalid);
+    g_test_add_func("/gateway/config/bind_invalid_hostname_literal_is_rejected", test_config_bind_invalid_hostname_literal_is_rejected);
     g_test_add_func("/gateway/config/bind_ipv6_unspecified_rejected", test_config_bind_ipv6_unspecified_rejected);
 
     /* Feature A: Config path resolution tests */
