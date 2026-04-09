@@ -312,10 +312,14 @@ export async function hydrateAttachmentParamsForAction(params: {
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
+  const shouldHydrateSend =
+    params.action === "send" &&
+    Boolean(readAttachmentMediaHint(params.args) ?? readAttachmentFileHint(params.args));
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
-    !shouldHydrateUploadFile
+    !shouldHydrateUploadFile &&
+    !shouldHydrateSend
   ) {
     return;
   }
@@ -326,7 +330,8 @@ export async function hydrateAttachmentParamsForAction(params: {
     args: params.args,
     dryRun: params.dryRun,
     mediaPolicy: params.mediaPolicy,
-    allowMessageCaptionFallback: params.action === "sendAttachment" || shouldHydrateUploadFile,
+    allowMessageCaptionFallback:
+      params.action === "sendAttachment" || shouldHydrateUploadFile || shouldHydrateSend,
   });
 }
 
