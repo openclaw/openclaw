@@ -114,27 +114,61 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
   return false;
 }
 
+function isPlausibleCsvText(buffer: Buffer): boolean {
+  // Avoid treating binary as CSV.
+  if (buffer.includes(0x00)) {
+    return false;
+  }
+  // Heuristic: require at least one comma and one newline in the first chunk.
+  const head = buffer.subarray(0, Math.min(buffer.length, 16 * 1024));
+  const hasComma = head.includes(0x2c); // ,
+  const hasNewline = head.includes(0x0a) || head.includes(0x0d); // \n or \r
+  if (!hasComma || !hasNewline) {
+    return false;
+  }
+  // Ensure it decodes as UTF-8 without replacement characters.
+  const decoded = head.toString("utf8");
+  if (decoded.includes("\uFFFD")) {
+    return false;
+  }
+  return true;
+}
+
 function assertHostReadMediaAllowed(params: {
-  contentType?: string;
+  detectedMime?: string;
+  verifiedMime?: string;
   kind: MediaKind | undefined;
+  buffer?: Buffer;
 }): void {
   if (params.kind === "image" || params.kind === "audio" || params.kind === "video") {
     return;
   }
   if (params.kind !== "document") {
-    const contentType = normalizeMimeType(params.contentType);
+    const contentType = normalizeMimeType(params.verifiedMime ?? params.detectedMime);
     throw new LocalMediaAccessError(
       "path-not-allowed",
       `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${contentType ?? "unknown"}).`,
     );
   }
-  const normalizedMime = normalizeMimeType(params.contentType);
-  if (normalizedMime && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)) {
+  // Host-local path: do not trust extension-derived MIME for allowlisting.
+  // Only allow verified (content-sniffed) MIME types, with a narrow CSV exception
+  // gated by a lightweight text-shape check.
+  const verified = normalizeMimeType(params.verifiedMime);
+  if (verified && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(verified)) {
+    return;
+  }
+  const detected = normalizeMimeType(params.detectedMime);
+  if (
+    detected === "text/csv" &&
+    params.buffer &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has("text/csv") &&
+    isPlausibleCsvText(params.buffer)
+  ) {
     return;
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${verified ?? "unknown"}).`,
   );
 }
 
@@ -390,8 +424,10 @@ async function loadWebMediaInternal(
   }
   if (hostReadCapability) {
     assertHostReadMediaAllowed({
-      contentType: verifiedMime ?? detectedMime,
+      detectedMime,
+      verifiedMime,
       kind: kindFromMime(detectedMime ?? verifiedMime),
+      buffer: data,
     });
   }
   return await clampAndFinalize({
