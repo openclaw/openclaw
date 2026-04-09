@@ -1,6 +1,7 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec.js";
 
@@ -68,6 +69,54 @@ describeNonWin("exec script preflight", () => {
       await expect(
         tool.execute("call-quoted", {
           command: 'node "bad.js"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("validates in-workdir scripts whose names start with '..'", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const jsPath = path.join(tmp, "..bad.js");
+      await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-dotdot-prefix-script", {
+          command: "node ..bad.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("validates in-workdir symlinked script entrypoints", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const targetPath = path.join(tmp, "bad-target.js");
+      const linkPath = path.join(tmp, "link.js");
+      await fs.writeFile(targetPath, "const value = $DM_JSON;", "utf-8");
+      await fs.symlink(targetPath, linkPath);
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-symlink-entrypoint", {
+          command: "node link.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("validates scripts under literal tilde directories in workdir", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const literalTildeDir = path.join(tmp, "~");
+      await fs.mkdir(literalTildeDir, { recursive: true });
+      await fs.writeFile(path.join(literalTildeDir, "bad.js"), "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-literal-tilde-path", {
+          command: 'node "~/bad.js"',
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
@@ -265,6 +314,115 @@ describeNonWin("exec script preflight", () => {
       });
       const text = result.content.find((block) => block.type === "text")?.text ?? "";
       expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("does not trust a swapped script pathname between validation and read", async () => {
+    await withTempDir("openclaw-exec-preflight-race-", async (parent) => {
+      const workdir = path.join(parent, "workdir");
+      const scriptPath = path.join(workdir, "script.js");
+      const outsidePath = path.join(parent, "outside.js");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
+      await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+
+      const originalStat = fs.stat.bind(fs);
+      let swapped = false;
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const target = args[0];
+        if (!swapped && typeof target === "string" && path.resolve(target) === scriptPath) {
+          const original = await originalStat(target);
+          await fs.rm(scriptPath, { force: true });
+          await fs.symlink(outsidePath, scriptPath);
+          swapped = true;
+          return original;
+        }
+        return await originalStat(...args);
+      });
+
+      try {
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        const result = await tool.execute("call-swapped-pathname", {
+          command: "node script.js",
+          workdir,
+        });
+        const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(swapped).toBe(true);
+        expect(text).not.toMatch(/exec preflight:/);
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+  });
+
+  it("handles pre-open symlink swaps without surfacing preflight errors", async () => {
+    await withTempDir("openclaw-exec-preflight-open-race-", async (parent) => {
+      const workdir = path.join(parent, "workdir");
+      const scriptPath = path.join(workdir, "script.js");
+      const outsidePath = path.join(parent, "outside.js");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
+      await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+
+      const originalOpen = fs.open.bind(fs);
+      let swapped = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const target = args[0];
+        if (!swapped && typeof target === "string" && path.resolve(target) === scriptPath) {
+          await fs.rm(scriptPath, { force: true });
+          await fs.symlink(outsidePath, scriptPath);
+          swapped = true;
+        }
+        return await originalOpen(...args);
+      });
+
+      try {
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        const result = await tool.execute("call-pre-open-swapped-pathname", {
+          command: "node script.js",
+          workdir,
+        });
+        const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(swapped).toBe(true);
+        expect(text).not.toMatch(/exec preflight:/);
+      } finally {
+        openSpy.mockRestore();
+      }
+    });
+  });
+
+  it("opens preflight script reads with O_NONBLOCK to avoid FIFO stalls", async () => {
+    await withTempDir("openclaw-exec-preflight-nonblock-", async (tmp) => {
+      const scriptPath = path.join(tmp, "script.js");
+      await fs.writeFile(scriptPath, 'console.log("ok")', "utf-8");
+
+      const originalOpen = fs.open.bind(fs);
+      const scriptOpenFlags: number[] = [];
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const [target, flags] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === scriptPath &&
+          typeof flags === "number"
+        ) {
+          scriptOpenFlags.push(flags);
+        }
+        return await originalOpen(...args);
+      });
+
+      try {
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        const result = await tool.execute("call-nonblocking-preflight-open", {
+          command: "node script.js",
+          workdir: tmp,
+        });
+        const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(scriptOpenFlags.length).toBeGreaterThan(0);
+        expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+        expect(text).not.toMatch(/exec preflight:/);
+      } finally {
+        openSpy.mockRestore();
+      }
     });
   });
 
