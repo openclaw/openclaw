@@ -548,7 +548,8 @@ describe("stripLeakedReasoningPreamble (via sanitizeAssistantVisibleText)", () =
       name: "strips cjk reasoning lead-in before visible reply",
       input: [
         "我先想一下这个问题。",
-        "Cybera said the post-send filter is the right seam.",
+        "I need to analyze this carefully.",
+        "Let me think through the approach.",
         "You're right. We should patch the send path.",
       ].join("\n"),
       expected: "You're right. We should patch the send path.",

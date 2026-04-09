@@ -558,7 +558,9 @@ function scoreSuspiciousPreamble(text: string): number {
     }
   }
   if (CJK_RE.test(scorableText)) {
-    score += suspiciousLineCount > 0 ? 2 : 1;
+    // Only apply +2 CJK bonus with stronger evidence (≥2 suspicious lines)
+    // to avoid truncating valid bilingual content with single instructional lines
+    score += suspiciousLineCount >= 2 ? 2 : 1;
   }
   if (suspiciousLineCount >= 2) {
     score += 1;
