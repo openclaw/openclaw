@@ -14,16 +14,15 @@ Use the **Dench Integrations tools** for all connected third-party app tasks in 
 
 ## Workflow
 
-1. Call `dench_search_integrations` with a `query` describing what you want to do (optionally narrow with `toolkit`).
+1. Call `dench_search_integrations` with a query with EXACT search strings of what might help you find relevant tools. like "posthog project", "stripe subscription", etc. (optionally narrow with toolkit).
 2. Inspect the returned `results` — each has `tool_slug`, `input_schema`, `is_connected`, `account_count`, and `accounts`.
 3. Read the `input_schema` to understand required fields, types, and defaults.
 4. Call `dench_execute_integrations` with `tool_slug` and the correct `arguments`.
 
 Do **not** use:
-- `gog`, shell CLIs for Gmail / Calendar / Drive / Slack / GitHub / Notion / Linear
-- `curl` or raw gateway HTTP calls
-- Direct provider REST calls
-- Old tools like `composio_search_tools`, `composio_resolve_tool`, or `composio_call_tool`
+- `gog`, shell CLIs for Gmail / Calendar / Drive / Slack / GitHub / Notion / Linear (unless you need to as last resort or if explicitly asked)
+- `curl` or raw gateway HTTP calls (unless explicitly asked)
+- Direct provider REST calls (unless explicitly asked)
 
 ## Multi-account handling
 
