@@ -1770,8 +1770,12 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted
               // to "final" so the downstream audio extraction path can pick them up.
+              // Strip text to avoid leaking tool summary into the combined reply.
               if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({ payload, kind: "final" });
+                deliveredReplies.push({
+                  payload: { ...payload, text: undefined },
+                  kind: "final",
+                });
               }
               break;
           }
