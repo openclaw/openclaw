@@ -50,7 +50,16 @@ describe("exec safe bin trust", () => {
     expect(dirs.has(path.resolve("/usr/local/bin"))).toBe(false);
     expect(dirs.has(path.resolve("/snap/bin"))).toBe(false);
     expect(dirs.has(path.resolve("/home/test/.nvm/versions/node/v22/bin"))).toBe(false);
-    expect(dirs.has(path.resolve("./scripts"))).toBe(false);
+    expect(Array.from(dirs)).not.toContain(path.resolve("./scripts"));
+  });
+
+  it("rejects raw relative trusted-dir entries before resolution", () => {
+    const dirs = buildTrustedSafeBinDirs({
+      baseDirs: ["/usr/bin"],
+      extraDirs: ["./scripts"],
+    });
+
+    expect(Array.from(dirs)).toEqual([path.resolve("/usr/bin")]);
   });
 
   it("classifies explicit mutable trusted-dir candidates", () => {

@@ -74,9 +74,9 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
 
 function resolveTrustedSafeBinDirs(entries: readonly string[]): string[] {
   const resolved = entries
+    .filter((entry) => !classifyRiskyExplicitSafeBinTrustedDir(entry))
     .map((entry) => normalizeTrustedDir(entry))
-    .filter((entry): entry is string => Boolean(entry))
-    .filter((entry) => !classifyRiskyExplicitSafeBinTrustedDir(entry));
+    .filter((entry): entry is string => Boolean(entry));
   return Array.from(new Set(resolved)).toSorted();
 }
 

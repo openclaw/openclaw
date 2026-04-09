@@ -269,6 +269,9 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   for (const scope of collectExecSafeBinScopes(next)) {
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
     for (const hit of listRiskyConfiguredSafeBins(scope.safeBins)) {
+      if (isRejectedSafeBin(hit.bin)) {
+        continue;
+      }
       warnings.push(`- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`);
     }
     const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);

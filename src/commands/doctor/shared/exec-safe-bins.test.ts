@@ -136,8 +136,6 @@ describe("doctor exec safe bin helpers", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes 'cat': cat reads named files by design, so do not treat it as a stdin-only safeBin; use an explicit executable-path allowlist entry or approval-gated run instead.",
-      "- tools.exec.safeBins includes 'ls': ls enumerates filesystem paths by design, so do not treat it as a stdin-only safeBin; use an explicit executable-path allowlist entry or approval-gated run instead.",
       "- tools.exec.safeBins includes 'cat': remove it from safeBins and use an explicit executable-path allowlist entry or approval-gated run instead.",
       "- tools.exec.safeBins includes 'ls': remove it from safeBins and use an explicit executable-path allowlist entry or approval-gated run instead.",
     ]);
