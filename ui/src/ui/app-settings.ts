@@ -363,10 +363,6 @@ export function syncThemeWithSettings(host: SettingsHost) {
   syncSystemThemeListener(host);
 }
 
-export function attachThemeListener(host: SettingsHost) {
-  syncSystemThemeListener(host);
-}
-
 export function detachThemeListener(host: SettingsHost) {
   host.systemThemeCleanup?.();
   host.systemThemeCleanup = null;

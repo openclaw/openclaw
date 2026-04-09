@@ -4,7 +4,6 @@ import {
   applyResolvedTheme,
   applySettings,
   applySettingsFromUrl,
-  attachThemeListener,
   setTabFromRoute,
   syncThemeWithSettings,
 } from "./app-settings.ts";
@@ -243,10 +242,10 @@ describe("setTabFromRoute", () => {
     });
 
     const host = createHost("chat");
-    host.theme = "knot" as unknown as ThemeName & ThemeMode;
-    host.themeMode = "system";
+    host.settings.theme = "knot" as unknown as ThemeName & ThemeMode;
+    host.settings.themeMode = "system";
 
-    attachThemeListener(host);
+    syncThemeWithSettings(host);
     listeners[0]?.({ matches: true } as MediaQueryListEvent);
     expect(host.themeResolved).toBe("openknot");
 
