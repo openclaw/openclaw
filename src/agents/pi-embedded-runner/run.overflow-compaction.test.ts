@@ -316,6 +316,36 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("detects context overflow from model_context_window_exceeded stop reason (no promptError)", async () => {
+    // Some providers (e.g. ZhipuAI/GLM) return model_context_window_exceeded as a
+    // stop reason rather than an error-coded stop. Without detection, payloads=0
+    // and the UI shows an infinite spinner instead of an error message (#63661).
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-responses" as const,
+          provider: "openai",
+          model: "glm-4.5-air",
+          usage: { input: 0, output: 0, total: 0 },
+          timestamp: 0,
+          stopReason: "model_context_window_exceeded",
+          errorMessage: "Unhandled stop reason: model_context_window_exceeded",
+          content: [],
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // The overflow should be detected and an error payload surfaced to the user.
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Context overflow");
+    expect(result.meta.error?.kind).toBe("context_overflow");
+  });
+
   it("guards thrown engine-owned overflow compaction attempts", async () => {
     mockedContextEngine.info.ownsCompaction = true;
     mockedGlobalHookRunner.hasHooks.mockImplementation(
