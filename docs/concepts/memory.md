@@ -19,7 +19,8 @@ Your agent has three memory-related files:
 - **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
 - **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
-  Today and yesterday's notes are loaded automatically.
+  These notes are not injected into the prompt automatically; they are read on
+  demand through memory search and memory reads.
 - **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
@@ -75,6 +76,71 @@ enabled automatically.
 
 For details on how search works, tuning options, and provider setup, see
 [Memory Search](/concepts/memory-search).
+
+### Memory injection modes
+
+You can control how much long-term memory is injected into the prompt with
+`agents.defaults.memoryInjection`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memoryInjection": "full"
+    }
+  }
+}
+```
+
+- **`"full"`** -- default behavior. `MEMORY.md` is loaded at session start just
+  like before.
+- **`"core-only"`** -- still injects `MEMORY.md`, but keeps it inside the normal
+  bootstrap size limits.
+- **`"recall-only"`** -- skips bootstrap injection for `MEMORY.md` entirely and
+  relies on search-based recall instead.
+
+`memoryInjection` only affects bootstrap prompt injection. It does not disable
+the memory files themselves, indexing, `memory_search`, or `memory_get`.
+
+### Automatic recall
+
+If you want memory recall to happen every turn instead of waiting for the model
+to call `memory_search`, enable `agents.defaults.memorySearch.autoRecall`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "autoRecall": {
+          "enabled": true,
+          "topK": 5,
+          "minScore": 0.3
+        }
+      }
+    }
+  }
+}
+```
+
+When enabled, OpenClaw uses the current user prompt as a search query before the
+model responds. Matching memories are prepended as a `<relevant-memories>` block
+so the model can use them immediately without first deciding to call a tool.
+
+<Info>
+If you set `memoryInjection: "recall-only"` without also enabling
+`memorySearch.autoRecall`, OpenClaw will warn at startup because the agent will
+have no automatic memory context.
+</Info>
+
+### Token-cost guidance
+
+- Use **`"recall-only"`** when your sessions are usually short and `MEMORY.md`
+  is large. This avoids paying the full bootstrap token cost every time.
+- Use **`"full"`** when you benefit from prompt-cache reuse across longer
+  sessions and your durable memory stays reasonably sized.
+- Use **`"core-only"`** when you want bootstrap memory available but need a hard
+  cap on prompt growth.
 
 ## Memory backends
 

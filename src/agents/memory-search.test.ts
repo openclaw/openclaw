@@ -187,6 +187,45 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.provider).toBe("auto");
     expect(resolved?.fallback).toBe("none");
+    expect(resolved?.autoRecall).toEqual({
+      enabled: false,
+      topK: 5,
+      minScore: 0.3,
+    });
+  });
+
+  it("merges autoRecall defaults and agent overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            autoRecall: {
+              enabled: true,
+              topK: 7,
+              minScore: 0.4,
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              autoRecall: {
+                topK: 3,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(resolveMemorySearchConfig(cfg, "main")?.autoRecall).toEqual({
+      enabled: true,
+      topK: 3,
+      minScore: 0.4,
+    });
   });
 
   it("resolves sync config without consulting embedding providers", () => {

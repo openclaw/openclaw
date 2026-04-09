@@ -9,6 +9,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
+export type MemoryInjectionMode = "full" | "core-only" | "recall-only";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -171,6 +172,8 @@ export type AgentDefaultsConfig = {
    *   transcript already contains a completed assistant turn
    */
   contextInjection?: AgentContextInjection;
+  /** Controls whether MEMORY.md is injected into bootstrap context. */
+  memoryInjection?: MemoryInjectionMode;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */

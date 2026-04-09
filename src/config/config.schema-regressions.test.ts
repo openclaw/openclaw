@@ -83,6 +83,36 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.memoryInjection", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memoryInjection: "recall-only",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts memorySearch.autoRecall", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            autoRecall: {
+              enabled: true,
+              topK: 5,
+              minScore: 0.3,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
       agents: {

@@ -3199,6 +3199,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
+              memoryInjection: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "full",
+                  },
+                  {
+                    type: "string",
+                    const: "core-only",
+                  },
+                  {
+                    type: "string",
+                    const: "recall-only",
+                  },
+                ],
+                title: "Memory Injection",
+                description:
+                  'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Use "recall-only" when you want memory context to come only from per-turn recall instead of eager bootstrap injection.',
+              },
               bootstrapMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -3683,6 +3702,37 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                  autoRecall: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "Enable Memory Search Auto Recall",
+                        description:
+                          "Turns on per-turn automatic recall injection before the model sees the current user prompt. Enable this when you want memory context even if the model forgets to call memory_search itself.",
+                      },
+                      topK: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Search Auto Recall Top K",
+                        description:
+                          "Maximum number of recalled memory hits injected into each turn (default: 5). Lower this to keep prompts tighter, or raise it when recall quality is good and you need broader context.",
+                      },
+                      minScore: {
+                        type: "number",
+                        minimum: 0,
+                        maximum: 1,
+                        title: "Memory Search Auto Recall Min Score",
+                        description:
+                          "Minimum relevance score required for an auto-recalled memory to be injected (default: 0.3). Raise this to suppress weak matches, or lower it when recall is too sparse.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Memory Search Auto Recall",
+                    description:
+                      "Automatically runs memory recall before prompt build and prepends the strongest matches into the current turn. Keep this off by default for backward compatibility, or enable it when tool-driven recall is too inconsistent.",
                   },
                   provider: {
                     type: "string",
@@ -5550,6 +5600,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       properties: {
                         sessionMemory: {
                           type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    autoRecall: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        topK: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        minScore: {
+                          type: "number",
+                          minimum: 0,
+                          maximum: 1,
                         },
                       },
                       additionalProperties: false,
@@ -24234,6 +24303,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
       tags: ["advanced"],
     },
+    "agents.defaults.memoryInjection": {
+      label: "Memory Injection",
+      help: 'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Use "recall-only" when you want memory context to come only from per-turn recall instead of eager bootstrap injection.',
+      tags: ["advanced"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
@@ -24333,6 +24407,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Search Session Index (Experimental)",
       help: "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
       tags: ["security", "storage", "advanced"],
+    },
+    "agents.defaults.memorySearch.autoRecall": {
+      label: "Memory Search Auto Recall",
+      help: "Automatically runs memory recall before prompt build and prepends the strongest matches into the current turn. Keep this off by default for backward compatibility, or enable it when tool-driven recall is too inconsistent.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.autoRecall.enabled": {
+      label: "Enable Memory Search Auto Recall",
+      help: "Turns on per-turn automatic recall injection before the model sees the current user prompt. Enable this when you want memory context even if the model forgets to call memory_search itself.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.autoRecall.topK": {
+      label: "Memory Search Auto Recall Top K",
+      help: "Maximum number of recalled memory hits injected into each turn (default: 5). Lower this to keep prompts tighter, or raise it when recall quality is good and you need broader context.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.autoRecall.minScore": {
+      label: "Memory Search Auto Recall Min Score",
+      help: "Minimum relevance score required for an auto-recalled memory to be injected (default: 0.3). Raise this to suppress weak matches, or lower it when recall is too sparse.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.provider": {
       label: "Memory Search Provider",

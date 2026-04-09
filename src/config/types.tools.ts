@@ -357,6 +357,15 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
+  /** Optional per-turn automatic recall injection. */
+  autoRecall?: {
+    /** Enable per-turn memory recall before prompt build (default: false). */
+    enabled?: boolean;
+    /** Maximum recall hits injected into prompt context (default: 5). */
+    topK?: number;
+    /** Minimum similarity threshold for injected recall hits (default: 0.3). */
+    minScore?: number;
+  };
   /** Memory embedding provider adapter id. */
   provider?: string;
   remote?: {
