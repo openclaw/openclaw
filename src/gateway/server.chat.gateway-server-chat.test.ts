@@ -721,6 +721,165 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history rewrites assistant image data URLs into managed image blocks", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      mockGetReplyFromConfigOnce(async () => ({
+        mediaUrls: [`data:image/png;base64,${pngB64}`],
+      }));
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-1",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(res.payload?.runId).toBe("idem-managed-image-1");
+
+        let assistantMessage: Record<string, unknown> | undefined;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+            sessionKey: "main",
+          });
+          expect(historyRes.ok).toBe(true);
+          const messages = historyRes.payload?.messages ?? [];
+          assistantMessage = messages.find(
+            (message): message is Record<string, unknown> =>
+              typeof message === "object" &&
+              message !== null &&
+              (message as { role?: unknown }).role === "assistant",
+          );
+          if (assistantMessage) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        expect(assistantMessage).toBeTruthy();
+        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+        expect(assistantContent).toEqual([
+          expect.objectContaining({
+            type: "image",
+            url: expect.stringContaining("/api/chat/media/outgoing/"),
+            openUrl: expect.stringContaining("/full"),
+            downloadUrl: expect.stringContaining("/download"),
+          }),
+        ]);
+        const serializedAssistant = JSON.stringify(assistantMessage);
+        expect(serializedAssistant).not.toContain("data:image/png;base64");
+        expect(serializedAssistant).not.toContain(pngB64);
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
+  test("chat.history cleans up stale managed image records", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      mockGetReplyFromConfigOnce(async () => ({
+        mediaUrls: [`data:image/png;base64,${pngB64}`],
+      }));
+
+      try {
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-cleanup",
+        });
+
+        expect(sendRes.ok).toBe(true);
+
+        const recordsDir = path.join(dir, "media", "outgoing", "records");
+        let recordName: string | undefined;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const names = await fs.readdir(recordsDir).catch(() => []);
+          recordName = names[0];
+          if (recordName) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(recordName).toBeTruthy();
+
+        const recordPath = path.join(recordsDir, recordName!);
+        const record = JSON.parse(await fs.readFile(recordPath, "utf-8"));
+        record.messageId = "missing-message";
+        await fs.writeFile(recordPath, `${JSON.stringify(record)}\n`, "utf-8");
+
+        const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(historyRes.ok).toBe(true);
+
+        await expect(fs.access(recordPath)).rejects.toThrow();
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
+  test("chat.send does not leak local file paths when managed image preparation fails", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+
+      try {
+        const missingPath = path.join(dir, "secret-subdir", "missing-image.png");
+        mockGetReplyFromConfigOnce(async () => ({
+          mediaUrls: [missingPath],
+        }));
+
+        const errorEventPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.runId === "idem-managed-image-error" &&
+            o.payload?.state === "error",
+          8000,
+        );
+
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "attach it",
+          idempotencyKey: "idem-managed-image-error",
+        });
+
+        expect(res.ok).toBe(true);
+
+        const errorEvent = await errorEventPromise;
+        expect(errorEvent.payload?.errorMessage).toMatch(
+          /managed image attachment|unable to read local media file/i,
+        );
+        expect(errorEvent.payload?.errorMessage).not.toContain(missingPath);
+        expect(errorEvent.payload?.errorMessage).not.toContain(dir);
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
   test("routes block-streamed /btw replies through side-result events", async () => {
     await withMainSessionStore(async (dir) => {
       await fs.writeFile(

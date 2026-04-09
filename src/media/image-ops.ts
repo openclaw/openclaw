@@ -498,11 +498,17 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
 
 export async function resizeToJpeg(params: {
   buffer: Buffer;
-  maxSide: number;
+  maxSide?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   quality: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
+
+  const maxWidth = params.maxWidth ?? params.maxSide;
+  const maxHeight = params.maxHeight ?? params.maxSide;
+  const maxSide = params.maxSide ?? Math.max(maxWidth ?? 0, maxHeight ?? 0);
 
   if (prefersSips()) {
     // Normalize EXIF orientation BEFORE resizing (sips resize doesn't auto-rotate)
@@ -513,7 +519,7 @@ export async function resizeToJpeg(params: {
       const meta = await getImageMetadata(normalized);
       if (meta) {
         const maxDim = Math.max(meta.width, meta.height);
-        if (maxDim > 0 && maxDim <= params.maxSide) {
+        if (maxDim > 0 && maxDim <= maxSide) {
           return await sipsResizeToJpeg({
             buffer: normalized,
             maxSide: maxDim,
@@ -524,7 +530,7 @@ export async function resizeToJpeg(params: {
     }
     return await sipsResizeToJpeg({
       buffer: normalized,
-      maxSide: params.maxSide,
+      maxSide,
       quality: params.quality,
     });
   }
@@ -534,8 +540,8 @@ export async function resizeToJpeg(params: {
   return await sharp(params.buffer)
     .rotate() // Auto-rotate based on EXIF before resizing
     .resize({
-      width: params.maxSide,
-      height: params.maxSide,
+      width: maxWidth,
+      height: maxHeight,
       fit: "inside",
       withoutEnlargement: params.withoutEnlargement !== false,
     })
@@ -578,21 +584,25 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
  */
 export async function resizeToPng(params: {
   buffer: Buffer;
-  maxSide: number;
+  maxSide?: number;
+  maxWidth?: number;
+  maxHeight?: number;
   compressionLevel?: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
 
   const sharp = await loadSharp();
+  const maxWidth = params.maxWidth ?? params.maxSide;
+  const maxHeight = params.maxHeight ?? params.maxSide;
   // Compression level 6 is a good balance (0=fastest, 9=smallest)
   const compressionLevel = params.compressionLevel ?? 6;
 
   return await sharp(params.buffer)
     .rotate() // Auto-rotate based on EXIF if present
     .resize({
-      width: params.maxSide,
-      height: params.maxSide,
+      width: maxWidth,
+      height: maxHeight,
       fit: "inside",
       withoutEnlargement: params.withoutEnlargement !== false,
     })

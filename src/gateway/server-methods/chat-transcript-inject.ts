@@ -41,12 +41,32 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
+function sanitizeInjectedAssistantTranscriptText(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const sanitized = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        Boolean(line) &&
+        !line.startsWith("MEDIA:") &&
+        line !== "[[reply_to_current]]" &&
+        !/^\[\[reply_to:.+\]\]$/.test(line) &&
+        line !== "[[audio_as_voice]]",
+    )
+    .join("\n")
+    .trim();
+  return sanitized || undefined;
+}
+
 export function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
-  message: string;
-  label?: string;
+  message?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
+  label?: string;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
@@ -67,10 +87,23 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     },
   };
   const resolvedContent = resolveInjectedAssistantContent({
-    message: params.message,
+    message: params.message ?? "",
     label: params.label,
     content: params.content,
   });
+  const text =
+    sanitizeInjectedAssistantTranscriptText(params.message) ||
+    sanitizeInjectedAssistantTranscriptText(
+      resolvedContent
+        .map((block) =>
+          block?.type === "text" && typeof block.text === "string" ? block.text.trim() : "",
+        )
+        .filter(Boolean)
+        .join("\n\n"),
+    );
+  if (resolvedContent.length === 0 && !text) {
+    return { ok: false, error: "assistant message was empty" };
+  }
   const messageBody: AppendMessageArg & Record<string, unknown> = {
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
@@ -78,6 +111,7 @@ export function appendInjectedAssistantMessageToTranscript(params: {
       AppendMessageArg,
       { role: "assistant" }
     >["content"],
+    ...(text ? { text } : {}),
     timestamp: now,
     // Pi stopReason is a strict enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.

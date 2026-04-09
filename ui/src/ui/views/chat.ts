@@ -112,7 +112,9 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onMediaLoad?: () => void;
   basePath?: string;
+  authHeader?: string;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -1279,6 +1281,9 @@ export function renderChat(props: ChatProps) {
                 canvasHostUrl: props.canvasHostUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                authHeader: props.authHeader,
+                requesterSessionKey: activeSession?.key ?? undefined,
+                onMediaLoad: props.onMediaLoad,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 onDelete: () => {

@@ -8,6 +8,7 @@ import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
+import { resolveGatewayHttpAuthHeader } from "./gateway-http-auth.js";
 import {
   renderChatControls,
   renderChatMobileToggle,
@@ -1874,6 +1875,7 @@ export function renderApp(state: AppViewState) {
                 });
               },
               onChatScroll: (event) => state.handleChatScroll(event),
+              onMediaLoad: () => requestHostUpdate(),
               getDraft: () => state.chatMessage,
               onDraftChange: (next) => (state.chatMessage = next),
               onRequestUpdate: requestHostUpdate,
@@ -1932,6 +1934,12 @@ export function renderApp(state: AppViewState) {
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,
               assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
               basePath: state.basePath ?? "",
+              authHeader:
+                resolveGatewayHttpAuthHeader({
+                  password: state.password,
+                  settings: state.settings,
+                  hello: state.hello,
+                }) ?? undefined,
             })
           : nothing}
         ${renderConfigTabForActiveTab()}
