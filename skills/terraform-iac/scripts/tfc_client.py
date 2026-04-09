@@ -3633,6 +3633,7 @@ def cmd_state(args):
 
 def cmd_outputs(args):
     _require_requests()
+    import time
     from urllib.parse import quote
     org = get_org()
     ws_name = quote(args.workspace, safe="")
@@ -3643,8 +3644,24 @@ def cmd_outputs(args):
     r.raise_for_status()
     ws_id = r.json()["data"]["id"]
 
-    r2 = requests.get(f"{TFC_API}/workspaces/{ws_id}/current-state-version-outputs", headers=api_headers())
-    r2.raise_for_status()
+    max_retries = 6
+    for attempt in range(max_retries):
+        r2 = requests.get(f"{TFC_API}/workspaces/{ws_id}/current-state-version-outputs", headers=api_headers())
+        if r2.status_code == 503:
+            wait = 2 ** attempt
+            print(f"  Outputs still processing, retrying in {wait}s... ({attempt + 1}/{max_retries})")
+            time.sleep(wait)
+            continue
+        if r2.status_code == 404:
+            print(f"No outputs found for workspace '{args.workspace}' — nothing deployed yet.")
+            return
+        r2.raise_for_status()
+        break
+    else:
+        print("ERROR: Outputs still unavailable after retries. TFC may still be processing the state.")
+        print("Try again in a minute: openclaw tfc_client.py outputs --workspace " + args.workspace)
+        sys.exit(1)
+
     outputs = r2.json().get("data", [])
     if not outputs:
         print("No outputs found.")
