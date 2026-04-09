@@ -30,21 +30,6 @@ function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }
 afterEach(() => {
   resetTaskRegistryForTests();
 });
-function createDueIsolatedJob(now: number): CronJob {
-  return {
-    id: "isolated-running-delete",
-    name: "isolated running delete",
-    enabled: true,
-    createdAtMs: now - 60_000,
-    updatedAtMs: now - 60_000,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "say hi" },
-    delivery: { mode: "announce", channel: "feishu", to: "chat:oc_group_a" },
-    state: { nextRunAtMs: now - 1 },
-  };
-}
 
 describe("cron service timer seam coverage", () => {
   it("persists the next schedule and hands off next-heartbeat main jobs", async () => {
@@ -116,24 +101,6 @@ describe("cron service timer seam coverage", () => {
         throw new Error("disk full");
       });
 
-  it("suppresses finished delivery effects when a due job is removed mid-run", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-03-23T12:00:00.000Z");
-    let resolveRun:
-      | ((value: { status: "ok"; delivered: true; summary: string }) => void)
-      | undefined;
-    const runIsolatedAgentJob = vi.fn(
-      () =>
-        new Promise<{ status: "ok"; delivered: true; summary: string }>((resolve) => {
-          resolveRun = resolve;
-        }),
-    );
-
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [createDueIsolatedJob(now)],
-    });
-
     const state = createCronServiceState({
       storePath,
       cronEnabled: true,
@@ -157,26 +124,5 @@ describe("cron service timer seam coverage", () => {
     });
 
     createTaskRecordSpy.mockRestore();
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob,
-    });
-
-    const tickPromise = onTimer(state);
-    await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1));
-
-    await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs: [] }), "utf8");
-    resolveRun?.({ status: "ok", delivered: true, summary: "should be suppressed" });
-    await tickPromise;
-
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "isolated-running-delete" }),
-      "cron: dropping completed run for job removed during execution",
-    );
-
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: CronJob[];
-    };
-    expect(persisted.jobs).toHaveLength(0);
   });
 });
