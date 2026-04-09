@@ -409,7 +409,7 @@ describe("modelsStatusCommand auth overview", () => {
         defaults: {
           model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
           models: { "claude-cli/claude-sonnet-4-6": {} },
-          cliBackends: { "claude-cli": {} },
+          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
       models: { providers: {} },
