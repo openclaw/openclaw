@@ -592,12 +592,15 @@ export async function handleOpenAiHttpRequest(
 
       let content: string;
       if (fullText) {
-        // Prefer deriving delta from the full cleaned text.
-        content = fullText.startsWith(accumulatedSent)
-          ? fullText.slice(accumulatedSent.length)
-          : fullText.length > accumulatedSent.length
-            ? fullText.slice(accumulatedSent.length)
-            : "";
+        if (fullText.startsWith(accumulatedSent)) {
+          // Normal append: derive incremental delta.
+          content = fullText.slice(accumulatedSent.length);
+        } else {
+          // Replace event: upstream rewrote the buffer; we can't retract already-sent
+          // bytes, so reset and re-emit the full corrected text.
+          accumulatedSent = "";
+          content = fullText;
+        }
       } else if (delta) {
         // Fallback: no full text available, use the raw delta.
         content = delta;
