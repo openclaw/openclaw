@@ -154,4 +154,56 @@ describe("google video generation provider", () => {
       }),
     );
   });
+
+  it("strips /v1beta from configured Google baseUrl before passing to GoogleGenAI SDK", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: false,
+      name: "operations/456",
+    });
+    getVideosOperationMock.mockResolvedValue({
+      done: true,
+      name: "operations/456",
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A sunset timelapse over the ocean",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            },
+          },
+        },
+      },
+    });
+
+    // The SDK appends its own /v1beta — if we pass /v1beta in baseUrl the path becomes
+    // /v1beta/v1beta/... and the request 404s. The provider must strip it before calling SDK.
+    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          baseUrl: "https://generativelanguage.googleapis.com",
+        }),
+      }),
+    );
+  });
 });
