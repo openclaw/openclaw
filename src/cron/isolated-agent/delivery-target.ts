@@ -73,8 +73,31 @@ export async function resolveDeliveryTarget(
     sessionKey?: string;
   },
 ): Promise<DeliveryTargetResolution> {
+  const explicitChannel =
+    typeof jobPayload.channel === "string" &&
+    jobPayload.channel.trim() &&
+    jobPayload.channel !== "last"
+      ? jobPayload.channel.trim().toLowerCase()
+      : undefined;
+  const explicitTo =
+    typeof jobPayload.to === "string" && jobPayload.to.trim() ? jobPayload.to.trim() : undefined;
+  const directAccountId =
+    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
+      ? jobPayload.accountId.trim()
+      : undefined;
+
+  if (explicitChannel && explicitTo && directAccountId) {
+    return {
+      ok: true,
+      channel: explicitChannel as Exclude<OutboundChannel, "none">,
+      to: explicitTo,
+      accountId: directAccountId,
+      threadId: jobPayload.threadId,
+      mode: "explicit",
+    };
+  }
+
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
-  const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;

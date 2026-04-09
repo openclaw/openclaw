@@ -541,4 +541,26 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(true);
     expect(result.accountId).toBe("explicit");
   });
+
+  it("keeps explicit plugin delivery target even when plugin registry is not loaded", async () => {
+    setMainSessionEntry(undefined);
+    resetPluginRuntimeStateForTest();
+    vi.mocked(resolveOutboundTarget).mockReset();
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "test-plugin-channel" as never,
+      to: "test-recipient",
+      accountId: "test-account",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      channel: "test-plugin-channel",
+      to: "test-recipient",
+      accountId: "test-account",
+      threadId: undefined,
+      mode: "explicit",
+    });
+    expect(resolveOutboundTarget).not.toHaveBeenCalled();
+  });
 });
