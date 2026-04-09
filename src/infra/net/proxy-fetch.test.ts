@@ -30,11 +30,11 @@ const { ProxyAgent, Socks5ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgent
     }
     class Socks5ProxyAgent {
       static lastCreated: Socks5ProxyAgent | undefined;
-      uri: string;
-      constructor(opts: { uri: string }) {
-        this.uri = opts.uri;
+      proxyUrl: string;
+      constructor(proxyUrl: string) {
+        this.proxyUrl = proxyUrl;
         Socks5ProxyAgent.lastCreated = this;
-        socks5AgentSpy(opts.uri);
+        socks5AgentSpy(proxyUrl);
       }
     }
     class EnvHttpProxyAgent {

@@ -28,7 +28,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const resolveAgent = (): ProxyAgent | Socks5ProxyAgent => {
     if (!agent) {
       agent = isSocksProxyUrl(proxyUrl)
-        ? new Socks5ProxyAgent({ uri: proxyUrl })
+        ? new Socks5ProxyAgent(proxyUrl)
         : new ProxyAgent(proxyUrl);
     }
     return agent;
