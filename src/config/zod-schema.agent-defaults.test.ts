@@ -13,6 +13,17 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts defaults-level subagent allowlist and requireAgentId", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        subagents: {
+          allowAgents: ["research", "*"],
+          requireAgentId: true,
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts videoGenerationModel", () => {
     expect(() =>
       AgentDefaultsSchema.parse({

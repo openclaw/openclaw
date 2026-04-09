@@ -170,6 +170,7 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z
           .number()
@@ -197,6 +198,7 @@ export const AgentDefaultsSchema = z
         controlTimeoutMs: z.number().int().positive().optional(),
         completionAnnounceTimeoutMs: z.number().int().positive().optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        requireAgentId: z.boolean().optional(),
         cleanupTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()

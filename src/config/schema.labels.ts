@@ -70,6 +70,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.embeddedHarness": "Default Embedded Harness",
   "agents.defaults.embeddedHarness.runtime": "Default Embedded Harness Runtime",
   "agents.defaults.embeddedHarness.fallback": "Default Embedded Harness Fallback",
+  "agents.defaults.subagents.allowAgents": "Subagent Allowlist",
   "agents.defaults.subagents.startupWaitTimeoutMs": "Subagent Startup Timeout (ms)",
   "agents.defaults.subagents.controlTimeoutMs": "Subagent Control Timeout (ms)",
   "agents.defaults.subagents.completionAnnounceTimeoutMs":

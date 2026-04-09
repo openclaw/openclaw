@@ -215,6 +215,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+  "agents.defaults.subagents.allowAgents":
+    'Default allowlist of target agent ids permitted for sessions_spawn when the requester agent does not set its own subagents.allowAgents. Use explicit values or ["*"] to control cross-agent spawning deliberately.',
   "agents.defaults.subagents.startupWaitTimeoutMs":
     "Default timeout in milliseconds for subagent launch and setup calls such as session patching and initial agent dispatch. Raise this when gateway or Node overload makes spawned-session setup exceed the legacy 10 second budget.",
   "agents.defaults.subagents.controlTimeoutMs":
@@ -223,6 +225,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default timeout in milliseconds for subagent completion delivery and direct announce flows. Prefer this canonical key over the legacy announceTimeoutMs alias.",
   "agents.defaults.subagents.announceTimeoutMs":
     "Legacy alias for agents.defaults.subagents.completionAnnounceTimeoutMs. Keep one canonical value in new configs and use this only for backward compatibility.",
+  "agents.defaults.subagents.requireAgentId":
+    "When true, sessions_spawn must include an explicit agentId instead of defaulting to the requester agent. Use this when operators need deliberate profile selection for spawned work.",
   "agents.defaults.subagents.cleanupTimeoutMs":
     "Default timeout in milliseconds for best-effort subagent cleanup calls such as failed-start session deletion or post-completion teardown. Keep this bounded but high enough that cleanup does not flap under load.",
   "agents.list":
