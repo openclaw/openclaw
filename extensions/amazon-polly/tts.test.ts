@@ -1,16 +1,12 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const mockSend = vi.fn();
-const mockDestroy = vi.fn();
 
 vi.mock("@aws-sdk/client-polly", () => {
   return {
     PollyClient: class {
       send(command: unknown, options?: unknown) {
         return mockSend(command, options);
-      }
-      destroy() {
-        mockDestroy();
       }
     },
     SynthesizeSpeechCommand: class {
@@ -60,7 +56,6 @@ describe("pollySynthesize", () => {
     expect(result).toBeInstanceOf(Buffer);
     expect(result.length).toBe(4);
     expect(mockSend).toHaveBeenCalledTimes(1);
-    expect(mockDestroy).toHaveBeenCalledTimes(1);
   });
 
   it("throws when AudioStream is empty", async () => {
@@ -129,7 +124,7 @@ describe("pollySynthesize", () => {
     );
   });
 
-  it("destroys client even on error", async () => {
+  it("propagates errors from Polly", async () => {
     mockSend.mockRejectedValue(new Error("AWS error"));
 
     await expect(
@@ -142,8 +137,6 @@ describe("pollySynthesize", () => {
         timeoutMs: 10_000,
       }),
     ).rejects.toThrow("AWS error");
-
-    expect(mockDestroy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -194,7 +187,6 @@ describe("pollyListVoices", () => {
         supportedEngines: ["neural", "standard"],
       },
     ]);
-    expect(mockDestroy).toHaveBeenCalledTimes(1);
   });
 
   it("filters out voices with empty ids", async () => {
