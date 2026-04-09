@@ -10,7 +10,7 @@ function clampSafeTimeoutMs(timeoutMs: number): number {
   return Math.max(1, Math.min(Math.floor(timeoutMs), MAX_SAFE_TIMEOUT_MS));
 }
 
-function readConfiguredTimeoutMs(value: unknown): number | undefined {
+export function readConfiguredTimeoutMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? clampSafeTimeoutMs(value)
     : undefined;

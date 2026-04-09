@@ -145,6 +145,7 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: resolveGatewayRpcTimeoutMs(params.config),

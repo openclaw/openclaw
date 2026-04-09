@@ -35,7 +35,9 @@ export function resolveConnectChallengeTimeoutMs(timeoutMs?: number | null): num
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 }
 
-export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+function readPreauthHandshakeTimeoutMsOverrideFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
   const configuredTimeout =
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
   if (configuredTimeout) {
@@ -44,6 +46,14 @@ export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = pro
       return parsed;
     }
   }
+  return undefined;
+}
+
+export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const override = readPreauthHandshakeTimeoutMsOverrideFromEnv(env);
+  if (override !== undefined) {
+    return override;
+  }
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 }
 
@@ -51,8 +61,8 @@ export function resolveConfiguredConnectChallengeTimeoutMs(
   config?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const envTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv(env);
-  if (envTimeoutMs !== DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS) {
+  const envTimeoutMs = readPreauthHandshakeTimeoutMsOverrideFromEnv(env);
+  if (envTimeoutMs !== undefined) {
     return clampConnectChallengeTimeoutMs(envTimeoutMs);
   }
   return resolveConnectChallengeTimeoutMs(config?.gateway?.connectChallengeTimeoutMs);

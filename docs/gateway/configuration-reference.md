@@ -2911,7 +2911,7 @@ See [Plugins](/tools/plugin).
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - `connectChallengeTimeoutMs`: pre-auth/connect handshake timeout in milliseconds for gateway clients and server-side handshake enforcement. Default: `10000`.
 - `timeoutMs`: default timeout in milliseconds for ordinary gateway control-plane RPC calls when callers do not pass one. Default: `10000`.
-- `finalResponseTimeoutMs`: default timeout in milliseconds for accepted-then-final gateway calls when callers do not pass one. Default: `90000`.
+- `finalResponseTimeoutMs`: default timeout in milliseconds for accepted-then-final gateway calls when callers do not pass one. If unset, OpenClaw uses `max(gateway.timeoutMs, 90000)`, so increasing `gateway.timeoutMs` can also increase the effective final-response default.
 - `sessionSettleTimeoutMs`: default timeout in milliseconds added around settle/wait paths such as embedded-session shutdown and `agent.wait` transport cleanup. Default: `15000`.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.

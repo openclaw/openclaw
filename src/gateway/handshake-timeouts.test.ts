@@ -61,4 +61,17 @@ describe("gateway handshake timeouts", () => {
       ),
     ).toBe(500);
   });
+
+  test("treats an explicit env value equal to the default as an override", () => {
+    expect(
+      resolveConfiguredConnectChallengeTimeoutMs(
+        {
+          gateway: {
+            connectChallengeTimeoutMs: 2_000,
+          },
+        },
+        { OPENCLAW_HANDSHAKE_TIMEOUT_MS: String(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS) },
+      ),
+    ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+  });
 });
