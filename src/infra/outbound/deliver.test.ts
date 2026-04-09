@@ -90,6 +90,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 type DeliverModule = typeof import("./deliver.js");
 
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
+let deliverOutboundPayloadsWithStatus: DeliverModule["deliverOutboundPayloadsWithStatus"];
 let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
 
 const whatsappChunkConfig: OpenClawConfig = {
@@ -188,7 +189,8 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+    ({ deliverOutboundPayloads, deliverOutboundPayloadsWithStatus, normalizeOutboundPayloads } =
+      await import("./deliver.js"));
   });
 
   beforeEach(() => {
@@ -885,6 +887,36 @@ describe("deliverOutboundPayloads", () => {
     expect(low).not.toHaveBeenCalled();
     expect(sendWhatsApp).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+  });
+
+  it("reports explicit blockedByHook when message_sending cancels delivery", async () => {
+    const hookRegistry = createEmptyPluginRegistry();
+    addTestHook({
+      registry: hookRegistry,
+      pluginId: "high",
+      hookName: "message_sending",
+      handler: vi.fn().mockResolvedValue({ cancel: true }) as PluginHookRegistration["handler"],
+      priority: 100,
+    });
+    const realRunner = createHookRunner(hookRegistry);
+    hookMocks.runner.hasHooks.mockImplementation((hookName?: string) =>
+      realRunner.hasHooks((hookName ?? "") as never),
+    );
+    hookMocks.runner.runMessageSending.mockImplementation((event, ctx) =>
+      realRunner.runMessageSending(event as never, ctx as never),
+    );
+
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const run = await deliverOutboundPayloadsWithStatus({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+    });
+
+    expect(run).toEqual({ results: [], blockedByHook: true });
+    expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {

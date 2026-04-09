@@ -77,6 +77,11 @@ export type OutboundDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
+export type OutboundDeliveryRun = {
+  results: OutboundDeliveryResult[];
+  blockedByHook: boolean;
+};
+
 type Chunker = (text: string, limit: number) => string[];
 
 type ChannelHandler = {
@@ -511,6 +516,13 @@ async function applyMessageSendingHook(params: {
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  const run = await deliverOutboundPayloadsWithStatus(params);
+  return run.results;
+}
+
+export async function deliverOutboundPayloadsWithStatus(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryRun> {
   const { channel, to, payloads } = params;
 
   // Write-ahead delivery queue: persist before sending, remove after success.
@@ -547,7 +559,7 @@ export async function deliverOutboundPayloads(
     : params;
 
   try {
-    const results = await deliverOutboundPayloadsCore(wrappedParams);
+    const run = await deliverOutboundPayloadsCore(wrappedParams);
     if (queueId) {
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
@@ -555,7 +567,7 @@ export async function deliverOutboundPayloads(
         await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
       }
     }
-    return results;
+    return run;
   } catch (err) {
     if (queueId) {
       if (isAbortError(err)) {
@@ -571,7 +583,7 @@ export async function deliverOutboundPayloads(
 /** Core delivery logic (extracted for queue wrapper). */
 async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<OutboundDeliveryRun> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
   const deps = params.deps;
@@ -582,6 +594,7 @@ async function deliverOutboundPayloadsCore(
     mediaSources: collectPayloadMediaSources(payloads),
   });
   const results: OutboundDeliveryResult[] = [];
+  let blockedByHook = false;
   const handler = await createChannelHandler({
     cfg,
     channel,
@@ -689,6 +702,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
       });
       if (hookResult.cancelled) {
+        blockedByHook = true;
         continue;
       }
       const effectivePayload = hookResult.payload;
@@ -813,5 +827,8 @@ async function deliverOutboundPayloadsCore(
     }
   }
 
-  return results;
+  return {
+    results,
+    blockedByHook,
+  };
 }
