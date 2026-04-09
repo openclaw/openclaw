@@ -1050,8 +1050,10 @@ export function attachGatewayUpgradeHandler(opts: {
         }
       }
       const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
-      if (wss.listenerCount("connection") === 0) {
-        const responseBody = "Gateway websocket handlers unavailable";
+      // Enforce the pre-auth budget before the no-handler 503 path so upgrade floods
+      // during startup cannot bypass connection limits (handlers attach after sidecars).
+      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
+        const responseBody = "Too many unauthenticated sockets";
         socket.write(
           "HTTP/1.1 503 Service Unavailable\r\n" +
             "Connection: close\r\n" +
@@ -1063,8 +1065,9 @@ export function attachGatewayUpgradeHandler(opts: {
         socket.destroy();
         return;
       }
-      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
-        const responseBody = "Too many unauthenticated sockets";
+      if (wss.listenerCount("connection") === 0) {
+        preauthConnectionBudget.release(preauthBudgetKey);
+        const responseBody = "Gateway websocket handlers unavailable";
         socket.write(
           "HTTP/1.1 503 Service Unavailable\r\n" +
             "Connection: close\r\n" +
