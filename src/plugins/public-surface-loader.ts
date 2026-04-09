@@ -202,6 +202,13 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   }
 }
 
+export function resolveBundledPluginPublicArtifactPath(params: {
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  return resolvePublicSurfaceLocation(params)?.modulePath ?? null;
+}
+
 export function resetBundledPluginPublicArtifactLoaderForTest(): void {
   loadedPublicSurfaceModules.clear();
   publicSurfaceLocations.clear();

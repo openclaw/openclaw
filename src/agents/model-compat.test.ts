@@ -17,8 +17,10 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
+  resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
 
@@ -501,5 +503,29 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "google", id: "gemini-3-flash-preview" },
       { provider: "openai", id: "gpt-5.2" },
     ]);
+  });
+});
+
+describe("resolveHighSignalLiveModelLimit", () => {
+  it("defaults modern live sweeps to the curated high-signal cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+      }),
+    ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("leaves explicit model lists uncapped unless a cap is provided", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: true,
+      }),
+    ).toBe(0);
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "3",
+        useExplicitModels: true,
+      }),
+    ).toBe(3);
   });
 });

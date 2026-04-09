@@ -1,9 +1,11 @@
 import path from "node:path";
+import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -32,6 +34,125 @@ function resolveQaManualLaneModels(opts: {
         : opts.primaryModel?.trim()
           ? primaryModel
           : defaultQaModelForMode(opts.providerMode, true),
+  };
+}
+
+function parseQaThinkingLevel(
+  label: string,
+  value: string | undefined,
+): QaThinkingLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = normalizeQaThinkingLevel(value);
+  if (!normalized) {
+    throw new Error(`${label} must be one of off, minimal, low, medium, high, xhigh, adaptive`);
+  }
+  return normalized;
+}
+
+function parseQaModelThinkingOverrides(entries: readonly string[] | undefined) {
+  const overrides: Record<string, QaThinkingLevel> = {};
+  for (const entry of entries ?? []) {
+    const separatorIndex = entry.lastIndexOf("=");
+    if (separatorIndex <= 0 || separatorIndex === entry.length - 1) {
+      throw new Error(`--model-thinking must use provider/model=level, got "${entry}"`);
+    }
+    const model = entry.slice(0, separatorIndex).trim();
+    const level = parseQaThinkingLevel("--model-thinking", entry.slice(separatorIndex + 1).trim());
+    if (!model || !level) {
+      throw new Error(`--model-thinking must use provider/model=level, got "${entry}"`);
+    }
+    overrides[model] = level;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function parseQaBooleanModelOption(label: string, value: string) {
+  switch (value.trim().toLowerCase()) {
+    case "1":
+    case "on":
+    case "true":
+    case "yes":
+      return true;
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      throw new Error(`${label} fast must be one of true, false, on, off, yes, no, 1, 0`);
+  }
+}
+
+function parseQaPositiveIntegerOption(label: string, value: number | undefined) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return Math.floor(value);
+}
+
+function parseQaModelSpecs(label: string, entries: readonly string[] | undefined) {
+  const models: string[] = [];
+  const optionsByModel: Record<string, QaCharacterModelOptions> = {};
+
+  for (const entry of entries ?? []) {
+    const parts = entry.split(",").map((part) => part.trim());
+    const model = parts[0];
+    if (!model) {
+      throw new Error(`${label} must start with provider/model, got "${entry}"`);
+    }
+    models.push(model);
+    const options: QaCharacterModelOptions = {};
+    for (const part of parts.slice(1)) {
+      if (!part) {
+        throw new Error(`${label} option cannot be empty in "${entry}"`);
+      }
+      if (part === "fast") {
+        options.fastMode = true;
+        continue;
+      }
+      if (part === "no-fast") {
+        options.fastMode = false;
+        continue;
+      }
+      const separatorIndex = part.indexOf("=");
+      if (separatorIndex <= 0 || separatorIndex === part.length - 1) {
+        throw new Error(
+          `${label} options must be thinking=<level>, fast, no-fast, or fast=<boolean>, got "${part}"`,
+        );
+      }
+      const key = part.slice(0, separatorIndex).trim();
+      const value = part.slice(separatorIndex + 1).trim();
+      switch (key) {
+        case "thinking": {
+          const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
+          if (!thinkingDefault) {
+            throw new Error(
+              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive`,
+            );
+          }
+          options.thinkingDefault = thinkingDefault;
+          break;
+        }
+        case "fast":
+          options.fastMode = parseQaBooleanModelOption(label, value);
+          break;
+        default:
+          throw new Error(`${label} does not support option "${key}" in "${entry}"`);
+      }
+    }
+    if (Object.keys(options).length > 0) {
+      optionsByModel[model] = { ...optionsByModel[model], ...options };
+    }
+  }
+
+  return {
+    models,
+    optionsByModel: Object.keys(optionsByModel).length > 0 ? optionsByModel : undefined,
   };
 }
 
@@ -92,6 +213,44 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+}
+
+export async function runQaCharacterEvalCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  model?: string[];
+  scenario?: string;
+  fast?: boolean;
+  thinking?: string;
+  modelThinking?: string[];
+  judgeModel?: string[];
+  judgeTimeoutMs?: number;
+  blindJudgeModels?: boolean;
+  concurrency?: number;
+  judgeConcurrency?: number;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const candidates = parseQaModelSpecs("--model", opts.model);
+  const judges = parseQaModelSpecs("--judge-model", opts.judgeModel);
+  const result = await runQaCharacterEval({
+    repoRoot,
+    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    models: candidates.models,
+    scenarioId: opts.scenario,
+    candidateFastMode: opts.fast,
+    candidateThinkingDefault: parseQaThinkingLevel("--thinking", opts.thinking),
+    candidateThinkingByModel: parseQaModelThinkingOverrides(opts.modelThinking),
+    candidateModelOptions: candidates.optionsByModel,
+    judgeModels: judges.models.length > 0 ? judges.models : undefined,
+    judgeModelOptions: judges.optionsByModel,
+    judgeTimeoutMs: opts.judgeTimeoutMs,
+    judgeBlindModels: opts.blindJudgeModels === true ? true : undefined,
+    candidateConcurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency),
+    judgeConcurrency: parseQaPositiveIntegerOption("--judge-concurrency", opts.judgeConcurrency),
+    progress: (message) => process.stderr.write(`${message}\n`),
+  });
+  process.stdout.write(`QA character eval report: ${result.reportPath}\n`);
+  process.stdout.write(`QA character eval summary: ${result.summaryPath}\n`);
 }
 
 export async function runQaManualLaneCommand(opts: {

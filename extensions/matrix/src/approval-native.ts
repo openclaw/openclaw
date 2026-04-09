@@ -334,15 +334,3 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
   native: matrixNativeAdapter,
   render: matrixNativeApprovalCapability.render,
 });
-
-export const matrixNativeApprovalAdapter = {
-  auth: {
-    authorizeActorAction: matrixApprovalCapability.authorizeActorAction,
-    getActionAvailabilityState: matrixApprovalCapability.getActionAvailabilityState,
-    getExecInitiatingSurfaceState: matrixApprovalCapability.getExecInitiatingSurfaceState,
-  },
-  delivery: matrixDeliveryAdapter,
-  nativeRuntime: matrixApprovalCapability.nativeRuntime,
-  render: matrixApprovalCapability.render,
-  native: matrixNativeAdapter,
-};

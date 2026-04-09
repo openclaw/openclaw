@@ -71,8 +71,19 @@ describe("syncExternalCliCredentials", () => {
 
   describe("shouldReplaceStoredOAuthCredential", () => {
     it("keeps equivalent stored credentials", () => {
-      const stored = makeOAuthCredential({ provider: "openai-codex", access: "a", refresh: "r" });
-      const incoming = makeOAuthCredential({ provider: "openai-codex", access: "a", refresh: "r" });
+      const expires = Date.now() + 60_000;
+      const stored = makeOAuthCredential({
+        provider: "openai-codex",
+        access: "a",
+        refresh: "r",
+        expires,
+      });
+      const incoming = makeOAuthCredential({
+        provider: "openai-codex",
+        access: "a",
+        refresh: "r",
+        expires,
+      });
 
       expect(shouldReplaceStoredOAuthCredential(stored, incoming)).toBe(false);
     });

@@ -6,7 +6,7 @@ import {
 } from "../plugins/provider-auth-choice.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
-import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
+import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() =>
