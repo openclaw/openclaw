@@ -56,20 +56,20 @@ interface SdkExports {
 }
 
 const _sdkReady: Promise<SdkExports> = import("openclaw/plugin-sdk/core")
-  // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
-  .then((sdk: any) => {
+  .then((sdk) => {
+    const s = sdk as Record<string, unknown>;
     const exports: SdkExports = {};
-    if (typeof sdk.loadOutboundMediaFromUrl === "function") {
-      exports.loadOutboundMediaFromUrl = sdk.loadOutboundMediaFromUrl;
+    if (typeof s.loadOutboundMediaFromUrl === "function") {
+      exports.loadOutboundMediaFromUrl = s.loadOutboundMediaFromUrl as SdkExports["loadOutboundMediaFromUrl"];
     }
-    if (typeof sdk.detectMime === "function") {
-      exports.detectMime = sdk.detectMime;
+    if (typeof s.detectMime === "function") {
+      exports.detectMime = s.detectMime as SdkExports["detectMime"];
     }
-    if (typeof sdk.getDefaultMediaLocalRoots === "function") {
-      exports.getDefaultMediaLocalRoots = sdk.getDefaultMediaLocalRoots;
+    if (typeof s.getDefaultMediaLocalRoots === "function") {
+      exports.getDefaultMediaLocalRoots = s.getDefaultMediaLocalRoots as SdkExports["getDefaultMediaLocalRoots"];
     }
-    if (typeof sdk.addWildcardAllowFrom === "function") {
-      exports.addWildcardAllowFrom = sdk.addWildcardAllowFrom;
+    if (typeof s.addWildcardAllowFrom === "function") {
+      exports.addWildcardAllowFrom = s.addWildcardAllowFrom as SdkExports["addWildcardAllowFrom"];
     }
     return exports;
   })
@@ -82,10 +82,10 @@ const _sdkReady: Promise<SdkExports> = import("openclaw/plugin-sdk/core")
 let _cachedAddWildcardAllowFrom: ((allowFrom: string[]) => string[]) | undefined;
 
 const _setupSdkReady: Promise<void> = import("openclaw/plugin-sdk/setup")
-  // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
-  .then((sdk: any) => {
-    if (typeof sdk.addWildcardAllowFrom === "function") {
-      _cachedAddWildcardAllowFrom = sdk.addWildcardAllowFrom;
+  .then((sdk) => {
+    const s = sdk as Record<string, unknown>;
+    if (typeof s.addWildcardAllowFrom === "function") {
+      _cachedAddWildcardAllowFrom = s.addWildcardAllowFrom as typeof _cachedAddWildcardAllowFrom;
     }
   })
   .catch(() => {

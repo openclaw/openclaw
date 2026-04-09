@@ -15,11 +15,15 @@ import type {
   WebhookInboundQuote,
 } from "./types.js";
 
-/* oxlint-disable typescript/no-explicit-any -- asRec() helper for chain property access on dynamic SDK objects */
-function asRec(val: unknown): Record<string, any> {
-  return (val ?? {}) as Record<string, any>;
+/** Cast unknown value to record for property access on dynamic SDK objects. */
+function asRec(val: unknown): Record<string, unknown> {
+  return (val ?? {}) as Record<string, unknown>;
 }
-/* oxlint-enable typescript/no-explicit-any */
+
+/** Nested record access: asRec(val).key cast to sub-record for chained access. */
+function subRec(val: unknown, key: string): Record<string, unknown> {
+  return asRec(asRec(val)[key]);
+}
 
 // ============================================================================
 // Constants
@@ -282,7 +286,7 @@ export function computeMd5(data: Buffer | string): string {
  * Resolve media max bytes (aligned with original resolveWecomMediaMaxBytes)
  */
 export function resolveWecomMediaMaxBytes(cfg: OpenClawConfig): number {
-  const val = asRec(cfg.channels?.wecom)?.media?.maxBytes;
+  const val = subRec(asRec(cfg.channels?.wecom), "media").maxBytes;
   if (typeof val === "number" && Number.isFinite(val) && val > 0) {
     return val;
   }
@@ -329,8 +333,8 @@ export async function processInboundMessage(
 
   // Image message processing
   if (msgtype === "image") {
-    const url = String(asRec(msg).image?.url ?? "").trim();
-    const aesKey = globalAesKey || asRec(msg).image?.aeskey || "";
+    const url = toStr(subRec(msg, "image").url).trim();
+    const aesKey = globalAesKey || toStr(subRec(msg, "image").aeskey) || "";
     if (url && aesKey) {
       try {
         const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
@@ -366,8 +370,8 @@ export async function processInboundMessage(
 
   // File message processing
   if (msgtype === "file") {
-    const url = String(asRec(msg).file?.url ?? "").trim();
-    const aesKey = globalAesKey || asRec(msg).file?.aeskey || "";
+    const url = toStr(subRec(msg, "file").url).trim();
+    const aesKey = globalAesKey || toStr(subRec(msg, "file").aeskey) || "";
     if (url && aesKey) {
       try {
         const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
@@ -402,8 +406,8 @@ export async function processInboundMessage(
 
   // Video message processing
   if (msgtype === "video") {
-    const url = String(asRec(msg).video?.url ?? "").trim();
-    const aesKey = globalAesKey || asRec(msg).video?.aeskey || "";
+    const url = toStr(subRec(msg, "video").url).trim();
+    const aesKey = globalAesKey || toStr(subRec(msg, "video").aeskey) || "";
     if (url && aesKey) {
       try {
         const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
@@ -438,7 +442,7 @@ export async function processInboundMessage(
 
   // Mixed message processing: extract text + first media
   if (msgtype === "mixed") {
-    const items = asRec(msg).mixed?.msg_item;
+    const items = subRec(msg, "mixed").msg_item;
     if (Array.isArray(items)) {
       let foundMedia: InboundResult["media"] | undefined = undefined;
       const bodyParts: string[] = [];
@@ -529,14 +533,14 @@ function pickBotFileName(
   }
 
   const fromFile = resolveInlineFileName(
-    asRec(msg)?.file?.filename ??
-      asRec(msg)?.file?.file_name ??
-      asRec(msg)?.file?.fileName ??
-      asRec(msg)?.file?.name ??
-      asRec(msg)?.file?.title ??
-      asRec(msg)?.filename ??
-      asRec(msg)?.fileName ??
-      asRec(msg)?.FileName,
+    subRec(msg, "file").filename ??
+      subRec(msg, "file").file_name ??
+      subRec(msg, "file").fileName ??
+      subRec(msg, "file").name ??
+      subRec(msg, "file").title ??
+      asRec(msg).filename ??
+      asRec(msg).fileName ??
+      asRec(msg).FileName,
   );
   return fromFile;
 }
