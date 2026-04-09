@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+} from "../../test-utils/talk-test-provider.js";
 import { createSecretsHandlers } from "./secrets.js";
 
 async function invokeSecretsReload(params: {
@@ -88,9 +92,15 @@ describe("secrets handlers", () => {
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
     const resolveSecrets = vi.fn().mockResolvedValue({
-      assignments: [{ path: "talk.apiKey", pathSegments: ["talk", "apiKey"], value: "sk" }],
+      assignments: [
+        {
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          value: "sk",
+        },
+      ],
       diagnostics: ["note"],
-      inactiveRefPaths: ["talk.apiKey"],
+      inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
@@ -98,17 +108,23 @@ describe("secrets handlers", () => {
       handlers,
       respond,
       commandName: "memory status",
-      targetIds: ["talk.apiKey"],
+      targetIds: ["talk.providers.*.apiKey"],
     });
     expect(resolveSecrets).toHaveBeenCalledWith({
       commandName: "memory status",
-      targetIds: ["talk.apiKey"],
+      targetIds: ["talk.providers.*.apiKey"],
     });
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,
-      assignments: [{ path: "talk.apiKey", pathSegments: ["talk", "apiKey"], value: "sk" }],
+      assignments: [
+        {
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          value: "sk",
+        },
+      ],
       diagnostics: ["note"],
-      inactiveRefPaths: ["talk.apiKey"],
+      inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
   });
 
@@ -138,7 +154,7 @@ describe("secrets handlers", () => {
       handlers,
       respond,
       commandName: "memory status",
-      targetIds: ["talk.apiKey", 12],
+      targetIds: ["talk.providers.*.apiKey", 12],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -174,7 +190,7 @@ describe("secrets handlers", () => {
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
     const resolveSecrets = vi.fn().mockResolvedValue({
-      assignments: [{ path: "talk.apiKey", pathSegments: [""], value: "sk" }],
+      assignments: [{ path: TALK_TEST_PROVIDER_API_KEY_PATH, pathSegments: [""], value: "sk" }],
       diagnostics: [],
       inactiveRefPaths: [],
     });
@@ -184,7 +200,7 @@ describe("secrets handlers", () => {
       handlers,
       respond,
       commandName: "memory status",
-      targetIds: ["talk.apiKey"],
+      targetIds: ["talk.providers.*.apiKey"],
     });
     expect(respond).toHaveBeenCalledWith(
       false,

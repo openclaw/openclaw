@@ -5,6 +5,8 @@
  */
 
 import { Buffer } from "buffer";
+import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { debugLog } from "./debug-log.js";
 
 export interface ImageSize {
@@ -20,7 +22,9 @@ export const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
  */
 function parsePngSize(buffer: Buffer): ImageSize | null {
   // PNG signature: 89 50 4E 47 0D 0A 1A 0A
-  if (buffer.length < 24) return null;
+  if (buffer.length < 24) {
+    return null;
+  }
   if (buffer[0] !== 0x89 || buffer[1] !== 0x50 || buffer[2] !== 0x4e || buffer[3] !== 0x47) {
     return null;
   }
@@ -33,7 +37,9 @@ function parsePngSize(buffer: Buffer): ImageSize | null {
 /** Parse image dimensions from JPEG SOF0/SOF2 markers. */
 function parseJpegSize(buffer: Buffer): ImageSize | null {
   // JPEG signature: FF D8 FF
-  if (buffer.length < 4) return null;
+  if (buffer.length < 4) {
+    return null;
+  }
   if (buffer[0] !== 0xff || buffer[1] !== 0xd8) {
     return null;
   }
@@ -70,7 +76,9 @@ function parseJpegSize(buffer: Buffer): ImageSize | null {
 
 /** Parse image dimensions from the GIF header. */
 function parseGifSize(buffer: Buffer): ImageSize | null {
-  if (buffer.length < 10) return null;
+  if (buffer.length < 10) {
+    return null;
+  }
   const signature = buffer.toString("ascii", 0, 6);
   if (signature !== "GIF87a" && signature !== "GIF89a") {
     return null;
@@ -82,7 +90,9 @@ function parseGifSize(buffer: Buffer): ImageSize | null {
 
 /** Parse image dimensions from WebP headers. */
 function parseWebpSize(buffer: Buffer): ImageSize | null {
-  if (buffer.length < 30) return null;
+  if (buffer.length < 30) {
+    return null;
+  }
 
   // Check the RIFF and WEBP signatures.
   const riff = buffer.toString("ascii", 0, 4);
@@ -136,7 +146,17 @@ export function parseImageSize(buffer: Buffer): ImageSize | null {
 }
 
 /**
+ * SSRF policy for image-dimension probing.  Generic public-network-only blocking
+ * (no hostname allowlist) because markdown image URLs can legitimately point to
+ * any public host, not just QQ-owned CDNs.
+ */
+const IMAGE_PROBE_SSRF_POLICY: SsrFPolicy = {};
+
+/**
  * Fetch image dimensions from a public URL using only the first 64 KB.
+ *
+ * Uses {@link fetchRemoteMedia} with SSRF guard to block probes against
+ * private/reserved/loopback/link-local/metadata destinations.
  */
 export async function getImageSizeFromUrl(
   url: string,
@@ -146,35 +166,33 @@ export async function getImageSizeFromUrl(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Request only the first 64 KB, which is enough for common headers.
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Range: "bytes=0-65535",
-        "User-Agent": "QQBot-Image-Size-Detector/1.0",
-      },
-    });
+    try {
+      const { buffer } = await fetchRemoteMedia({
+        url,
+        maxBytes: 65_536,
+        maxRedirects: 0,
+        ssrfPolicy: IMAGE_PROBE_SSRF_POLICY,
+        requestInit: {
+          signal: controller.signal,
+          headers: {
+            Range: "bytes=0-65535",
+            "User-Agent": "QQBot-Image-Size-Detector/1.0",
+          },
+        },
+      });
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok && response.status !== 206) {
-      debugLog(`[image-size] Failed to fetch ${url}: ${response.status}`);
-      return null;
+      const size = parseImageSize(buffer);
+      if (size) {
+        debugLog(
+          `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
+        );
+      }
+      return size;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    const size = parseImageSize(buffer);
-    if (size) {
-      debugLog(
-        `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
-      );
-    }
-
-    return size;
   } catch (err) {
-    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${err}`);
+    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${String(err)}`);
     return null;
   }
 }
@@ -198,7 +216,7 @@ export function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
 
     return size;
   } catch (err) {
-    debugLog(`[image-size] Error parsing Base64: ${err}`);
+    debugLog(`[image-size] Error parsing Base64: ${String(err)}`);
     return null;
   }
 }

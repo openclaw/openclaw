@@ -147,7 +147,7 @@ export async function persistSessionsYieldContextMessage(
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
-  agent: { replaceMessages: (messages: AgentMessage[]) => void };
+  agent: { state: { messages: AgentMessage[] } };
   sessionManager?: unknown;
 }) {
   const strippedMessages = activeSession.messages.slice();
@@ -170,7 +170,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
     break;
   }
   if (strippedMessages.length !== activeSession.messages.length) {
-    activeSession.agent.replaceMessages(strippedMessages);
+    activeSession.agent.state.messages = strippedMessages;
   }
 
   const sessionManager = activeSession.sessionManager as

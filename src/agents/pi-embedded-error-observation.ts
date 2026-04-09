@@ -1,6 +1,7 @@
 import { readLoggingConfig } from "../logging/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { getApiErrorPayloadFingerprint, parseApiErrorInfo } from "./pi-embedded-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
@@ -71,14 +72,6 @@ function redactObservationText(text: string | undefined): string | undefined {
   });
 }
 
-function extractRequestId(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  const match = text.match(REQUEST_ID_RE);
-  return match?.[1]?.trim() || undefined;
-}
-
 function buildObservationFingerprint(params: {
   raw: string;
   requestId?: string;
@@ -122,7 +115,8 @@ export function buildApiErrorObservationFields(rawError?: string): {
   }
   try {
     const parsed = parseApiErrorInfo(trimmed);
-    const requestId = parsed?.requestId ?? extractRequestId(trimmed);
+    const requestId =
+      parsed?.requestId ?? normalizeOptionalString(trimmed.match(REQUEST_ID_RE)?.[1]);
     const requestIdHash = requestId ? redactIdentifier(requestId, { len: 12 }) : undefined;
     const rawFingerprint = buildObservationFingerprint({
       raw: trimmed,

@@ -25,10 +25,7 @@ import {
   loadMSTeamsSdkWithAuth,
 } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import {
-  applyMSTeamsWebhookTimeouts,
-  type ApplyMSTeamsWebhookTimeoutsOpts,
-} from "./webhook-timeouts.js";
+import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 export type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
@@ -196,7 +193,7 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+    runtime.log?.(`msteams resolve failed; using config entries. ${formatUnknownError(err)}`);
   }
 
   msteamsCfg = {
@@ -285,7 +282,7 @@ export async function monitorMSTeamsProvider(
         next();
       })
       .catch((err) => {
-        log.debug?.(`JWT validation error: ${String(err)}`);
+        log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
         res.status(401).json({ error: "Unauthorized" });
       });
   });
@@ -330,7 +327,7 @@ export async function monitorMSTeamsProvider(
     };
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: String(err) });
+      log.error("msteams server error", { error: formatUnknownError(err) });
       reject(err);
     };
     httpServer.once("listening", onListening);
@@ -339,7 +336,7 @@ export async function monitorMSTeamsProvider(
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
+    log.error("msteams server error", { error: formatUnknownError(err) });
   });
 
   const shutdown = async () => {
@@ -347,7 +344,7 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug?.("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: formatUnknownError(err) });
         }
         resolve();
       });

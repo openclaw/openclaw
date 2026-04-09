@@ -1,3 +1,5 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -5,10 +7,12 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
+  filterSupplementalContextItems,
   recordPendingHistoryEntryIfEnabled,
+  resolveChannelContextVisibilityMode,
   resolveDualTextControlCommandGate,
-  resolveMentionGating,
   resolveInboundSessionEnvelopeContext,
+  shouldIncludeSupplementalContext,
   formatAllowlistMatchMeta,
   type HistoryEntry,
 } from "../../runtime-api.js";
@@ -18,6 +22,7 @@ import {
   type MSTeamsAttachmentLike,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
+import { isRecord } from "../attachments/shared.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
@@ -32,8 +37,43 @@ import {
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
+  translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+
+function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+  for (const attachment of attachments) {
+    if (attachment.contentType !== "text/html") {
+      continue;
+    }
+    const content = attachment.content;
+    const raw =
+      typeof content === "string"
+        ? content
+        : isRecord(content) && typeof content.text === "string"
+          ? content.text
+          : isRecord(content) && typeof content.body === "string"
+            ? content.body
+            : "";
+    if (!raw) {
+      continue;
+    }
+    const text = raw
+      .replace(/<at[^>]*>.*?<\/at>/gis, " ")
+      .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import {
   isMSTeamsGroupAllowed,
@@ -47,6 +87,40 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+
+function buildStoredConversationReference(params: {
+  activity: MSTeamsTurnContext["activity"];
+  conversationId: string;
+  conversationType: string;
+  teamId?: string;
+  /** Thread root message ID for channel thread messages. */
+  threadId?: string;
+}): StoredConversationReference {
+  const { activity, conversationId, conversationType, teamId, threadId } = params;
+  const from = activity.from;
+  const conversation = activity.conversation;
+  const agent = activity.recipient;
+  const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+    | { timezone?: string }
+    | undefined;
+  return {
+    activityId: activity.id,
+    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
+    agent,
+    bot: agent ? { id: agent.id, name: agent.name } : undefined,
+    conversation: {
+      id: conversationId,
+      conversationType,
+      tenantId: conversation?.tenantId,
+    },
+    teamId,
+    channelId: activity.channelId,
+    serviceUrl: activity.serviceUrl,
+    locale: activity.locale,
+    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
@@ -68,6 +142,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
   };
   const msteamsCfg = cfg.channels?.msteams;
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "msteams",
+  });
   const historyLimit = Math.max(
     0,
     msteamsCfg?.historyLimit ??
@@ -86,7 +164,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     text: string;
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
-    implicitMention: boolean;
+    implicitMentionKinds: Array<"reply_to_bot">;
   };
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
@@ -95,9 +173,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
+    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments, {
+      maxInlineBytes: mediaMaxBytes,
+      maxInlineTotalBytes: mediaMaxBytes,
+    });
     const rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
+    let quoteSenderId: string | undefined;
+    let quoteSenderName: string | undefined;
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -130,6 +213,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    // For channel thread messages, resolve the thread root message ID so outbound
+    // replies land in the correct thread. The root ID comes from the `messageid=`
+    // portion of conversation.id (preferred) or from activity.replyToId.
+    const threadId =
+      conversationType === "channel"
+        ? (conversationMessageId ?? activity.replyToId ?? undefined)
+        : undefined;
+    const conversationRef = buildStoredConversationReference({
+      activity,
+      conversationId,
+      conversationType,
+      teamId,
+      threadId,
+    });
 
     const {
       dmPolicy,
@@ -167,6 +264,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching,
       });
       if (access.decision === "pairing") {
+        conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+          log.debug?.("failed to save conversation reference", {
+            error: formatUnknownError(err),
+          });
+        });
         const request = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName },
@@ -296,30 +398,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    // Extract clientInfo entity (Teams sends this on every activity with timezone, locale, etc.)
-    const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
-      | { timezone?: string; locale?: string; country?: string; platform?: string }
-      | undefined;
-
-    // Build conversation reference for proactive replies.
-    const agent = activity.recipient;
-    const conversationRef: StoredConversationReference = {
-      activityId: activity.id,
-      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
-      agent,
-      bot: agent ? { id: agent.id, name: agent.name } : undefined,
-      conversation: {
-        id: conversationId,
-        conversationType,
-        tenantId: conversation?.tenantId,
-      },
-      teamId,
-      channelId: activity.channelId,
-      serviceUrl: activity.serviceUrl,
-      locale: activity.locale,
-      // Only set timezone if present (preserve previously stored value on next upsert)
-      ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
-    };
     conversationStore.upsert(conversationId, conversationRef).catch((err) => {
       log.debug?.("failed to save conversation reference", {
         error: formatUnknownError(err),
@@ -376,6 +454,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
     });
 
+    // Isolate channel thread sessions: each thread gets its own session key so
+    // context does not bleed across threads. Prefer conversationMessageId (the
+    // ;messageid= portion of conversation.id, i.e. the thread root) over
+    // activity.replyToId (which may point to a non-root parent in deep threads).
+    // DMs and group chats are unaffected — only channel thread replies fork.
+    const channelThreadId = isChannel
+      ? (conversationMessageId ?? activity.replyToId ?? undefined)
+      : undefined;
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: channelThreadId,
+      parentSessionKey: channelThreadId ? route.sessionKey : undefined,
+    });
+    route.sessionKey = threadKeys.sessionKey;
+
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -395,17 +488,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelConfig,
     });
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
-
-    if (!isDirectMessage) {
-      const mentionGate = resolveMentionGating({
-        requireMention: Boolean(requireMention),
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
         canDetectMention: true,
         wasMentioned: params.wasMentioned,
-        implicitMention: params.implicitMention,
-        shouldBypassMention: false,
-      });
-      const mentioned = mentionGate.effectiveWasMentioned;
-      if (requireMention && mentionGate.shouldSkip) {
+        implicitMentionKinds: params.implicitMentionKinds,
+      },
+      policy: {
+        isGroup: !isDirectMessage,
+        requireMention: Boolean(requireMention),
+        allowTextCommands: false,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+
+    if (!isDirectMessage) {
+      const mentioned = mentionDecision.effectiveWasMentioned;
+      if (requireMention && mentionDecision.shouldSkip) {
         log.debug?.("skipping message (mention required)", {
           teamId,
           channelId,
@@ -426,6 +526,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
     }
+    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+      isDirectMessage,
+      conversationId,
+      aadObjectId: from.aadObjectId,
+      appId,
+    });
+
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
       htmlSummary: htmlSummary ?? undefined,
@@ -434,7 +541,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       allowHosts: msteamsCfg?.mediaAllowHosts,
       authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
       conversationType,
-      conversationId,
+      conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,
       activity: {
         id: activity.id,
@@ -460,26 +567,35 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        const threadMessages =
-          groupPolicy === "allowlist"
-            ? allMessages.filter((msg) => {
-                return resolveMSTeamsAllowlistMatch({
+        quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+        quoteSenderName =
+          parentMsg?.from?.user?.displayName ??
+          parentMsg?.from?.application?.displayName ??
+          quoteInfo?.sender;
+        const { items: threadMessages } = filterSupplementalContextItems({
+          items: allMessages,
+          mode: contextVisibilityMode,
+          kind: "thread",
+          isSenderAllowed: (msg) =>
+            groupPolicy === "allowlist"
+              ? resolveMSTeamsAllowlistMatch({
                   allowFrom: effectiveGroupAllowFrom,
                   senderId: msg.from?.user?.id ?? "",
                   senderName: msg.from?.user?.displayName,
                   allowNameMatching,
-                }).allowed;
-              })
-            : allMessages;
+                }).allowed
+              : true,
+        });
         const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {
           threadContext = formatted;
         }
       } catch (err) {
-        log.debug?.("failed to fetch thread history", { error: String(err) });
+        log.debug?.("failed to fetch thread history", { error: formatUnknownError(err) });
         // Graceful degradation: thread history is an optional enhancement.
       }
     }
+    quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
@@ -524,6 +640,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           }))
         : undefined;
     const commandBody = text.trim();
+    const quoteSenderAllowed =
+      quoteInfo && quoteInfo.sender
+        ? !isChannel || groupPolicy !== "allowlist"
+          ? true
+          : resolveMSTeamsAllowlistMatch({
+              allowFrom: effectiveGroupAllowFrom,
+              senderId: quoteSenderId ?? "",
+              senderName: quoteSenderName,
+              allowNameMatching,
+            }).allowed
+        : true;
+    const includeQuoteContext =
+      quoteInfo &&
+      shouldIncludeSupplementalContext({
+        mode: contextVisibilityMode,
+        kind: "quote",
+        senderAllowed: quoteSenderAllowed,
+      });
 
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -550,13 +684,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      WasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
       ReplyToId: activity.replyToId ?? undefined,
-      ReplyToBody: quoteInfo?.body,
-      ReplyToSender: quoteInfo?.sender,
+      ReplyToBody: includeQuoteContext ? quoteInfo?.body : undefined,
+      ReplyToSender: includeQuoteContext ? quoteInfo?.sender : undefined,
       ReplyToIsQuote: quoteInfo ? true : undefined,
       ...mediaPayload,
     });
@@ -566,7 +700,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
       onRecordError: (err) => {
-        logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+        logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
       },
     });
 
@@ -576,6 +710,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
+      sessionKey: route.sessionKey,
       accountId: route.accountId,
       runtime,
       log,
@@ -597,8 +732,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // Use Teams clientInfo timezone if no explicit userTimezone is configured.
     // This ensures the agent knows the sender's timezone for time-aware responses
     // and proactive sends within the same session.
-    // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
-    const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
+    const activityClientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+      | { timezone?: string }
+      | undefined;
+    const senderTimezone = activityClientInfo?.timezone || conversationRef.timezone;
     const configOverride =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {
@@ -643,8 +780,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
       }
     } catch (err) {
-      log.error("dispatch failed", { error: String(err) });
-      runtime.error?.(`msteams dispatch failed: ${String(err)}`);
+      log.error("dispatch failed", { error: formatUnknownError(err) });
+      runtime.error?.(`msteams dispatch failed: ${formatUnknownError(err)}`);
       try {
         await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
@@ -696,34 +833,36 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .filter(Boolean)
         .join("\n");
       const wasMentioned = entries.some((entry) => entry.wasMentioned);
-      const implicitMention = entries.some((entry) => entry.implicitMention);
+      const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
       await handleTeamsMessageNow({
         context: last.context,
         rawText: combinedRawText,
         text: combinedText,
         attachments: [],
         wasMentioned,
-        implicitMention,
+        implicitMentionKinds,
       });
     },
     onError: (err) => {
-      runtime.error?.(`msteams debounce flush failed: ${String(err)}`);
+      runtime.error?.(`msteams debounce flush failed: ${formatUnknownError(err)}`);
     },
   });
 
   return async function handleTeamsMessage(context: MSTeamsTurnContext) {
     const activity = context.activity;
-    const rawText = activity.text?.trim() ?? "";
-    const text = stripMSTeamsMentionTags(rawText);
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
+    const rawText = activity.text?.trim() ?? "";
+    const htmlText = extractTextFromHtmlAttachments(attachments);
+    const text = stripMSTeamsMentionTags(rawText || htmlText);
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
-    const implicitMention = Boolean(
-      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId),
-    );
+    const implicitMentionKinds: Array<"reply_to_bot"> =
+      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId)
+        ? ["reply_to_bot"]
+        : [];
 
     await inboundDebouncer.enqueue({
       context,
@@ -731,7 +870,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       text,
       attachments,
       wasMentioned,
-      implicitMention,
+      implicitMentionKinds,
     });
   };
 }

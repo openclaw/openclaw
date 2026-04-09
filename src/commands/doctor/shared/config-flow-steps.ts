@@ -1,8 +1,8 @@
-import { migrateLegacyConfig } from "../../../config/config.js";
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
 import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 export function applyLegacyCompatibilityStep(params: {
   snapshot: DoctorConfigPreflightResult["snapshot"];
@@ -28,11 +28,12 @@ export function applyLegacyCompatibilityStep(params: {
     return {
       state: {
         ...params.state,
+        pendingChanges: params.state.pendingChanges || params.snapshot.legacyIssues.length > 0,
         fixHints: params.shouldRepair
           ? params.state.fixHints
           : [
               ...params.state.fixHints,
-              `Run "${params.doctorFixCommand}" to apply compatibility migrations.`,
+              `Run "${params.doctorFixCommand}" to migrate legacy config keys.`,
             ],
       },
       issueLines,
@@ -42,14 +43,19 @@ export function applyLegacyCompatibilityStep(params: {
 
   return {
     state: {
-      cfg: params.shouldRepair ? migrated : params.state.cfg,
+      // Doctor should keep using the best-effort migrated shape in memory even
+      // during preview mode; confirmation only controls whether we write it.
+      cfg: migrated,
       candidate: migrated,
-      pendingChanges: params.state.pendingChanges || changes.length > 0,
+      // The read path can normalize legacy config into the snapshot before
+      // migrateLegacyConfig emits concrete mutations. Legacy issues still mean
+      // the on-disk config needs a doctor --fix path.
+      pendingChanges: params.state.pendingChanges || params.snapshot.legacyIssues.length > 0,
       fixHints: params.shouldRepair
         ? params.state.fixHints
         : [
             ...params.state.fixHints,
-            `Run "${params.doctorFixCommand}" to apply compatibility migrations.`,
+            `Run "${params.doctorFixCommand}" to migrate legacy config keys.`,
           ],
     },
     issueLines,

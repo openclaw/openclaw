@@ -72,6 +72,9 @@ export function toBrowserErrorResponse(err: unknown): {
   if (err instanceof BrowserError) {
     return { status: err.status, message: err.message };
   }
+  if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
+    return { status: 409, message: err.message };
+  }
   if (err instanceof SsrFBlockedError) {
     return { status: 400, message: err.message };
   }

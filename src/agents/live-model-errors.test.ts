@@ -13,6 +13,11 @@ describe("live model error helpers", () => {
         "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
       ),
     ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      ),
+    ).toBe(true);
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
 

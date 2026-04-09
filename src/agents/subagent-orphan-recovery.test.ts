@@ -3,7 +3,7 @@ import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-utils.fs.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
-import * as subagentRegistry from "./subagent-registry.js";
+import * as subagentRegistryRuntime from "./subagent-registry-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Mock dependencies before importing the module under test
@@ -28,7 +28,7 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessages: vi.fn(() => []),
 }));
 
-vi.mock("./subagent-registry.js", () => ({
+vi.mock("./subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: vi.fn(() => true),
 }));
 
@@ -103,7 +103,7 @@ describe("subagent-orphan-recovery", () => {
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(params.message).toContain("gateway reload");
     expect(params.message).toContain("Test task: implement feature X");
-    expect(subagentRegistry.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+    expect(subagentRegistryRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: "run-1",
         nextRunId: "test-run-id",
@@ -136,7 +136,36 @@ describe("subagent-orphan-recovery", () => {
     });
 
     expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
     expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("recovers restart-aborted timeout runs even when the registry marked them ended", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        endedAt: Date.now() - 1_000,
+        outcome: {
+          status: "timeout",
+        },
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
   });
 
   it("handles multiple orphaned sessions", async () => {
@@ -379,7 +408,7 @@ describe("subagent-orphan-recovery", () => {
 
   it("does not retry a session after the gateway accepted resume but run remap failed", async () => {
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
-    vi.mocked(subagentRegistry.replaceSubagentRunAfterSteer).mockReturnValue(false);
+    vi.mocked(subagentRegistryRuntime.replaceSubagentRunAfterSteer).mockReturnValue(false);
 
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {

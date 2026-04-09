@@ -227,6 +227,49 @@ describe("cdp", () => {
     expect(created.targetId).toBe("TARGET_LOCAL");
   });
 
+  it("blocks cross-host websocket pivots returned by /json/version in strict SSRF mode", async () => {
+    const httpPort = await startVersionHttpServer({
+      webSocketDebuggerUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
+    });
+
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        url: "https://example.com",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("blocks the initial /json/version fetch when the cdpUrl host is outside strict SSRF policy", async () => {
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: "http://169.254.169.254:9222",
+        url: "https://example.com",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("blocks direct websocket cdp urls outside strict SSRF policy", async () => {
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
+        url: "https://example.com",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
   it("evaluates javascript via CDP", async () => {
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method === "Runtime.enable") {
@@ -315,6 +358,14 @@ describe("cdp", () => {
   it("propagates auth and query params onto normalized websocket URLs", () => {
     const normalized = normalizeCdpWsUrl(
       "ws://127.0.0.1:9222/devtools/browser/ABC",
+      "https://user:pass@example.com?token=abc",
+    );
+    expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
+  });
+
+  it("rewrites localhost absolute-form websocket URLs for remote CDP hosts", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://localhost.:9222/devtools/browser/ABC",
       "https://user:pass@example.com?token=abc",
     );
     expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");

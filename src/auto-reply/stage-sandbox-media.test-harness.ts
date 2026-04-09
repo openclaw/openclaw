@@ -31,7 +31,7 @@ export function createSandboxMediaStageConfig(home: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         workspace: join(home, "openclaw"),
         sandbox: {
           mode: "non-main",

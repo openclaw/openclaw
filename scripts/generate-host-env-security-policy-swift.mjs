@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadHostEnvSecurityPolicy } from "../src/infra/host-env-security-policy.js";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
@@ -24,8 +25,8 @@ const outputPath = path.join(
   "HostEnvSecurityPolicy.generated.swift",
 );
 
-/** @type {{blockedKeys: string[]; blockedOverrideKeys?: string[]; blockedOverridePrefixes?: string[]; blockedPrefixes: string[]}} */
-const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+const policy = loadHostEnvSecurityPolicy(rawPolicy);
 
 const renderSwiftStringArray = (items) => items.map((item) => `        "${item}"`).join(",\n");
 

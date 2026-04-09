@@ -3,9 +3,8 @@ import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-  type OpenClawConfig,
   type ResolvedLineAccount,
-} from "../runtime-api.js";
+} from "./channel-api.js";
 
 export function normalizeLineAllowFrom(entry: string): string {
   return entry.replace(/^line:(?:user:)?/i, "");
@@ -13,8 +12,7 @@ export function normalizeLineAllowFrom(entry: string): string {
 
 export const lineConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedLineAccount,
-  ResolvedLineAccount,
-  OpenClawConfig
+  ResolvedLineAccount
 >({
   sectionKey: "line",
   listAccountIds: listLineAccountIds,
