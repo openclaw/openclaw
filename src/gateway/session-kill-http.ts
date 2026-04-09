@@ -96,6 +96,23 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
+  // For local admin kills, verify the request has actual admin scope from the caller.
+  // Previously, this check was missing, allowing operator.write callers to reach
+  // the admin kill path without proper authorization (GHSA-9p93-7j67-5pc2).
+  if (allowLocalAdminKill) {
+    const adminScopeAuth = authorizeOperatorScopesForMethod("sessions.delete", requestedScopes);
+    if (!adminScopeAuth.allowed) {
+      sendJson(res, 403, {
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: `local admin kill requires operator.admin scope: ${adminScopeAuth.missingScope}`,
+        },
+      });
+      return true;
+    }
+  }
+
   const { entry, canonicalKey } = loadSessionEntry(sessionKey);
   if (!entry) {
     sendJson(res, 404, {
