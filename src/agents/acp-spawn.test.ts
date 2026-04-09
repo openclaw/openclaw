@@ -1271,6 +1271,11 @@ describe("spawnAcpDirect", () => {
         parentSessionKey: "agent:main:subagent:parent",
         agentId: "codex",
         logPath: "/tmp/sess-main.acp-stream.jsonl",
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:parent-channel",
+          accountId: "default",
+        },
         emitStartNotice: false,
       }),
     );
