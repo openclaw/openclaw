@@ -258,6 +258,10 @@ Notes:
 Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This
 works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 
+Recommended starter config: enable diagnostics, turn on the bundled
+`diagnostics-otel` plugin, export traces + metrics, and leave OTLP logs off
+until you have validated collector capacity and retention.
+
 ```json
 {
   "plugins": {
@@ -277,7 +281,7 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "serviceName": "openclaw-gateway",
       "traces": true,
       "metrics": true,
-      "logs": true,
+      "logs": false,
       "sampleRate": 0.2,
       "flushIntervalMs": 60000
     }
@@ -293,9 +297,30 @@ Notes:
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
   include model usage spans plus webhook/message processing spans when enabled.
+- `logs: false` is the recommended starting posture. Turn OTLP logs on later only
+  after confirming your collector and storage pipeline can absorb the extra log
+  volume.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+
+### Validate the exporter settings
+
+After applying the config, validate the target environment before rolling it out
+more widely:
+
+1. Run `openclaw config validate` to confirm the config parses cleanly.
+2. Restart the Gateway so the plugin starts with the new diagnostics settings.
+3. Confirm the configured `endpoint` is reachable from the Gateway host.
+4. Generate a small amount of traffic (for example, a test agent turn) so both
+   traces and metrics have something to export.
+5. Verify your collector/backend receives:
+   - spans with `service.name=openclaw-gateway`
+   - metrics prefixed with `openclaw.`
+6. Keep `diagnostics.otel.logs=false` for the first rollout unless you
+   explicitly need OTLP log export.
+
+For team handoff, the JSON example above is the canonical starter config.
 
 ### Exported metrics (names + types)
 
