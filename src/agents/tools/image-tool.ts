@@ -1,33 +1,17 @@
-import { resolve, isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
-} from "../../media-understanding/defaults.js";
-import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
-import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type MediaUnderstandingProvider,
-} from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import { sanitizeToolResultImages } from "../tool-images.js";
 import {
-  coerceImageAssistantText,
   coerceImageModelConfig,
   decodeDataUrl,
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
-import {
-  applyImageModelConfigDefaults,
-  buildTextToolResult,
-  resolveMediaToolLocalRoots,
-  resolvePromptAndModelOverride,
-} from "./media-tool-shared.js";
+import { resolveMediaToolLocalRoots, resolvePromptAndModelOverride } from "./media-tool-shared.js";
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
@@ -36,7 +20,6 @@ import {
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
-  runWithImageModelFallback,
   type AnyAgentTool,
   type SandboxedBridgeMediaPathConfig,
   type SandboxFsBridge,
@@ -46,69 +29,19 @@ import {
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
-const imageToolProviderDeps = {
-  buildProviderRegistry,
-  getMediaUnderstandingProvider,
-  describeImageWithModel,
-  describeImagesWithModel,
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
-};
-
 export const __testing = {
   decodeDataUrl,
-  coerceImageAssistantText,
-  resolveImageToolMaxTokens,
-  setProviderDepsForTest(overrides?: {
-    buildProviderRegistry?: typeof buildProviderRegistry;
-    getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
-    describeImageWithModel?: typeof describeImageWithModel;
-    describeImagesWithModel?: typeof describeImagesWithModel;
-    resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
-    resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
-  }) {
-    imageToolProviderDeps.buildProviderRegistry =
-      overrides?.buildProviderRegistry ?? buildProviderRegistry;
-    imageToolProviderDeps.getMediaUnderstandingProvider =
-      overrides?.getMediaUnderstandingProvider ?? getMediaUnderstandingProvider;
-    imageToolProviderDeps.describeImageWithModel =
-      overrides?.describeImageWithModel ?? describeImageWithModel;
-    imageToolProviderDeps.describeImagesWithModel =
-      overrides?.describeImagesWithModel ?? describeImagesWithModel;
-    imageToolProviderDeps.resolveAutoMediaKeyProviders =
-      overrides?.resolveAutoMediaKeyProviders ?? resolveAutoMediaKeyProviders;
-    imageToolProviderDeps.resolveDefaultMediaModel =
-      overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
-  },
 } as const;
-
-function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
-}
 
 /**
  * Resolve the effective image model config for the `image` tool.
- *
- * - Prefer explicit config (`agents.defaults.imageModel`).
- * - Otherwise, try to "pair" the primary model with an image-capable model:
- *   - same provider (best effort)
- *   - fall back to OpenAI/Anthropic when available
+ * No longer used for model dispatch — images are returned as content blocks
+ * for the primary model to analyse in-context. Kept for tool availability gating.
  */
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
 }): ImageModelConfig | null {
-  // Note: We intentionally do NOT gate based on primarySupportsImages here.
-  // Even when the primary model supports images, we keep the tool available
-  // because images are auto-injected into prompts (see attempt.ts detectAndLoadPromptImages).
-  // The tool description is adjusted via modelHasVision to discourage redundant usage.
   const explicit = coerceImageModelConfig(params.cfg);
   if (hasToolModelConfig(explicit)) {
     return explicit;
@@ -124,38 +57,16 @@ export function resolveImageModelConfigForTool(params: {
     if (providerVisionFromConfig) {
       return [providerVisionFromConfig];
     }
-    const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
-      cfg: params.cfg,
-      providerId: primary.provider,
-      capability: "image",
-    });
-    if (providerDefault) {
-      return [`${primary.provider}/${providerDefault}`];
-    }
     if (isMinimaxVlmProvider(primary.provider)) {
       return [`${primary.provider}/MiniMax-VL-01`];
     }
-    return [];
+    return [`${primary.provider}/${primary.model}`];
   })();
-
-  const autoCandidates = imageToolProviderDeps
-    .resolveAutoMediaKeyProviders({
-      cfg: params.cfg,
-      capability: "image",
-    })
-    .map((providerId) => {
-      const modelId = imageToolProviderDeps.resolveDefaultMediaModel({
-        cfg: params.cfg,
-        providerId,
-        capability: "image",
-      });
-      return modelId ? `${providerId}/${modelId}` : null;
-    });
 
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
-    candidates: [...primaryCandidates, ...autoCandidates],
+    candidates: primaryCandidates,
   });
 }
 
@@ -174,108 +85,6 @@ type ImageSandboxConfig = {
   root: string;
   bridge: SandboxFsBridge;
 };
-
-async function runImagePrompt(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-  imageModelConfig: ImageModelConfig;
-  modelOverride?: string;
-  prompt: string;
-  images: Array<{ buffer: Buffer; mimeType: string }>;
-}): Promise<{
-  text: string;
-  provider: string;
-  model: string;
-  attempts: Array<{ provider: string; model: string; error: string }>;
-}> {
-  const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
-  const providerCfg: OpenClawConfig = effectiveCfg ?? {};
-  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
-
-  const result = await runWithImageModelFallback({
-    cfg: effectiveCfg,
-    modelOverride: params.modelOverride,
-    run: async (provider, modelId) => {
-      const imageProvider = imageToolProviderDeps.getMediaUnderstandingProvider(
-        provider,
-        providerRegistry as Map<string, MediaUnderstandingProvider>,
-      );
-      if (
-        params.images.length > 1 &&
-        (imageProvider?.describeImages || !imageProvider?.describeImage)
-      ) {
-        const describeImages =
-          imageProvider?.describeImages ?? imageToolProviderDeps.describeImagesWithModel;
-        const described = await describeImages({
-          images: params.images.map((image, index) => ({
-            buffer: image.buffer,
-            fileName: `image-${index + 1}`,
-            mime: image.mimeType,
-          })),
-          provider,
-          model: modelId,
-          prompt: params.prompt,
-          maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
-          cfg: providerCfg,
-          agentDir: params.agentDir,
-        });
-        return { text: described.text, provider, model: described.model ?? modelId };
-      }
-      const describeImage =
-        imageProvider?.describeImage ?? imageToolProviderDeps.describeImageWithModel;
-      if (params.images.length === 1) {
-        const image = params.images[0];
-        const described = await describeImage({
-          buffer: image.buffer,
-          fileName: "image-1",
-          mime: image.mimeType,
-          provider,
-          model: modelId,
-          prompt: params.prompt,
-          maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
-          cfg: providerCfg,
-          agentDir: params.agentDir,
-        });
-        return { text: described.text, provider, model: described.model ?? modelId };
-      }
-
-      const parts: string[] = [];
-      for (const [index, image] of params.images.entries()) {
-        const described = await describeImage({
-          buffer: image.buffer,
-          fileName: `image-${index + 1}`,
-          mime: image.mimeType,
-          provider,
-          model: modelId,
-          prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
-          maxTokens: resolveImageToolMaxTokens(undefined),
-          timeoutMs: 30_000,
-          cfg: providerCfg,
-          agentDir: params.agentDir,
-        });
-        parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
-      }
-      return {
-        text: parts.join("\n\n").trim(),
-        provider,
-        model: modelId,
-      };
-    },
-  });
-
-  return {
-    text: result.result.text,
-    provider: result.result.provider,
-    model: result.result.model,
-    attempts: result.attempts.map((attempt) => ({
-      provider: attempt.provider,
-      model: attempt.model,
-      error: attempt.error,
-    })),
-  };
-}
 
 export function createImageTool(options?: {
   config?: OpenClawConfig;
@@ -371,10 +180,7 @@ export function createImageTool(options?: {
         };
       }
 
-      const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
-        record,
-        DEFAULT_PROMPT,
-      );
+      const { prompt: promptRaw } = resolvePromptAndModelOverride(record, DEFAULT_PROMPT);
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
@@ -505,16 +311,8 @@ export function createImageTool(options?: {
         });
       }
 
-      // MARK: - Run image prompt with all loaded images
-      const result = await runImagePrompt({
-        cfg: options?.config,
-        agentDir,
-        imageModelConfig,
-        modelOverride,
-        prompt: promptRaw,
-        images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
-      });
-
+      // Return images as content blocks for the primary model to analyse in-context.
+      // This replicates the same behaviour as pasting an image directly into the chat.
       const imageDetails =
         loadedImages.length === 1
           ? {
@@ -530,7 +328,19 @@ export function createImageTool(options?: {
               })),
             };
 
-      return buildTextToolResult(result, imageDetails);
+      const result = {
+        content: [
+          { type: "text" as const, text: promptRaw },
+          ...loadedImages.map((img) => ({
+            type: "image" as const,
+            data: img.buffer.toString("base64"),
+            mimeType: img.mimeType,
+          })),
+        ],
+        details: imageDetails,
+      };
+
+      return await sanitizeToolResultImages(result, "image");
     },
   };
 }
