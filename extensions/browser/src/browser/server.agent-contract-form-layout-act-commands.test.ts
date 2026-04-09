@@ -112,13 +112,13 @@ describe("browser control server", () => {
         timeMs: 5,
       });
       expect(wait.ok).toBe(true);
-      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        timeMs: 5,
-        text: undefined,
-        textGone: undefined,
-      });
+      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          timeMs: 5,
+        }),
+      );
 
       const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",
@@ -220,12 +220,13 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+      const batchRes = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "batch",
         actions: [{ kind: "click", ref: {} }],
       });
 
       expect(batchRes.error).toContain("click requires ref or selector");
+      expect(batchRes.code).toBe("ACT_INVALID_REQUEST");
       expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
@@ -236,12 +237,13 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+      const batchRes = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "batch",
         actions: [{ kind: "click", ref: "5", targetId: "other-tab" }],
       });
 
       expect(batchRes.error).toContain("batched action targetId must match request targetId");
+      expect(batchRes.code).toBe("ACT_TARGET_ID_MISMATCH");
       expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,

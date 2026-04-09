@@ -98,46 +98,216 @@ export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockF
 const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
-  batchViaPlaywright: vi.fn(async () => ({ results: [] })),
-  clickViaPlaywright: vi.fn(async () => {}),
-  closePageViaPlaywright: vi.fn(async () => {}),
+  batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+  clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
     path: "/tmp/report.pdf",
   })),
-  dragViaPlaywright: vi.fn(async () => {}),
-  evaluateViaPlaywright: vi.fn(async () => "ok"),
-  fillFormViaPlaywright: vi.fn(async () => {}),
+  dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
+  fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  hoverViaPlaywright: vi.fn(async () => {}),
-  scrollIntoViewViaPlaywright: vi.fn(async () => {}),
+  hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
-  pressKeyViaPlaywright: vi.fn(async () => {}),
+  pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   responseBodyViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/api/data",
     status: 200,
     headers: { "content-type": "application/json" },
     body: '{"ok":true}',
   })),
-  resizeViewportViaPlaywright: vi.fn(async () => {}),
-  selectOptionViaPlaywright: vi.fn(async () => {}),
+  resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),
-  typeViaPlaywright: vi.fn(async () => {}),
+  typeViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   waitForDownloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
     path: "/tmp/report.pdf",
   })),
-  waitForViaPlaywright: vi.fn(async () => {}),
+  waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  executeActViaPlaywright: vi.fn(
+    async (_opts?: {
+      cdpUrl: string;
+      action: { kind: string } & Record<string, unknown>;
+      targetId?: string;
+      ssrfPolicy?: unknown;
+      evaluateEnabled?: boolean;
+      signal?: AbortSignal;
+    }) => ({}),
+  ),
 }));
+
+pwMocks.executeActViaPlaywright.mockImplementation(
+  async (
+    opts:
+      | {
+          cdpUrl: string;
+          action: { kind: string } & Record<string, unknown>;
+          targetId?: string;
+          ssrfPolicy?: unknown;
+          evaluateEnabled?: boolean;
+          signal?: AbortSignal;
+        }
+      | undefined,
+  ) => {
+    if (!opts) {
+      return {};
+    }
+    const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
+    switch (action.kind) {
+      case "click":
+        await pwMocks.clickViaPlaywright({
+          cdpUrl,
+          targetId,
+          ref: action.ref,
+          selector: action.selector,
+          doubleClick: action.doubleClick,
+          button: action.button,
+          modifiers: action.modifiers,
+          delayMs: action.delayMs,
+          timeoutMs: action.timeoutMs,
+          ssrfPolicy,
+        });
+        return {};
+      case "type":
+        await pwMocks.typeViaPlaywright({
+          cdpUrl,
+          targetId,
+          ref: action.ref,
+          selector: action.selector,
+          text: action.text,
+          submit: action.submit,
+          slowly: action.slowly,
+          timeoutMs: action.timeoutMs,
+          ssrfPolicy,
+        });
+        return {};
+      case "press":
+        await pwMocks.pressKeyViaPlaywright({
+          cdpUrl,
+          targetId,
+          key: action.key,
+          delayMs: action.delayMs,
+          ssrfPolicy,
+        });
+        return {};
+      case "hover":
+        await pwMocks.hoverViaPlaywright({
+          cdpUrl,
+          targetId,
+          ref: action.ref,
+          selector: action.selector,
+          timeoutMs: action.timeoutMs,
+        });
+        return {};
+      case "scrollIntoView":
+        await pwMocks.scrollIntoViewViaPlaywright({
+          cdpUrl,
+          targetId,
+          ref: action.ref,
+          selector: action.selector,
+          timeoutMs: action.timeoutMs,
+        });
+        return {};
+      case "drag":
+        await pwMocks.dragViaPlaywright({
+          cdpUrl,
+          targetId,
+          startRef: action.startRef,
+          startSelector: action.startSelector,
+          endRef: action.endRef,
+          endSelector: action.endSelector,
+          timeoutMs: action.timeoutMs,
+        });
+        return {};
+      case "select":
+        await pwMocks.selectOptionViaPlaywright({
+          cdpUrl,
+          targetId,
+          ref: action.ref,
+          selector: action.selector,
+          values: action.values,
+          timeoutMs: action.timeoutMs,
+        });
+        return {};
+      case "fill":
+        await pwMocks.fillFormViaPlaywright({
+          cdpUrl,
+          targetId,
+          fields: action.fields,
+          timeoutMs: action.timeoutMs,
+        });
+        return {};
+      case "resize":
+        await pwMocks.resizeViewportViaPlaywright({
+          cdpUrl,
+          targetId,
+          width: action.width,
+          height: action.height,
+        });
+        return {};
+      case "wait":
+        await pwMocks.waitForViaPlaywright({
+          cdpUrl,
+          targetId,
+          timeMs: action.timeMs,
+          text: action.text,
+          textGone: action.textGone,
+          selector: action.selector,
+          url: action.url,
+          loadState: action.loadState,
+          fn: action.fn,
+          timeoutMs: action.timeoutMs,
+          signal,
+        });
+        return {};
+      case "evaluate": {
+        if (!evaluateEnabled) {
+          throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
+        }
+        const result = await pwMocks.evaluateViaPlaywright({
+          cdpUrl,
+          targetId,
+          ssrfPolicy,
+          fn: action.fn,
+          ref: action.ref,
+          timeoutMs: action.timeoutMs,
+          signal,
+        });
+        return { result };
+      }
+      case "close":
+        await pwMocks.closePageViaPlaywright({ cdpUrl, targetId });
+        return {};
+      case "batch": {
+        const result = await pwMocks.batchViaPlaywright({
+          cdpUrl,
+          targetId,
+          actions: action.actions,
+          stopOnError: action.stopOnError,
+          evaluateEnabled,
+          ssrfPolicy,
+          signal,
+        });
+        return { results: result.results };
+      }
+      default:
+        return {};
+    }
+  },
+);
 
 export function getPwMocks(): Record<string, MockFn> {
   return pwMocks as unknown as Record<string, MockFn>;
