@@ -27,7 +27,6 @@ export type BrowserBridge = {
 
 type ResolvedNoVncObserver = {
   noVncPort: number;
-  password?: string;
 };
 
 function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
@@ -35,10 +34,6 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
     autoconnect: "1",
     resize: "remote",
   });
-  const password = normalizeOptionalString(params.password);
-  if (password) {
-    hash.set("password", password);
-  }
   const targetUrl = `http://127.0.0.1:${params.noVncPort}/vnc.html#${hash.toString()}`;
   const encodedTarget = JSON.stringify(targetUrl);
   return `<!doctype html>
