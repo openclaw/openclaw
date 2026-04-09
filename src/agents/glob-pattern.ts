@@ -1,7 +1,7 @@
 export type CompiledGlobPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
+  | { kind: "all"; raw: string }
+  | { kind: "exact"; value: string; raw: string }
+  | { kind: "regex"; value: RegExp; raw: string };
 
 function escapeRegex(value: string) {
   // Standard "escape string for regex literal" pattern.
@@ -14,17 +14,18 @@ export function compileGlobPattern(params: {
 }): CompiledGlobPattern {
   const normalized = params.normalize(params.raw);
   if (!normalized) {
-    return { kind: "exact", value: "" };
+    return { kind: "exact", value: "", raw: params.raw };
   }
   if (normalized === "*") {
-    return { kind: "all" };
+    return { kind: "all", raw: params.raw };
   }
   if (!normalized.includes("*")) {
-    return { kind: "exact", value: normalized };
+    return { kind: "exact", value: normalized, raw: params.raw };
   }
   return {
     kind: "regex",
     value: new RegExp(`^${escapeRegex(normalized).replaceAll("\\*", ".*")}$`),
+    raw: params.raw,
   };
 }
 
@@ -41,16 +42,23 @@ export function compileGlobPatterns(params: {
 }
 
 export function matchesAnyGlobPattern(value: string, patterns: CompiledGlobPattern[]): boolean {
+  return findMatchingGlobPattern(value, patterns) !== undefined;
+}
+
+export function findMatchingGlobPattern(
+  value: string,
+  patterns: CompiledGlobPattern[],
+): string | undefined {
   for (const pattern of patterns) {
     if (pattern.kind === "all") {
-      return true;
+      return pattern.raw;
     }
     if (pattern.kind === "exact" && value === pattern.value) {
-      return true;
+      return pattern.raw;
     }
     if (pattern.kind === "regex" && pattern.value.test(value)) {
-      return true;
+      return pattern.raw;
     }
   }
-  return false;
+  return undefined;
 }
