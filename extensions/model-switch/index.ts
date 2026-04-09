@@ -49,7 +49,9 @@ const modelSwitchParameters = Type.Object({
 type ModelSwitchParams = Static<typeof modelSwitchParameters>;
 
 const modelInfoParameters = Type.Object({
-  action: Type.Union([Type.Literal("status"), Type.Literal("list"), Type.Literal("capabilities")], {
+  action: Type.Unsafe<"status" | "list" | "capabilities">({
+    type: "string",
+    enum: ["status", "list", "capabilities"],
     description:
       "'status' = current model, 'list' = all models, 'capabilities' = detail for one model.",
   }),
@@ -66,23 +68,8 @@ export default definePluginEntry({
   description: "Seamless local LLM model switching with session continuation.",
   register(api) {
     const config = resolveConfig(api.pluginConfig);
-    const followupRuntime = (api.runtime as Record<string, unknown>).followup as
-      | {
-          enqueueFollowupTurn: (p: {
-            sessionKey: string;
-            prompt: string;
-            source: string;
-          }) => Promise<boolean>;
-        }
-      | undefined;
+    const followupRuntime = api.runtime.followup;
     const stateDir = api.runtime.state.resolveStateDir();
-
-    if (!followupRuntime) {
-      api.logger.warn(
-        "[model-switch] runtime.followup not available (requires enqueueFollowupTurn API). " +
-          "Model switching will work but session continuation after switch is disabled.",
-      );
-    }
 
     // Shared mutable state between tool, hook, and service
     const state: SwitchState = {
@@ -98,14 +85,7 @@ export default definePluginEntry({
       config,
       stateDir,
       logger: api.logger,
-      enqueueFollowupTurn: followupRuntime
-        ? followupRuntime.enqueueFollowupTurn.bind(followupRuntime)
-        : async () => {
-            api.logger.warn(
-              "[model-switch] enqueueFollowupTurn not available. Session continuation skipped.",
-            );
-            return false;
-          },
+      enqueueFollowupTurn: followupRuntime.enqueueFollowupTurn.bind(followupRuntime),
       onSwitchComplete: () => {
         if (resolveSwitchPromise) {
           resolveSwitchPromise();

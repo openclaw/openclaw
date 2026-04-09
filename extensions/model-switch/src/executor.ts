@@ -81,7 +81,11 @@ export async function executeSwitch(
     if (source) {
       logger.info(`[model-switch] Stopping ${sourceModelId}: ${source.stopCommand}`);
       try {
-        execSync(source.stopCommand, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        execSync(source.stopCommand, {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: config.switchTimeoutMs,
+        });
       } catch {
         logger.warn(`[model-switch] Stop command returned non-zero (may already be stopped)`);
       }
@@ -103,7 +107,11 @@ export async function executeSwitch(
     // Step 3: Start target model
     logger.info(`[model-switch] Starting ${params.targetModelId}: ${target.startCommand}`);
     try {
-      execSync(target.startCommand, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      execSync(target.startCommand, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: config.switchTimeoutMs,
+      });
     } catch (err) {
       logger.error(`[model-switch] Start command failed: ${String(err)}`);
       return false;
