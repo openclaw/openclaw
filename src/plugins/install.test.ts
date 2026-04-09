@@ -940,6 +940,67 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("fails package installs when manifest traversal exceeds the directory cap", async () => {
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES", "4");
+
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "directory-cap-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const vendorRoot = path.join(pluginDir, "vendor");
+    for (let index = 0; index < 8; index += 1) {
+      fs.mkdirSync(path.join(vendorRoot, `pkg-${index}`), { recursive: true });
+    }
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+      expect(result.error).toContain("manifest dependency scan exceeded max directories (4)");
+    }
+  });
+
+  it("fails package installs when manifest traversal exceeds the depth cap", async () => {
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_DEPTH", "2");
+
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "depth-cap-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const nestedDir = path.join(pluginDir, "vendor", "a", "b", "c");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nestedDir, "package.json"),
+      JSON.stringify({
+        name: "plain-crypto-js",
+        version: "4.2.1",
+      }),
+    );
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+      expect(result.error).toContain("manifest dependency scan exceeded max depth (2)");
+    }
+  });
+
   it("reports all blocked dependencies from the same manifest", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

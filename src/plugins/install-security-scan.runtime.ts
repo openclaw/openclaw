@@ -37,6 +37,12 @@ type PackageManifest = {
   peerDependencies?: Record<string, string>;
 };
 
+type PackageManifestTraversalLimits = {
+  maxDepth: number;
+  maxDirectories: number;
+  maxManifests: number;
+};
+
 type PluginInstallRequestKind =
   | "skill-install"
   | "plugin-dir"
@@ -137,19 +143,79 @@ function buildBuiltinScanFromSummary(summary: {
   };
 }
 
+const DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS: PackageManifestTraversalLimits = {
+  maxDepth: 64,
+  maxDirectories: 10_000,
+  maxManifests: 10_000,
+};
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const rawValue = process.env[name];
+  if (!rawValue) {
+    return fallback;
+  }
+  const parsedValue = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+    return fallback;
+  }
+  return parsedValue;
+}
+
+function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits {
+  return {
+    maxDepth: readPositiveIntegerEnv(
+      "OPENCLAW_INSTALL_SCAN_MAX_DEPTH",
+      DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxDepth,
+    ),
+    maxDirectories: readPositiveIntegerEnv(
+      "OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES",
+      DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxDirectories,
+    ),
+    maxManifests: readPositiveIntegerEnv(
+      "OPENCLAW_INSTALL_SCAN_MAX_MANIFESTS",
+      DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxManifests,
+    ),
+  };
+}
+
 async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
-  const queue = [rootDir];
+  const limits = resolvePackageManifestTraversalLimits();
+  const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
+  const visitedDirectories = new Set<string>();
   let queueIndex = 0;
 
   while (queueIndex < queue.length) {
-    const currentDir = queue[queueIndex];
+    const current = queue[queueIndex];
     queueIndex += 1;
-    if (!currentDir) {
+    if (!current) {
       continue;
     }
 
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    if (current.depth > limits.maxDepth) {
+      throw new Error(
+        `manifest dependency scan exceeded max depth (${limits.maxDepth}) at ${current.dir}`,
+      );
+    }
+
+    const currentDir = current.dir;
+    const currentRealPath = await fs.realpath(currentDir).catch(() => currentDir);
+    if (visitedDirectories.has(currentRealPath)) {
+      continue;
+    }
+    visitedDirectories.add(currentRealPath);
+    if (visitedDirectories.size > limits.maxDirectories) {
+      throw new Error(
+        `manifest dependency scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
+      );
+    }
+
+    let entries: Array<{
+      name: string;
+      isDirectory(): boolean;
+      isFile(): boolean;
+      isSymbolicLink(): boolean;
+    }>;
     try {
       entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
     } catch {
@@ -159,13 +225,21 @@ async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
     // Intentionally walk vendored/node_modules trees so bundled transitive
     // manifests cannot hide blocked packages from install-time policy checks.
     for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
       const nextPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        queue.push(nextPath);
+        queue.push({ depth: current.depth + 1, dir: nextPath });
         continue;
       }
       if (entry.isFile() && entry.name === "package.json") {
         packageManifestPaths.push(nextPath);
+        if (packageManifestPaths.length > limits.maxManifests) {
+          throw new Error(
+            `manifest dependency scan exceeded max manifests (${limits.maxManifests}) under ${rootDir}`,
+          );
+        }
       }
     }
   }
