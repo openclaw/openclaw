@@ -2219,6 +2219,39 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toThrow("plugin load failed: telegram: invalid config: <root>: must be object");
   });
 
+  it("fails fast for open allowlists even when other plugins are explicitly enabled", () => {
+    setupBundledTelegramPlugin();
+    const broken = writePlugin({
+      id: "broken",
+      filename: "broken.cjs",
+      body: `module.exports = { id: "broken", register() {} };`,
+    });
+
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: cachedBundledTelegramDir,
+        throwOnLoadError: true,
+        config: {
+          channels: {
+            telegram: {
+              enabled: true,
+            },
+          },
+          plugins: {
+            load: { paths: [broken.file] },
+            entries: {
+              broken: {
+                enabled: true,
+                config: "nope" as unknown as Record<string, unknown>,
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("plugin load failed: broken: invalid config: <root>: must be object");
+  });
+
   it("filters strict plugin load failures by plugins.allow", () => {
     const registry = {
       plugins: [

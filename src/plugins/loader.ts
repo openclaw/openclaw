@@ -822,20 +822,22 @@ function maybeThrowOnPluginLoadError(
   if (errored.length === 0) {
     return;
   }
-  const strictIds = new Set<string>();
-  for (const pluginId of allowlist) {
-    strictIds.add(pluginId);
-  }
-  for (const plugin of registry.plugins) {
-    if (plugin.explicitlyEnabled) {
-      strictIds.add(plugin.id);
+  const hasAllowlist = allowlist.length > 0;
+  const strictIds = hasAllowlist ? new Set<string>(allowlist) : null;
+  if (strictIds) {
+    for (const plugin of registry.plugins) {
+      if (plugin.explicitlyEnabled) {
+        strictIds.add(plugin.id);
+      }
     }
   }
-  if (strictIds.size > 0 && !errored.some((entry) => strictIds.has(entry.id))) {
+  // Restrict strict-error filtering to non-empty allowlists so the open-allowlist
+  // (plugins.allow is empty) semantics stay fail-fast for any plugin load error.
+  if (strictIds && !errored.some((entry) => strictIds.has(entry.id))) {
     return;
   }
   throw new PluginLoadFailureError(registry, {
-    onlyPluginIds: strictIds.size > 0 ? [...strictIds].toSorted() : undefined,
+    onlyPluginIds: strictIds && strictIds.size > 0 ? [...strictIds].toSorted() : undefined,
   });
 }
 
