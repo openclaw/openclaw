@@ -149,8 +149,13 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
       { phoneKey: "5557654321", name: "Bob Example" },
     ]);
     expect(execFileAsync).toHaveBeenCalledTimes(1);
-    const sql = execFileAsync.mock.calls[0]?.[1]?.[3];
-    expect(sql).toContain("WHERE digits IN ('5551234567', '5557654321')");
+
+    const args = execFileAsync.mock.calls[0]?.[1] ?? [];
+    const sql = args[args.length - 1];
+    expect(sql).toContain("WHERE digits IN (?1, ?2)");
+    expect(args).toContain("-cmd");
+    expect(args).toContain(".parameter set ?1 '5551234567'");
+    expect(args).toContain(".parameter set ?2 '5557654321'");
   });
 
   it("resolves names through the macOS contacts path across multiple databases", async () => {
