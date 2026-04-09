@@ -805,17 +805,18 @@ export async function runReplyAgent(params: {
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    if (verboseNotices.length > 0) {
-      finalPayloads = [...verboseNotices, ...finalPayloads];
-    }
-    if (responseUsageLine) {
-      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
-    }
+    const prefixPayloads = [...verboseNotices];
     if (verboseEnabled) {
       const pluginStatusPayload = buildInlinePluginStatusPayload(activeSessionEntry);
       if (pluginStatusPayload) {
-        finalPayloads = [...finalPayloads, pluginStatusPayload];
+        prefixPayloads.push(pluginStatusPayload);
       }
+    }
+    if (prefixPayloads.length > 0) {
+      finalPayloads = [...prefixPayloads, ...finalPayloads];
+    }
+    if (responseUsageLine) {
+      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
     return finalizeWithFollowup(

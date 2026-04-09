@@ -589,8 +589,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
     expect(Array.isArray(result)).toBe(true);
     expect((result as { text?: string }[]).map((payload) => payload.text)).toEqual([
-      "Normal reply",
       "🧩 Active Memory: ok 842ms recent 34 chars\n🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
+      "Normal reply",
     ]);
   });
 
