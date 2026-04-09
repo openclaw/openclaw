@@ -123,19 +123,21 @@ export function updateSkillEdit(state: SkillsState, skillKey: string, value: str
   state.skillEdits = { ...state.skillEdits, [skillKey]: value };
 }
 
-export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
-  if (!state.client || !state.connected) {
+async function runSkillMutation(
+  state: SkillsState,
+  skillKey: string,
+  run: (client: GatewayBrowserClient) => Promise<SkillMessage>,
+) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
   state.skillsBusyKey = skillKey;
   state.skillsError = null;
   try {
-    await state.client.request("skills.update", { skillKey, enabled });
+    const message = await run(client);
     await loadSkills(state);
-    setSkillMessage(state, skillKey, {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    });
+    setSkillMessage(state, skillKey, message);
   } catch (err) {
     const message = getErrorMessage(err);
     state.skillsError = message;
@@ -148,30 +150,25 @@ export async function updateSkillEnabled(state: SkillsState, skillKey: string, e
   }
 }
 
+export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
+  await runSkillMutation(state, skillKey, async (client) => {
+    await client.request("skills.update", { skillKey, enabled });
+    return {
+      kind: "success",
+      message: enabled ? "Skill enabled" : "Skill disabled",
+    };
+  });
+}
+
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  state.skillsBusyKey = skillKey;
-  state.skillsError = null;
-  try {
+  await runSkillMutation(state, skillKey, async (client) => {
     const apiKey = state.skillEdits[skillKey] ?? "";
-    await state.client.request("skills.update", { skillKey, apiKey });
-    await loadSkills(state);
-    setSkillMessage(state, skillKey, {
+    await client.request("skills.update", { skillKey, apiKey });
+    return {
       kind: "success",
       message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    });
-  } catch (err) {
-    const message = getErrorMessage(err);
-    state.skillsError = message;
-    setSkillMessage(state, skillKey, {
-      kind: "error",
-      message,
-    });
-  } finally {
-    state.skillsBusyKey = null;
-  }
+    };
+  });
 }
 
 export async function installSkill(
@@ -181,33 +178,18 @@ export async function installSkill(
   installId: string,
   dangerouslyForceUnsafeInstall = false,
 ) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  state.skillsBusyKey = skillKey;
-  state.skillsError = null;
-  try {
-    const result = await state.client.request<{ message?: string }>("skills.install", {
+  await runSkillMutation(state, skillKey, async (client) => {
+    const result = await client.request<{ message?: string }>("skills.install", {
       name,
       installId,
       dangerouslyForceUnsafeInstall,
       timeoutMs: 120000,
     });
-    await loadSkills(state);
-    setSkillMessage(state, skillKey, {
+    return {
       kind: "success",
       message: result?.message ?? "Installed",
-    });
-  } catch (err) {
-    const message = getErrorMessage(err);
-    state.skillsError = message;
-    setSkillMessage(state, skillKey, {
-      kind: "error",
-      message,
-    });
-  } finally {
-    state.skillsBusyKey = null;
-  }
+    };
+  });
 }
 
 export async function searchClawHub(state: SkillsState, query: string) {

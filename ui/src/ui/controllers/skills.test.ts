@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { searchClawHub, setClawHubSearchQuery, type SkillsState } from "./skills.ts";
+import {
+  installSkill,
+  saveSkillApiKey,
+  searchClawHub,
+  setClawHubSearchQuery,
+  updateSkillEnabled,
+  type SkillsState,
+} from "./skills.ts";
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> } {
   const request = vi.fn();
@@ -105,5 +112,88 @@ describe("searchClawHub", () => {
     expect(state.clawhubSearchResults).toBeNull();
     expect(state.clawhubSearchError).toBeNull();
     expect(state.clawhubSearchLoading).toBe(false);
+  });
+});
+
+describe("skill mutations", () => {
+  it("updates skill enablement and records a success message", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {};
+      }
+      return {};
+    });
+
+    await updateSkillEnabled(state, "github", true);
+
+    expect(request).toHaveBeenCalledWith("skills.update", { skillKey: "github", enabled: true });
+    expect(state.skillMessages.github).toEqual({ kind: "success", message: "Skill enabled" });
+    expect(state.skillsBusyKey).toBeNull();
+    expect(state.skillsError).toBeNull();
+  });
+
+  it("saves API keys and reports success", async () => {
+    const { state, request } = createState();
+    state.skillEdits.github = "sk-test";
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {};
+      }
+      return {};
+    });
+
+    await saveSkillApiKey(state, "github");
+
+    expect(request).toHaveBeenCalledWith("skills.update", {
+      skillKey: "github",
+      apiKey: "sk-test",
+    });
+    expect(state.skillMessages.github).toEqual({
+      kind: "success",
+      message: "API key saved — stored in openclaw.json (skills.entries.github)",
+    });
+    expect(state.skillsBusyKey).toBeNull();
+  });
+
+  it("installs skills and uses server success messages", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.install") {
+        return { message: "Installed from registry" };
+      }
+      if (method === "skills.status") {
+        return {};
+      }
+      return {};
+    });
+
+    await installSkill(state, "github", "GitHub", "install-123", true);
+
+    expect(request).toHaveBeenCalledWith("skills.install", {
+      name: "GitHub",
+      installId: "install-123",
+      dangerouslyForceUnsafeInstall: true,
+      timeoutMs: 120000,
+    });
+    expect(state.skillMessages.github).toEqual({
+      kind: "success",
+      message: "Installed from registry",
+    });
+    expect(state.skillsBusyKey).toBeNull();
+  });
+
+  it("records errors from failed mutations", async () => {
+    const { state, request } = createState();
+    request.mockRejectedValue(new Error("skills update failed"));
+
+    await updateSkillEnabled(state, "github", false);
+
+    expect(state.skillsError).toBe("skills update failed");
+    expect(state.skillMessages.github).toEqual({
+      kind: "error",
+      message: "skills update failed",
+    });
+    expect(state.skillsBusyKey).toBeNull();
   });
 });

@@ -237,91 +237,96 @@ export function setThemeMode(
 }
 
 export async function refreshActiveTab(host: SettingsHost) {
-  if (host.tab === "overview") {
-    await loadOverview(host);
-  }
-  if (host.tab === "channels") {
-    await loadChannelsTab(host);
-  }
-  if (host.tab === "instances") {
-    await loadPresence(host as unknown as OpenClawApp);
-  }
-  if (host.tab === "usage") {
-    await loadUsage(host as unknown as OpenClawApp);
-  }
-  if (host.tab === "sessions") {
-    await loadSessions(host as unknown as OpenClawApp);
-  }
-  if (host.tab === "cron") {
-    await loadCron(host);
-  }
-  if (host.tab === "skills") {
-    await loadSkills(host as unknown as OpenClawApp);
-  }
-  if (host.tab === "agents") {
-    await loadAgents(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
-    const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
-    if (agentIds.length > 0) {
-      void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
+  const app = host as unknown as OpenClawApp;
+  switch (host.tab) {
+    case "overview":
+      await loadOverview(host);
+      return;
+    case "channels":
+      await loadChannelsTab(host);
+      return;
+    case "instances":
+      await loadPresence(app);
+      return;
+    case "usage":
+      await loadUsage(app);
+      return;
+    case "sessions":
+      await loadSessions(app);
+      return;
+    case "cron":
+      await loadCron(host);
+      return;
+    case "skills":
+      await loadSkills(app);
+      return;
+    case "agents": {
+      await loadAgents(app);
+      await loadConfig(app);
+      const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+      if (agentIds.length > 0) {
+        void loadAgentIdentities(app, agentIds);
+      }
+      const agentId =
+        host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+      if (!agentId) {
+        return;
+      }
+      void loadAgentIdentity(app, agentId);
+      switch (host.agentsPanel) {
+        case "files":
+          void loadAgentFiles(app, agentId);
+          return;
+        case "skills":
+          void loadAgentSkills(app, agentId);
+          return;
+        case "channels":
+          void loadChannels(app, false);
+          return;
+        case "cron":
+          void loadCron(host);
+          return;
+        default:
+          return;
+      }
     }
-    const agentId =
-      host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
-    if (agentId) {
-      void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
-      if (host.agentsPanel === "files") {
-        void loadAgentFiles(host as unknown as OpenClawApp, agentId);
-      }
-      if (host.agentsPanel === "skills") {
-        void loadAgentSkills(host as unknown as OpenClawApp, agentId);
-      }
-      if (host.agentsPanel === "channels") {
-        void loadChannels(host as unknown as OpenClawApp, false);
-      }
-      if (host.agentsPanel === "cron") {
-        void loadCron(host);
-      }
-    }
-  }
-  if (host.tab === "nodes") {
-    await loadNodes(host as unknown as OpenClawApp);
-    await loadDevices(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
-    await loadExecApprovals(host as unknown as OpenClawApp);
-  }
-  if (host.tab === "dreams") {
-    await loadConfig(host as unknown as OpenClawApp);
-    await Promise.all([
-      loadDreamingStatus(host as unknown as OpenClawApp),
-      loadDreamDiary(host as unknown as OpenClawApp),
-    ]);
-  }
-  if (host.tab === "chat") {
-    await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
-    scheduleChatScroll(
-      host as unknown as Parameters<typeof scheduleChatScroll>[0],
-      !host.chatHasAutoScrolled,
-    );
-  }
-  if (
-    host.tab === "config" ||
-    host.tab === "communications" ||
-    host.tab === "appearance" ||
-    host.tab === "automation" ||
-    host.tab === "infrastructure" ||
-    host.tab === "aiAgents"
-  ) {
-    await loadConfigSchema(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
-  }
-  if (host.tab === "debug") {
-    await loadDebug(host as unknown as OpenClawApp);
-    host.eventLog = host.eventLogBuffer;
-  }
-  if (host.tab === "logs") {
-    host.logsAtBottom = true;
-    await loadLogs(host as unknown as OpenClawApp, { reset: true });
-    scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+    case "nodes":
+      await loadNodes(app);
+      await loadDevices(app);
+      await loadConfig(app);
+      await loadExecApprovals(app);
+      return;
+    case "dreams":
+      await loadConfig(app);
+      await Promise.all([loadDreamingStatus(app), loadDreamDiary(app)]);
+      return;
+    case "chat":
+      await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
+      scheduleChatScroll(
+        host as unknown as Parameters<typeof scheduleChatScroll>[0],
+        !host.chatHasAutoScrolled,
+      );
+      return;
+    case "config":
+    case "communications":
+    case "appearance":
+    case "automation":
+    case "infrastructure":
+    case "aiAgents":
+      await loadConfigSchema(app);
+      await loadConfig(app);
+      return;
+    case "debug":
+      await loadDebug(app);
+      host.eventLog = host.eventLogBuffer;
+      return;
+    case "logs":
+      host.logsAtBottom = true;
+      await loadLogs(app, { reset: true });
+      scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+      return;
+    default:
+      return;
   }
 }
 
