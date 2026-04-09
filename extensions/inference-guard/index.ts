@@ -44,8 +44,9 @@ export default definePluginEntry({
   register(api) {
     const config = resolveConfig(api.pluginConfig);
 
-    // Track heartbeat queue depth
-    let queuedHeartbeatCount = 0;
+    // Track heartbeat timing — use timestamps instead of counters to avoid drift
+    // on aborted/crashed heartbeats that never fire agent_end.
+    let lastHeartbeatStartedAt = 0;
 
     // Track if model-switch is in progress (coordinate with model-switch plugin)
     // Read from shared state file or in-memory flag
@@ -75,22 +76,18 @@ export default definePluginEntry({
           (ctx as { isCron?: boolean }).isCron === true;
 
         if (isHeartbeat) {
-          // Heartbeat queue cap — drop if already at limit
-          if (queuedHeartbeatCount >= config.deferPolicy.heartbeat.maxQueued) {
+          // Heartbeat rate limiting — if a heartbeat started recently, drop this one.
+          // Uses timestamps instead of counters to avoid drift on aborted/crashed heartbeats.
+          const now = Date.now();
+          const minIntervalMs = 30_000; // Don't allow heartbeats more often than 30s
+          if (now - lastHeartbeatStartedAt < minIntervalMs) {
             api.logger.debug?.(
-              `[inference-guard] Dropping heartbeat — queue cap reached (${queuedHeartbeatCount}/${config.deferPolicy.heartbeat.maxQueued})`,
+              `[inference-guard] Dropping heartbeat — too soon after previous (${now - lastHeartbeatStartedAt}ms < ${minIntervalMs}ms)`,
             );
-            return { handled: true, reason: "inference-guard: heartbeat queue cap" };
+            return { handled: true, reason: "inference-guard: heartbeat rate limit" };
           }
-          queuedHeartbeatCount++;
-
-          // Note: actual deferral behind user messages would require checking
-          // the command lane queue depth, which is not directly accessible from
-          // plugin hooks. For MVP, heartbeat rate-limiting via queue cap is the
-          // primary defense. Full deferral requires core OpenClaw changes.
-          api.logger.debug?.(
-            `[inference-guard] Heartbeat proceeding (queued: ${queuedHeartbeatCount})`,
-          );
+          lastHeartbeatStartedAt = now;
+          api.logger.debug?.("[inference-guard] Heartbeat proceeding");
         }
 
         if (isCron) {
@@ -102,52 +99,37 @@ export default definePluginEntry({
       { priority: 0 }, // After model-switch gate (-100)
     );
 
-    // --- Hook: agent_end — decrement heartbeat counter ---
-    api.on("agent_end", (_event, ctx) => {
-      const isHeartbeat =
-        ctx &&
-        typeof ctx === "object" &&
-        "isHeartbeat" in ctx &&
-        (ctx as { isHeartbeat?: boolean }).isHeartbeat === true;
-
-      if (isHeartbeat && queuedHeartbeatCount > 0) {
-        queuedHeartbeatCount--;
-      }
-      return undefined;
-    });
+    // No agent_end hook needed — timestamp-based rate limiting is self-correcting
+    // and doesn't drift on aborted/crashed heartbeats.
 
     // --- Service: monitor model-switch state ---
+    let monitorInterval: ReturnType<typeof setInterval> | undefined;
+
     api.registerService({
       id: "inference-guard-monitor",
       async start(ctx) {
-        // Periodically check if model-switch is active by reading its state dir
-        // This is a coordination mechanism — model-switch sets switching=true,
-        // inference-guard reads it.
-        const checkInterval = setInterval(() => {
+        const stateDir = api.runtime.state.resolveStateDir();
+        const markerPath = `${stateDir}/../model-switch/model-switch-pending.json`;
+        const { existsSync } = await import("node:fs");
+
+        monitorInterval = setInterval(() => {
           try {
-            // Check for model-switch marker file
-            const stateDir = api.runtime.state.resolveStateDir();
-            const markerPath = `${stateDir}/../model-switch/model-switch-pending.json`;
-            // Use a simple existence check — if marker exists, switch is in progress
-            import("node:fs")
-              .then((fs) => {
-                modelSwitchActive = fs.existsSync(markerPath);
-              })
-              .catch(() => {
-                // fs import failed — assume no switch
-              });
+            modelSwitchActive = existsSync(markerPath);
           } catch {
             // Ignore errors
           }
         }, 2000);
 
-        // Store for cleanup
-        (ctx as unknown as { _interval: ReturnType<typeof setInterval> })._interval = checkInterval;
-
         ctx.logger.info(
           `[inference-guard] Started with maxConcurrent=${config.maxConcurrentInference}, ` +
             `heartbeat maxQueued=${config.deferPolicy.heartbeat.maxQueued}`,
         );
+      },
+      stop() {
+        if (monitorInterval) {
+          clearInterval(monitorInterval);
+          monitorInterval = undefined;
+        }
       },
     });
   },
