@@ -22,6 +22,12 @@ export type PrivacyMode = "private" | "group_shared" | "global_shared" | "admin"
 export type SessionType = "private_chat" | "group_chat" | "global_chat" | "operator_chat";
 export type LaunchableSessionType = SessionType;
 
+export type OperatorAuthContext = {
+  role: string;
+  scopes: string[];
+  deviceTokenIssuedAtMs: number | null;
+};
+
 export type ScopeRef = {
   type: ScopeType;
   id: string;
@@ -42,11 +48,9 @@ export type ControlUiMeContextResponse = {
   groups: string[];
   visibleScopes: ScopeRef[];
   launchableSessionTypes: LaunchableSessionType[];
+  currentSessionType: SessionType;
   shareTargets: ScopeRef[];
   selectedScope: ScopeRef | null;
   selectedPrivacyMode: PrivacyMode;
-  operator: {
-    role: typeof CONTROL_UI_OPERATOR_ROLE;
-    scopes: string[];
-  };
+  operator: OperatorAuthContext;
 };

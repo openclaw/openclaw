@@ -1666,6 +1666,7 @@ export function renderApp(state: AppViewState) {
               selectedScope: state.selectedScope,
               selectedPrivacyMode: state.selectedPrivacyMode,
               launchableSessionTypes: state.launchableSessionTypes,
+              currentSessionType: state.currentSessionType,
               onLoadMeContext: () => void state.loadMeContext(),
               onScopeChange: (scopeId: string) => state.selectMeContextScope(scopeId),
             })

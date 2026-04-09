@@ -110,6 +110,7 @@ export type ChatProps = {
   selectedScope?: ScopeRef | null;
   selectedPrivacyMode?: PrivacyMode | null;
   launchableSessionTypes?: ControlUiMeContextResponse["launchableSessionTypes"];
+  currentSessionType?: ControlUiMeContextResponse["currentSessionType"] | null;
   onLoadMeContext?: () => void;
   onScopeChange?: (scopeId: string) => void;
 };
@@ -681,7 +682,11 @@ function renderContextBar(props: ChatProps): TemplateResult | typeof nothing {
         <span class="pill"
           >${renderPrivacyBadgeLabel(props.selectedPrivacyMode ?? selectedScope.privacyMode)}</span
         >
-        ${launchable[0] ? html`<span class="pill">${launchable[0]}</span>` : nothing}
+        ${props.currentSessionType
+          ? html`<span class="pill">${props.currentSessionType}</span>`
+          : launchable[0]
+            ? html`<span class="pill">${launchable[0]}</span>`
+            : nothing}
       </div>
       ${visibleScopes.length > 0 && props.onScopeChange
         ? html`

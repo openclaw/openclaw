@@ -170,6 +170,7 @@ export class OpenClawApp extends LitElement {
   @state() currentUser: ControlUiMeContextResponse["user"] | null = null;
   @state() visibleScopes: ScopeRef[] = [];
   @state() launchableSessionTypes: ControlUiMeContextResponse["launchableSessionTypes"] = [];
+  @state() currentSessionType: ControlUiMeContextResponse["currentSessionType"] | null = null;
   @state() shareTargets: ScopeRef[] = [];
   @state() selectedScope: ScopeRef | null = null;
   @state() selectedPrivacyMode: PrivacyMode | null = null;

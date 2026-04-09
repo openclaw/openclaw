@@ -71,6 +71,7 @@ export type AppViewState = {
   currentUser: ControlUiMeContextResponse["user"] | null;
   visibleScopes: ScopeRef[];
   launchableSessionTypes: ControlUiMeContextResponse["launchableSessionTypes"];
+  currentSessionType: ControlUiMeContextResponse["currentSessionType"] | null;
   shareTargets: ScopeRef[];
   selectedScope: ScopeRef | null;
   selectedPrivacyMode: PrivacyMode | null;

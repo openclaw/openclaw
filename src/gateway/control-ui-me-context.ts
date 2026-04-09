@@ -2,31 +2,14 @@ import type { IncomingMessage } from "node:http";
 import {
   CONTROL_UI_OPERATOR_ROLE,
   CONTROL_UI_OPERATOR_SCOPES,
-} from "../gateway/control-ui-contract.js";
-import type {
-  ControlUiMeContextResponse,
-  LaunchableSessionType,
-  PrivacyMode,
-  RuntimeUser,
-  ScopeRef,
+  type ControlUiMeContextResponse,
+  type LaunchableSessionType,
+  type PrivacyMode,
+  type RuntimeUser,
+  type ScopeRef,
+  type SessionType,
 } from "./control-ui-contract.js";
-
-function readRequestHeader(req: IncomingMessage, name: string): string | null {
-  const value = req.headers[name];
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const trimmed = entry.trim();
-      if (trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-  }
-  return null;
-}
+import { getHeader } from "./http-utils.js";
 
 function titleCaseWords(value: string): string {
   return value
@@ -36,29 +19,23 @@ function titleCaseWords(value: string): string {
     .join(" ");
 }
 
-function normalizeUserId(raw: string | null): string {
-  if (!raw) {
-    return "operator";
+function normalizeUserIdFromHeaders(req: IncomingMessage): string {
+  const deviceId = getHeader(req, "x-openclaw-device-id")?.trim();
+  if (deviceId) {
+    return deviceId.toLowerCase();
   }
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-");
-  return normalized || "operator";
+  return "control-ui-operator";
 }
 
-function deriveDisplayName(userId: string, fallback: string | null): string {
-  if (fallback && fallback.trim()) {
-    return fallback.trim();
-  }
-  return titleCaseWords(userId.replace(/[._-]+/g, " "));
+function deriveDisplayName(userId: string): string {
+  return titleCaseWords(userId.replace(/[._:-]+/g, " "));
 }
 
-function deriveRole(userId: string): RuntimeUser["role"] {
-  if (userId === "igor") {
+function deriveRoleFromOperatorScopes(scopes: string[]): RuntimeUser["role"] {
+  if (scopes.includes("operator.admin")) {
     return "main_operator";
   }
-  if (userId === "stipe") {
+  if (scopes.includes("operator.write") || scopes.includes("operator.approvals")) {
     return "admin";
   }
   return "user";
@@ -75,11 +52,15 @@ function deriveRoleLabel(role: RuntimeUser["role"]): string {
   }
 }
 
-function deriveGroups(userId: string): string[] {
-  if (userId === "igor" || userId === "stipe" || userId === "ivan") {
-    return ["OGMA"];
+function deriveGroupsFromHeaders(req: IncomingMessage): string[] {
+  const raw = getHeader(req, "x-openclaw-groups")?.trim();
+  if (!raw) {
+    return [];
   }
-  return [];
+  return raw
+    .split(",")
+    .map((groupId) => groupId.trim())
+    .filter((groupId) => groupId.length > 0);
 }
 
 function buildPrivateScope(user: RuntimeUser): ScopeRef {
@@ -121,7 +102,10 @@ function deriveVisibleScopes(user: RuntimeUser): ScopeRef[] {
 }
 
 function deriveLaunchableSessionTypes(user: RuntimeUser): LaunchableSessionType[] {
-  const types: LaunchableSessionType[] = ["private_chat", "group_chat"];
+  const types: LaunchableSessionType[] = ["private_chat"];
+  if (user.groups.length > 0) {
+    types.push("group_chat");
+  }
   if (user.role === "admin" || user.role === "main_operator") {
     types.push("global_chat");
   }
@@ -129,6 +113,19 @@ function deriveLaunchableSessionTypes(user: RuntimeUser): LaunchableSessionType[
     types.push("operator_chat");
   }
   return types;
+}
+
+function deriveCurrentSessionType(user: RuntimeUser): SessionType {
+  if (user.role === "main_operator") {
+    return "operator_chat";
+  }
+  if (user.role === "admin") {
+    return "global_chat";
+  }
+  if (user.groups.length > 0) {
+    return "group_chat";
+  }
+  return "private_chat";
 }
 
 function deriveShareTargets(user: RuntimeUser): ScopeRef[] {
@@ -142,25 +139,55 @@ function deriveShareTargets(user: RuntimeUser): ScopeRef[] {
   return targets;
 }
 
-function deriveSelectedScope(visibleScopes: ScopeRef[]): ScopeRef | null {
+function deriveSelectedScope(
+  visibleScopes: ScopeRef[],
+  currentSessionType: SessionType,
+): ScopeRef | null {
+  if (currentSessionType === "global_chat") {
+    return visibleScopes.find((scope) => scope.type === "global") ?? visibleScopes[0] ?? null;
+  }
+  if (currentSessionType === "group_chat") {
+    return visibleScopes.find((scope) => scope.type === "group") ?? visibleScopes[0] ?? null;
+  }
   return visibleScopes[0] ?? null;
 }
 
+function parseOperatorScopes(req: IncomingMessage): string[] {
+  const raw = getHeader(req, "x-openclaw-scopes")?.trim();
+  if (!raw) {
+    return [...CONTROL_UI_OPERATOR_SCOPES];
+  }
+  return raw
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+}
+
+function parseIssuedAt(req: IncomingMessage): number | null {
+  const raw = getHeader(req, "x-openclaw-auth-issued-at")?.trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function buildControlUiMeContextResponse(req: IncomingMessage): ControlUiMeContextResponse {
-  const headerUserId = readRequestHeader(req, "x-openclaw-user-id");
-  const headerDisplayName = readRequestHeader(req, "x-openclaw-user-name");
-  const userId = normalizeUserId(headerUserId);
-  const role = deriveRole(userId);
+  const scopes = parseOperatorScopes(req);
+  const userId = normalizeUserIdFromHeaders(req);
+  const groups = deriveGroupsFromHeaders(req);
+  const role = deriveRoleFromOperatorScopes(scopes);
   const user: RuntimeUser = {
     id: userId,
-    displayName: deriveDisplayName(userId, headerDisplayName),
+    displayName: deriveDisplayName(userId),
     role,
     roleLabel: deriveRoleLabel(role),
-    groups: deriveGroups(userId),
+    groups,
   };
 
   const visibleScopes = deriveVisibleScopes(user);
-  const selectedScope = deriveSelectedScope(visibleScopes);
+  const currentSessionType = deriveCurrentSessionType(user);
+  const selectedScope = deriveSelectedScope(visibleScopes, currentSessionType);
   const selectedPrivacyMode: PrivacyMode = selectedScope?.privacyMode ?? "private";
 
   return {
@@ -168,12 +195,14 @@ export function buildControlUiMeContextResponse(req: IncomingMessage): ControlUi
     groups: [...user.groups],
     visibleScopes,
     launchableSessionTypes: deriveLaunchableSessionTypes(user),
+    currentSessionType,
     shareTargets: deriveShareTargets(user),
     selectedScope,
     selectedPrivacyMode,
     operator: {
-      role: CONTROL_UI_OPERATOR_ROLE,
-      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+      role: getHeader(req, "x-openclaw-role")?.trim() || CONTROL_UI_OPERATOR_ROLE,
+      scopes,
+      deviceTokenIssuedAtMs: parseIssuedAt(req),
     },
   };
 }
