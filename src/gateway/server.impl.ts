@@ -1054,27 +1054,6 @@ export async function startGatewayServer(
             toolEventRecipients,
             sessionEventSubscribers,
             isChatSendRunActive: (runId) => chatAbortControllers.has(runId),
-            isConnIdConnected: (connId) => {
-              for (const gatewayClient of clients) {
-                if (gatewayClient.connId === connId) {
-                  return true;
-                }
-              }
-              return false;
-            },
-            hasConnectedClientForDevice: (deviceId, opts) => {
-              for (const gatewayClient of clients) {
-                if (gatewayClient.connect.device?.id !== deviceId) {
-                  continue;
-                }
-                if (opts?.excludeConnId && gatewayClient.connId === opts.excludeConnId) {
-                  continue;
-                }
-                return true;
-              }
-              return false;
-            },
-            logWarn: (message) => log.warn(message),
           }),
         );
 
@@ -1407,26 +1386,6 @@ export async function startGatewayServer(
             /* ignore */
           }
         }
-      },
-      isConnIdConnected: (connId: string) => {
-        for (const gatewayClient of clients) {
-          if (gatewayClient.connId === connId) {
-            return true;
-          }
-        }
-        return false;
-      },
-      hasConnectedClientForDevice: (deviceId: string, opts?: { excludeConnId?: string }) => {
-        for (const gatewayClient of clients) {
-          if (gatewayClient.connect.device?.id !== deviceId) {
-            continue;
-          }
-          if (opts?.excludeConnId && gatewayClient.connId === opts.excludeConnId) {
-            continue;
-          }
-          return true;
-        }
-        return false;
       },
       disconnectClientsUsingSharedGatewayAuth: () => {
         for (const gatewayClient of clients) {

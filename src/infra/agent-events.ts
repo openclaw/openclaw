@@ -111,8 +111,6 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
-  requestConnId?: string;
-  requestDeviceId?: string;
 };
 
 type AgentEventState = {
@@ -152,12 +150,6 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
-  }
-  if (context.requestConnId && existing.requestConnId !== context.requestConnId) {
-    existing.requestConnId = context.requestConnId;
-  }
-  if (context.requestDeviceId && existing.requestDeviceId !== context.requestDeviceId) {
-    existing.requestDeviceId = context.requestDeviceId;
   }
 }
 

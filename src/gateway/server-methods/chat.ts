@@ -14,7 +14,6 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -46,7 +45,6 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { maybeSendChatReplyApnsAlert } from "../chat-apns-notify.js";
 import {
   type ChatImageContent,
   MediaOffloadError,
@@ -92,6 +90,7 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
+
 type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -1780,11 +1779,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
-            registerAgentRunContext(runId, {
-              sessionKey,
-              requestConnId: normalizeOptionalString(client?.connId) ?? undefined,
-              requestDeviceId: normalizeOptionalString(client?.connect?.device?.id) ?? undefined,
-            });
             void emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
@@ -1845,16 +1839,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                 .filter(Boolean)
                 .join("\n\n")
                 .trim();
-              await maybeSendChatReplyApnsAlert({
-                sessionKey,
-                mainSessionKey: cfg.session?.mainKey,
-                requestDeviceId: normalizeOptionalString(client?.connect?.device?.id),
-                requestConnId: normalizeOptionalString(client?.connId),
-                replyText: combinedReply,
-                isConnIdConnected: context.isConnIdConnected,
-                hasConnectedClientForDevice: context.hasConnectedClientForDevice,
-                logWarn: (message) => context.logGateway.warn(message),
-              });
               const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(finalPayloads);
               const assistantContent: Array<Record<string, unknown>> = [];
               if (combinedReply) {

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
-const maybeSendChatReplyApnsAlertMock = vi.fn();
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
@@ -25,10 +24,6 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
-vi.mock("./chat-apns-notify.js", () => ({
-  maybeSendChatReplyApnsAlert: (...args: unknown[]) => maybeSendChatReplyApnsAlertMock(...args),
-}));
-
 import { loadConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
@@ -49,7 +44,6 @@ describe("agent event handler", () => {
     });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
-    maybeSendChatReplyApnsAlertMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
   });
 
@@ -63,8 +57,6 @@ describe("agent event handler", () => {
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
-    isConnIdConnected?: (connId: string) => boolean;
-    hasConnectedClientForDevice?: (deviceId: string, opts?: { excludeConnId?: string }) => boolean;
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -89,8 +81,6 @@ describe("agent event handler", () => {
       sessionEventSubscribers,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
-      isConnIdConnected: params?.isConnIdConnected,
-      hasConnectedClientForDevice: params?.hasConnectedClientForDevice,
     });
 
     return {
@@ -1324,41 +1314,6 @@ describe("agent event handler", () => {
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(nodeSendToSession).not.toHaveBeenCalled();
-  });
-
-  it("triggers APNs chat alert for offline requester devices on final assistant text", () => {
-    const { chatRunState, handler } = createHarness({
-      isConnIdConnected: () => false,
-      hasConnectedClientForDevice: () => false,
-    });
-    chatRunState.registry.add("run-offline", {
-      sessionKey: "main",
-      clientRunId: "client-offline",
-    });
-    registerAgentRunContext("run-offline", {
-      sessionKey: "main",
-      requestConnId: "conn-offline",
-      requestDeviceId: "ios-device-1",
-    });
-
-    handler({
-      runId: "run-offline",
-      seq: 1,
-      stream: "assistant",
-      ts: Date.now(),
-      data: { text: "reply from assistant" },
-    });
-    emitLifecycleEnd(handler, "run-offline");
-
-    expect(maybeSendChatReplyApnsAlertMock).toHaveBeenCalledTimes(1);
-    expect(maybeSendChatReplyApnsAlertMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "main",
-        requestConnId: "conn-offline",
-        requestDeviceId: "ios-device-1",
-        replyText: "reply from assistant",
-      }),
-    );
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
