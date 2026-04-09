@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeats/sessions: remove stale accumulated isolated heartbeat session keys when the next tick converges them back to the canonical sibling, so repaired sessions stop showing orphaned `:heartbeat:heartbeat` variants in session listings. (#59606) Thanks @rogerdigital.
 - Control UI/dreaming: keep the Dreaming trace area contained and scrollable so overlays no longer cover tabs or blow out the page layout.
 - Cron/Telegram: collapse isolated announce delivery to the final assistant-visible text only for Telegram targets, while preserving existing multi-message direct delivery semantics for other channels. (#63228) Thanks @welfo-beo.
+- Gateway/thread routing: preserve Slack, Telegram, and Mattermost thread-child delivery targets so bound subagent completion messages land in the originating thread instead of top-level channels. (#54840) Thanks @yzzymt.
 
 ## 2026.4.9
 
@@ -1060,7 +1061,6 @@ Docs: https://docs.openclaw.ai
 - Telegram/forum topics: keep native `/new` and `/reset` routed to the active topic by preserving the topic target on forum-thread command context. (#35963)
 - Status/port diagnostics: treat single-process dual-stack loopback gateway listeners as healthy in `openclaw status --all`, suppressing false "port already in use" conflict warnings. (#53398) Thanks @DanWebb1949.
 - CLI/Docker: treat loopback private-host CLI gateway connects as local for silent pairing auto-approval, while keeping remote backend and public-host CLI connects behind pairing. (#55113) Thanks @sar618.
-- Gateway/thread routing: preserve Slack, Telegram, and Mattermost thread-child delivery targets so bound subagent completion messages land in the originating thread instead of top-level channels. (#54840) Thanks @yzzymt.
 
 ## 2026.3.24
 
