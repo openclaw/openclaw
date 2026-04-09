@@ -18,6 +18,11 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  toolPolicyAudit?: {
+    decision: "allow" | "deny";
+    matchedBy: string;
+    rule?: string;
+  };
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -93,6 +98,25 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
     }
   }
   return true;
+}
+
+function formatToolPolicyAuditLog(params: {
+  toolName: string;
+  toolCallId?: string;
+  runId?: string;
+  audit: NonNullable<HookContext["toolPolicyAudit"]>;
+}): string {
+  return [
+    "embedded run tool policy:",
+    params.runId ? `runId=${params.runId}` : undefined,
+    `tool=${params.toolName}`,
+    params.toolCallId ? `toolCallId=${params.toolCallId}` : undefined,
+    `decision=${params.audit.decision}`,
+    `matchedBy=${params.audit.matchedBy}`,
+    params.audit.rule ? `rule=${JSON.stringify(params.audit.rule)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 async function recordLoopOutcome(args: {
@@ -410,6 +434,16 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
+      if (ctx?.toolPolicyAudit) {
+        log.debug(
+          formatToolPolicyAuditLog({
+            toolName: normalizedToolName,
+            toolCallId,
+            runId: ctx.runId,
+            audit: ctx.toolPolicyAudit,
+          }),
+        );
+      }
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
         await recordLoopOutcome({
@@ -458,6 +492,7 @@ export const __testing = {
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
+  formatToolPolicyAuditLog,
   mergeParamsWithApprovalOverrides,
   isPlainObject,
 };

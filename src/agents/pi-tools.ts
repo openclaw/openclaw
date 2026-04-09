@@ -56,6 +56,7 @@ import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  explainToolPolicyPipelineDecision,
 } from "./tool-policy-pipeline.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -606,28 +607,29 @@ export function createOpenClawCodingTools(options?: {
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const policySteps = [
+    ...buildDefaultToolPolicyPipelineSteps({
+      profilePolicy: profilePolicyWithAlsoAllow,
+      profile,
+      profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+      providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+      providerProfile,
+      providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      agentId,
+    }),
+    { policy: sandboxToolPolicy, label: "sandbox tools.allow" },
+    { policy: subagentPolicy, label: "subagent tools.allow" },
+  ];
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        agentId,
-      }),
-      { policy: sandboxToolPolicy, label: "sandbox tools.allow" },
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-    ],
+    steps: policySteps,
   });
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
@@ -646,6 +648,12 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      toolPolicyAudit: explainToolPolicyPipelineDecision({
+        toolName: tool.name,
+        tools: toolsByAuthorization,
+        toolMeta: (candidate) => getPluginToolMeta(candidate),
+        steps: policySteps,
+      }),
     }),
   );
   const withAbort = options?.abortSignal
