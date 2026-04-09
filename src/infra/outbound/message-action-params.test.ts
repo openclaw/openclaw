@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as webMedia from "../../media/web-media.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -12,6 +13,10 @@ import {
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("message action media helpers", () => {
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
@@ -152,6 +157,36 @@ describe("message action media helpers", () => {
     });
 
     expect(args.filename).toBe("attachment");
+  });
+
+  it("hydrates send actions when media is provided via the media field", async () => {
+    const loadSpy = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      buffer: Buffer.from("remote-image"),
+      contentType: "image/png",
+      kind: "image",
+      fileName: "photo.png",
+    });
+    const args: Record<string, unknown> = {
+      media: "https://example.com/photo.png",
+      message: "hello",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "discord",
+      args,
+      action: "send",
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith(
+      "https://example.com/photo.png",
+      expect.objectContaining({}),
+    );
+    expect(args.buffer).toBe(Buffer.from("remote-image").toString("base64"));
+    expect(args.contentType).toBe("image/png");
+    expect(args.filename).toBe("photo.png");
+    expect(args.caption).toBe("hello");
   });
 });
 
