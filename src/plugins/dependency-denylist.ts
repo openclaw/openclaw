@@ -10,17 +10,26 @@ export type BlockedManifestDependencyFinding = {
   field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
 };
 
-type PackageDependencyFields = {
-  name?: string;
-} & Partial<
-  Record<Exclude<BlockedManifestDependencyFinding["field"], "name">, Record<string, string>>
+type PackageDependencyMapFields = Partial<
+  Record<
+    Exclude<BlockedManifestDependencyFinding["field"], "name" | "overrides">,
+    Record<string, string>
+  >
 >;
 
-type PackageOverrideFields = {
-  overrides?: PackageOverrideValue;
-};
+type PackageDependencyFields = {
+  name?: string;
+} & PackageDependencyMapFields;
 
-type PackageOverrideValue = string | Record<string, PackageOverrideValue>;
+interface PackageOverrideObject {
+  [key: string]: PackageOverrideValue;
+}
+
+type PackageOverrideValue = string | PackageOverrideObject;
+
+type PackageOverrideFields = {
+  overrides?: unknown;
+};
 
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET = new Set<string>(
   blockedInstallDependencyPackageNames,
@@ -108,6 +117,10 @@ function collectBlockedOverrideFindings(
   return findings;
 }
 
+function isPackageOverrideObject(value: unknown): value is PackageOverrideObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function findBlockedManifestDependencies(
   manifest: PackageDependencyFields & PackageOverrideFields,
 ): BlockedManifestDependencyFinding[] {
@@ -115,7 +128,7 @@ export function findBlockedManifestDependencies(
   if (manifest.name && BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(manifest.name)) {
     findings.push({ dependencyName: manifest.name, field: "name" });
   }
-  if (manifest.overrides) {
+  if (isPackageOverrideObject(manifest.overrides)) {
     findings.push(...collectBlockedOverrideFindings(manifest.overrides));
   }
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {

@@ -9,7 +9,7 @@ import {
 type RootPackageManifest = {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  overrides?: Record<string, string>;
+  overrides?: Record<string, string | Record<string, string>>;
   peerDependencies?: Record<string, string>;
   pnpm?: {
     overrides?: Record<string, string>;
@@ -63,7 +63,7 @@ describe("dependency denylist guardrails", () => {
     expect(
       findBlockedManifestDependencies({
         overrides: {
-          axios: "1.14.0",
+          axios: "1.15.0",
           "@scope/parent": {
             "safe-name": "npm:plain-crypto-js@^4.2.1",
           },

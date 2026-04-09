@@ -563,6 +563,9 @@ beforeAll(async () => {
 beforeEach(() => {
   resetGlobalHookRunner();
   vi.clearAllMocks();
+  const run = vi.mocked(runCommandWithTimeout);
+  run.mockReset();
+  mockSuccessfulCommandRun(run);
   vi.unstubAllEnvs();
   resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
 });
@@ -1425,7 +1428,7 @@ describe("installPluginFromDir", () => {
 
     const run = vi.mocked(runCommandWithTimeout);
     run.mockImplementation(async (_command, opts) => {
-      const cwd = opts?.cwd;
+      const cwd = typeof opts === "number" ? undefined : opts?.cwd;
       if (!cwd) {
         throw new Error("expected cwd for npm install");
       }

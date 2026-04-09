@@ -1428,7 +1428,7 @@
     "openshell": "0.1.0"
   },
   "overrides": {
-    "axios": "1.14.0"
+    "axios": "1.15.0"
   },
   "engines": {
     "node": ">=22.14.0"

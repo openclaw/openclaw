@@ -33,7 +33,7 @@ type PackageManifest = {
   name?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  overrides?: Record<string, unknown>;
+  overrides?: unknown;
   peerDependencies?: Record<string, string>;
 };
 
@@ -147,9 +147,9 @@ async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
       continue;
     }
 
-    let entries: Awaited<ReturnType<typeof fs.readdir>>;
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
     try {
-      entries = await fs.readdir(currentDir, { withFileTypes: true });
+      entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
     } catch {
       continue;
     }
