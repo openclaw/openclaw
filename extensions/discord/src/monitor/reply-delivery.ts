@@ -411,7 +411,7 @@ export async function deliverDiscordReply(params: {
     });
     const tableMode = params.tableMode ?? "code";
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: convertMarkdownTables(payload.text ?? "", tableMode),
+      text: convertMarkdownTables(payload.text ?? "", tableMode, "> "),
     });
     if (!reply.hasContent) {
       continue;

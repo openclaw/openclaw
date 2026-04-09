@@ -42,13 +42,14 @@ export function scanUnmatchedInlineMarkers(
     let matched = false;
     for (const marker of INLINE_MARKERS) {
       if (text.startsWith(marker, i)) {
-        // For `_`-based markers: only treat as emphasis if preceded by whitespace,
-        // punctuation, or start of string (CommonMark word-boundary rule).
-        // This avoids mangling snake_case identifiers.
+        // For `_`-based markers: only treat as emphasis if at a word boundary.
+        // CommonMark: `_` opens/closes emphasis only when not inside a word.
+        // Check both the character before AND after to avoid mangling snake_case.
         if (marker.startsWith("_")) {
           const prev = i > 0 ? text[i - 1] : " ";
-          if (/\w/.test(prev)) {
-            // Inside a word - not an emphasis marker, skip
+          const next = i + marker.length < text.length ? text[i + marker.length] : " ";
+          if (/\w/.test(prev) || /\w/.test(next)) {
+            // Inside a word - not an emphasis marker, skip just this char
             i++;
             matched = true;
             break;
