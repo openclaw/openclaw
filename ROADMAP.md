@@ -22,3 +22,4 @@
 - **Group behavior policies** — configurable per-group behavior rules for agents
 - **Moltbook integration** — integrate Moltbook into agent containers
 - **GEMA (Google open-source model) deploy option** — add GEMA as a selectable model for agent deployments
+- **Agent memory system (QMD / Obsidian)** — persistent structured memory for agents, markdown-based vault style (ref: mempalace)
