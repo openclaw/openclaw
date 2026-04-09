@@ -67,11 +67,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].fastModeDefault": "Agent Fast Mode Default",
   agents: "Agents",
   "agents.defaults": "Agent Defaults",
+  "agents.defaults.subagents.allowAgents": "Subagent Allowlist",
   "agents.defaults.subagents.startupWaitTimeoutMs": "Subagent Startup Timeout (ms)",
   "agents.defaults.subagents.controlTimeoutMs": "Subagent Control Timeout (ms)",
   "agents.defaults.subagents.completionAnnounceTimeoutMs":
     "Subagent Completion Delivery Timeout (ms)",
   "agents.defaults.subagents.announceTimeoutMs": "Subagent Announce Timeout Alias (ms)",
+  "agents.defaults.subagents.requireAgentId": "Subagent Require Agent Id",
   "agents.defaults.subagents.cleanupTimeoutMs": "Subagent Cleanup Timeout (ms)",
   "agents.list": "Agent List",
   gateway: "Gateway",

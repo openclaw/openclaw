@@ -60,6 +60,23 @@ describe("captureSubagentCompletionReply", () => {
     vi.useRealTimers();
   });
 
+  it("returns undefined without polling when waitForReply is false", async () => {
+    const readSubagentOutput = vi
+      .fn<(sessionKey: string) => Promise<string | undefined>>()
+      .mockResolvedValue(undefined);
+
+    const result = await captureSubagentCompletionReplyUsing({
+      sessionKey: "agent:main:subagent:child",
+      waitForReply: false,
+      maxWaitMs: 50,
+      retryIntervalMs: 8,
+      readSubagentOutput,
+    });
+
+    expect(result).toBeUndefined();
+    expect(readSubagentOutput).toHaveBeenCalledTimes(1);
+  });
+
   it("returns partial assistant progress when the latest assistant turn is tool-only", async () => {
     const readSubagentOutput = vi
       .fn<(sessionKey: string) => Promise<string | undefined>>()

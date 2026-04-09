@@ -7,6 +7,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { captureSubagentCompletionReplyUsing } from "./subagent-announce-capture.js";
 import { resolveSubagentWaitGatewayTimeoutMs } from "./subagent-timeouts.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
@@ -308,14 +309,14 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
+  options?: { waitForReply?: boolean },
 ): Promise<string | undefined> {
-  const immediate = await readSubagentOutput(sessionKey);
-  if (immediate?.trim()) {
-    return immediate;
-  }
-  return await readLatestSubagentOutputWithRetry({
+  return await captureSubagentCompletionReplyUsing({
     sessionKey,
+    waitForReply: options?.waitForReply,
     maxWaitMs: FAST_TEST_MODE ? 50 : 1_500,
+    retryIntervalMs: FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    readSubagentOutput: async (nextSessionKey) => await readSubagentOutput(nextSessionKey),
   });
 }
 

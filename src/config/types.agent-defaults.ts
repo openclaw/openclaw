@@ -273,6 +273,8 @@ export type AgentDefaultsConfig = {
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
+    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
+    allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;
     /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
@@ -295,6 +297,8 @@ export type AgentDefaultsConfig = {
     completionAnnounceTimeoutMs?: number;
     /** Legacy alias for completionAnnounceTimeoutMs. */
     announceTimeoutMs?: number;
+    /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
+    requireAgentId?: boolean;
     /** Gateway timeout in ms for best-effort cleanup calls (default: 10000). */
     cleanupTimeoutMs?: number;
   };
