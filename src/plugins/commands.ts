@@ -515,7 +515,12 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   acceptsArgs: boolean;
 }> {
   const providerName = provider?.trim().toLowerCase();
-  if (providerName && providerName !== "telegram" && providerName !== "discord") {
+  if (
+    providerName &&
+    providerName !== "telegram" &&
+    providerName !== "discord" &&
+    providerName !== "slack"
+  ) {
     return [];
   }
   return Array.from(pluginCommands.values()).map((cmd) => ({

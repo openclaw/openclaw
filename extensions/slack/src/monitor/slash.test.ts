@@ -1,6 +1,14 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
+const { getPluginCommandSpecsMock } = vi.hoisted(() => ({
+  getPluginCommandSpecsMock: vi.fn(() => []),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginCommandSpecs: getPluginCommandSpecsMock,
+}));
+
 vi.mock("../../../../src/auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
@@ -192,6 +200,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSlackSlashMocks();
+  getPluginCommandSpecsMock.mockReset().mockReturnValue([]);
 });
 
 async function registerCommands(ctx: unknown, account: unknown) {
@@ -690,6 +699,41 @@ describe("Slack native command argument menus", () => {
         text: "Sorry, that button is no longer valid.",
       }),
     );
+  });
+});
+
+describe("Slack plugin slash command routing", () => {
+  it("registers /nemoclaw and forwards arguments into the existing command handler flow", async () => {
+    getPluginCommandSpecsMock.mockReturnValue([
+      {
+        name: "nemoclaw",
+        description: "Show the latest NemoClaw digest summary or inspect a job.",
+        acceptsArgs: true,
+      },
+    ]);
+
+    const harness = createArgMenusHarness();
+    harness.ctx = {
+      ...(harness.ctx as Record<string, unknown>),
+      cfg: { commands: { native: false, nativeSkills: false } },
+    } as typeof harness.ctx;
+    harness.account = {
+      ...(harness.account as Record<string, unknown>),
+      config: { commands: { native: false, nativeSkills: false } },
+    } as typeof harness.account;
+
+    await registerCommands(harness.ctx, harness.account);
+
+    const handler = requireHandler(harness.commands, "/nemoclaw", "/nemoclaw");
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      command: createSlashCommand({ text: "digest" }),
+      ack,
+      respond,
+    });
+
+    expectSingleDispatchedSlashBody("/nemoclaw digest");
   });
 });
 

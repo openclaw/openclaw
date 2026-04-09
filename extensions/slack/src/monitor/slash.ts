@@ -5,6 +5,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
+import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -58,6 +59,33 @@ function loadSlashDispatchRuntime() {
 function loadSlashSkillCommandsRuntime() {
   slashSkillCommandsRuntimePromise ??= import("./slash-skill-commands.runtime.js");
   return slashSkillCommandsRuntimePromise;
+}
+
+function listSlackPluginSlashCommands(params: {
+  nativeCommands: Array<{ name: string }>;
+  runtime: SlackMonitorContext["runtime"];
+}): Array<{ name: string; description: string; acceptsArgs: boolean }> {
+  const existingNames = new Set(
+    params.nativeCommands.map((command) => command.name.trim().toLowerCase()).filter(Boolean),
+  );
+  const pluginCommands: Array<{ name: string; description: string; acceptsArgs: boolean }> = [];
+  for (const pluginCommand of getPluginCommandSpecs("slack")) {
+    const normalizedName = pluginCommand.name.trim().toLowerCase();
+    if (!normalizedName) {
+      continue;
+    }
+    if (existingNames.has(normalizedName)) {
+      params.runtime.error?.(
+        danger(
+          `slack: plugin command "/${normalizedName}" duplicates an existing slash command. Skipping.`,
+        ),
+      );
+      continue;
+    }
+    existingNames.add(normalizedName);
+    pluginCommands.push(pluginCommand);
+  }
+  return pluginCommands;
 }
 
 type EncodedMenuChoice = SlackExternalArgMenuChoice;
@@ -669,6 +697,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       provider: "slack",
     });
   }
+  const pluginCommands = listSlackPluginSlashCommands({ nativeCommands, runtime });
 
   if (nativeCommands.length > 0) {
     if (!slashCommandsRuntime) {
@@ -705,7 +734,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       );
     }
-  } else if (slashCommand.enabled) {
+  }
+
+  if (slashCommand.enabled) {
     ctx.app.command(
       buildSlackSlashCommandMatcher(slashCommand.name),
       async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
@@ -718,7 +749,28 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       },
     );
-  } else {
+  }
+
+  if (slashCommand.enabled || nativeCommands.length > 0) {
+    for (const pluginCommand of pluginCommands) {
+      ctx.app.command(
+        `/${pluginCommand.name}`,
+        async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+          const rawText = command.text?.trim() ?? "";
+          const prompt = rawText ? `/${pluginCommand.name} ${rawText}` : `/${pluginCommand.name}`;
+          await handleSlashCommand({
+            command,
+            ack,
+            respond,
+            body,
+            prompt,
+          });
+        },
+      );
+    }
+  }
+
+  if (!slashCommand.enabled && nativeCommands.length === 0 && pluginCommands.length === 0) {
     logVerbose("slack: slash commands disabled");
   }
 

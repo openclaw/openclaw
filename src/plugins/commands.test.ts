@@ -105,7 +105,13 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
-    expect(getPluginCommandSpecs("slack")).toEqual([]);
+    expect(getPluginCommandSpecs("slack")).toEqual([
+      {
+        name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
   });
 
   it("matches provider-specific native aliases back to the canonical command", () => {

@@ -1051,6 +1051,16 @@ same `summary_parts` contract used by preview and Slack notifications.
 status source, formats `notification_digest_summary` through the same Slack digest formatter
 when present, and otherwise returns a minimal `status / exit_code / error / summary` text.
 
+For direct Slack slash command routing, the first-pass bridge stays intentionally thin:
+
+- enable `channels.slack.slashCommand.enabled=true` (or Slack native commands)
+- expose `/nemoclaw` as a Slack slash command name
+- let the Slack native command surface pass `/nemoclaw digest` and `/nemoclaw job <id>`
+  into the existing plugin command handler
+
+This keeps the Slack layer aligned with the existing `summary_parts` formatter path instead
+of introducing a separate command-specific render contract.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

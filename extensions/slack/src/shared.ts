@@ -48,6 +48,11 @@ function buildSlackManifest(botName: string) {
           description: "Send a message to OpenClaw",
           should_escape: false,
         },
+        {
+          command: "/nemoclaw",
+          description: "Show the latest NemoClaw digest or inspect a job",
+          should_escape: false,
+        },
       ],
     },
     oauth_config: {
