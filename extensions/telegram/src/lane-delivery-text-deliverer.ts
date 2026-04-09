@@ -621,6 +621,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
+        await consumeArchivedSelection();
         return result("preview-retained");
       }
     }

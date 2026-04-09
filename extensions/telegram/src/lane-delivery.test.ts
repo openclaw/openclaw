@@ -493,6 +493,23 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("consumes retained archived previews so final cleanup does not delete them later", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Complete final answer",
+      deleteIfUnused: true,
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: ambiguous post-connect error"));
+
+    const result = await deliverFinalAnswer(harness, "Complete final answer");
+
+    expect(result.kind).toBe("preview-retained");
+    expect(harness.archivedAnswerPreviews).toEqual([]);
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("keeps the archived preview when the final text regresses", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({
