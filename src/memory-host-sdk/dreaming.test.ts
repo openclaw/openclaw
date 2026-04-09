@@ -156,6 +156,9 @@ describe("memory dreaming host helpers", () => {
         "America/Los_Angeles",
       ),
     ).toBe(true);
+  });
+
+  it("resolves the configured memory-slot plugin id", () => {
     expect(
       resolveMemoryDreamingPluginId({
         plugins: {
@@ -165,6 +168,9 @@ describe("memory dreaming host helpers", () => {
         },
       } as OpenClawConfig),
     ).toBe("memos-local-openclaw-plugin");
+  });
+
+  it("reads dreaming config from the configured memory-slot owner", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
@@ -187,6 +193,9 @@ describe("memory dreaming host helpers", () => {
         enabled: true,
       },
     });
+  });
+
+  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
@@ -211,6 +220,9 @@ describe("memory dreaming host helpers", () => {
         frequency: "0 */6 * * *",
       },
     });
+  });
+
+  it("falls back to memory-core when no memory slot override is configured", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
