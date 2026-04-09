@@ -10,6 +10,7 @@ export type MemoryConfig = {
     baseUrl?: string;
     dimensions?: number;
   };
+  dreaming?: unknown;
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
@@ -97,7 +98,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      ["embedding", "dreaming", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
       "memory config",
     );
 
@@ -127,6 +128,7 @@ export const memoryConfigSchema = {
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
       },
+      dreaming: cfg.dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,

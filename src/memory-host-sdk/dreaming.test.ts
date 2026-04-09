@@ -190,6 +190,30 @@ describe("memory dreaming host helpers", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 */6 * * *",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+        frequency: "0 */6 * * *",
+      },
+    });
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
           entries: {
             "memory-core": {
               config: {
