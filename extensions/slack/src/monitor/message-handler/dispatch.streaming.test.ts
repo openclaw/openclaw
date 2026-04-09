@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
@@ -16,6 +17,46 @@ describe("slack native streaming defaults", () => {
     expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
+  });
+});
+
+describe("slack turn delivery tracker", () => {
+  it("treats repeated text payloads on the same thread as duplicates", () => {
+    const tracker = createSlackTurnDeliveryTracker();
+    const payload = { text: "same reply" };
+
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(false);
+    tracker.markDelivered({ kind: "final", payload, threadTs: "123.456" });
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(true);
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "other-thread" })).toBe(false);
+  });
+
+  it("keeps explicit reply targets distinct from the shared thread target", () => {
+    const tracker = createSlackTurnDeliveryTracker();
+
+    tracker.markDelivered({
+      kind: "final",
+      payload: { text: "same reply", replyToId: "thread-A" },
+      threadTs: "123.456",
+    });
+
+    expect(
+      tracker.hasDelivered({
+        kind: "final",
+        payload: { text: "same reply", replyToId: "thread-B" },
+        threadTs: "123.456",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps distinct dispatch kinds separate for identical payloads", () => {
+    const tracker = createSlackTurnDeliveryTracker();
+    const payload = { text: "same reply" };
+
+    tracker.markDelivered({ kind: "tool", payload, threadTs: "123.456" });
+
+    expect(tracker.hasDelivered({ kind: "tool", payload, threadTs: "123.456" })).toBe(true);
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(false);
   });
 });
 

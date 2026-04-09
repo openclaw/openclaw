@@ -74,6 +74,7 @@ describe("web session", () => {
     await waitForCredsSaveQueue();
     resetLogger();
     setLoggerOverride(null);
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -93,6 +94,30 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();
     expect(saveCreds).toHaveBeenCalled();
+  });
+
+  it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+    expect(passed.agent).toBeDefined();
+    expect(passed.fetchAgent).toBe(passed.agent);
+  });
+
+  it("does not create a proxy agent when no env proxy is configured", async () => {
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeUndefined();
   });
 
   it("waits for connection open", async () => {

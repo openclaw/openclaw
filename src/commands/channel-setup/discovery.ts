@@ -3,6 +3,7 @@ import {
   listChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
+import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
 import type { ChannelMeta, ChannelPlugin } from "../../channels/plugins/types.js";
 import { listChatChannels } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,6 +15,12 @@ type ChannelCatalogEntry = {
   id: ChannelChoice;
   meta: ChannelMeta;
 };
+
+export function shouldShowChannelInSetup(
+  meta: Pick<ChannelMeta, "exposure" | "showConfigured" | "showInSetup">,
+): boolean {
+  return isChannelVisibleInSetup(meta);
+}
 
 export type ResolvedChannelSetupEntries = {
   entries: ChannelCatalogEntry[];
@@ -71,11 +78,15 @@ export function resolveChannelSetupEntries(params: {
   const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir });
   const installedCatalogEntries = catalogEntries.filter(
     (entry) =>
-      !installedPluginIds.has(entry.id) && manifestInstalledIds.has(entry.id as ChannelChoice),
+      !installedPluginIds.has(entry.id) &&
+      manifestInstalledIds.has(entry.id as ChannelChoice) &&
+      shouldShowChannelInSetup(entry.meta),
   );
   const installableCatalogEntries = catalogEntries.filter(
     (entry) =>
-      !installedPluginIds.has(entry.id) && !manifestInstalledIds.has(entry.id as ChannelChoice),
+      !installedPluginIds.has(entry.id) &&
+      !manifestInstalledIds.has(entry.id as ChannelChoice) &&
+      shouldShowChannelInSetup(entry.meta),
   );
 
   const metaById = new Map<string, ChannelMeta>();
@@ -100,7 +111,7 @@ export function resolveChannelSetupEntries(params: {
     entries: Array.from(metaById, ([id, meta]) => ({
       id: id as ChannelChoice,
       meta,
-    })),
+    })).filter((entry) => shouldShowChannelInSetup(entry.meta)),
     installedCatalogEntries,
     installableCatalogEntries,
     installedCatalogById: new Map(

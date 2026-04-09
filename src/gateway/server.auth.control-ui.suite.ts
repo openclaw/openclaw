@@ -821,6 +821,33 @@ export function registerControlUiAndPairingSuite(): void {
         wsBootstrap.close();
       });
 
+      const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const replay = await connectReq(wsReplay, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(replay.ok).toBe(false);
+      expect((replay.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+      );
+      wsReplay.close();
+
+      const wsReconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const reconnect = await connectReq(wsReconnect, {
+        skipDefaultAuth: true,
+        deviceToken: issuedDeviceToken,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(reconnect.ok).toBe(true);
+      wsReconnect.close();
+
       await expect(
         verifyDeviceBootstrapToken({
           token: issued.token,
@@ -837,6 +864,19 @@ export function registerControlUiAndPairingSuite(): void {
           token: issuedDeviceToken,
           role: "node",
           scopes: [],
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: issuedOperatorToken,
+          role: "operator",
+          scopes: [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ],
         }),
       ).resolves.toEqual({ ok: true });
     } finally {
@@ -883,7 +923,9 @@ export function registerControlUiAndPairingSuite(): void {
           timeoutMs: 500,
         }),
       ).rejects.toThrow();
-      await expect(waitForWsClose(wsFail, 1_000)).resolves.toBe(true);
+      // The full agentic shard can saturate the event loop enough that the
+      // server-side close after a pre-hello failure arrives later than 1s.
+      await expect(waitForWsClose(wsFail, 5_000)).resolves.toBe(true);
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const retry = await connectReq(wsRetry, {

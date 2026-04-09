@@ -19,7 +19,7 @@ const ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_ID",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
-];
+] as const;
 
 const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
@@ -37,7 +37,7 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
     label: PROVIDER_LABEL,
     docsPath: "/providers/models",
     aliases: ["gemini-cli"],
-    envVars: ENV_VARS,
+    envVars: [...ENV_VARS],
     auth: [
       {
         id: "oauth",
@@ -114,7 +114,6 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: PROVIDER_ID,
-        templateProviderId: "google",
         ctx,
       }),
     ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,

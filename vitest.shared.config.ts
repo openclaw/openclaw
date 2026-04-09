@@ -7,11 +7,7 @@ import {
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
-import {
-  detectVitestProcessStats,
-  shouldPrintVitestThrottle,
-  type VitestProcessStats,
-} from "./vitest.system-load.ts";
+import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -61,16 +57,14 @@ export function resolveLocalVitestMaxWorkers(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-  processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): number {
-  return resolveLocalVitestScheduling(env, system, pool, processStats).maxWorkers;
+  return resolveLocalVitestScheduling(env, system, pool).maxWorkers;
 }
 
 export function resolveLocalVitestScheduling(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-  processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): LocalVitestScheduling {
   const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
   if (override !== null) {
@@ -86,36 +80,42 @@ export function resolveLocalVitestScheduling(
   const loadAverage1m = Math.max(0, system.loadAverage1m ?? 0);
   const totalMemoryGb = (system.totalMemoryBytes ?? 0) / 1024 ** 3;
 
+  // Keep smaller hosts conservative, but let large local boxes actually use
+  // their cores. Thread workers scale much better than the old fork-first cap.
   let inferred =
-    cpuCount <= 4 ? 1 : cpuCount <= 8 ? 2 : cpuCount <= 12 ? 3 : cpuCount <= 16 ? 4 : 6;
+    cpuCount <= 2
+      ? 1
+      : cpuCount <= 4
+        ? 2
+        : cpuCount <= 8
+          ? 4
+          : Math.max(1, Math.floor(cpuCount * 0.75));
 
   if (totalMemoryGb <= 16) {
     inferred = Math.min(inferred, 2);
   } else if (totalMemoryGb <= 32) {
-    inferred = Math.min(inferred, 3);
-  } else if (totalMemoryGb <= 64) {
     inferred = Math.min(inferred, 4);
-  } else if (totalMemoryGb <= 128) {
-    inferred = Math.min(inferred, 5);
-  } else {
+  } else if (totalMemoryGb <= 64) {
     inferred = Math.min(inferred, 6);
+  } else if (totalMemoryGb <= 128) {
+    inferred = Math.min(inferred, 8);
+  } else if (totalMemoryGb <= 256) {
+    inferred = Math.min(inferred, 12);
+  } else {
+    inferred = Math.min(inferred, 16);
   }
 
   const loadRatio = loadAverage1m > 0 ? loadAverage1m / cpuCount : 0;
   if (loadRatio >= 1) {
     inferred = Math.max(1, Math.floor(inferred / 2));
   } else if (loadRatio >= 0.75) {
+    inferred = Math.max(1, inferred - 2);
+  } else if (loadRatio >= 0.5) {
     inferred = Math.max(1, inferred - 1);
   }
 
-  if (pool === "threads") {
-    inferred = Math.min(inferred, 4);
-    if (cpuCount >= 8) {
-      inferred = Math.max(1, inferred - 1);
-    }
-    if (loadRatio >= 0.5) {
-      inferred = Math.max(1, inferred - 1);
-    }
+  if (pool === "forks") {
+    inferred = Math.min(inferred, 8);
   }
 
   inferred = clamp(inferred, 1, 16);
@@ -128,28 +128,17 @@ export function resolveLocalVitestScheduling(
     };
   }
 
-  const highSystemContention =
-    loadRatio >= 1 ||
-    processStats.otherVitestWorkerCount >= 2 ||
-    processStats.otherVitestCpuPercent >= 150 ||
-    processStats.otherVitestRootCount >= 2;
-
-  if (highSystemContention) {
+  if (loadRatio >= 1) {
+    const maxWorkers = Math.max(1, Math.floor(inferred / 2));
     return {
-      maxWorkers: 1,
-      fileParallelism: false,
-      throttledBySystem: true,
+      maxWorkers,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem: maxWorkers < inferred,
     };
   }
 
-  const moderateSystemContention =
-    loadRatio >= 0.75 ||
-    processStats.otherVitestWorkerCount >= 1 ||
-    processStats.otherVitestCpuPercent >= 75 ||
-    processStats.otherVitestRootCount >= 1;
-
-  if (moderateSystemContention) {
-    const maxWorkers = Math.min(inferred, 2);
+  if (loadRatio >= 0.75) {
+    const maxWorkers = Math.max(2, Math.ceil(inferred * 0.75));
     return {
       maxWorkers,
       fileParallelism: true,
@@ -167,7 +156,7 @@ export function resolveLocalVitestScheduling(
 export function resolveDefaultVitestPool(
   _env: Record<string, string | undefined> = process.env,
 ): OpenClawVitestPool {
-  return "forks";
+  return "threads";
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -200,6 +189,10 @@ export const sharedVitestConfig = {
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
       })),
+      ...pluginSdkSubpaths.map((subpath) => ({
+        find: `@openclaw/plugin-sdk/${subpath}`,
+        replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
+      })),
       {
         find: "openclaw/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
@@ -211,8 +204,9 @@ export const sharedVitestConfig = {
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,
-    isolate: true,
+    isolate: false,
     pool: defaultPool,
+    runner: "./test/non-isolated-runner.ts",
     maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
     fileParallelism: isCI ? true : localScheduling.fileParallelism,
     forceRerunTriggers: [
@@ -262,6 +256,8 @@ export const sharedVitestConfig = {
       "vitest.media.config.ts",
       "vitest.media-understanding.config.ts",
       "vitest.performance-config.ts",
+      "vitest.unit-fast.config.ts",
+      "vitest.unit-fast-paths.mjs",
       "vitest.scoped-config.ts",
       "vitest.shared-core.config.ts",
       "vitest.shared.config.ts",

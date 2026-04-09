@@ -1012,10 +1012,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   if (result.status === "skipped") {
     if (result.reason === "dirty") {
+      defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
         theme.warn(
-          "Skipped: working directory has uncommitted changes. Commit or stash them first.",
+          "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
         ),
+      );
+      defaultRuntime.log(
+        theme.muted("Commit, stash, or discard the local changes, then rerun `openclaw update`."),
       );
     }
     if (result.reason === "not-git-install") {
@@ -1034,55 +1038,105 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  if (switchToGit && result.status === "ok" && result.mode === "git") {
+    if (!opts.json) {
+      defaultRuntime.log(
+        theme.muted(
+          "Switched from a package install to a git checkout. Skipping remaining post-update work in the old CLI process; rerun follow-up commands from the new git install if needed.",
+        ),
+      );
+    }
+    defaultRuntime.exit(0);
+    return;
+  }
+
   let postUpdateConfigSnapshot = configSnapshot;
   if (requestedChannel && configSnapshot.valid && requestedChannel !== storedChannel) {
-    const next = {
-      ...configSnapshot.config,
-      update: {
-        ...configSnapshot.config.update,
-        channel: requestedChannel,
-      },
-    };
-    await replaceConfigFile({
-      nextConfig: next,
-      baseHash: configSnapshot.hash,
-    });
-    postUpdateConfigSnapshot = {
-      ...configSnapshot,
-      hash: undefined,
-      parsed: next,
-      sourceConfig: asResolvedSourceConfig(next),
-      resolved: asResolvedSourceConfig(next),
-      runtimeConfig: asRuntimeConfig(next),
-      config: asRuntimeConfig(next),
-    };
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
+    if (switchToGit) {
+      if (!opts.json) {
+        defaultRuntime.log(
+          theme.muted(
+            `Skipped persisting update.channel=${requestedChannel} in the pre-update CLI process after switching to a git install.`,
+          ),
+        );
+      }
+    } else {
+      const next = {
+        ...configSnapshot.config,
+        update: {
+          ...configSnapshot.config.update,
+          channel: requestedChannel,
+        },
+      };
+      await replaceConfigFile({
+        nextConfig: next,
+        baseHash: configSnapshot.hash,
+      });
+      postUpdateConfigSnapshot = {
+        ...configSnapshot,
+        hash: undefined,
+        parsed: next,
+        sourceConfig: asResolvedSourceConfig(next),
+        resolved: asResolvedSourceConfig(next),
+        runtimeConfig: asRuntimeConfig(next),
+        config: asRuntimeConfig(next),
+      };
+      if (!opts.json) {
+        defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
+      }
     }
   }
 
-  await updatePluginsAfterCoreUpdate({
-    root,
-    channel,
-    configSnapshot: postUpdateConfigSnapshot,
-    opts,
-  });
+  const postUpdateRoot = result.root ?? root;
 
-  await tryWriteCompletionCache(root, Boolean(opts.json));
-  await tryInstallShellCompletion({
-    jsonMode: Boolean(opts.json),
-    skipPrompt: Boolean(opts.yes),
-  });
+  // A package -> git switch still runs inside the pre-update CLI process.
+  // Any follow-up work that re-enters the CLI can then compare new bundled
+  // plugin minima against the old host version and fail even though the
+  // install itself succeeded. Leave the switched checkout alone and let the
+  // new git install handle follow-up commands in a fresh process.
+  const deferOldProcessPostUpdateWork = switchToGit && result.mode === "git";
+  if (deferOldProcessPostUpdateWork) {
+    if (!opts.json) {
+      defaultRuntime.log(
+        theme.muted(
+          "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
+        ),
+      );
+    }
+  } else {
+    await updatePluginsAfterCoreUpdate({
+      root: postUpdateRoot,
+      channel,
+      configSnapshot: postUpdateConfigSnapshot,
+      opts,
+    });
+  }
 
-  await maybeRestartService({
-    shouldRestart,
-    result,
-    opts,
-    refreshServiceEnv: refreshGatewayServiceEnv,
-    gatewayPort,
-    restartScriptPath,
-    invocationCwd,
-  });
+  if (deferOldProcessPostUpdateWork) {
+    if (!opts.json) {
+      defaultRuntime.log(
+        theme.muted(
+          "Skipped completion/restart follow-ups in the pre-update CLI process after switching to a git install.",
+        ),
+      );
+    }
+  } else {
+    await tryWriteCompletionCache(postUpdateRoot, Boolean(opts.json));
+    await tryInstallShellCompletion({
+      jsonMode: Boolean(opts.json),
+      skipPrompt: Boolean(opts.yes),
+    });
+
+    await maybeRestartService({
+      shouldRestart,
+      result,
+      opts,
+      refreshServiceEnv: refreshGatewayServiceEnv,
+      gatewayPort,
+      restartScriptPath,
+      invocationCwd,
+    });
+  }
 
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));

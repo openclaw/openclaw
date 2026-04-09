@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
@@ -30,10 +35,10 @@ export function supportsBuiltInXHighThinking(
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
-  if (!raw) {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
     return undefined;
   }
-  const key = raw.trim().toLowerCase();
   const collapsed = key.replace(/[\s_-]+/g, "");
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";
@@ -110,10 +115,10 @@ export function resolveThinkingDefaultForModel(params: {
 type OnOffFullLevel = "off" | "on" | "full";
 
 function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
-  if (!raw) {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
     return undefined;
   }
-  const key = raw.toLowerCase();
   if (["off", "false", "no", "0"].includes(key)) {
     return "off";
   }
@@ -138,7 +143,7 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) {
     return "off";
   }
@@ -165,7 +170,7 @@ export function normalizeFastMode(raw?: string | boolean | null): boolean | unde
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
     return false;
   }
@@ -179,7 +184,7 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0"].includes(key)) {
     return "off";
   }
@@ -209,7 +214,7 @@ export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | u
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"].includes(key)) {
     return "off";
   }

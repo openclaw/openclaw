@@ -69,6 +69,11 @@ type SettingsHost = {
   dreamingStatusError: string | null;
   dreamingStatus: null;
   dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -153,6 +158,11 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamingStatusError: null,
   dreamingStatus: null,
   dreamingModeSaving: false,
+  dreamDiaryLoading: false,
+  dreamDiaryActionLoading: false,
+  dreamDiaryError: null,
+  dreamDiaryPath: null,
+  dreamDiaryContent: null,
 });
 
 describe("setTabFromRoute", () => {

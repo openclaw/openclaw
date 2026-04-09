@@ -1,13 +1,38 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  loadSanitizeSessionHistoryWithCleanMocks,
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
+  type SanitizeSessionHistoryHarness,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
+vi.mock("./pi-embedded-helpers.js", async () => ({
+  ...(await vi.importActual("./pi-embedded-helpers.js")),
+  sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
+}));
+
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
+  };
+});
+
 describe("sanitizeSessionHistory openai tool id preservation", () => {
+  let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
+
+  beforeEach(async () => {
+    const harness = await loadSanitizeSessionHistoryWithCleanMocks();
+    sanitizeSessionHistory = harness.sanitizeSessionHistory;
+  });
+
   const makeSessionManager = () =>
     makeInMemorySessionManager([
       makeModelSnapshotEntry({

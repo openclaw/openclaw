@@ -1,11 +1,25 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
-import { qqbotSetupPlugin } from "./channel.setup.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./channel-config-shared.js";
 import { DEFAULT_ACCOUNT_ID } from "./config.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
 
-const getQQBotSetupStatus = createPluginSetupWizardStatus(qqbotSetupPlugin);
+const qqbotSetupPlugin = {
+  id: "qqbot",
+  setupWizard: qqbotSetupWizard,
+  meta: {
+    ...qqbotMeta,
+  },
+  config: {
+    ...qqbotConfigAdapter,
+  },
+  setup: {
+    ...qqbotSetupAdapterShared,
+  },
+};
+
+const getQQBotSetupStatus = createPluginSetupWizardStatus(qqbotSetupPlugin as never);
 
 describe("qqbot setup", () => {
   it("treats SecretRef-backed default accounts as configured", () => {
@@ -91,8 +105,8 @@ describe("qqbot setup", () => {
     const account = qqbotSetupPlugin.config.resolveAccount?.(cfg, DEFAULT_ACCOUNT_ID);
 
     expect(account?.clientSecret).toBe("");
-    expect(qqbotSetupPlugin.config.isConfigured?.(account!, cfg)).toBe(true);
-    expect(qqbotSetupPlugin.config.describeAccount?.(account!, cfg)?.configured).toBe(true);
+    expect(qqbotSetupPlugin.config.isConfigured?.(account)).toBe(true);
+    expect(qqbotSetupPlugin.config.describeAccount?.(account)?.configured).toBe(true);
   });
 
   it("keeps the sibling credential when switching only AppSecret to env mode", async () => {
@@ -105,7 +119,7 @@ describe("qqbot setup", () => {
       },
     } as OpenClawConfig;
 
-    const next = await qqbotSetupWizard.credentials[1]!.applyUseEnv!({
+    const next = await qqbotSetupWizard.credentials[1].applyUseEnv!({
       cfg,
       accountId: DEFAULT_ACCOUNT_ID,
     });
@@ -122,7 +136,7 @@ describe("qqbot setup", () => {
     expect(setup).toBeDefined();
 
     expect(
-      setup!.resolveAccountId?.({
+      setup.resolveAccountId?.({
         accountId: " Bot2 ",
       } as never),
     ).toBe("bot2");
@@ -133,7 +147,7 @@ describe("qqbot setup", () => {
     expect(setup).toBeDefined();
 
     expect(
-      setup!.resolveAccountId?.({
+      setup.resolveAccountId?.({
         cfg: {
           channels: {
             qqbot: {

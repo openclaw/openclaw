@@ -31,6 +31,7 @@ import {
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { icons } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
@@ -323,8 +324,8 @@ function renderContextNotice(
     <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
       <svg
         class="context-notice__icon"
-        width="24"
-        height="24"
+        width="16"
+        height="16"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -495,12 +496,12 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Arg mode: /command <partial-arg>
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
-    const cmdName = argMatch[1].toLowerCase();
-    const argFilter = argMatch[2].toLowerCase();
+    const cmdName = normalizeLowercaseStringOrEmpty(argMatch[1]);
+    const argFilter = normalizeLowercaseStringOrEmpty(argMatch[2]);
     const cmd = SLASH_COMMANDS.find((c) => c.name === cmdName);
     if (cmd?.argOptions?.length) {
       const filtered = argFilter
-        ? cmd.argOptions.filter((opt) => opt.toLowerCase().startsWith(argFilter))
+        ? cmd.argOptions.filter((opt) => normalizeLowercaseStringOrEmpty(opt).startsWith(argFilter))
         : cmd.argOptions;
       if (filtered.length > 0) {
         vs.slashMenuMode = "args";
@@ -1421,13 +1422,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const senderLabel =
+      normalizeLowercaseStringOrEmpty(role) === "user" ? (normalized.senderLabel ?? null) : null;
     const timestamp = normalized.timestamp || Date.now();
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (normalizeLowercaseStringOrEmpty(role) === "user" && currentGroup.senderLabel !== senderLabel)
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -1486,7 +1488,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+    if (!props.showToolCalls && normalizeLowercaseStringOrEmpty(normalized.role) === "toolresult") {
       continue;
     }
 

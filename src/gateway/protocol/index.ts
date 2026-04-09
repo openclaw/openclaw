@@ -120,6 +120,8 @@ import {
   type ExecApprovalsSetParams,
   ExecApprovalsSetParamsSchema,
   type ExecApprovalsSnapshot,
+  type ExecApprovalGetParams,
+  ExecApprovalGetParamsSchema,
   type ExecApprovalRequestParams,
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
@@ -198,6 +200,14 @@ import {
   SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCompactionBranchParams,
+  SessionsCompactionBranchParamsSchema,
+  type SessionsCompactionGetParams,
+  SessionsCompactionGetParamsSchema,
+  type SessionsCompactionListParams,
+  SessionsCompactionListParamsSchema,
+  type SessionsCompactionRestoreParams,
+  SessionsCompactionRestoreParamsSchema,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
   type SessionsDeleteParams,
@@ -374,6 +384,18 @@ export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
 export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
 );
+export const validateSessionsCompactionListParams = ajv.compile<SessionsCompactionListParams>(
+  SessionsCompactionListParamsSchema,
+);
+export const validateSessionsCompactionGetParams = ajv.compile<SessionsCompactionGetParams>(
+  SessionsCompactionGetParamsSchema,
+);
+export const validateSessionsCompactionBranchParams = ajv.compile<SessionsCompactionBranchParams>(
+  SessionsCompactionBranchParamsSchema,
+);
+export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompactionRestoreParams>(
+  SessionsCompactionRestoreParamsSchema,
+);
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
@@ -444,6 +466,9 @@ export const validateExecApprovalsGetParams = ajv.compile<ExecApprovalsGetParams
 );
 export const validateExecApprovalsSetParams = ajv.compile<ExecApprovalsSetParams>(
   ExecApprovalsSetParamsSchema,
+);
+export const validateExecApprovalGetParams = ajv.compile<ExecApprovalGetParams>(
+  ExecApprovalGetParamsSchema,
 );
 export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequestParams>(
   ExecApprovalRequestParamsSchema,
@@ -546,6 +571,10 @@ export {
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsResolveParamsSchema,
+  SessionsCompactionListParamsSchema,
+  SessionsCompactionGetParamsSchema,
+  SessionsCompactionBranchParamsSchema,
+  SessionsCompactionRestoreParamsSchema,
   SessionsCreateParamsSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
@@ -615,6 +644,11 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
+  ExecApprovalsGetParamsSchema,
+  ExecApprovalsSetParamsSchema,
+  ExecApprovalGetParamsSchema,
+  ExecApprovalRequestParamsSchema,
+  ExecApprovalResolveParamsSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
@@ -736,6 +770,9 @@ export type {
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
+  ExecApprovalGetParams,
+  ExecApprovalRequestParams,
+  ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
   PollParams,

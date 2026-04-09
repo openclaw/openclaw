@@ -8,6 +8,8 @@
  * This module extracts meaningful keywords from such queries to improve FTS results.
  */
 
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 // Common stop words that don't add search value
 const STOP_WORDS_EN = new Set([
   // Articles and determiners
@@ -673,7 +675,7 @@ function isValidKeyword(token: string): boolean {
 function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
   const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
-  const normalized = text.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(text);
 
   // Split into segments (English words, Chinese character sequences, etc.)
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);

@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { formatErrorMessage } from "../../src/infra/errors.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -540,7 +541,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       ok: false,
       stage: "validation",
       smokeId: "n/a",
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 
@@ -672,7 +673,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       ok: false,
       stage: setupStage,
       smokeId,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 
@@ -830,7 +831,7 @@ const result = await run().catch(
     ok: false,
     stage: "unexpected",
     smokeId: "n/a",
-    error: err instanceof Error ? err.message : String(err),
+    error: formatErrorMessage(err),
   }),
 );
 

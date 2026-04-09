@@ -73,8 +73,10 @@ enum ShellExecutor {
                 group.addTask { await waitTask.value }
                 group.addTask {
                     try? await Task.sleep(nanoseconds: nanos)
-                    if process.isRunning { process.terminate() }
-                    _ = await waitTask.value // drain pipes after termination
+                    guard process.isRunning else {
+                        return await waitTask.value
+                    }
+                    process.terminate()
                     return ShellResult(
                         stdout: "",
                         stderr: "",

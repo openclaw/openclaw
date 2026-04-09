@@ -1,7 +1,6 @@
 import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  DEFAULT_ACCOUNT_ID,
 } from "openclaw/plugin-sdk/setup-runtime";
 
 const channel = "googlechat" as const;

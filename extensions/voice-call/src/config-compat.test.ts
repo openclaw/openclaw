@@ -93,7 +93,7 @@ describe("voice-call config compatibility", () => {
         doctorFixCommand: "openclaw doctor --fix",
       }),
     ).toEqual([
-      `[voice-call] legacy config keys detected under plugins.entries.voice-call.config; runtime fallback remains for now but will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "openclaw doctor --fix".`,
+      `[voice-call] legacy config keys detected under plugins.entries.voice-call.config; runtime loading will not rewrite them, and support for the legacy shape will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "openclaw doctor --fix".`,
       '[voice-call] plugins.entries.voice-call.config.provider: Replace provider "log" with "mock".',
       "[voice-call] plugins.entries.voice-call.config.twilio.from: Move twilio.from to fromNumber.",
       "[voice-call] plugins.entries.voice-call.config.streaming.sttProvider: Move streaming.sttProvider to streaming.provider.",

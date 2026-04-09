@@ -45,6 +45,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
@@ -220,7 +224,7 @@ function resolvePlacementWithoutChannelPlugin(params: {
 }
 
 function normalizeLineConversationIdFallback(value: string | undefined): string | undefined {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -233,9 +237,9 @@ function normalizeTelegramConversationIdFallback(params: {
   threadId?: string | number;
   groupId?: string;
 }): string | undefined {
-  const explicitGroupId = params.groupId?.trim();
+  const explicitGroupId = normalizeOptionalString(params.groupId);
   const explicitThreadId =
-    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
   if (
     explicitGroupId &&
     explicitThreadId &&
@@ -245,7 +249,7 @@ function normalizeTelegramConversationIdFallback(params: {
     return `${explicitGroupId}:topic:${explicitThreadId}`;
   }
 
-  const trimmed = params.to?.trim() ?? "";
+  const trimmed = normalizeOptionalString(params.to) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -299,7 +303,7 @@ function isHeartbeatEnabledForSessionAgent(params: {
     resolveAgentConfig(params.cfg, requesterAgentId)?.heartbeat?.every ??
     params.cfg.agents?.defaults?.heartbeat?.every ??
     DEFAULT_HEARTBEAT_EVERY;
-  const trimmedEvery = typeof heartbeatEvery === "string" ? heartbeatEvery.trim() : "";
+  const trimmedEvery = normalizeOptionalString(heartbeatEvery) ?? "";
   if (!trimmedEvery) {
     return false;
   }
@@ -345,10 +349,10 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
 
   // Explicit delivery overrides are not session-local and can route updates
   // to unrelated destinations (for example a pinned ops channel).
-  if (typeof heartbeat?.to === "string" && heartbeat.to.trim().length > 0) {
+  if (normalizeOptionalString(heartbeat?.to)) {
     return false;
   }
-  if (typeof heartbeat?.accountId === "string" && heartbeat.accountId.trim().length > 0) {
+  if (normalizeOptionalString(heartbeat?.accountId)) {
     return false;
   }
 
@@ -383,7 +387,7 @@ function resolveTargetAcpAgentId(params: {
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
-  const trimmed = (value ?? "").trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -426,7 +430,7 @@ async function resolveRuntimeCwdForAcpSpawn(params: {
   if (!params.resolvedCwd) {
     return undefined;
   }
-  if (typeof params.explicitCwd === "string" && params.explicitCwd.trim()) {
+  if (normalizeOptionalString(params.explicitCwd)) {
     return params.resolvedCwd;
   }
   try {
@@ -445,7 +449,7 @@ function resolveRequesterInternalSessionKey(params: {
   requesterSessionKey?: string;
 }): string {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const requesterSessionKey = params.requesterSessionKey?.trim();
+  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
   return requesterSessionKey
     ? resolveInternalSessionKey({
         key: requesterSessionKey,
@@ -490,7 +494,7 @@ function resolveConversationIdForThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): string | undefined {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   const normalizedChannelId = channel ? normalizeChannelId(channel) : null;
   const channelKey = normalizedChannelId ?? channel ?? null;
   const pluginResolvedConversationId = normalizedChannelId
@@ -501,8 +505,8 @@ function resolveConversationIdForThreadBinding(params: {
         isGroup: true,
       })?.conversationId
     : null;
-  if (pluginResolvedConversationId?.trim()) {
-    return pluginResolvedConversationId.trim();
+  if (normalizeOptionalString(pluginResolvedConversationId)) {
+    return normalizeOptionalString(pluginResolvedConversationId);
   }
   if (channelKey === "line") {
     const lineConversationId = normalizeLineConversationIdFallback(params.groupId ?? params.to);
@@ -531,8 +535,8 @@ function resolveAcpSpawnChannelAccountId(params: {
   channel?: string;
   accountId?: string;
 }): string | undefined {
-  const channel = params.channel?.trim().toLowerCase();
-  const explicitAccountId = params.accountId?.trim();
+  const channel = normalizeOptionalLowercaseString(params.channel);
+  const explicitAccountId = normalizeOptionalString(params.accountId);
   if (explicitAccountId) {
     return explicitAccountId;
   }
@@ -541,9 +545,7 @@ function resolveAcpSpawnChannelAccountId(params: {
   }
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
-  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
-    ? configuredDefaultAccountId.trim()
-    : "default";
+  return normalizeOptionalString(configuredDefaultAccountId) ?? "default";
 }
 
 function prepareAcpThreadBinding(params: {
@@ -554,7 +556,7 @@ function prepareAcpThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   if (!channel) {
     return {
       ok: false,
@@ -659,7 +661,7 @@ function resolveAcpSpawnRequesterState(params: {
       : false;
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"
-      ? params.ctx.agentThreadId.trim().length > 0
+      ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
       : params.ctx.agentThreadId != null;
   const requesterAgentId = requesterParsedSession?.agentId;
 
@@ -824,7 +826,7 @@ async function bindPreparedAcpThread(params: {
 
   let sessionEntry = params.initializedRuntime.sessionEntry;
   if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
-    const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
+    const boundThreadId = normalizeOptionalString(String(binding.conversation.conversationId));
     if (boundThreadId) {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId: params.initializedRuntime.sessionId,
@@ -853,10 +855,12 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   // Child-thread ACP spawns deliver bootstrap output to the new thread; current-conversation
   // binds deliver back to the originating target.
   const boundThreadIdRaw = params.binding?.conversation.conversationId;
-  const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
+  const boundThreadId = boundThreadIdRaw
+    ? normalizeOptionalString(String(boundThreadIdRaw))
+    : undefined;
   const fallbackThreadIdRaw = params.requester.origin?.threadId;
   const fallbackThreadId =
-    fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
+    fallbackThreadIdRaw != null ? normalizeOptionalString(String(fallbackThreadIdRaw)) : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
   const requesterConversationId = resolveConversationIdForThreadBinding({
     channel: params.requester.origin?.channel,
@@ -881,9 +885,11 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     parentConversationId: params.binding?.conversation.parentConversationId,
   });
   const inferredDeliveryTo =
-    (bindingMatchesRequesterConversation ? params.requester.origin?.to?.trim() : undefined) ??
+    (bindingMatchesRequesterConversation
+      ? normalizeOptionalString(params.requester.origin?.to)
+      : undefined) ??
     boundDeliveryTarget.to ??
-    params.requester.origin?.to?.trim() ??
+    normalizeOptionalString(params.requester.origin?.to) ??
     formatConversationTarget({
       channel: params.requester.origin?.channel,
       conversationId: deliveryThreadId,
@@ -926,7 +932,7 @@ export async function spawnAcpDirect(
     });
   }
   const streamToParentRequested = params.streamTo === "parent";
-  const parentSessionKey = ctx.agentSessionKey?.trim();
+  const parentSessionKey = normalizeOptionalString(ctx.agentSessionKey);
   if (streamToParentRequested && !parentSessionKey) {
     return createAcpSpawnFailure({
       status: "error",
@@ -1130,8 +1136,9 @@ export async function spawnAcpDirect(
       },
       timeoutMs: 10_000,
     });
-    if (typeof response?.runId === "string" && response.runId.trim()) {
-      childRunId = response.runId.trim();
+    const responseRunId = normalizeOptionalString(response?.runId);
+    if (responseRunId) {
+      childRunId = responseRunId;
     }
   } catch (err) {
     parentRelay?.dispose();
@@ -1175,7 +1182,7 @@ export async function spawnAcpDirect(
         label: params.label,
         task: params.task,
         preferMetadata: true,
-        deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+        deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
         startedAt: Date.now(),
       });
     } catch (error) {
@@ -1207,7 +1214,7 @@ export async function spawnAcpDirect(
       label: params.label,
       task: params.task,
       preferMetadata: true,
-      deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+      deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
       startedAt: Date.now(),
     });
   } catch (error) {

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+  isRemoteEnvironment: vi.fn(() => false),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
@@ -73,6 +74,10 @@ vi.mock("../../config/logging.js", () => ({
 
 vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
+}));
+
+vi.mock("../oauth-env.js", () => ({
+  isRemoteEnvironment: mocks.isRemoteEnvironment,
 }));
 
 const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
@@ -147,6 +152,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
+    mocks.isRemoteEnvironment.mockReturnValue(false);
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
@@ -579,7 +585,7 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
-  it("writes pasted Anthropic setup-tokens and logs the legacy warning", async () => {
+  it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
     const runtime = createRuntime();
     mocks.clackText.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
 
@@ -595,10 +601,13 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
     });
     expect(runtime.log).toHaveBeenCalledWith(
-      "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
+      "Anthropic setup-token auth is supported in OpenClaw.",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
+      "OpenClaw prefers Claude CLI reuse when it is available on the host.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic staff told us this OpenClaw path is allowed again.",
     );
   });
 

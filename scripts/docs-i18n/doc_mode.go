@@ -17,15 +17,15 @@ const (
 	bodyTagEnd          = "</body>"
 )
 
-func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool, routes *routeIndex) (bool, error) {
+func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	currentHash := hashBytes(content)
 
@@ -33,10 +33,10 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 	if !overwrite {
 		skip, err := shouldSkipDoc(outputPath, currentHash)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 		if skip {
-			return true, nil
+			return true, "", nil
 		}
 	}
 
@@ -44,7 +44,7 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 	frontData := map[string]any{}
 	if strings.TrimSpace(sourceFront) != "" {
 		if err := yaml.Unmarshal([]byte(sourceFront), &frontData); err != nil {
-			return false, fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+			return false, "", fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
 		}
 	}
 	frontTemplate, markers := buildFrontmatterTemplate(frontData)
@@ -52,32 +52,30 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 
 	translatedDoc, err := translator.TranslateRaw(ctx, taggedInput, srcLang, tgtLang)
 	if err != nil {
-		return false, fmt.Errorf("translate failed (%s): %w", relPath, err)
+		return false, "", fmt.Errorf("translate failed (%s): %w", relPath, err)
 	}
 
 	translatedFront, translatedBody, err := parseTaggedDocument(translatedDoc)
 	if err != nil {
-		return false, fmt.Errorf("tagged output invalid for %s: %w", relPath, err)
+		return false, "", fmt.Errorf("tagged output invalid for %s: %w", relPath, err)
 	}
 	if sourceFront != "" && strings.TrimSpace(translatedFront) == "" {
-		return false, fmt.Errorf("translation removed frontmatter for %s", relPath)
+		return false, "", fmt.Errorf("translation removed frontmatter for %s", relPath)
 	}
 	if err := applyFrontmatterTranslations(frontData, markers, translatedFront); err != nil {
-		return false, fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
+		return false, "", fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
 	}
-	translatedBody = routes.localizeBodyLinks(translatedBody)
-
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	output := updatedFront + translatedBody
-	return false, os.WriteFile(outputPath, []byte(output), 0o644)
+	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
 func formatTaggedDocument(frontMatter, body string) string {

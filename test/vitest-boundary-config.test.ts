@@ -12,11 +12,11 @@ describe("loadBoundaryIncludePatternsFromEnv", () => {
 });
 
 describe("boundary vitest config", () => {
-  it("keeps boundary suites isolated with shared test bootstrap", () => {
+  it("keeps boundary suites on the non-isolated runner with shared test bootstrap", () => {
     const config = createBoundaryVitestConfig({});
 
-    expect(config.test?.isolate).toBe(true);
-    expect(config.test?.runner).toBeUndefined();
+    expect(config.test?.isolate).toBe(false);
+    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     expect(config.test?.include).toEqual(boundaryTestFiles);
     expect(config.test?.setupFiles).toEqual(["test/setup.ts"]);
   });

@@ -31,13 +31,11 @@ OpenClaw features that can generate provider usage or paid API calls.
   `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
   from `stats.input_tokens - stats.cached` when needed.
 
-Anthropic note: Anthropic's public Claude Code docs still include direct Claude
-Code terminal usage in Claude plan limits. Separately, Anthropic told OpenClaw
-users that starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**, the
-**OpenClaw** Claude-login path counts as third-party harness usage and
-requires **Extra Usage** billed separately from the subscription. Anthropic
-does not expose a per-message dollar estimate that OpenClaw can show in
-`/usage full`.
+Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is
+allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as
+sanctioned for this integration unless Anthropic publishes a new policy.
+Anthropic still does not expose a per-message dollar estimate that OpenClaw can
+show in `/usage full`.
 
 **CLI usage windows (provider quotas)**
 

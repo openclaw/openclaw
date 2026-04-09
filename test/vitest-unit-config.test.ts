@@ -68,10 +68,10 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 });
 
 describe("unit vitest config", () => {
-  it("defaults unit tests to isolated mode", () => {
+  it("defaults unit tests to the non-isolated runner", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.isolate).toBe(true);
-    expect(unitConfig.test?.runner).toBeUndefined();
+    expect(unitConfig.test?.isolate).toBe(false);
+    expect(unitConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("keeps acp and ui tests out of the generic unit lane", () => {
@@ -96,5 +96,46 @@ describe("unit vitest config", () => {
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
+  });
+
+  it("appends extra exclude patterns instead of replacing the base unit excludes", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        extraExcludePatterns: ["src/security/**"],
+      },
+    );
+    expect(unitConfig.test?.exclude).toEqual(
+      expect.arrayContaining(["src/commands/**", "src/config/**", "src/security/**"]),
+    );
+  });
+
+  it("keeps bundled unit include files out of the resolved exclude list", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        includePatterns: [
+          "src/infra/matrix-plugin-helper.test.ts",
+          "src/plugin-sdk/facade-runtime.test.ts",
+          "src/plugins/loader.test.ts",
+        ],
+      },
+    );
+
+    expect(unitConfig.test?.include).toEqual([
+      "src/infra/matrix-plugin-helper.test.ts",
+      "src/plugin-sdk/facade-runtime.test.ts",
+      "src/plugins/loader.test.ts",
+    ]);
+    expect(unitConfig.test?.exclude).not.toEqual(
+      expect.arrayContaining([
+        "src/infra/**",
+        "src/plugin-sdk/**",
+        "src/plugins/**",
+        "src/infra/matrix-plugin-helper.test.ts",
+        "src/plugin-sdk/facade-runtime.test.ts",
+        "src/plugins/loader.test.ts",
+      ]),
+    );
   });
 });

@@ -330,6 +330,46 @@ api.runtime.tools.registerMemoryCli(/* ... */);
 
 Channel-specific runtime helpers (available when a channel plugin is loaded).
 
+`api.runtime.channel.mentions` is the shared inbound mention-policy surface for
+bundled channel plugins that use runtime injection:
+
+```typescript
+const mentionMatch = api.runtime.channel.mentions.matchesMentionWithExplicit(text, {
+  mentionRegexes,
+  mentionPatterns,
+});
+
+const decision = api.runtime.channel.mentions.resolveInboundMentionDecision({
+  facts: {
+    canDetectMention: true,
+    wasMentioned: mentionMatch.matched,
+    implicitMentionKinds: api.runtime.channel.mentions.implicitMentionKindWhen(
+      "reply_to_bot",
+      isReplyToBot,
+    ),
+  },
+  policy: {
+    isGroup,
+    requireMention,
+    allowTextCommands,
+    hasControlCommand,
+    commandAuthorized,
+  },
+});
+```
+
+Available mention helpers:
+
+- `buildMentionRegexes`
+- `matchesMentionPatterns`
+- `matchesMentionWithExplicit`
+- `implicitMentionKindWhen`
+- `resolveInboundMentionDecision`
+
+`api.runtime.channel.mentions` intentionally does not expose the older
+`resolveMentionGating*` compatibility helpers. Prefer the normalized
+`{ facts, policy }` path.
+
 ## Storing runtime references
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside

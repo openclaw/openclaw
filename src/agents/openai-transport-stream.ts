@@ -23,17 +23,24 @@ import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIStrictToolSetting,
+} from "./openai-tool-schema.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+
+type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -47,7 +54,8 @@ type BaseStreamOptions = {
 };
 
 type OpenAIResponsesOptions = BaseStreamOptions & {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoning?: OpenAIReasoningEffort;
+  reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 };
@@ -63,7 +71,8 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
           name: string;
         };
       };
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoning?: OpenAIReasoningEffort;
+  reasoningEffort?: OpenAIReasoningEffort;
 };
 
 type OpenAIModeModel = Model<Api> & {
@@ -332,7 +341,7 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = resolveStrictToolFlagForInventory(tools, options?.strict);
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
   if (strict === undefined) {
     return tools.map((tool) => ({
       type: "function",
@@ -345,43 +354,9 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
     strict,
   }));
-}
-
-function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return true;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
-    return false;
-  }
-  if (Array.isArray(record.type)) {
-    return false;
-  }
-  if (record.type === "object" && record.additionalProperties !== false) {
-    return false;
-  }
-
-  return Object.values(record).every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
-}
-
-function resolveStrictToolFlagForInventory(
-  tools: NonNullable<Context["tools"]>,
-  strict: boolean | null | undefined,
-): boolean | undefined {
-  if (strict !== true) {
-    return strict === false ? false : undefined;
-  }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters))
-    ? true
-    : undefined;
 }
 
 async function processResponsesStream(
@@ -755,6 +730,10 @@ function getPromptCacheRetention(
   return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
 }
 
+function resolveOpenAIReasoningEffort(options: OpenAIResponsesOptions | undefined) {
+  return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -793,18 +772,21 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     params.tools = convertResponsesTools(context.tools, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel),
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+        transport: "stream",
+      }),
     });
   }
   if (model.reasoning) {
-    if (options?.reasoningEffort || options?.reasoningSummary) {
+    if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
       params.reasoning = {
-        effort: options?.reasoningEffort || "medium",
+        effort: resolveOpenAIReasoningEffort(options),
         summary: options?.reasoningSummary || "auto",
       };
       params.include = ["reasoning.encrypted_content"];
     } else if (model.provider !== "github-copilot") {
-      params.reasoning = { effort: "none" };
+      params.reasoning = { effort: "high", summary: "auto" };
+      params.include = ["reasoning.encrypted_content"];
     }
   }
   applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
@@ -1192,6 +1174,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  requiresStringContent: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -1226,6 +1209,7 @@ function getCompat(model: OpenAIModeModel): {
       detected.vercelGatewayRouting,
     supportsStrictMode:
       (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
+    requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
   };
 }
 
@@ -1254,41 +1238,8 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function resolvesToNativeOpenAIStrictTools(model: OpenAIModeModel): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-  if (!capabilities.usesKnownNativeOpenAIRoute) {
-    return false;
-  }
-  return (
-    capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
-    capabilities.provider === "azure-openai" ||
-    capabilities.provider === "azure-openai-responses"
-  );
-}
-
-function resolveOpenAIStrictToolSetting(
-  model: OpenAIModeModel,
-  compat?: ReturnType<typeof getCompat>,
-): boolean | undefined {
-  if (resolvesToNativeOpenAIStrictTools(model)) {
-    return true;
-  }
-  if (compat?.supportsStrictMode) {
-    return false;
-  }
-  return undefined;
+function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
+  return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
 function convertTools(
@@ -1296,16 +1247,19 @@ function convertTools(
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
-  const strict = resolveStrictToolFlagForInventory(
+  const strict = resolveOpenAIStrictToolFlagForInventory(
     tools,
-    resolveOpenAIStrictToolSetting(model, compat),
+    resolveOpenAIStrictToolSetting(model, {
+      transport: "stream",
+      supportsStrictMode: compat?.supportsStrictMode,
+    }),
   );
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
       ...(strict === undefined ? {} : { strict }),
     },
   }));
@@ -1323,9 +1277,12 @@ export function buildOpenAICompletionsParams(
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
+  const messages = convertMessages(model as never, completionsContext, compat as never);
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, completionsContext, compat as never),
+    messages: compat.requiresStringContent
+      ? flattenCompletionMessagesToStringContent(messages)
+      : messages,
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {
@@ -1352,13 +1309,14 @@ export function buildOpenAICompletionsParams(
   if (options?.toolChoice) {
     params.tool_choice = options.toolChoice;
   }
-  if (compat.thinkingFormat === "openrouter" && model.reasoning && options?.reasoningEffort) {
+  const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
+  if (compat.thinkingFormat === "openrouter" && model.reasoning && completionsReasoningEffort) {
     params.reasoning = {
-      effort: mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap),
+      effort: mapReasoningEffort(completionsReasoningEffort, compat.reasoningEffortMap),
     };
-  } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+  } else if (completionsReasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     params.reasoning_effort = mapReasoningEffort(
-      options.reasoningEffort,
+      completionsReasoningEffort,
       compat.reasoningEffortMap,
     );
   }

@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { TELEGRAM_COMMAND_NAME_PATTERN as bundledTelegramCommandNamePattern } from "../../extensions/telegram/channel-config-api.ts";
 import * as telegramCommandConfig from "./telegram-command-config.js";
 
 describe("telegram command config", () => {
-  it("keeps the regex in parity with the bundled telegram contract", () => {
-    expect(telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN.toString()).toBe(
-      bundledTelegramCommandNamePattern.toString(),
-    );
-  });
-
   it("exposes the same regex via the helper", () => {
     expect(telegramCommandConfig.getTelegramCommandNamePattern()).toBe(
       telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN,

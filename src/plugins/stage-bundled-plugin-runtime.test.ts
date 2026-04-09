@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,13 +6,12 @@ import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-ru
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 function makeRepoRoot(prefix: string): string {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(repoRoot);
-  return repoRoot;
+  return makeTrackedTempDir(prefix, tempDirs);
 }
 
 function createDistPluginDir(repoRoot: string, pluginId: string) {
@@ -74,9 +72,7 @@ function expectRuntimeArtifactText(params: {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("stageBundledPluginRuntime", () => {

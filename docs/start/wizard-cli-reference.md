@@ -129,19 +129,6 @@ What you set:
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
-  <Accordion title="Anthropic Claude CLI">
-    Reuses a local Claude CLI login on the gateway host and switches model
-    selection to a canonical `claude-cli/claude-*` ref.
-
-    This is an available local fallback path in `openclaw onboard` and
-    `openclaw configure`. For production, prefer an Anthropic API key.
-
-    - macOS: checks Keychain item "Claude Code-credentials"
-    - Linux and Windows: reuses `~/.claude/.credentials.json` if present
-
-    On macOS, choose "Always Allow" so launchd starts do not block.
-
-  </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
     Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw

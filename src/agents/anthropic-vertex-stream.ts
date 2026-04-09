@@ -4,7 +4,7 @@ import { streamAnthropic, type AnthropicOptions, type Model } from "@mariozechne
 import {
   resolveAnthropicVertexClientRegion,
   resolveAnthropicVertexProjectId,
-} from "../../extensions/anthropic-vertex/api.js";
+} from "../plugin-sdk/anthropic-vertex.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,

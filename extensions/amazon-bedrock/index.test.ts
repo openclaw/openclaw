@@ -33,7 +33,9 @@ async function registerWithConfig(
   });
   await amazonBedrockPlugin.register(api);
   const provider = providers[0];
-  if (!provider) throw new Error("provider registration missing");
+  if (!provider) {
+    throw new Error("provider registration missing");
+  }
   return provider;
 }
 
@@ -124,7 +126,6 @@ describe("amazon-bedrock provider plugin", () => {
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
-      dropThinkingBlocks: true,
     });
   });
 

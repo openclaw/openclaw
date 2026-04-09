@@ -9,8 +9,99 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
-const ZH_NAV_PATH = path.join(SOURCE_DOCS_DIR, ".i18n", "zh-Hans-navigation.json");
-const ZH_TM_PATH = path.join(SOURCE_DOCS_DIR, ".i18n", "zh-CN.tm.jsonl");
+const GENERATED_LOCALES = [
+  {
+    language: "zh-Hans",
+    dir: "zh-CN",
+    navFile: "zh-Hans-navigation.json",
+    tmFile: "zh-CN.tm.jsonl",
+    navMode: "overlay",
+  },
+  {
+    language: "ja",
+    dir: "ja-JP",
+    navFile: "ja-navigation.json",
+    tmFile: "ja-JP.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "es",
+    dir: "es",
+    navFile: "es-navigation.json",
+    tmFile: "es.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "pt-BR",
+    dir: "pt-BR",
+    navFile: "pt-BR-navigation.json",
+    tmFile: "pt-BR.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "ko",
+    dir: "ko",
+    navFile: "ko-navigation.json",
+    tmFile: "ko.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "de",
+    dir: "de",
+    navFile: "de-navigation.json",
+    tmFile: "de.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "fr",
+    dir: "fr",
+    navFile: "fr-navigation.json",
+    tmFile: "fr.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "ar",
+    dir: "ar",
+    navFile: "ar-navigation.json",
+    tmFile: "ar.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "it",
+    dir: "it",
+    navFile: "it-navigation.json",
+    tmFile: "it.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "tr",
+    dir: "tr",
+    navFile: "tr-navigation.json",
+    tmFile: "tr.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "uk",
+    dir: "uk",
+    navFile: "uk-navigation.json",
+    tmFile: "uk.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "id",
+    dir: "id",
+    navFile: "id-navigation.json",
+    tmFile: "id.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "pl",
+    dir: "pl",
+    navFile: "pl-navigation.json",
+    tmFile: "pl.tm.jsonl",
+    navMode: "clone-en",
+  },
+];
 
 function parseArgs(argv) {
   const args = {
@@ -67,28 +158,84 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function prefixLocalePage(entry, localeDir) {
+  if (typeof entry === "string") {
+    return `${localeDir}/${entry}`;
+  }
+  if (Array.isArray(entry)) {
+    return entry.map((item) => prefixLocalePage(item, localeDir));
+  }
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+
+  const clone = { ...entry };
+  if (typeof clone.page === "string") {
+    clone.page = `${localeDir}/${clone.page}`;
+  }
+  if (Array.isArray(clone.pages)) {
+    clone.pages = clone.pages.map((item) => prefixLocalePage(item, localeDir));
+  }
+  return clone;
+}
+
+function cloneEnglishLanguageNav(englishNav, locale) {
+  if (!englishNav) {
+    throw new Error("docs/docs.json is missing navigation.languages.en");
+  }
+  return {
+    ...englishNav,
+    language: locale.language,
+    tabs: Array.isArray(englishNav.tabs)
+      ? englishNav.tabs.map((tab) => ({
+          ...tab,
+          pages: Array.isArray(tab.pages)
+            ? tab.pages.map((entry) => prefixLocalePage(entry, locale.dir))
+            : tab.pages,
+          groups: Array.isArray(tab.groups)
+            ? tab.groups.map((group) => ({
+                ...group,
+                pages: Array.isArray(group.pages)
+                  ? group.pages.map((entry) => prefixLocalePage(entry, locale.dir))
+                  : group.pages,
+              }))
+            : tab.groups,
+        }))
+      : englishNav.tabs,
+  };
+}
+
+function composeLocaleNav(locale, englishNav) {
+  if (locale.navMode === "clone-en") {
+    return cloneEnglishLanguageNav(englishNav, locale);
+  }
+  return readJson(path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile));
+}
+
 function composeDocsConfig() {
   const sourceConfig = readJson(SOURCE_CONFIG_PATH);
-  const zhNavigation = readJson(ZH_NAV_PATH);
   const languages = sourceConfig?.navigation?.languages;
 
   if (!Array.isArray(languages)) {
     throw new Error("docs/docs.json is missing navigation.languages");
   }
 
-  const withoutZh = languages.filter((entry) => entry?.language !== "zh-Hans");
-  const jaIndex = withoutZh.findIndex((entry) => entry?.language === "ja");
-  if (jaIndex === -1) {
-    withoutZh.push(zhNavigation);
+  const englishNav = languages.find((entry) => entry?.language === "en");
+  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
+  const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
+  const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
+  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
+  if (enIndex === -1) {
+    withoutGenerated.push(...generated);
   } else {
-    withoutZh.splice(jaIndex, 0, zhNavigation);
+    withoutGenerated.splice(enIndex + 1, 0, ...generated);
   }
 
   return {
     ...sourceConfig,
     navigation: {
       ...sourceConfig.navigation,
-      languages: withoutZh,
+      languages: withoutGenerated,
     },
   };
 }
@@ -97,25 +244,36 @@ function syncDocsTree(targetRoot) {
   const targetDocsDir = path.join(targetRoot, "docs");
   ensureDir(targetDocsDir);
 
+  const localeFilters = GENERATED_LOCALES.flatMap((entry) => [
+    "--filter",
+    `P ${entry.dir}/`,
+    "--filter",
+    `P .i18n/${entry.tmFile}`,
+    "--exclude",
+    `${entry.dir}/`,
+    "--exclude",
+    `.i18n/${entry.tmFile}`,
+  ]);
+
   run("rsync", [
     "-a",
     "--delete",
     "--filter",
-    "P zh-CN/",
-    "--filter",
-    "P .i18n/zh-CN.tm.jsonl",
+    "P .i18n/README.md",
     "--exclude",
-    "zh-CN/",
-    "--exclude",
-    ".i18n/zh-CN.tm.jsonl",
+    ".i18n/README.md",
+    ...localeFilters,
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
 
-  const targetZhTmPath = path.join(targetDocsDir, ".i18n", "zh-CN.tm.jsonl");
-  if (!fs.existsSync(targetZhTmPath) && fs.existsSync(ZH_TM_PATH)) {
-    ensureDir(path.dirname(targetZhTmPath));
-    fs.copyFileSync(ZH_TM_PATH, targetZhTmPath);
+  for (const locale of GENERATED_LOCALES) {
+    const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);
+    const targetTmPath = path.join(targetDocsDir, ".i18n", locale.tmFile);
+    if (!fs.existsSync(targetTmPath) && fs.existsSync(sourceTmPath)) {
+      ensureDir(path.dirname(targetTmPath));
+      fs.copyFileSync(sourceTmPath, targetTmPath);
+    }
   }
 
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());

@@ -15,7 +15,6 @@ import {
   resolveWebSearchProviderCredential,
   setProviderWebSearchPluginConfigValue,
   setScopedCredentialValue,
-  type SearchConfigRecord,
   type WebSearchProviderSetupContext,
   type WebSearchProviderPlugin,
   writeCache,
@@ -168,15 +167,15 @@ function runXaiWebSearch(params: {
 function resolveXaiToolSearchConfig(ctx: {
   config?: Record<string, unknown>;
   searchConfig?: Record<string, unknown>;
-}): SearchConfigRecord | undefined {
+}) {
   return mergeScopedSearchConfig(
-    ctx.searchConfig as SearchConfigRecord | undefined,
+    ctx.searchConfig,
     "grok",
     resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
-  ) as SearchConfigRecord | undefined;
+  );
 }
 
-function resolveXaiWebSearchCredential(searchConfig?: SearchConfigRecord): string | undefined {
+function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
     path: "tools.web.search.grok.apiKey",
@@ -243,14 +242,11 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
             model: resolveXaiWebSearchModel(searchConfig),
             apiKey,
             timeoutSeconds: resolveTimeoutSeconds(
-              (searchConfig?.timeoutSeconds as number | undefined) ?? undefined,
+              searchConfig?.timeoutSeconds,
               DEFAULT_TIMEOUT_SECONDS,
             ),
             inlineCitations: resolveXaiInlineCitations(searchConfig),
-            cacheTtlMs: resolveCacheTtlMs(
-              (searchConfig?.cacheTtlMinutes as number | undefined) ?? undefined,
-              DEFAULT_CACHE_TTL_MINUTES,
-            ),
+            cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
           });
         },
       };

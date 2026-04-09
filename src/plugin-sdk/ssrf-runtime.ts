@@ -15,9 +15,11 @@ export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  createLegacyPrivateNetworkDoctorContract,
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
   migrateLegacyFlatAllowPrivateNetworkAlias,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "./ssrf-policy.js";

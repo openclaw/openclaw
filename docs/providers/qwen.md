@@ -1,10 +1,9 @@
+---
 summary: "Use Qwen Cloud via OpenClaw's bundled qwen provider"
 read_when:
-
-- You want to use Qwen with OpenClaw
-- You previously used Qwen OAuth
-  title: "Qwen"
-
+  - You want to use Qwen with OpenClaw
+  - You previously used Qwen OAuth
+title: "Qwen"
 ---
 
 # Qwen
@@ -62,6 +61,71 @@ After onboarding, set a default model:
   },
 }
 ```
+
+## Plan types and endpoints
+
+| Plan                       | Region | Auth choice                | Endpoint                                         |
+| -------------------------- | ------ | -------------------------- | ------------------------------------------------ |
+| Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`      |
+| Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
+| Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
+
+The provider auto-selects the endpoint based on your auth choice. Canonical
+choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
+You can override with a custom `baseUrl` in config.
+
+Native Model Studio endpoints advertise streaming usage compatibility on the
+shared `openai-completions` transport. OpenClaw keys that off endpoint
+capabilities now, so DashScope-compatible custom provider ids targeting the
+same native hosts inherit the same streaming-usage behavior instead of
+requiring the built-in `qwen` provider id specifically.
+
+## Get your API key
+
+- **Manage keys**: [home.qwencloud.com/api-keys](https://home.qwencloud.com/api-keys)
+- **Docs**: [docs.qwencloud.com](https://docs.qwencloud.com/developer-guides/getting-started/introduction)
+
+## Built-in catalog
+
+OpenClaw currently ships this bundled Qwen catalog. The configured catalog is
+endpoint-aware: Coding Plan configs omit models that are only known to work on
+the Standard endpoint.
+
+| Model ref                   | Input       | Context   | Notes                                              |
+| --------------------------- | ----------- | --------- | -------------------------------------------------- |
+| `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
+| `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
+| `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
+| `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
+| `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
+| `qwen/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                  |
+| `qwen/glm-5`                | text        | 202,752   | GLM                                                |
+| `qwen/glm-4.7`              | text        | 202,752   | GLM                                                |
+| `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+
+Availability can still vary by endpoint and billing plan even when a model is
+present in the bundled catalog.
+
+Native-streaming usage compatibility applies to both the Coding Plan hosts and
+the Standard DashScope-compatible hosts:
+
+- `https://coding.dashscope.aliyuncs.com/v1`
+- `https://coding-intl.dashscope.aliyuncs.com/v1`
+- `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+
+## Qwen 3.6 Plus availability
+
+`qwen3.6-plus` is available on the Standard (pay-as-you-go) Model Studio
+endpoints:
+
+- China: `dashscope.aliyuncs.com/compatible-mode/v1`
+- Global: `dashscope-intl.aliyuncs.com/compatible-mode/v1`
+
+If the Coding Plan endpoints return an "unsupported model" error for
+`qwen3.6-plus`, switch to Standard (pay-as-you-go) instead of the Coding Plan
+endpoint/key pair.
 
 ## Capability plan
 
@@ -123,6 +187,15 @@ Current bundled Qwen video-generation limits:
 - Up to **4** input videos
 - Up to **10 seconds** duration
 - Supports `size`, `aspectRatio`, `resolution`, `audio`, and `watermark`
+- Reference image/video mode currently requires **remote http(s) URLs**. Local
+  file paths are rejected up front because the DashScope video endpoint does not
+  accept uploaded local buffers for those references.
 
-See [Qwen / Model Studio](/providers/qwen_modelstudio) for endpoint-level detail
-and compatibility notes.
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Environment note
+
+If the Gateway runs as a daemon (launchd/systemd), make sure `QWEN_API_KEY` is
+available to that process (for example, in `~/.openclaw/.env` or via
+`env.shellEnv`).

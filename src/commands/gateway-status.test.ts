@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
+import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -38,6 +39,13 @@ const mocks = vi.hoisted(() => {
       stderr: [],
       stop: sshStop,
     })),
+    loadGatewayTlsRuntime: vi.fn(
+      async (): Promise<GatewayTlsRuntime> => ({
+        enabled: true,
+        required: true,
+        fingerprintSha256: "sha256:local-fingerprint",
+      }),
+    ),
     probeGateway: vi.fn(async (opts: { url: string }): Promise<GatewayProbeResult> => {
       const { url } = opts;
       if (url.includes("127.0.0.1")) {
@@ -125,6 +133,7 @@ const {
   sshStop,
   resolveSshConfig,
   startSshPortForward,
+  loadGatewayTlsRuntime,
   probeGateway,
 } = mocks;
 
@@ -158,6 +167,10 @@ vi.mock("../infra/ssh-tunnel.js", async () => {
 
 vi.mock("../infra/ssh-config.js", () => ({
   resolveSshConfig: mocks.resolveSshConfig,
+}));
+
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -628,6 +641,69 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
+  });
+
+  it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    loadGatewayTlsRuntime.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: "sha256:local-fingerprint",
+        timeoutMs: 15_000,
+      }),
+    );
+  });
+
+  it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockClear();
+    loadGatewayTlsRuntime.mockResolvedValueOnce({
+      enabled: false,
+      required: true,
+      error: "gateway tls: cert/key missing",
+    });
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: undefined,
+      }),
+    );
+
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+    };
+    expect(parsed.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "local_tls_runtime_unavailable",
+        targetIds: ["localLoopback"],
+      }),
+    );
+    expect(
+      parsed.warnings?.find((warning) => warning.code === "local_tls_runtime_unavailable")?.message,
+    ).toContain("gateway tls: cert/key missing");
   });
 
   it("passes the full caller timeout through to local loopback probes", async () => {

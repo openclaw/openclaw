@@ -324,6 +324,56 @@ describe("createPluginApprovalHandlers", () => {
     });
   });
 
+  describe("plugin.approval.list", () => {
+    it("lists pending plugin approvals", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const requestOpts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "Desc",
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](requestOpts);
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+          undefined,
+        );
+      });
+
+      const listRespond = vi.fn();
+      await handlers["plugin.approval.list"](
+        createMockOptions("plugin.approval.list", {}, { respond: listRespond }),
+      );
+      expect(listRespond).toHaveBeenCalledWith(
+        true,
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: expect.stringMatching(/^plugin:/),
+            request: expect.objectContaining({
+              title: "Sensitive action",
+              description: "Desc",
+            }),
+          }),
+        ]),
+        undefined,
+      );
+
+      const acceptedCall = respond.mock.calls.find(
+        (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+      );
+      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      manager.resolve(approvalId, "allow-once");
+      await handlerPromise;
+    });
+  });
+
   describe("plugin.approval.waitDecision", () => {
     it("rejects missing id", async () => {
       const handlers = createPluginApprovalHandlers(manager);

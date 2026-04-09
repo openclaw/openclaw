@@ -201,7 +201,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
-    if (!thinking) return "";
+    if (!thinking) {
+      return "";
+    }
     const withoutLabel = thinking.replace(/^Reasoning:\n/, "");
     const plain = withoutLabel.replace(/^_(.*)_$/gm, "$1");
     const lines = plain.split("\n").map((line) => `> ${line}`);
@@ -210,9 +212,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
     const parts: string[] = [];
-    if (thinking) parts.push(formatReasoningPrefix(thinking));
-    if (thinking && answer) parts.push("\n\n---\n\n");
-    if (answer) parts.push(answer);
+    if (thinking) {
+      parts.push(formatReasoningPrefix(thinking));
+    }
+    if (thinking && answer) {
+      parts.push("\n\n---\n\n");
+    }
+    if (answer) {
+      parts.push(answer);
+    }
     return parts.join("");
   };
 
@@ -250,7 +258,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const queueReasoningUpdate = (nextThinking: string) => {
-    if (!nextThinking) return;
+    if (!nextThinking) {
+      return;
+    }
     reasoningText = nextThinking;
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };

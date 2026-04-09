@@ -2,67 +2,60 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import {
+  createEmbeddingDataFetchMock,
+  createGeminiFetchMock,
+  installFetchMock,
+  mockResolvedProviderKey as mockResolvedProviderKeyBase,
+  readFirstFetchRequest,
+} from "./embeddings-provider.test-support.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-const { createOllamaEmbeddingProviderMock } = vi.hoisted(() => ({
+const {
+  bedrockSendMock,
+  createOllamaEmbeddingProviderMock,
+  defaultProviderMock,
+  resolveCredentialsMock,
+} = vi.hoisted(() => ({
+  bedrockSendMock: vi.fn(),
   createOllamaEmbeddingProviderMock: vi.fn(async () => {
     throw new Error("Unexpected ollama provider in embeddings.test.ts");
   }),
-}));
-
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: typeof fetch;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    if (!fetchImpl) {
-      throw new Error("fetch is not available");
-    }
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
+  defaultProviderMock: vi.fn(),
+  resolveCredentialsMock: vi.fn(),
 }));
 
 vi.mock("./embeddings-ollama.js", () => ({
   createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
 }));
 
-const createFetchMock = () =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
-  }));
+vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+  class MockClient {
+    send = bedrockSendMock;
+  }
+  class MockCommand {
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  }
+  return { BedrockRuntimeClient: MockClient, InvokeModelCommand: MockCommand };
+});
 
-const createGeminiFetchMock = () =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ embedding: { values: [1, 2, 3] } }),
-  }));
+vi.mock("@aws-sdk/credential-provider-node", () => ({
+  defaultProvider: defaultProviderMock.mockImplementation(() => resolveCredentialsMock),
+}));
 
-function installFetchMock(fetchMock: typeof globalThis.fetch) {
-  vi.stubGlobal("fetch", fetchMock);
-}
-
-function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
-  const [url, init] = fetchMock.mock.calls[0] ?? [];
-  return { url, init: init as RequestInit | undefined };
-}
+const createFetchMock = () => createEmbeddingDataFetchMock([1, 2, 3]);
 
 type ResolvedProviderAuth = Awaited<ReturnType<typeof authModule.resolveApiKeyForProvider>>;
 
 beforeEach(() => {
   vi.spyOn(authModule, "resolveApiKeyForProvider");
   vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
+  defaultProviderMock.mockImplementation(() => resolveCredentialsMock);
 });
 
 beforeEach(() => {
@@ -82,11 +75,7 @@ function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvid
 }
 
 function mockResolvedProviderKey(apiKey = "provider-key") {
-  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-    apiKey,
-    mode: "api-key",
-    source: "test",
-  });
+  mockResolvedProviderKeyBase(authModule.resolveApiKeyForProvider, apiKey);
 }
 
 function mockMissingLocalEmbeddingDependency() {
@@ -108,7 +97,7 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 
 function expectAutoSelectedProvider(
   result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
-  expectedId: "openai" | "gemini" | "mistral",
+  expectedId: "openai" | "gemini" | "mistral" | "bedrock",
 ) {
   expect(result.requestedProvider).toBe("auto");
   const provider = requireProvider(result);
@@ -166,7 +155,7 @@ describe("embedding provider remote overrides", () => {
 
     expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
     const url = fetchMock.mock.calls[0]?.[0];
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const init = fetchMock.mock.calls[0]?.[1];
     expect(url).toBe("https://example.com/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-key");
@@ -207,7 +196,7 @@ describe("embedding provider remote overrides", () => {
     await provider.embedQuery("hello");
 
     expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledTimes(1);
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const init = fetchMock.mock.calls[0]?.[1];
     const headers = (init?.headers as Record<string, string>) ?? {};
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
@@ -433,6 +422,39 @@ describe("embedding provider auto selection", () => {
       const [url] = fetchMock.mock.calls[0] ?? [];
       expect(url, testCase.name).toBe(testCase.expectedUrl);
     }
+  });
+
+  it("selects Bedrock in auto mode when the AWS credential chain resolves", async () => {
+    bedrockSendMock.mockResolvedValue({
+      body: new TextEncoder().encode(JSON.stringify({ embedding: [1, 2, 3] })),
+    });
+    resolveCredentialsMock.mockResolvedValue({ accessKeyId: "AKIAEXAMPLE" });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    const result = await createAutoProvider();
+    const provider = expectAutoSelectedProvider(result, "bedrock");
+    await provider.embedQuery("hello");
+
+    expect(bedrockSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows non-auth Bedrock setup errors in auto mode", async () => {
+    resolveCredentialsMock.mockResolvedValue({ accessKeyId: "AKIAEXAMPLE" });
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    await expect(
+      createEmbeddingProvider({
+        config: {} as never,
+        provider: "auto",
+        model: "",
+        fallback: "none",
+        outputDimensionality: 768,
+      }),
+    ).rejects.toThrow("Invalid dimensions 768");
   });
 });
 

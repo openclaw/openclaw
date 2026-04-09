@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as tar from "tar";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../test-helpers/fs-fixtures.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
@@ -17,6 +17,7 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
+const tempDirs: string[] = [];
 
 function collectPluginSdkPackageExports(): string[] {
   const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
@@ -65,42 +66,22 @@ function readRootPackageJson(): {
 function readMatrixPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
-  };
 } {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      releaseChecks?: {
-        rootDependencyMirrorAllowlist?: unknown;
-      };
-    };
   };
 }
 
 function readAmazonBedrockPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  openclaw?: {
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
-  };
 } {
   return JSON.parse(
     readFileSync(resolve(REPO_ROOT, "extensions/amazon-bedrock/package.json"), "utf8"),
   ) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      releaseChecks?: {
-        rootDependencyMirrorAllowlist?: unknown;
-      };
-    };
   };
 }
 
@@ -224,20 +205,16 @@ function packOpenClawToTempDir(packDir: string): string {
 async function readPackedRootPackageJson(archivePath: string): Promise<{
   dependencies?: Record<string, string>;
 }> {
-  const extractDir = mkdtempSync(join(os.tmpdir(), "openclaw-packed-root-package-json-"));
-  try {
-    await tar.x({
-      file: archivePath,
-      cwd: extractDir,
-      filter: (entryPath) => entryPath === "package/package.json",
-      strict: true,
-    });
-    return JSON.parse(readFileSync(join(extractDir, "package", "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-    };
-  } finally {
-    rmSync(extractDir, { recursive: true, force: true });
-  }
+  const extractDir = makeTrackedTempDir("openclaw-packed-root-package-json", tempDirs);
+  await tar.x({
+    file: archivePath,
+    cwd: extractDir,
+    filter: (entryPath) => entryPath === "package/package.json",
+    strict: true,
+  });
+  return JSON.parse(readFileSync(join(extractDir, "package", "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
 }
 
 function collectExtensionFiles(dir: string): string[] {
@@ -294,6 +271,10 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
 }
 
 describe("plugin-sdk package contract guardrails", () => {
+  afterEach(() => {
+    cleanupTrackedTempDirs(tempDirs);
+  });
+
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
   });
@@ -326,15 +307,12 @@ describe("plugin-sdk package contract guardrails", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
-    const allowlist = matrixPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
 
-    expect(Array.isArray(allowlist)).toBe(true);
-    const matrixRootMirrorAllowlist = allowlist as string[];
-    expect(matrixRootMirrorAllowlist).toEqual(
-      expect.arrayContaining(["@matrix-org/matrix-sdk-crypto-wasm"]),
-    );
-
-    for (const dep of matrixRootMirrorAllowlist) {
+    for (const dep of [
+      "@matrix-org/matrix-sdk-crypto-wasm",
+      "@matrix-org/matrix-sdk-crypto-nodejs",
+      "matrix-js-sdk",
+    ]) {
       expect(rootRuntimeDeps.get(dep)).toBe(matrixRuntimeDeps.get(dep));
     }
   });
@@ -343,13 +321,8 @@ describe("plugin-sdk package contract guardrails", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const bedrockPackageJson = readAmazonBedrockPackageJson();
     const bedrockRuntimeDeps = collectRuntimeDependencySpecs(bedrockPackageJson);
-    const allowlist = bedrockPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
 
-    expect(Array.isArray(allowlist)).toBe(true);
-    const bedrockRootMirrorAllowlist = allowlist as string[];
-    expect(bedrockRootMirrorAllowlist).toEqual(expect.arrayContaining(["@aws-sdk/client-bedrock"]));
-
-    for (const dep of bedrockRootMirrorAllowlist) {
+    for (const dep of ["@aws-sdk/client-bedrock"]) {
       expect(rootRuntimeDeps.get(dep)).toBe(bedrockRuntimeDeps.get(dep));
     }
   });
@@ -365,26 +338,22 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps matrix crypto WASM in the packed artifact manifest", async () => {
-    const tempRoot = mkdtempSync(join(os.tmpdir(), "openclaw-matrix-wasm-pack-"));
-    try {
-      const packDir = join(tempRoot, "pack");
-      mkdirSync(packDir, { recursive: true });
+    const tempRoot = makeTrackedTempDir("openclaw-matrix-wasm-pack", tempDirs);
+    const packDir = join(tempRoot, "pack");
+    mkdirSync(packDir, { recursive: true });
 
-      const archivePath = packOpenClawToTempDir(packDir);
-      const packedPackageJson = await readPackedRootPackageJson(archivePath);
-      const matrixPackageJson = readMatrixPackageJson();
-      const bedrockPackageJson = readAmazonBedrockPackageJson();
+    const archivePath = packOpenClawToTempDir(packDir);
+    const packedPackageJson = await readPackedRootPackageJson(archivePath);
+    const matrixPackageJson = readMatrixPackageJson();
+    const bedrockPackageJson = readAmazonBedrockPackageJson();
 
-      expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
-        matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
-      );
-      expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
-        bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
-      );
-      expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
+    expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
+      matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
+    );
+    expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
+      bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
+    );
+    expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {

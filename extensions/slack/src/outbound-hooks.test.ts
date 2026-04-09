@@ -33,7 +33,10 @@ const BASE_SLACK_SEND_CTX = {
 } as const;
 
 const sendSlackText = async (ctx: SlackSendTextCtx) => {
-  const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+  const sendText = slackOutbound.sendText;
+  if (!sendText) {
+    throw new Error("slackOutbound.sendText is unavailable");
+  }
   return await sendText({
     cfg: {} as OpenClawConfig,
     ...ctx,
@@ -147,7 +150,10 @@ describe("slack outbound hook wiring", () => {
     };
     getGlobalHookRunnerMock.mockReturnValue(mockRunner);
 
-    const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+    const sendText = slackOutbound.sendText;
+    if (!sendText) {
+      throw new Error("slackOutbound.sendText is unavailable");
+    }
     await sendText({
       cfg: {
         channels: {

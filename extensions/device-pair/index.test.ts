@@ -80,11 +80,11 @@ function createApi(params?: {
     },
     pluginConfig: {
       publicUrl: "ws://51.79.175.165:18789",
-      ...(params?.pluginConfig ?? {}),
+      ...params?.pluginConfig,
     },
     runtime: (params?.runtime ?? {}) as OpenClawPluginApi["runtime"],
     registerCommand: params?.registerCommand,
-  }) as OpenClawPluginApi;
+  });
 }
 
 function registerPairCommand(params?: {

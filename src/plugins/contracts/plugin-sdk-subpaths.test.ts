@@ -290,6 +290,13 @@ describe("plugin-sdk subpath exports", () => {
     ]) {
       expectSourceMentions(subpath, ["chunkTextForOutbound"]);
     }
+    for (const subpath of ["googlechat", "msteams", "nextcloud-talk", "zalouser"]) {
+      expectSourceMentions(subpath, [
+        "resolveInboundMentionDecision",
+        "resolveMentionGating",
+        "resolveMentionGatingWithBypass",
+      ]);
+    }
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "resolveApprovalApprovers",
@@ -310,6 +317,87 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceContract("channel-secret-basic-runtime", {
+      mentions: [
+        "collectSimpleChannelFieldAssignments",
+        "collectConditionalChannelFieldAssignments",
+        "collectSecretInputAssignment",
+        "getChannelSurface",
+        "pushAssignment",
+        "pushInactiveSurfaceWarning",
+        "ResolverContext",
+        "SecretTargetRegistryEntry",
+      ],
+      omits: ["collectNestedChannelTtsAssignments"],
+    });
+    expectSourceContract("channel-secret-runtime", {
+      mentions: [
+        "collectSimpleChannelFieldAssignments",
+        "collectConditionalChannelFieldAssignments",
+        "collectSecretInputAssignment",
+        "getChannelSurface",
+        "pushAssignment",
+        "pushInactiveSurfaceWarning",
+        "ResolverContext",
+        "SecretTargetRegistryEntry",
+      ],
+      omits: [
+        "buildUntrustedChannelMetadata",
+        "evaluateSupplementalContextVisibility",
+        "resolvePinnedMainDmOwnerFromAllowlist",
+        "safeMatchRegex",
+      ],
+    });
+    expectSourceContract("channel-secret-tts-runtime", {
+      mentions: ["collectNestedChannelTtsAssignments"],
+      omits: ["collectSimpleChannelFieldAssignments", "collectConditionalChannelFieldAssignments"],
+    });
+    expectSourceContract("provider-web-search-contract", {
+      mentions: [
+        "createWebSearchProviderContractFields",
+        "enablePluginInConfig",
+        "getScopedCredentialValue",
+        "resolveProviderWebSearchPluginConfig",
+        "setScopedCredentialValue",
+        "setProviderWebSearchPluginConfigValue",
+        "WebSearchProviderPlugin",
+      ],
+      omits: [
+        "buildSearchCacheKey",
+        "withTrustedWebSearchEndpoint",
+        "writeCachedSearchPayload",
+        "resolveCitationRedirectUrl",
+      ],
+    });
+    expectSourceContract("provider-web-search-config-contract", {
+      mentions: [
+        "getScopedCredentialValue",
+        "resolveProviderWebSearchPluginConfig",
+        "setScopedCredentialValue",
+        "setProviderWebSearchPluginConfigValue",
+        "WebSearchProviderPlugin",
+      ],
+      omits: [
+        "enablePluginInConfig",
+        "buildSearchCacheKey",
+        "withTrustedWebSearchEndpoint",
+        "writeCachedSearchPayload",
+        "resolveCitationRedirectUrl",
+      ],
+    });
+    expectSourceContract("provider-web-fetch-contract", {
+      mentions: ["enablePluginInConfig", "WebFetchProviderPlugin"],
+      omits: [
+        "withTrustedWebToolsEndpoint",
+        "readResponseText",
+        "resolveCacheTtlMs",
+        "wrapExternalContent",
+      ],
+    });
+    expectSourceContract("tool-payload", {
+      mentions: ["extractToolPayload", "ToolPayloadCarrier"],
+      omits: ["createAnthropicToolPayloadCompatibilityWrapper", "extractToolSend"],
+    });
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",
@@ -375,7 +463,7 @@ describe("plugin-sdk subpath exports", () => {
         resolve(REPO_ROOT, "extensions"),
         resolve(REPO_ROOT, "test"),
       ],
-      pattern: /openclaw\/plugin-sdk\/channel-runtime/u,
+      pattern: /openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
       exclude: ["src/plugins/sdk-alias.test.ts"],
     });
     expect(matches).toEqual([]);
@@ -419,6 +507,7 @@ describe("plugin-sdk subpath exports", () => {
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
       "resolveInboundSessionEnvelopeContext",
+      "resolveInboundMentionDecision",
       "resolveMentionGating",
       "resolveMentionGatingWithBypass",
       "resolveOutboundSendDep",
@@ -502,9 +591,11 @@ describe("plugin-sdk subpath exports", () => {
       "formatInboundEnvelope",
       "formatInboundFromLabel",
       "formatLocationText",
+      "implicitMentionKindWhen",
       "logInboundDrop",
       "matchesMentionPatterns",
       "matchesMentionWithExplicit",
+      "resolveInboundMentionDecision",
       "normalizeMentionText",
       "resolveInboundDebounceMs",
       "resolveEnvelopeFormatOptions",
@@ -598,7 +689,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("command-auth", [
       "buildCommandTextFromArgs",
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
       "buildCommandsPaginationKeyboard",
+      "buildHelpMessage",
       "buildModelsProviderData",
       "hasControlCommand",
       "listNativeCommandSpecsForConfig",
@@ -615,6 +709,12 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceMentions("command-status", [
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
+      "buildHelpMessage",
+    ]);
+    expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
@@ -662,6 +762,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolvePinnedHostnameWithPolicy",
       "formatErrorMessage",
       "assertHttpUrlTargetsPrivateNetwork",
+      "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
 
@@ -689,7 +790,6 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
       "generatePkceVerifierChallenge",
-      "readClaudeCliCredentialsCached",
       "toFormUrlEncoded",
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
@@ -806,29 +906,28 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps runtime entry subpaths importable", async () => {
-    const [
-      coreSdk,
-      channelActionsSdk,
-      globalSingletonSdk,
-      textRuntimeSdk,
-      pluginEntrySdk,
-      channelLifecycleSdk,
-      channelPairingSdk,
-      channelReplyPipelineSdk,
-      ...representativeModules
-    ] = await Promise.all([
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/global-singleton"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-reply-pipeline"),
-      ...representativeRuntimeSmokeSubpaths.map((id) =>
-        importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
-      ),
-    ]);
+    const coreSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core");
+    const channelActionsSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-actions",
+    );
+    const globalSingletonSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/global-singleton",
+    );
+    const textRuntimeSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime");
+    const pluginEntrySdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry");
+    const channelLifecycleSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-lifecycle",
+    );
+    const channelPairingSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-pairing",
+    );
+    const channelReplyPipelineSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-reply-pipeline",
+    );
+    const representativeModules = [];
+    for (const id of representativeRuntimeSmokeSubpaths) {
+      representativeModules.push(await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`));
+    }
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
     expect(typeof coreSdk.optionalStringEnum).toBe("function");

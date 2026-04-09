@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
@@ -8,31 +9,37 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
 
 type CapabilityProviderRegistryKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityContractKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
+  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
   imageGenerationProviders: "imageGenerationProviders",
   videoGenerationProviders: "videoGenerationProviders",
+  musicGenerationProviders: "musicGenerationProviders",
 };
 
 function resolveBundledCapabilityCompatPluginIds(params: {
@@ -56,8 +63,12 @@ function resolveCapabilityProviderConfig(params: {
   cfg?: OpenClawConfig;
 }) {
   const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
-  const enablementCompat = withBundledPluginEnablementCompat({
+  const allowlistCompat = withBundledPluginAllowlistCompat({
     config: params.cfg,
+    pluginIds,
+  });
+  const enablementCompat = withBundledPluginEnablementCompat({
+    config: allowlistCompat,
     pluginIds,
   });
   return withBundledPluginVitestCompat({

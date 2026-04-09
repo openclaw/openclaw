@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  classifyProviderFailoverReasonWithPlugin: () => null,
-  matchesProviderContextOverflowWithPlugin: () => false,
+const hoisted = vi.hoisted(() => ({
+  classifyProviderFailoverReasonWithPlugin: vi.fn(() => null),
+  matchesProviderContextOverflowWithPlugin: vi.fn(() => false),
 }));
+
+vi.mock("../../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+    "../../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    classifyProviderFailoverReasonWithPlugin: hoisted.classifyProviderFailoverReasonWithPlugin,
+    matchesProviderContextOverflowWithPlugin: hoisted.matchesProviderContextOverflowWithPlugin,
+  };
+});
 
 import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
 import {
@@ -12,6 +23,15 @@ import {
 } from "./provider-error-patterns.js";
 
 describe("matchesProviderContextOverflow", () => {
+  it("skips provider hook dispatch for unrelated errors", () => {
+    hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
+
+    expect(
+      matchesProviderContextOverflow("Permission denied for /root/oc-acp-write-should-fail.txt."),
+    ).toBe(false);
+    expect(hoisted.matchesProviderContextOverflowWithPlugin).not.toHaveBeenCalled();
+  });
+
   it.each([
     // AWS Bedrock
     "ValidationException: The input is too long for the model",
@@ -37,9 +57,11 @@ describe("matchesProviderContextOverflow", () => {
   });
 
   it("does not match unrelated errors", () => {
+    hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
     expect(matchesProviderContextOverflow("rate limit exceeded")).toBe(false);
     expect(matchesProviderContextOverflow("invalid api key")).toBe(false);
     expect(matchesProviderContextOverflow("internal server error")).toBe(false);
+    expect(hoisted.matchesProviderContextOverflowWithPlugin).not.toHaveBeenCalled();
   });
 });
 

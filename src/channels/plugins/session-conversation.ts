@@ -1,15 +1,16 @@
-import { fileURLToPath } from "node:url";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
-import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../../plugins/bundled-plugin-metadata.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
-import { getChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
+import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
 export type ResolvedSessionConversation = {
   id: string;
@@ -47,7 +48,6 @@ type BundledSessionKeyModule = {
   ) => SessionConversationHookResult | null;
 };
 
-const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
@@ -58,14 +58,15 @@ function normalizeResolvedChannel(channel: string): string {
   return (
     normalizeAnyChannelId(channel) ??
     normalizeChatChannelId(channel) ??
-    channel.trim().toLowerCase()
+    normalizeOptionalLowercaseString(channel) ??
+    ""
   );
 }
 
 function getMessagingAdapter(channel: string) {
   const normalizedChannel = normalizeResolvedChannel(channel);
   try {
-    return getChannelPlugin(normalizedChannel)?.messaging;
+    return getLoadedChannelPlugin(normalizedChannel)?.messaging;
   } catch {
     return undefined;
   }
@@ -119,10 +120,10 @@ function normalizeSessionConversationResolution(
 
   return {
     id: resolved.id.trim(),
-    threadId: resolved.threadId?.trim() || undefined,
+    threadId: normalizeOptionalString(resolved.threadId),
     baseConversationId:
-      resolved.baseConversationId?.trim() ||
-      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ||
+      normalizeOptionalString(resolved.baseConversationId) ??
+      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ??
       resolved.id.trim(),
     parentConversationCandidates: dedupeConversationIds(
       resolved.parentConversationCandidates ?? [],
@@ -140,16 +141,6 @@ function resolveBundledSessionConversationFallback(params: {
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
   const dirName = normalizeResolvedChannel(params.channel);
-  if (
-    !resolveBundledPluginPublicSurfacePath({
-      rootDir: OPENCLAW_PACKAGE_ROOT,
-      bundledPluginsDir: resolveBundledPluginsDir(),
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })
-  ) {
-    return null;
-  }
   let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
   try {
     resolveSessionConversation =
@@ -265,7 +256,9 @@ export function resolveSessionThreadInfo(
   }
 
   return {
-    baseSessionKey: resolved.threadId ? resolved.baseSessionKey : sessionKey?.trim() || undefined,
+    baseSessionKey: resolved.threadId
+      ? resolved.baseSessionKey
+      : normalizeOptionalString(sessionKey),
     threadId: resolved.threadId,
   };
 }

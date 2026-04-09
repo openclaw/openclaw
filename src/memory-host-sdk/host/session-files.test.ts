@@ -89,6 +89,7 @@ describe("buildSessionEntry", () => {
     // Content line 2 → JSONL line 7 (the second user message)
     expect(entry!.lineMap).toBeDefined();
     expect(entry!.lineMap).toEqual([4, 6, 7]);
+    expect(entry!.messageTimestampsMs).toEqual([0, 0, 0]);
   });
 
   it("returns empty lineMap when no messages are found", async () => {
@@ -103,6 +104,7 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry!.content).toBe("");
     expect(entry!.lineMap).toEqual([]);
+    expect(entry!.messageTimestampsMs).toEqual([]);
   });
 
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {
@@ -119,5 +121,33 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
     expect(entry!.lineMap).toEqual([3, 5]);
+    expect(entry!.messageTimestampsMs).toEqual([0, 0]);
+  });
+
+  it("captures message timestamps when present", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-04-05T10:00:00.000Z",
+        message: { role: "user", content: "First" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          timestamp: "2026-04-05T10:01:00.000Z",
+          content: "Second",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "timestamps.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.messageTimestampsMs).toEqual([
+      Date.parse("2026-04-05T10:00:00.000Z"),
+      Date.parse("2026-04-05T10:01:00.000Z"),
+    ]);
   });
 });
