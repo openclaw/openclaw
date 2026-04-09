@@ -307,7 +307,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     steerMessage: triggerMessage,
     internalEvents,
     summaryLine: params.handle.taskLabel,
-    requesterSessionOrigin: params.handle.requesterOrigin,
     requesterOrigin: params.handle.requesterOrigin,
     completionDirectOrigin: params.handle.requesterOrigin,
     directOrigin: params.handle.requesterOrigin,
