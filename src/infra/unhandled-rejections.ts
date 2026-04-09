@@ -9,8 +9,10 @@ import {
 } from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 
 const handlers = new Set<UnhandledRejectionHandler>();
+const uncaughtExceptionHandlers = new Set<UncaughtExceptionHandler>();
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -320,6 +322,13 @@ export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHan
   };
 }
 
+export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+  uncaughtExceptionHandlers.add(handler);
+  return () => {
+    uncaughtExceptionHandlers.delete(handler);
+  };
+}
+
 export function isUnhandledRejectionHandled(reason: unknown): boolean {
   for (const handler of handlers) {
     try {
@@ -329,6 +338,22 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
     } catch (err) {
       console.error(
         "[openclaw] Unhandled rejection handler failed:",
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
+    }
+  }
+  return false;
+}
+
+export function isUncaughtExceptionHandled(error: unknown): boolean {
+  for (const handler of uncaughtExceptionHandlers) {
+    try {
+      if (handler(error)) {
+        return true;
+      }
+    } catch (err) {
+      console.error(
+        "[openclaw] Uncaught exception handler failed:",
         err instanceof Error ? (err.stack ?? err.message) : err,
       );
     }

@@ -42,24 +42,40 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
   })),
 }));
 
-const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnhandledRejection } =
-  vi.hoisted(() => {
-    let handler: ((reason: unknown) => boolean) | undefined;
-    return {
-      registerUnhandledRejectionHandlerMock: vi.fn((next: (reason: unknown) => boolean) => {
-        handler = next;
-        return () => {
-          if (handler === next) {
-            handler = undefined;
-          }
-        };
-      }),
-      emitUnhandledRejection: (reason: unknown) => handler?.(reason) ?? false,
-      resetUnhandledRejection: () => {
-        handler = undefined;
-      },
-    };
-  });
+const {
+  registerUnhandledRejectionHandlerMock,
+  registerUncaughtExceptionHandlerMock,
+  emitUnhandledRejection,
+  emitUncaughtException,
+  resetProcessErrorHandlers,
+} = vi.hoisted(() => {
+  let unhandledRejectionHandler: ((reason: unknown) => boolean) | undefined;
+  let uncaughtExceptionHandler: ((error: unknown) => boolean) | undefined;
+  return {
+    registerUnhandledRejectionHandlerMock: vi.fn((next: (reason: unknown) => boolean) => {
+      unhandledRejectionHandler = next;
+      return () => {
+        if (unhandledRejectionHandler === next) {
+          unhandledRejectionHandler = undefined;
+        }
+      };
+    }),
+    registerUncaughtExceptionHandlerMock: vi.fn((next: (error: unknown) => boolean) => {
+      uncaughtExceptionHandler = next;
+      return () => {
+        if (uncaughtExceptionHandler === next) {
+          uncaughtExceptionHandler = undefined;
+        }
+      };
+    }),
+    emitUnhandledRejection: (reason: unknown) => unhandledRejectionHandler?.(reason) ?? false,
+    emitUncaughtException: (error: unknown) => uncaughtExceptionHandler?.(error) ?? false,
+    resetProcessErrorHandlers: () => {
+      unhandledRejectionHandler = undefined;
+      uncaughtExceptionHandler = undefined;
+    },
+  };
+});
 
 const { createTelegramBotErrors } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
@@ -315,6 +331,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     computeBackoff,
     sleepWithAbort,
     registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
+    registerUncaughtExceptionHandler: registerUncaughtExceptionHandlerMock,
   };
 });
 
@@ -360,7 +377,8 @@ describe("monitorTelegramProvider (grammY)", () => {
       sourceFetch: globalThis.fetch,
     }));
     registerUnhandledRejectionHandlerMock.mockClear();
-    resetUnhandledRejection();
+    registerUncaughtExceptionHandlerMock.mockClear();
+    resetProcessErrorHandlers();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -592,6 +610,22 @@ describe("monitorTelegramProvider (grammY)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("force-restarts polling when uncaught network exception stalls runner", async () => {
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceWithStalledPollingRunner();
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await firstCycle.waitForRunStart();
+
+    expect(emitUncaughtException(await makeTaggedPollingFetchError())).toBe(true);
+    expect(firstCycle.stop).toHaveBeenCalledTimes(1);
+    await secondCycle.waitForRunStart();
+    abort.abort();
+    await monitor;
+    expectRecoverableRetryState(2);
   });
 
   it("rebuilds the resolved transport after an unhandled polling network rejection", async () => {

@@ -6,7 +6,10 @@ import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import {
+  registerUnhandledRejectionHandler,
+  registerUncaughtExceptionHandler,
+} from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -103,7 +106,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSessionInstance | undefined;
 
-  const unregisterHandler = registerUnhandledRejectionHandler((err) => {
+  const handlePollingNetworkFailure = (err: unknown, label: string) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
     const isTelegramPollingError = isTelegramPollingNetworkError(err);
     if (isGrammyHttpError(err) && isNetworkError && isTelegramPollingError) {
@@ -118,14 +121,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       pollingSession?.abortActiveFetch();
       void activeRunner.stop().catch(() => {});
       log("[telegram][diag] marking transport dirty after polling network failure");
-      log(
-        `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
-      );
+      log(`[telegram] Restarting polling after ${label}: ${formatErrorMessage(err)}`);
       return true;
     }
 
     return false;
-  });
+  };
+
+  const unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((err) =>
+    handlePollingNetworkFailure(err, "unhandled network error"),
+  );
+  const unregisterUncaughtExceptionHandler = registerUncaughtExceptionHandler((err) =>
+    handlePollingNetworkFailure(err, "uncaught network error"),
+  );
 
   try {
     const cfg = opts.config ?? loadConfig();
@@ -245,6 +253,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
-    unregisterHandler();
+    unregisterUnhandledRejectionHandler();
+    unregisterUncaughtExceptionHandler();
   }
 }
