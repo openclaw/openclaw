@@ -225,6 +225,35 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("accepts `media` as alias of mediaUrl for gateway send", async () => {
+    mockDeliverySuccess("m-media-field");
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      media: "https://example.com/from-media-field.png",
+      channel: "slack",
+      idempotencyKey: "idem-media-field",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "",
+            mediaUrl: "https://example.com/from-media-field.png",
+            mediaUrls: undefined,
+          },
+        ],
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-media-field" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("forwards gateway client scopes into outbound delivery", async () => {
     mockDeliverySuccess("m-scope");
 

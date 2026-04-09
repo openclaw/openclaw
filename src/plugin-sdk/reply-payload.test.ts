@@ -7,6 +7,7 @@ import {
   hasOutboundReplyContent,
   hasOutboundText,
   isNumericTargetId,
+  normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
@@ -67,6 +68,36 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     expect(isNumericTargetId("  987  ")).toBe(true);
     expect(isNumericTargetId("ab12")).toBe(false);
     expect(isNumericTargetId("")).toBe(false);
+  });
+});
+
+describe("normalizeOutboundReplyPayload", () => {
+  it("maps `media` to mediaUrl when mediaUrl is absent", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        text: "hi",
+        media: "/data/photo.jpg",
+      }),
+    ).toEqual({
+      text: "hi",
+      mediaUrls: undefined,
+      mediaUrl: "/data/photo.jpg",
+      replyToId: undefined,
+    });
+  });
+
+  it("prefers explicit mediaUrl over `media`", () => {
+    expect(
+      normalizeOutboundReplyPayload({
+        mediaUrl: "https://a/x.png",
+        media: "https://b/y.png",
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: undefined,
+      mediaUrl: "https://a/x.png",
+      replyToId: undefined,
+    });
   });
 });
 

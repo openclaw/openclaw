@@ -39,6 +39,8 @@ export const SendParamsSchema = Type.Object(
   {
     to: NonEmptyString,
     message: Type.Optional(Type.String()),
+    /** Alias of `mediaUrl` (message tool / clients that use the send attachment field name). */
+    media: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
     gifPlayback: Type.Optional(Type.Boolean()),

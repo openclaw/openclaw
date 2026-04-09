@@ -12,6 +12,7 @@ import {
   hasReplyPayloadContent,
   type InteractiveReply,
 } from "../../interactive/payload.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -52,11 +53,29 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
+/** Map message-tool `media` (and similar loose payloads) onto `mediaUrl` when no explicit media is set. */
+function applyOutboundMediaFieldAlias(payload: ReplyPayload): ReplyPayload {
+  const mediaAlias = readStringValue((payload as Record<string, unknown>).media);
+  if (!mediaAlias) {
+    return payload;
+  }
+  if (payload.mediaUrl?.trim()) {
+    return payload;
+  }
+  if (payload.mediaUrls?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
+    return payload;
+  }
+  const promoted: ReplyPayload = { ...payload, mediaUrl: mediaAlias };
+  delete (promoted as Record<string, unknown>).media;
+  return promoted;
+}
+
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   const normalized: ReplyPayload[] = [];
-  for (const payload of payloads) {
+  for (const entry of payloads) {
+    const payload = applyOutboundMediaFieldAlias(entry);
     if (shouldSuppressReasoningPayload(payload)) {
       continue;
     }

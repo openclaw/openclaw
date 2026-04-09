@@ -61,6 +61,34 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ).toEqual([]);
   });
 
+  it("maps message-tool `media` onto mediaUrl when no explicit mediaUrl/mediaUrls", () => {
+    const out = normalizeReplyPayloadsForDelivery([
+      { text: "Test", media: "/home/user/.openclaw/media/x.jpg" } as unknown as ReplyPayload,
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      text: "Test",
+      mediaUrl: "/home/user/.openclaw/media/x.jpg",
+    });
+    expect(out[0]).not.toHaveProperty("media");
+  });
+
+  it("does not override explicit mediaUrl when `media` is also present", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "hi",
+          mediaUrl: "https://a.example/p.png",
+          media: "https://b.example/ignored.png",
+        } as unknown as ReplyPayload,
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        mediaUrl: "https://a.example/p.png",
+      }),
+    ]);
+  });
+
   it("keeps JSON NO_REPLY objects that include extra fields", () => {
     expect(
       normalizeReplyPayloadsForDelivery([{ text: '{"action":"NO_REPLY","note":"example"}' }]),

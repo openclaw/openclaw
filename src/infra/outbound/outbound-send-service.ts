@@ -140,12 +140,15 @@ export async function executeSendAction(params: {
   }
 
   throwIfAborted(params.ctx.abortSignal);
+  const mediaFallback =
+    typeof params.ctx.params.media === "string" ? params.ctx.params.media : undefined;
   const result: MessageSendResult = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
     content: params.message,
     agentId: params.ctx.agentId,
     mediaUrl: params.mediaUrl || undefined,
+    media: mediaFallback,
     mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,

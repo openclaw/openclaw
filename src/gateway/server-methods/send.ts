@@ -195,6 +195,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const request = p as {
       to: string;
       message?: string;
+      media?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
       gifPlayback?: boolean;
@@ -224,7 +225,8 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
-    const mediaUrl = normalizeOptionalString(request.mediaUrl);
+    const mediaUrl =
+      normalizeOptionalString(request.mediaUrl) ?? normalizeOptionalString(request.media);
     const mediaUrls = Array.isArray(request.mediaUrls)
       ? request.mediaUrls
           .map((entry) => normalizeOptionalString(entry))
