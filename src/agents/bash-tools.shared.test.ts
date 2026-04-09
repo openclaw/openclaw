@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import { resolveRequiredOsHomeDir } from "../infra/home-dir.js";
+import { resolveSandboxWorkdir, resolveWorkdir } from "./bash-tools.shared.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
@@ -12,6 +13,53 @@ async function withTempDir(run: (dir: string) => Promise<void>) {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+describe("resolveWorkdir", () => {
+  it("resolves a valid absolute path unchanged", () => {
+    const result = resolveWorkdir(os.tmpdir(), []);
+    expect(result).toBe(os.tmpdir());
+  });
+
+  it("expands ~ to the OS home directory", () => {
+    // resolveWorkdir anchors ~ to the OS home (not OPENCLAW_HOME)
+    const expected = resolveRequiredOsHomeDir();
+    const result = resolveWorkdir("~", []);
+    expect(result).toBe(expected);
+  });
+
+  it("expands ~/subpath to a path under the OS home directory", async () => {
+    const effectiveHome = resolveRequiredOsHomeDir();
+    const tempName = `openclaw-test-workdir-${Date.now()}`;
+    const fullPath = path.join(effectiveHome, tempName);
+    await mkdir(fullPath, { recursive: true });
+    try {
+      const result = resolveWorkdir(`~/${tempName}`, []);
+      expect(result).toBe(fullPath);
+    } finally {
+      await rm(fullPath, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when workdir does not exist", () => {
+    expect(() => resolveWorkdir("/tmp/openclaw-nonexistent-workdir-test-12345", [])).toThrow(
+      /workdir ".*" is unavailable/,
+    );
+  });
+
+  it("throws when ~ path does not resolve to an existing directory", () => {
+    expect(() => resolveWorkdir("~/openclaw-nonexistent-workdir-test-12345", [])).toThrow(
+      /workdir ".*" is unavailable/,
+    );
+  });
+
+  it("throws when workdir exists but is a file, not a directory", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "not-a-dir.txt");
+      await writeFile(filePath, "");
+      expect(() => resolveWorkdir(filePath, [])).toThrow(/workdir ".*" is not a directory/);
+    });
+  });
+});
 
 describe("resolveSandboxWorkdir", () => {
   it("maps container root workdir to host workspace", async () => {
