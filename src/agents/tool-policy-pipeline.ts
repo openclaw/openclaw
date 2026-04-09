@@ -1,4 +1,5 @@
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
+import { explainToolPolicyNameDecision } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import {
@@ -34,6 +35,12 @@ export type ToolPolicyPipelineStep = {
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
+};
+
+export type ToolPolicyPipelineAudit = {
+  decision: "allow" | "deny";
+  matchedBy: string;
+  rule?: string;
 };
 
 export function buildDefaultToolPolicyPipelineSteps(params: {
@@ -155,6 +162,67 @@ export function applyToolPolicyPipeline(params: {
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
   }
   return filtered;
+}
+
+export function explainToolPolicyPipelineDecision(params: {
+  toolName: string;
+  tools: AnyAgentTool[];
+  toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
+  steps: ToolPolicyPipelineStep[];
+}): ToolPolicyPipelineAudit {
+  const coreToolNames = new Set(
+    params.tools
+      .filter((tool) => !params.toolMeta(tool))
+      .map((tool) => normalizeToolName(tool.name))
+      .filter(Boolean),
+  );
+
+  const pluginGroups = buildPluginToolGroups({
+    tools: params.tools,
+    toolMeta: params.toolMeta,
+  });
+
+  let lastAllow: { matchedBy: string; rule?: string } | undefined;
+  let lastPolicyLabel: string | undefined;
+  for (const step of params.steps) {
+    if (!step.policy) {
+      continue;
+    }
+
+    let policy: ToolPolicyLike | undefined = step.policy;
+    if (step.stripPluginOnlyAllowlist) {
+      policy = analyzeAllowlistByToolType(policy, pluginGroups, coreToolNames).policy;
+    }
+
+    const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    if (!expanded) {
+      continue;
+    }
+
+    lastPolicyLabel = step.label;
+    const decision = explainToolPolicyNameDecision(params.toolName, expanded);
+    if (!decision.allowed) {
+      return {
+        decision: "deny",
+        matchedBy: step.label,
+        ...(decision.rule ? { rule: decision.rule } : {}),
+      };
+    }
+    if (decision.reason === "allow_rule") {
+      lastAllow = {
+        matchedBy: step.label,
+        ...(decision.rule ? { rule: decision.rule } : {}),
+      };
+    }
+  }
+
+  if (lastAllow) {
+    return { decision: "allow", ...lastAllow };
+  }
+  if (lastPolicyLabel) {
+    return { decision: "allow", matchedBy: lastPolicyLabel };
+  }
+  return { decision: "allow", matchedBy: "default" };
 }
 
 function shouldWarnAboutUnknownAllowlist(params: {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "vitest";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  explainToolPolicyPipelineDecision,
   resetToolPolicyWarningCacheForTest,
 } from "./tool-policy-pipeline.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
@@ -265,5 +266,48 @@ describe("tool-policy-pipeline", () => {
       ],
     });
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
+  });
+
+  test("explains matched allow rules for surviving tools", () => {
+    const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
+    const audit = explainToolPolicyPipelineDecision({
+      toolName: "exec",
+      tools: tools as any,
+      toolMeta: () => undefined,
+      steps: [
+        {
+          policy: { allow: ["exec"] },
+          label: "agents.main.tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(audit).toEqual({
+      decision: "allow",
+      matchedBy: "agents.main.tools.allow",
+      rule: "exec",
+    });
+  });
+
+  test("explains allowlist-miss denies with the responsible policy label", () => {
+    const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
+    const audit = explainToolPolicyPipelineDecision({
+      toolName: "process",
+      tools: tools as any,
+      toolMeta: () => undefined,
+      steps: [
+        {
+          policy: { allow: ["exec"] },
+          label: "tools.profile (minimal)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(audit).toEqual({
+      decision: "deny",
+      matchedBy: "tools.profile (minimal)",
+    });
   });
 });
