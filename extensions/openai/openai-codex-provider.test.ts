@@ -170,6 +170,26 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves gpt-5.4-pro with pro pricing when no codex template exists in registry", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-pro",
+      modelRegistry: {
+        find: () => undefined,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4-pro",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
     const provider = buildOpenAICodexProviderPlugin();
 

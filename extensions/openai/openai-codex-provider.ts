@@ -180,7 +180,7 @@ function resolveCodexForwardCompatModel(
       baseUrl: OPENAI_CODEX_BASE_URL,
       reasoning: true,
       input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: patch?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
