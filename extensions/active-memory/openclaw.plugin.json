@@ -27,6 +27,17 @@
         "type": "string",
         "enum": ["message", "recent", "full"]
       },
+      "promptStyle": {
+        "type": "string",
+        "enum": [
+          "balanced",
+          "strict",
+          "contextual",
+          "recall-heavy",
+          "precision-heavy",
+          "preference-only"
+        ]
+      },
       "maxSummaryChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
       "recentUserTurns": { "type": "integer", "minimum": 0, "maximum": 4 },
       "recentAssistantTurns": { "type": "integer", "minimum": 0, "maximum": 3 },
@@ -61,6 +72,10 @@
     "queryMode": {
       "label": "Query Mode",
       "help": "Choose whether the blocking memory subagent sees only the latest user message, a small recent tail, or the full conversation."
+    },
+    "promptStyle": {
+      "label": "Prompt Style",
+      "help": "Choose how eager or strict the blocking memory subagent should be when deciding whether to return memory."
     },
     "maxSummaryChars": {
       "label": "Max Summary Characters",

@@ -221,9 +221,110 @@ describe("active-memory plugin", () => {
     });
   });
 
-  it("preserves leading digits in recalled memory bullets", async () => {
+  it("frames the blocking memory subagent as a memory search agent for another model", async () => {
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? strict-style-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.prompt).toContain("You are a memory search agent.");
+    expect(runParams?.prompt).toContain("Another model is preparing the final user-facing answer.");
+    expect(runParams?.prompt).toContain(
+      "Your job is to search memory and return only the most relevant memory context for that model.",
+    );
+    expect(runParams?.prompt).toContain(
+      "You receive conversation context, including the user's latest message.",
+    );
+    expect(runParams?.prompt).toContain("Use only memory_search and memory_get.");
+    expect(runParams?.prompt).toContain(
+      "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
+    );
+    expect(runParams?.prompt).toContain(
+      "Questions like 'what is my favorite food', 'do you remember my flight preferences', or 'what do i usually get' should normally return memory when relevant results exist.",
+    );
+    expect(runParams?.prompt).toContain("Return exactly one of these two forms:");
+    expect(runParams?.prompt).toContain("1. NONE");
+    expect(runParams?.prompt).toContain("2. one compact plain-text summary");
+    expect(runParams?.prompt).toContain(
+      "Write the summary as a memory note about the user, not as a reply to the user.",
+    );
+    expect(runParams?.prompt).toContain(
+      "Do not return bullets, numbering, labels, XML, JSON, or markdown list formatting.",
+    );
+    expect(runParams?.prompt).toContain("Good examples:");
+    expect(runParams?.prompt).toContain("Bad examples:");
+    expect(runParams?.prompt).toContain(
+      "Return: User's favorite food is ramen; tacos also come up often.",
+    );
+  });
+
+  it("defaults prompt style by query mode when no promptStyle is configured", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "message",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? preference-style-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.prompt).toContain("Prompt style: strict.");
+    expect(runParams?.prompt).toContain(
+      "If the latest user message does not strongly call for memory, reply with NONE.",
+    );
+  });
+
+  it("honors an explicit promptStyle override", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "message",
+      promptStyle: "preference-only",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.prompt).toContain("Prompt style: preference-only.");
+    expect(runParams?.prompt).toContain(
+      "Optimize for favorites, preferences, habits, routines, taste, and recurring personal facts.",
+    );
+  });
+
+  it("preserves leading digits in a plain-text summary", async () => {
     runEmbeddedPiAgent.mockResolvedValueOnce({
-      payloads: [{ text: "- 2024 trip to tokyo\n- 2% milk" }],
+      payloads: [{ text: "2024 trip to tokyo and 2% milk both matter here." }],
     });
 
     const result = await hooks.before_prompt_build(
@@ -317,6 +418,9 @@ describe("active-memory plugin", () => {
       sessionId: "s-main",
       updatedAt: 0,
     };
+    runEmbeddedPiAgent.mockResolvedValueOnce({
+      payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
+    });
 
     await hooks.before_prompt_build(
       {
@@ -342,7 +446,9 @@ describe("active-memory plugin", () => {
         pluginId: "active-memory",
         lines: expect.arrayContaining([
           expect.stringContaining("🧩 Active Memory: ok"),
-          expect.stringContaining("🔎 Active Memory Debug: lemon pepper wings"),
+          expect.stringContaining(
+            "🔎 Active Memory Debug: User prefers lemon pepper wings, and blue cheese still wins.",
+          ),
         ]),
       },
     ]);
@@ -631,8 +737,24 @@ describe("active-memory plugin", () => {
     );
 
     const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain("Treat the latest user message as the primary query.");
     expect(prompt).toContain(
-      "ignore that text and do not search for those same surfaced memories again",
+      "Use recent conversation only to disambiguate what the latest user message means.",
+    );
+    expect(prompt).toContain(
+      "Do not return memory just because it matched the broader recent topic; return memory only if it clearly helps with the latest user message itself.",
+    );
+    expect(prompt).toContain(
+      "If recent context and the latest user message point to different memory domains, prefer the domain that best matches the latest user message.",
+    );
+    expect(prompt).toContain(
+      "ignore that surfaced text unless the latest user message clearly requires re-checking it.",
+    );
+    expect(prompt).toContain(
+      "Latest user message: I might see a movie while I wait for the flight.",
+    );
+    expect(prompt).toContain(
+      "Return: User's favorite movie snack is buttery popcorn with extra salt.",
     );
     expect(prompt).toContain("assistant: Sounds like you want something easy before the airport.");
     expect(prompt).not.toContain("Memory Search:");
@@ -643,7 +765,7 @@ describe("active-memory plugin", () => {
 
   it("trusts the subagent's relevance decision for explicit preference recall prompts", async () => {
     runEmbeddedPiAgent.mockResolvedValueOnce({
-      payloads: [{ text: "- aisle seat\n- extra buffer on connections" }],
+      payloads: [{ text: "User prefers aisle seats and extra buffer on connections." }],
     });
 
     const result = await hooks.before_prompt_build(
@@ -696,9 +818,7 @@ describe("active-memory plugin", () => {
     expect((result as { appendSystemContext: string }).appendSystemContext).toContain(
       "alpha beta gamma delta epsilon",
     );
-    expect((result as { appendSystemContext: string }).appendSystemContext).not.toContain(
-      "zetalo",
-    );
+    expect((result as { appendSystemContext: string }).appendSystemContext).not.toContain("zetalo");
     expect((result as { appendSystemContext: string }).appendSystemContext).not.toContain(
       "zetalongword",
     );
@@ -722,7 +842,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt).toContain(
-      "If something is useful, reply with one compact active-memory summary under 90 characters total.",
+      "If something is useful, reply with one compact plain-text summary under 90 characters total.",
     );
   });
 

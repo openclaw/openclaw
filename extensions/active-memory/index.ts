@@ -53,6 +53,13 @@ type ActiveRecallPluginConfig = {
   model?: string;
   modelFallbackPolicy?: "default-remote" | "resolved-only";
   allowedChatTypes?: Array<"direct" | "group" | "channel">;
+  promptStyle?:
+    | "balanced"
+    | "strict"
+    | "contextual"
+    | "recall-heavy"
+    | "precision-heavy"
+    | "preference-only";
   timeoutMs?: number;
   queryMode?: "message" | "recent" | "full";
   maxSummaryChars?: number;
@@ -71,6 +78,13 @@ type ResolvedActiveRecallPluginConfig = {
   model?: string;
   modelFallbackPolicy: "default-remote" | "resolved-only";
   allowedChatTypes: Array<"direct" | "group" | "channel">;
+  promptStyle:
+    | "balanced"
+    | "strict"
+    | "contextual"
+    | "recall-heavy"
+    | "precision-heavy"
+    | "preference-only";
   timeoutMs: number;
   queryMode: "message" | "recent" | "full";
   maxSummaryChars: number;
@@ -108,6 +122,13 @@ type CachedActiveRecallResult = {
 };
 
 type ActiveMemoryChatType = "direct" | "group" | "channel";
+type ActiveMemoryPromptStyle =
+  | "balanced"
+  | "strict"
+  | "contextual"
+  | "recall-heavy"
+  | "precision-heavy"
+  | "preference-only";
 
 const ACTIVE_MEMORY_STATUS_PREFIX = "🧩 Active Memory:";
 const ACTIVE_MEMORY_DEBUG_PREFIX = "🔎 Active Memory Debug:";
@@ -230,6 +251,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     modelFallbackPolicy:
       raw.modelFallbackPolicy === "resolved-only" ? "resolved-only" : "default-remote",
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
+    promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
@@ -255,6 +277,78 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
   };
+}
+
+function resolvePromptStyle(
+  promptStyle: unknown,
+  queryMode: ActiveRecallPluginConfig["queryMode"],
+): ActiveMemoryPromptStyle {
+  if (
+    promptStyle === "balanced" ||
+    promptStyle === "strict" ||
+    promptStyle === "contextual" ||
+    promptStyle === "recall-heavy" ||
+    promptStyle === "precision-heavy" ||
+    promptStyle === "preference-only"
+  ) {
+    return promptStyle;
+  }
+  if (queryMode === "message") {
+    return "strict";
+  }
+  if (queryMode === "full") {
+    return "contextual";
+  }
+  return "balanced";
+}
+
+function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
+  switch (style) {
+    case "strict":
+      return [
+        "Treat the latest user message as the only primary query.",
+        "Use any additional context only for narrow disambiguation.",
+        "Do not return memory just because it matches the broader conversation topic.",
+        "Return memory only if it clearly helps with the latest user message itself.",
+        "If the latest user message does not strongly call for memory, reply with NONE.",
+        "If the connection is weak, indirect, or speculative, reply with NONE.",
+      ];
+    case "contextual":
+      return [
+        "Treat the latest user message as the primary query.",
+        "Use recent conversation to understand continuity and intent, but do not let older context override the latest user message.",
+        "When the latest message shifts domains, prefer memory that matches the new domain.",
+        "Return memory when it materially helps the other model answer the latest user message or maintain clear conversational continuity.",
+      ];
+    case "recall-heavy":
+      return [
+        "Treat the latest user message as the primary query, but be willing to surface memory on softer plausible matches when it would add useful continuity or personalization.",
+        "If there is a credible recurring preference, habit, or user-context match, lean toward returning memory instead of NONE.",
+        "Still prefer the memory domain that best matches the latest user message.",
+      ];
+    case "precision-heavy":
+      return [
+        "Treat the latest user message as the primary query.",
+        "Use recent conversation only for narrow disambiguation.",
+        "Aggressively prefer NONE unless the memory clearly and directly helps with the latest user message.",
+        "Do not return memory for soft, speculative, or loosely adjacent matches.",
+      ];
+    case "preference-only":
+      return [
+        "Treat the latest user message as the primary query.",
+        "Optimize for favorites, preferences, habits, routines, taste, and recurring personal facts.",
+        "If relevant memory is mostly a stable user preference or recurring habit, lean toward returning it.",
+        "If the strongest match is only a one-off historical fact and not a recurring preference or habit, prefer NONE unless the latest user message clearly asks for that fact.",
+      ];
+    case "balanced":
+    default:
+      return [
+        "Treat the latest user message as the primary query.",
+        "Use recent conversation only to disambiguate what the latest user message means.",
+        "Do not return memory just because it matched the broader recent topic; return memory only if it clearly helps with the latest user message itself.",
+        "If recent context and the latest user message point to different memory domains, prefer the domain that best matches the latest user message.",
+      ];
+  }
 }
 
 function isEnabledForAgent(
@@ -554,29 +648,11 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (normalizeNoRecallValue(trimmed)) {
     return null;
   }
-
-  const lines: string[] = [];
-  for (const rawLine of trimmed.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    if (/^(memories|memory|relevant memories|active memory)\s*:/i.test(line)) {
-      continue;
-    }
-    const normalized = line
-      .replace(/^[-*•]\s+/, "")
-      .replace(/^\d+[.)]\s+/, "")
-      .trim();
-    if (!normalized || normalizeNoRecallValue(normalized)) {
-      continue;
-    }
-    lines.push(normalized);
-  }
-  if (lines.length === 0) {
+  const singleLine = trimmed.replace(/\s+/g, " ").trim();
+  if (!singleLine || normalizeNoRecallValue(singleLine)) {
     return null;
   }
-  return lines.join("; ").replace(/\s+/g, " ").trim() || null;
+  return singleLine;
 }
 
 function truncateSummary(summary: string, maxSummaryChars: number): string {
@@ -833,16 +909,50 @@ async function runRecallSidecar(params: {
     ? path.join(persistedDir!, `${sidecarSessionId}.jsonl`)
     : path.join(tempDir!, "session.jsonl");
   const prompt = [
-    "You are Active Memory, a fast sidecar memory model.",
+    "You are a memory search agent.",
+    "Another model is preparing the final user-facing answer.",
+    "Your job is to search memory and return only the most relevant memory context for that model.",
+    "You receive conversation context, including the user's latest message.",
     "Use only memory_search and memory_get.",
-    "Search for memories relevant to the user's latest message.",
-    "If the provided conversation context already contains recalled-memory summaries, debug output, or prior memory/tool traces, ignore that text and do not search for those same surfaced memories again unless the latest user message clearly requires re-checking them.",
-    "Return active memory only if it would concretely change or personalize the answer.",
-    "If the connection is weak, broad, or only vaguely related, reply with NONE.",
-    "If nothing seems strongly useful, reply with NONE.",
-    `If something is useful, reply with one compact active-memory summary under ${params.config.maxSummaryChars} characters total.`,
     "Do not answer the user directly.",
+    `Prompt style: ${params.config.promptStyle}.`,
+    ...buildPromptStyleLines(params.config.promptStyle),
+    "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
+    "Questions like 'what is my favorite food', 'do you remember my flight preferences', or 'what do i usually get' should normally return memory when relevant results exist.",
+    "If the provided conversation context already contains recalled-memory summaries, debug output, or prior memory/tool traces, ignore that surfaced text unless the latest user message clearly requires re-checking it.",
+    "Return memory only when it would materially help the other model answer the user's latest message.",
+    "If the connection is weak, broad, or only vaguely related, reply with NONE.",
+    "If nothing clearly useful is found, reply with NONE.",
+    "Return exactly one of these two forms:",
+    "1. NONE",
+    "2. one compact plain-text summary",
+    `If something is useful, reply with one compact plain-text summary under ${params.config.maxSummaryChars} characters total.`,
+    "Write the summary as a memory note about the user, not as a reply to the user.",
     "Do not explain your reasoning.",
+    "Do not return bullets, numbering, labels, XML, JSON, or markdown list formatting.",
+    "Do not prefix the summary with 'Memory:' or any other label.",
+    "",
+    "Good examples:",
+    "User message: What is my favorite food?",
+    "Return: User's favorite food is ramen; tacos also come up often.",
+    "User message: Do you remember my flight preferences?",
+    "Return: User prefers aisle seats and extra buffer over tight connections.",
+    "Recent context: user was discussing flights and airport planning.",
+    "Latest user message: I might see a movie while I wait for the flight.",
+    "Return: User's favorite movie snack is buttery popcorn with extra salt.",
+    "User message: Explain DNS over HTTPS.",
+    "Return: NONE",
+    "",
+    "Bad examples:",
+    "Return: - Favorite food is ramen",
+    "Return: 1. Favorite food is ramen",
+    "Return: Memory: Favorite food is ramen",
+    'Return: {"memory":"Favorite food is ramen"}',
+    "Return: <memory>Favorite food is ramen</memory>",
+    "Return: Ramen seems to be your favorite food.",
+    "Return: You like aisle seats and extra buffer.",
+    "Return: I prefer aisle seats and extra buffer.",
+    "Recent context: user was discussing flights and airport planning. Latest user message: I might see a movie while I wait for the flight. Return: User prefers aisle seats and extra buffer over tight connections.",
     "",
     "Conversation context:",
     params.query,
@@ -947,12 +1057,20 @@ async function maybeResolveActiveRecall(params: {
     if (params.config.logging && transcriptPath) {
       params.api.logger.info?.(`${logPrefix} transcript=${transcriptPath}`);
     }
-    const result = {
-      status: summary.length > 0 ? ("ok" as const) : ("empty" as const),
-      elapsedMs: Date.now() - startedAt,
-      rawReply,
-      summary: summary || null,
-    } satisfies ActiveRecallResult;
+    const result: ActiveRecallResult =
+      summary.length > 0
+        ? {
+            status: "ok",
+            elapsedMs: Date.now() - startedAt,
+            rawReply,
+            summary,
+          }
+        : {
+            status: "empty",
+            elapsedMs: Date.now() - startedAt,
+            rawReply,
+            summary: null,
+          };
     if (params.config.logging) {
       params.api.logger.info?.(
         `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
