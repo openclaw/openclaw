@@ -187,12 +187,17 @@ export function installSessionToolResultGuard(
   };
 
   const clearPendingToolResults = () => {
+    if (pendingState.size() === 0) {
+      drainPendingToolResultReplayMetadataForSession({ sessionKey: replaySessionKey });
+      return;
+    }
     for (const [id] of pendingState.entries()) {
       consumePendingToolResultReplayMetadata({
         sessionKey: replaySessionKey,
         toolCallId: id,
       });
     }
+    drainPendingToolResultReplayMetadataForSession({ sessionKey: replaySessionKey });
     pendingState.clear();
   };
 
