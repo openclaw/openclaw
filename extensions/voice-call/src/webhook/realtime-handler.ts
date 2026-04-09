@@ -141,8 +141,7 @@ export class RealtimeCallHandler {
       maxPayload: MAX_REALTIME_MESSAGE_BYTES,
     });
     wss.handleUpgrade(request, socket, head, (ws) => {
-      let bridge!: ActiveRealtimeVoiceBridge;
-      let hasBridge = false;
+      const bridgeRef: { current?: ActiveRealtimeVoiceBridge } = {};
       let initialized = false;
 
       ws.on("message", (data: Buffer) => {
@@ -161,11 +160,11 @@ export class RealtimeCallHandler {
             if (!nextBridge) {
               return;
             }
-            bridge = nextBridge;
-            hasBridge = true;
+            bridgeRef.current = nextBridge;
             return;
           }
-          if (!hasBridge) {
+          const bridge = bridgeRef.current;
+          if (!bridge) {
             return;
           }
           const mediaData =
@@ -194,8 +193,8 @@ export class RealtimeCallHandler {
       });
 
       ws.on("close", () => {
-        if (hasBridge) {
-          bridge.close();
+        if (bridgeRef.current) {
+          bridgeRef.current.close();
         }
       });
 
@@ -258,6 +257,7 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
+    const bridgeRef: { current?: ActiveRealtimeVoiceBridge } = {};
     const bridge = this.realtimeProvider.createBridge({
       providerConfig: this.providerConfig,
       instructions: this.config.instructions,
@@ -313,8 +313,12 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent) => {
+        const activeBridge = bridgeRef.current;
+        if (!activeBridge) {
+          return;
+        }
         void this.executeToolCall(
-          bridge,
+          activeBridge,
           callId,
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,
@@ -354,6 +358,7 @@ export class RealtimeCallHandler {
       ws.close(1011, "Failed to connect");
     });
 
+    bridgeRef.current = bridge;
     return bridge;
   }
 

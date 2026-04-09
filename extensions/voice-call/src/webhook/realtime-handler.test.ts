@@ -192,23 +192,29 @@ describe("RealtimeCallHandler websocket hardening", () => {
 
     try {
       const ws = await connectWs(server.url);
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: {
-            streamSid: "MZ-oversized",
-            callSid: "CA-oversized",
-            padding: "A".repeat(300 * 1024),
-          },
-        }),
-      );
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: {
+              streamSid: "MZ-oversized",
+              callSid: "CA-oversized",
+              padding: "A".repeat(300 * 1024),
+            },
+          }),
+        );
 
-      const closed = await waitForClose(ws);
+        const closed = await waitForClose(ws);
 
-      expect(closed.code).toBe(1009);
-      expect(createBridge).not.toHaveBeenCalled();
-      expect(processEvent).not.toHaveBeenCalled();
-      expect(getCallByProviderCallId).not.toHaveBeenCalled();
+        expect(closed.code).toBe(1009);
+        expect(createBridge).not.toHaveBeenCalled();
+        expect(processEvent).not.toHaveBeenCalled();
+        expect(getCallByProviderCallId).not.toHaveBeenCalled();
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
     } finally {
       await server.close();
     }
