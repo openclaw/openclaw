@@ -109,10 +109,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const handlePollingNetworkFailure = (err: unknown, label: string) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
     const isTelegramPollingError = isTelegramPollingNetworkError(err);
-    if (isGrammyHttpError(err) && isNetworkError && isTelegramPollingError) {
-      log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
-      return true;
-    }
 
     const activeRunner = pollingSession?.activeRunner;
     if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
@@ -122,6 +118,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       void activeRunner.stop().catch(() => {});
       log("[telegram][diag] marking transport dirty after polling network failure");
       log(`[telegram] Restarting polling after ${label}: ${formatErrorMessage(err)}`);
+      return true;
+    }
+
+    if (isGrammyHttpError(err) && isNetworkError && isTelegramPollingError) {
+      log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true;
     }
 

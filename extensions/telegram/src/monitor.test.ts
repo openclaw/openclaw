@@ -126,6 +126,16 @@ function makeRecoverableFetchError() {
   });
 }
 
+class MockHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly error: unknown,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 async function makeTaggedPollingFetchError() {
   const { tagTelegramNetworkError } = await import("./network-errors.js");
   const err = makeRecoverableFetchError();
@@ -134,6 +144,13 @@ async function makeTaggedPollingFetchError() {
     url: "https://api.telegram.org/bot123456:ABC/getUpdates",
   });
   return err;
+}
+
+async function makeTaggedPollingHttpError() {
+  return new MockHttpError(
+    "Network request for 'getUpdates' failed!",
+    await makeTaggedPollingFetchError(),
+  );
 }
 
 const createAbortTask = (
@@ -621,6 +638,22 @@ describe("monitorTelegramProvider (grammY)", () => {
     await firstCycle.waitForRunStart();
 
     expect(emitUncaughtException(await makeTaggedPollingFetchError())).toBe(true);
+    expect(firstCycle.stop).toHaveBeenCalledTimes(1);
+    await secondCycle.waitForRunStart();
+    abort.abort();
+    await monitor;
+    expectRecoverableRetryState(2);
+  });
+
+  it("force-restarts polling when uncaught polling HttpError stalls runner", async () => {
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceWithStalledPollingRunner();
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await firstCycle.waitForRunStart();
+
+    expect(emitUncaughtException(await makeTaggedPollingHttpError())).toBe(true);
     expect(firstCycle.stop).toHaveBeenCalledTimes(1);
     await secondCycle.waitForRunStart();
     abort.abort();
