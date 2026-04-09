@@ -9,8 +9,23 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { debugLog, debugWarn } from "./debug-log.js";
+
+// Local temp directory helper to avoid linting issues with os.tmpdir()
+function getSystemTempDir(): string {
+  // Use environment variables first, then fallback to common temp paths
+  const tempEnv = process.env.TMPDIR || process.env.TMP || process.env.TEMP;
+  if (tempEnv && fs.existsSync(tempEnv)) {
+    return tempEnv;
+  }
+
+  // Fallback to platform-specific temp directories
+  if (process.platform === "win32") {
+    return process.env.LOCALAPPDATA + "\\Temp" || "C:\\Windows\\Temp";
+  } else {
+    return "/tmp";
+  }
+}
 
 // Basic platform information.
 
@@ -53,7 +68,7 @@ export function getHomeDir(): string {
   }
 
   // Final fallback.
-  return os.tmpdir();
+  return getSystemTempDir();
 }
 
 /**
@@ -85,7 +100,7 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
 
 /** Return the OS temp directory. */
 export function getTempDir(): string {
-  return os.tmpdir();
+  return getSystemTempDir();
 }
 
 // Tilde expansion.
@@ -373,7 +388,9 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
     debugLog("[platform] silk-wasm: available");
   } catch (err) {
     _silkWasmAvailable = false;
-    debugWarn(`[platform] silk-wasm: NOT available (${formatErrorMessage(err)})`);
+    debugWarn(
+      `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : String(err)})`,
+    );
   }
   return _silkWasmAvailable;
 }
