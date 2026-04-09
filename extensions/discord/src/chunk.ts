@@ -3,6 +3,62 @@ import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/r
 const BQ_PREFIX_RE = /^(>+\s?)/;
 const TABLE_SEPARATOR_RE = /^\|?[\s-:|]+\|[\s-:|]*$/;
 
+// Inline formatting markers, longest first.
+const INLINE_MARKERS = ["***", "**", "*", "___", "__", "_", "``", "`"];
+
+type InlineFormatState = {
+  openMarkers: string[];
+};
+
+/**
+ * Scan text for unmatched inline formatting markers, skipping fenced regions.
+ */
+function scanUnmatchedInlineMarkers(text: string): InlineFormatState {
+  const openMarkers: string[] = [];
+  let i = 0;
+  let inFence = false;
+
+  while (i < text.length) {
+    // Simple fence detection: toggle on ``` at start of line
+    if ((i === 0 || text[i - 1] === "\n") && text.startsWith("```", i)) {
+      inFence = !inFence;
+      i += 3;
+      // Skip to end of line
+      while (i < text.length && text[i] !== "\n") { i++; }
+      continue;
+    }
+    if (inFence) { i++; continue; }
+
+    // Skip escaped characters
+    if (text[i] === "\\" && i + 1 < text.length) { i += 2; continue; }
+
+    // Try to match markers longest-first
+    let matched = false;
+    for (const marker of INLINE_MARKERS) {
+      if (text.startsWith(marker, i)) {
+        // For _-based markers: only treat as emphasis at word boundaries
+        if (marker.startsWith("_")) {
+          const prev = i > 0 ? text[i - 1] : " ";
+          const next = i + marker.length < text.length ? text[i + marker.length] : " ";
+          if (/\w/.test(prev) || /\w/.test(next)) { i++; matched = true; break; }
+        }
+        const existingIdx = openMarkers.lastIndexOf(marker);
+        if (existingIdx !== -1) {
+          openMarkers.splice(existingIdx, 1);
+        } else {
+          openMarkers.push(marker);
+        }
+        i += marker.length;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) { i++; }
+  }
+
+  return { openMarkers };
+}
+
 type TableHeader = {
   headerLine: string;
   separatorLine: string;
@@ -439,7 +495,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
   }
 
-  return rebalanceReasoningItalics(text, chunks);
+  return rebalanceReasoningItalics(text, rebalanceInlineFormatting(chunks));
 }
 
 export function chunkDiscordTextWithMode(
@@ -465,6 +521,48 @@ export function chunkDiscordTextWithMode(
     chunks.push(...nested);
   }
   return chunks;
+}
+
+/**
+ * Close unmatched inline formatting markers (**, *, __, _, `) at chunk
+ * boundaries and reopen them at the start of the next chunk so bold,
+ * italic, and code spans render correctly when split across messages.
+ */
+function rebalanceInlineFormatting(chunks: string[]): string[] {
+  if (chunks.length <= 1) {
+    return chunks;
+  }
+
+  const adjusted = [...chunks];
+  let pendingReopen = "";
+
+  for (let i = 0; i < adjusted.length; i++) {
+    let chunk = adjusted[i];
+
+    // Prepend any reopen markers from the previous chunk
+    if (pendingReopen) {
+      chunk = `${pendingReopen}${chunk}`;
+      adjusted[i] = chunk;
+    }
+
+    if (i === adjusted.length - 1) {
+      pendingReopen = "";
+      break;
+    }
+
+    // Scan for unmatched markers in this chunk
+    const state = scanUnmatchedInlineMarkers(chunk);
+    if (state.openMarkers.length > 0) {
+      const close = [...state.openMarkers].reverse().join("");
+      const reopen = state.openMarkers.join("");
+      adjusted[i] = `${chunk}${close}`;
+      pendingReopen = reopen;
+    } else {
+      pendingReopen = "";
+    }
+  }
+
+  return adjusted;
 }
 
 // Keep italics intact for reasoning payloads that are wrapped once with `_…_`.

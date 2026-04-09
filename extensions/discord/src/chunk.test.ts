@@ -216,4 +216,17 @@ describe("chunkDiscordText", () => {
       }
     }
   });
+
+  it("closes and reopens bold markers when split across chunks", () => {
+    const text = "Line 1\n**Bold text that\nspans multiple lines\nand should stay bold** done.";
+
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 2 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // Every chunk should have balanced ** markers
+    for (const chunk of chunks) {
+      const stars = (chunk.match(/\*\*/g) || []).length;
+      expect(stars % 2).toBe(0);
+    }
+  });
 });
