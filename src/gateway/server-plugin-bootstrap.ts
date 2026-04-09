@@ -1,6 +1,7 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry, pinActivePluginHookRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -31,9 +32,14 @@ type GatewayPluginBootstrapParams = {
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
+function pinGatewayHookRegistryAndRefreshRunner(pluginRegistry: PluginRegistry) {
+  pinActivePluginHookRegistry(pluginRegistry);
+  initializeGlobalHookRunner(pluginRegistry);
+}
+
 function pinGatewayPrimaryRegistries(pluginRegistry: PluginRegistry) {
   pinActivePluginChannelRegistry(pluginRegistry);
-  pinActivePluginHookRegistry(pluginRegistry);
+  pinGatewayHookRegistryAndRefreshRunner(pluginRegistry);
 }
 
 function installGatewayPluginRuntimeEnvironment(cfg: ReturnType<typeof loadConfig>) {
