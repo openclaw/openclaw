@@ -10,6 +10,7 @@ import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
+  encodeGraphShareId,
   GRAPH_ROOT,
   estimateBase64DecodedBytes,
   inferPlaceholder,
@@ -327,8 +328,7 @@ export async function downloadMSTeamsGraphMedia(params: {
             if (!isUrlAllowed(shareUrl, policy.allowHosts)) {
               continue;
             }
-            const encodedUrl = Buffer.from(shareUrl).toString("base64url");
-            const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
+            const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
 
             const media = await downloadAndStoreMSTeamsRemoteMedia({
               url: sharesUrl,
