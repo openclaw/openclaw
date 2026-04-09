@@ -179,9 +179,17 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
   if (cfg.plugins?.enabled === false) {
     return false;
   }
+  const deny = cfg.plugins?.deny;
+  if (Array.isArray(deny) && deny.includes("you")) {
+    return false;
+  }
+  const allow = cfg.plugins?.allow;
+  if (Array.isArray(allow) && allow.length > 0 && !allow.includes("you")) {
+    return false;
+  }
   const normalizedPlugins = cfg.plugins?.entries;
   const youPlugin = normalizedPlugins?.you;
-  if (!youPlugin || youPlugin.enabled === false) {
+  if (youPlugin?.enabled === false) {
     return false;
   }
   // web_research/web_contents require an API key to be internet-capable.
