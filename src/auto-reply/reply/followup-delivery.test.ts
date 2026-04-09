@@ -50,7 +50,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ text: "hello world!" }],
         messageProvider: "slack",
         originatingTo: "channel:C1",
-        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1", sentText: true }],
       }),
     ).toEqual([]);
   });
@@ -63,7 +63,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         messageProvider: "heartbeat",
         originatingChannel: "telegram",
         originatingTo: "268300329",
-        sentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+        sentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329", sentText: true }],
       }),
     ).toEqual([]);
   });
@@ -78,7 +78,13 @@ describe("resolveFollowupDeliveryPayloads", () => {
         originatingTo: "268300329",
         originatingAccountId: "personal",
         sentTargets: [
-          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+          {
+            tool: "telegram",
+            provider: "telegram",
+            to: "268300329",
+            accountId: "work",
+            sentText: true,
+          },
         ],
       }),
     ).toEqual([{ text: "hello world!" }]);

@@ -643,11 +643,12 @@ export function handleToolExecutionStart(
         }
         // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message",
         // Telegram also accepts "caption" for media sends with text.
-        const text =
+        const rawText =
           (argsRecord.content as string) ??
           (argsRecord.message as string) ??
           (argsRecord.caption as string);
-        if (text && typeof text === "string") {
+        const text = typeof rawText === "string" ? rawText.trim() : "";
+        if (text) {
           ctx.state.pendingMessagingTexts.set(toolCallId, text);
           ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
         }

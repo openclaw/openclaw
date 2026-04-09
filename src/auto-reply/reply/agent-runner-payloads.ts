@@ -173,26 +173,29 @@ export async function buildReplyPayloads(params: {
   const dedupeRuntime = shouldCheckMessagingToolDedupe
     ? await loadReplyPayloadsDedupeRuntime()
     : null;
+  const originTargetParams = {
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.originatingChannel,
+      provider: params.messageProvider,
+    }),
+    messagingToolSentTargets,
+    originatingTo: resolveOriginMessageTo({
+      originatingTo: params.originatingTo,
+    }),
+    accountId: resolveOriginAccountId({
+      originatingAccountId: params.accountId,
+    }),
+  };
   const suppressMessagingToolReplies =
-    dedupeRuntime?.shouldSuppressMessagingToolReplies({
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: params.originatingChannel,
-        provider: params.messageProvider,
-      }),
-      messagingToolSentTargets,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: params.originatingTo,
-      }),
-      accountId: resolveOriginAccountId({
-        originatingAccountId: params.accountId,
-      }),
-    }) ?? false;
-  // Only dedupe against messaging tool sends for the same origin target.
+    dedupeRuntime?.shouldSuppressMessagingToolReplies(originTargetParams) ?? false;
+  // Dedupe against messaging tool sends for the same origin target.
   // Cross-target sends (for example posting to another channel) must not
   // suppress the current conversation's final reply.
+  // Media dedupe uses the broader hasSentToSameOriginTarget (ignores sentText)
+  // so media-only sends still get deduped even though they don't suppress text replies.
   // If target metadata is unavailable, keep legacy dedupe behavior.
-  const dedupeMessagingToolPayloads =
-    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const sentToSameOrigin = dedupeRuntime?.hasSentToSameOriginTarget(originTargetParams) ?? false;
+  const dedupeMessagingToolPayloads = sentToSameOrigin || messagingToolSentTargets.length === 0;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
