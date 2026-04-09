@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clickChromeMcpElement,
   buildChromeMcpArgs,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
@@ -303,6 +304,41 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("times out a stuck click and recovers on the next call", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name === "click") {
+          return await new Promise(() => {});
+        }
+        if (name === "list_pages") {
+          return {
+            content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      session.client.callTool = callTool as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "btn-1",
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(/timed out/i);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toHaveLength(1);
   });
 
   it("creates a fresh session when userDataDir changes for the same profile", async () => {
