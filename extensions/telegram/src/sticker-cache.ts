@@ -1,22 +1,23 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveApiKeyForProvider } from "../../../src/agents/model-auth.js";
-import type { ModelCatalogEntry } from "../../../src/agents/model-catalog.js";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-} from "../../../src/agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { STATE_DIR } from "../../../src/config/paths.js";
-import { logVerbose } from "../../../src/globals.js";
-import { loadJsonFile, saveJsonFile } from "../../../src/infra/json-file.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
 import {
-  AUTO_IMAGE_KEY_PROVIDERS,
-  DEFAULT_IMAGE_MODELS,
-} from "../../../src/media-understanding/defaults.js";
-import { resolveAutoImageModel } from "../../../src/media-understanding/runner.js";
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
+} from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { getTelegramRuntime } from "./runtime.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -75,12 +76,12 @@ export function cacheSticker(sticker: CachedSticker): void {
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
   const cache = loadCache();
-  const queryLower = query.toLowerCase();
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
   for (const sticker of Object.values(cache.stickers)) {
     let score = 0;
-    const descLower = sticker.description.toLowerCase();
+    const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 
     // Exact substring match in description
     if (descLower.includes(queryLower)) {
@@ -102,7 +103,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
     }
 
     // Set name match
-    if (sticker.setName?.toLowerCase().includes(queryLower)) {
+    if (normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower)) {
       score += 3;
     }
 
@@ -146,14 +147,6 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
-let imageRuntimePromise: Promise<
-  typeof import("../../../src/media-understanding/providers/image-runtime.js")
-> | null = null;
-
-function loadImageRuntime() {
-  imageRuntimePromise ??= import("../../../src/media-understanding/providers/image-runtime.js");
-  return imageRuntimePromise;
-}
 
 export interface DescribeStickerParams {
   imagePath: string;
@@ -193,15 +186,25 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     }
   };
 
+  const autoProviders = resolveAutoMediaKeyProviders({
+    cfg,
+    capability: "image",
+  });
+
   const selectCatalogModel = (provider: string) => {
     const entries = catalog.filter(
       (entry) =>
-        entry.provider.toLowerCase() === provider.toLowerCase() && modelSupportsVision(entry),
+        normalizeLowercaseStringOrEmpty(entry.provider) ===
+          normalizeLowercaseStringOrEmpty(provider) && modelSupportsVision(entry),
     );
     if (entries.length === 0) {
       return undefined;
     }
-    const defaultId = DEFAULT_IMAGE_MODELS[provider];
+    const defaultId = resolveDefaultMediaModel({
+      cfg,
+      providerId: provider,
+      capability: "image",
+    });
     const preferred = entries.find((entry) => entry.id === defaultId);
     return preferred ?? entries[0];
   };
@@ -209,16 +212,14 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let resolved = null as { provider: string; model?: string } | null;
   if (
     activeModel &&
-    AUTO_IMAGE_KEY_PROVIDERS.includes(
-      activeModel.provider as (typeof AUTO_IMAGE_KEY_PROVIDERS)[number],
-    ) &&
+    autoProviders.includes(activeModel.provider) &&
     (await hasProviderKey(activeModel.provider))
   ) {
     resolved = activeModel;
   }
 
   if (!resolved) {
-    for (const provider of AUTO_IMAGE_KEY_PROVIDERS) {
+    for (const provider of autoProviders) {
       if (!(await hasProviderKey(provider))) {
         continue;
       }
@@ -247,22 +248,18 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
-    const buffer = await fs.readFile(imagePath);
-    // Lazy import to avoid circular dependency
-    const { describeImageWithModel } = await loadImageRuntime();
-    const result = await describeImageWithModel({
-      buffer,
-      fileName: "sticker.webp",
+    const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({
+      filePath: imagePath,
       mime: "image/webp",
-      prompt: STICKER_DESCRIPTION_PROMPT,
       cfg,
-      agentDir: agentDir ?? "",
+      agentDir,
       provider,
       model,
+      prompt: STICKER_DESCRIPTION_PROMPT,
       maxTokens: 150,
-      timeoutMs: 30000,
+      timeoutMs: 30_000,
     });
-    return result.text;
+    return result.text ?? null;
   } catch (err) {
     logVerbose(`telegram: failed to describe sticker: ${String(err)}`);
     return null;

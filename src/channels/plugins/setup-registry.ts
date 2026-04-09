@@ -2,28 +2,32 @@ import {
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
+import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 type CachedChannelSetupPlugins = {
   registryVersion: number;
+  registryRef: object | null;
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
 
 const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
   registryVersion: -1,
+  registryRef: null,
   sorted: [],
   byId: new Map(),
 };
 
 let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
 
-function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
   for (const plugin of plugins) {
-    const id = String(plugin.id).trim();
+    const id = normalizeOptionalString(plugin.id) ?? "";
     if (!id || seen.has(id)) {
       continue;
     }
@@ -33,17 +37,8 @@ function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
-function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
-  const registry = requireActivePluginRegistry();
-  const registryVersion = getActivePluginRegistryVersion();
-  const cached = cachedChannelSetupPlugins;
-  if (cached.registryVersion === registryVersion) {
-    return cached;
-  }
-
-  const sorted = dedupeSetupPlugins(
-    (registry.channelSetups ?? []).map((entry) => entry.plugin),
-  ).toSorted((a, b) => {
+function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
+  return dedupeSetupPlugins(plugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -53,6 +48,20 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
     }
     return a.id.localeCompare(b.id);
   });
+}
+
+function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
+  const registry = requireActivePluginRegistry();
+  const registryVersion = getActivePluginRegistryVersion();
+  const cached = cachedChannelSetupPlugins;
+  if (cached.registryVersion === registryVersion && cached.registryRef === registry) {
+    return cached;
+  }
+
+  const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
+  const sorted = sortChannelSetupPlugins(
+    registryPlugins.length > 0 ? registryPlugins : listBundledChannelSetupPlugins(),
+  );
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);
@@ -60,6 +69,7 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
 
   const next: CachedChannelSetupPlugins = {
     registryVersion,
+    registryRef: registry,
     sorted,
     byId,
   };
@@ -72,7 +82,7 @@ export function listChannelSetupPlugins(): ChannelPlugin[] {
 }
 
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }

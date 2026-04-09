@@ -3,14 +3,17 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../../../src/agents/tools/common.js";
-import { readDiscordParentIdParam } from "../../../../src/agents/tools/discord-actions-shared.js";
-import { handleDiscordAction } from "../../../../src/agents/tools/discord-actions.js";
-import { resolveReactionMessageId } from "../../../../src/channels/plugins/actions/reaction-message-id.js";
-import type { ChannelMessageActionContext } from "../../../../src/channels/plugins/types.js";
-import { readBooleanParam } from "../../../../src/plugin-sdk/boolean-param.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
+import { handleDiscordAction } from "../../action-runtime-api.js";
+import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+import { readDiscordParentIdParam } from "./runtime.shared.js";
 
 const providerId = "discord";
 
@@ -23,13 +26,17 @@ export async function handleDiscordMessageAction(
     | "accountId"
     | "requesterSenderId"
     | "toolContext"
+    | "mediaAccess"
     | "mediaLocalRoots"
+    | "mediaReadFile"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
   const actionOptions = {
+    mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
   } as const;
 
   const resolveChannelId = () =>
@@ -40,7 +47,9 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
     const asVoice = readBooleanParam(params, "asVoice") === true;
-    const rawComponents = params.components;
+    const rawComponents =
+      params.components ??
+      buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
@@ -111,7 +120,7 @@ export async function handleDiscordMessageAction(
 
   if (action === "react") {
     const messageIdRaw = resolveReactionMessageId({ args: params, toolContext: ctx.toolContext });
-    const messageId = messageIdRaw != null ? String(messageIdRaw).trim() : "";
+    const messageId = normalizeOptionalStringifiedId(messageIdRaw) ?? "";
     if (!messageId) {
       throw new Error(
         "messageId required. Provide messageId explicitly or react to the current inbound message.",

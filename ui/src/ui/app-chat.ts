@@ -1,5 +1,4 @@
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
-import { scheduleChatScroll } from "./app-scroll.ts";
+import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
@@ -10,7 +9,10 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ModelCatalogEntry } from "./types.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -29,9 +31,10 @@ export type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
-  chatModelOverrides: Record<string, string | null>;
+  chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
@@ -49,7 +52,7 @@ export function isChatStopCommand(text: string) {
   if (!trimmed) {
     return false;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "/stop") {
     return true;
   }
@@ -67,7 +70,7 @@ function isChatResetCommand(text: string) {
   if (!trimmed) {
     return false;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "/new" || normalized === "/reset") {
     return true;
   }
@@ -108,6 +111,22 @@ function enqueueChatMessage(
   ];
 }
 
+function enqueuePendingRunMessage(host: ChatHost, text: string, pendingRunId: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  host.chatQueue = [
+    ...host.chatQueue,
+    {
+      id: generateUUID(),
+      text: trimmed,
+      createdAt: Date.now(),
+      pendingRunId,
+    },
+  ];
+}
+
 async function sendChatMessageNow(
   host: ChatHost,
   message: string,
@@ -121,6 +140,8 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  // Reset scroll state before sending to ensure auto-scroll works for the response
+  resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
@@ -141,7 +162,8 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  // Force scroll after sending to ensure viewport is at bottom for incoming stream
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
   }
@@ -155,11 +177,12 @@ async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
-  const [next, ...rest] = host.chatQueue;
-  if (!next) {
+  const nextIndex = host.chatQueue.findIndex((item) => !item.pendingRunId);
+  if (nextIndex < 0) {
     return;
   }
-  host.chatQueue = rest;
+  const next = host.chatQueue[nextIndex];
+  host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
   let ok = false;
   try {
     if (next.localCommandName) {
@@ -184,6 +207,13 @@ async function flushChatQueue(host: ChatHost) {
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+}
+
+export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
+  if (!runId) {
+    return;
+  }
+  host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
 }
 
 export async function handleSendChat(
@@ -212,14 +242,14 @@ export async function handleSendChat(
   // Intercept local slash commands (/status, /model, /compact, etc.)
   const parsed = parseSlashCommand(message);
   if (parsed?.command.executeLocal) {
-    if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.name)) {
+    if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
       if (messageOverride == null) {
         host.chatMessage = "";
         host.chatAttachments = [];
       }
       enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
         args: parsed.args,
-        name: parsed.command.name,
+        name: parsed.command.key,
       });
       return;
     }
@@ -228,7 +258,7 @@ export async function handleSendChat(
       host.chatMessage = "";
       host.chatAttachments = [];
     }
-    await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
+    await dispatchSlashCommand(host, parsed.command.key, parsed.args, {
       previousDraft: prevDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
     });
@@ -257,7 +287,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export"].includes(name);
+  return !["stop", "focus", "export-session", "steer", "redirect"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -292,7 +322,7 @@ async function dispatchSlashCommand(
     case "focus":
       host.onSlashAction?.("toggle-focus");
       return;
-    case "export":
+    case "export-session":
       host.onSlashAction?.("export");
       return;
   }
@@ -302,17 +332,31 @@ async function dispatchSlashCommand(
   }
 
   const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
+  const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
+    chatModelCatalog: host.chatModelCatalog,
+    sessionsResult: host.sessionsResult,
+  });
 
   if (result.content) {
     injectCommandResult(host, result.content);
   }
 
-  if (result.sessionPatch && "model" in result.sessionPatch) {
+  if (result.trackRunId) {
+    host.chatRunId = result.trackRunId;
+    host.chatStream = "";
+    host.chatSending = false;
+  }
+
+  if (result.pendingCurrentRun && host.chatRunId) {
+    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
+  }
+
+  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
     host.chatModelOverrides = {
       ...host.chatModelOverrides,
-      [targetSessionKey]: result.sessionPatch.model ?? null,
+      [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
     };
+    host.onSlashAction?.("refresh-tools-effective");
   }
 
   if (result.action === "refresh") {
@@ -381,10 +425,24 @@ async function refreshChatModels(host: ChatHost) {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+const chatAvatarRequestVersions = new WeakMap<object, number>();
 
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
 };
+
+function beginChatAvatarRequest(host: ChatHost): number {
+  const key = host as object;
+  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
+  chatAvatarRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function shouldApplyChatAvatarResult(host: ChatHost, version: number, sessionKey: string): boolean {
+  return (
+    chatAvatarRequestVersions.get(host as object) === version && host.sessionKey === sessionKey
+  );
+}
 
 function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
@@ -409,23 +467,35 @@ export async function refreshChatAvatar(host: ChatHost) {
     host.chatAvatarUrl = null;
     return;
   }
+  const sessionKey = host.sessionKey;
+  const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
-    host.chatAvatarUrl = null;
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      host.chatAvatarUrl = null;
+    }
     return;
   }
   host.chatAvatarUrl = null;
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
     const res = await fetch(url, { method: "GET" });
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      return;
+    }
     if (!res.ok) {
       host.chatAvatarUrl = null;
       return;
     }
     const data = (await res.json()) as { avatarUrl?: unknown };
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      return;
+    }
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     host.chatAvatarUrl = avatarUrl || null;
   } catch {
-    host.chatAvatarUrl = null;
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      host.chatAvatarUrl = null;
+    }
   }
 }

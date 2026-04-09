@@ -1,8 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import android.content.ContentResolver
-import android.net.Uri
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -47,10 +44,34 @@ import ai.openclaw.app.ui.mobileDanger
 import ai.openclaw.app.ui.mobileDangerSoft
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
-import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+internal fun resolvePendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+): String? {
+  val prompt = pendingPrompt?.trim()?.ifEmpty { null } ?: return null
+  if (!healthOk || pendingRunCount > 0) return null
+  return prompt
+}
+
+internal suspend fun dispatchPendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+  dispatch: suspend (String) -> Boolean,
+): Boolean {
+  val prompt =
+    resolvePendingAssistantAutoSend(
+      pendingPrompt = pendingPrompt,
+      healthOk = healthOk,
+      pendingRunCount = pendingRunCount,
+    ) ?: return false
+  return dispatch(prompt)
+}
 
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
@@ -64,10 +85,28 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatDraft by viewModel.chatDraft.collectAsState()
+  val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
-  LaunchedEffect(mainSessionKey) {
+  LaunchedEffect(Unit) {
     viewModel.loadChat(mainSessionKey)
-    viewModel.refreshChatSessions(limit = 200)
+  }
+
+  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+    val accepted =
+      dispatchPendingAssistantAutoSend(
+        pendingPrompt = pendingAssistantAutoSend,
+        healthOk = healthOk,
+        pendingRunCount = pendingRunCount,
+      ) { prompt ->
+        viewModel.sendChatAwaitAcceptance(
+          message = prompt,
+          thinking = thinkingLevel,
+          attachments = emptyList(),
+        )
+      }
+    if (!accepted) return@LaunchedEffect
+    viewModel.clearPendingAssistantAutoSend()
   }
 
   val context = LocalContext.current
@@ -83,7 +122,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         val next =
           uris.take(8).mapNotNull { uri ->
             try {
-              loadImageAttachment(resolver, uri)
+              loadSizedImageAttachment(resolver, uri)
             } catch (_: Throwable) {
               null
             }
@@ -123,10 +162,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
       ChatComposer(
+        draftText = chatDraft,
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
         attachments = attachments,
+        onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
         onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
         onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
@@ -160,7 +201,10 @@ private fun ChatThreadSelector(
   mainSessionKey: String,
   onSelectSession: (String) -> Unit,
 ) {
-  val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
+  val sessionOptions =
+    remember(sessionKey, sessions, mainSessionKey) {
+      resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
+    }
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -214,24 +258,3 @@ data class PendingImageAttachment(
   val mimeType: String,
   val base64: String,
 )
-
-private suspend fun loadImageAttachment(resolver: ContentResolver, uri: Uri): PendingImageAttachment {
-  val mimeType = resolver.getType(uri) ?: "image/*"
-  val fileName = (uri.lastPathSegment ?: "image").substringAfterLast('/')
-  val bytes =
-    withContext(Dispatchers.IO) {
-      resolver.openInputStream(uri)?.use { input ->
-        val out = ByteArrayOutputStream()
-        input.copyTo(out)
-        out.toByteArray()
-      } ?: ByteArray(0)
-    }
-  if (bytes.isEmpty()) throw IllegalStateException("empty attachment")
-  val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-  return PendingImageAttachment(
-    id = uri.toString() + "#" + System.currentTimeMillis().toString(),
-    fileName = fileName,
-    mimeType = mimeType,
-    base64 = base64,
-  )
-}

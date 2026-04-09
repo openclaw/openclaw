@@ -1,89 +1,34 @@
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { fetchGeminiUsage } from "../../src/infra/provider-usage.fetch.js";
-import { buildOauthProviderAuthResult } from "../../src/plugin-sdk/provider-auth-result.js";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
-} from "../../src/plugins/types.js";
-import { loginGeminiCliOAuth } from "./oauth.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
+import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
+import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
 const DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
-const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
-const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
-const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
-const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 const ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_ID",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
-];
+] as const;
 
-function cloneFirstTemplateModel(params: {
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      PROVIDER_ID,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      reasoning: true,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
-
-function parseGoogleUsageToken(apiKey: string): string {
-  try {
-    const parsed = JSON.parse(apiKey) as { token?: unknown };
-    if (typeof parsed?.token === "string") {
-      return parsed.token;
-    }
-  } catch {
-    // ignore
-  }
-  return apiKey;
-}
+const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = {
+  ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
+  ...buildProviderStreamFamilyHooks("google-thinking"),
+  ...buildProviderToolCompatFamilyHooks("gemini"),
+};
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
-}
-
-function resolveGeminiCliForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmed = ctx.modelId.trim();
-  const lower = trimmed.toLowerCase();
-
-  let templateIds: readonly string[];
-  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
-    templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
-    templateIds = GEMINI_3_1_FLASH_TEMPLATE_IDS;
-  } else {
-    return undefined;
-  }
-
-  return cloneFirstTemplateModel({
-    modelId: trimmed,
-    templateIds,
-    ctx,
-  });
 }
 
 export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
@@ -92,7 +37,7 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
     label: PROVIDER_LABEL,
     docsPath: "/providers/models",
     aliases: ["gemini-cli"],
-    envVars: ENV_VARS,
+    envVars: [...ENV_VARS],
     auth: [
       {
         id: "oauth",
@@ -100,8 +45,27 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
         hint: "PKCE + localhost callback",
         kind: "oauth",
         run: async (ctx: ProviderAuthContext) => {
+          await ctx.prompter.note(
+            [
+              "This is an unofficial integration and is not endorsed by Google.",
+              "Some users have reported account restrictions or suspensions after using third-party Gemini CLI and Antigravity OAuth clients.",
+              "Proceed only if you understand and accept this risk.",
+            ].join("\n"),
+            "Google Gemini CLI caution",
+          );
+
+          const proceed = await ctx.prompter.confirm({
+            message: "Continue with Google Gemini CLI OAuth?",
+            initialValue: false,
+          });
+          if (!proceed) {
+            await ctx.prompter.note("Skipped Google Gemini CLI OAuth setup.", "Setup skipped");
+            return { profiles: [] };
+          }
+
           const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
           try {
+            const { loginGeminiCliOAuth } = await import("./oauth.runtime.js");
             const result = await loginGeminiCliOAuth({
               isRemote: ctx.isRemote,
               openUrl: ctx.openUrl,
@@ -119,8 +83,14 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
               refresh: result.refresh,
               expires: result.expires,
               email: result.email,
-              credentialExtra: { projectId: result.projectId },
-              notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
+              ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
+              ...(result.projectId
+                ? {
+                    notes: [
+                      "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+                    ],
+                  }
+                : {}),
             });
           } catch (err) {
             spin.stop("Gemini CLI OAuth failed");
@@ -133,7 +103,22 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
         },
       },
     ],
-    resolveDynamicModel: (ctx) => resolveGeminiCliForwardCompatModel(ctx),
+    wizard: {
+      setup: {
+        choiceId: "google-gemini-cli",
+        choiceLabel: "Gemini CLI OAuth",
+        choiceHint: "Google OAuth with project-aware token payload",
+        methodId: "oauth",
+      },
+    },
+    resolveDynamicModel: (ctx) =>
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: PROVIDER_ID,
+        ctx,
+      }),
+    ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,
+    isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
+    formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     resolveUsageAuth: async (ctx) => {
       const auth = await ctx.resolveOAuthToken();
       if (!auth) {

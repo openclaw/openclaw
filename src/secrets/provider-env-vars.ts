@@ -1,67 +1,146 @@
-export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
-  openai: ["OPENAI_API_KEY"],
-  anthropic: ["ANTHROPIC_API_KEY"],
-  google: ["GEMINI_API_KEY"],
-  minimax: ["MINIMAX_API_KEY"],
+import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+
+const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
+  voyage: ["VOYAGE_API_KEY"],
+  cerebras: ["CEREBRAS_API_KEY"],
+  "anthropic-openai": ["ANTHROPIC_API_KEY"],
+  "qwen-dashscope": ["DASHSCOPE_API_KEY"],
+} as const;
+
+const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
   "minimax-cn": ["MINIMAX_API_KEY"],
-  moonshot: ["MOONSHOT_API_KEY"],
-  "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
-  synthetic: ["SYNTHETIC_API_KEY"],
-  venice: ["VENICE_API_KEY"],
-  zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
-  xiaomi: ["XIAOMI_API_KEY"],
-  openrouter: ["OPENROUTER_API_KEY"],
-  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
-  litellm: ["LITELLM_API_KEY"],
-  "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
-  opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
-  "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
-  together: ["TOGETHER_API_KEY"],
-  huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
-  qianfan: ["QIANFAN_API_KEY"],
-  xai: ["XAI_API_KEY"],
-  mistral: ["MISTRAL_API_KEY"],
-  kilocode: ["KILOCODE_API_KEY"],
-  modelstudio: ["MODELSTUDIO_API_KEY"],
-  volcengine: ["VOLCANO_ENGINE_API_KEY"],
-  byteplus: ["BYTEPLUS_API_KEY"],
+} as const;
+
+export type ProviderEnvVarLookupParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 };
 
-const EXTRA_PROVIDER_AUTH_ENV_VARS = [
-  "VOYAGE_API_KEY",
-  "GROQ_API_KEY",
-  "DEEPGRAM_API_KEY",
-  "CEREBRAS_API_KEY",
-  "NVIDIA_API_KEY",
-  "COPILOT_GITHUB_TOKEN",
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "CHUTES_OAUTH_TOKEN",
-  "CHUTES_API_KEY",
-  "QWEN_OAUTH_TOKEN",
-  "QWEN_PORTAL_API_KEY",
-  "MINIMAX_OAUTH_TOKEN",
-  "OLLAMA_API_KEY",
-  "VLLM_API_KEY",
-] as const;
+function appendUniqueEnvVarCandidates(
+  target: Record<string, string[]>,
+  providerId: string,
+  keys: readonly string[],
+) {
+  const normalizedProviderId = providerId.trim();
+  if (!normalizedProviderId || keys.length === 0) {
+    return;
+  }
+  const bucket = (target[normalizedProviderId] ??= []);
+  const seen = new Set(bucket);
+  for (const key of keys) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || seen.has(normalizedKey)) {
+      continue;
+    }
+    seen.add(normalizedKey);
+    bucket.push(normalizedKey);
+  }
+}
 
-const KNOWN_SECRET_ENV_VARS = [
-  ...new Set(Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys)),
-];
+function resolveManifestProviderAuthEnvVarCandidates(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, string[]> {
+  const registry = loadPluginManifestRegistry({
+    config: params?.config,
+    workspaceDir: params?.workspaceDir,
+    env: params?.env,
+  });
+  const candidates: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+  for (const plugin of registry.plugins) {
+    if (!plugin.providerAuthEnvVars) {
+      continue;
+    }
+    for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      appendUniqueEnvVarCandidates(candidates, providerId, keys);
+    }
+  }
+  const aliases = resolveProviderAuthAliasMap(params);
+  for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const keys = candidates[target];
+    if (keys) {
+      appendUniqueEnvVarCandidates(candidates, alias, keys);
+    }
+  }
+  return candidates;
+}
+
+export function resolveProviderAuthEnvVarCandidates(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, readonly string[]> {
+  return {
+    ...resolveManifestProviderAuthEnvVarCandidates(params),
+    ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+  };
+}
+
+export function resolveProviderEnvVars(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, readonly string[]> {
+  return {
+    ...resolveProviderAuthEnvVarCandidates(params),
+    ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
+  };
+}
+
+/**
+ * Provider auth env candidates used by generic auth resolution.
+ *
+ * Order matters: the first non-empty value wins for helpers such as
+ * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
+ * metadata so auth probes do not need to load plugin runtime.
+ */
+export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]> = {
+  ...resolveProviderAuthEnvVarCandidates(),
+};
+
+/**
+ * Provider env vars used for setup/default secret refs and broad secret
+ * scrubbing. This can include non-model providers and may intentionally choose
+ * a different preferred first env var than auth resolution.
+ *
+ * Bundled provider auth envs come from plugin manifests. The override map here
+ * is only for true core/non-plugin providers and a few setup-specific ordering
+ * overrides where generic onboarding wants a different preferred env var.
+ */
+export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
+  ...resolveProviderEnvVars(),
+};
+
+export function getProviderEnvVars(
+  providerId: string,
+  params?: ProviderEnvVarLookupParams,
+): string[] {
+  const providerEnvVars = resolveProviderEnvVars(params);
+  const envVars = Object.hasOwn(providerEnvVars, providerId)
+    ? providerEnvVars[providerId]
+    : undefined;
+  return Array.isArray(envVars) ? [...envVars] : [];
+}
+
+const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
 
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
-const KNOWN_PROVIDER_AUTH_ENV_VARS = [
-  ...new Set([...KNOWN_SECRET_ENV_VARS, ...EXTRA_PROVIDER_AUTH_ENV_VARS]),
-];
-
-export function listKnownProviderAuthEnvVarNames(): string[] {
-  return [...KNOWN_PROVIDER_AUTH_ENV_VARS];
+export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
+  return [
+    ...new Set([
+      ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
+      ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
+      ...EXTRA_PROVIDER_AUTH_ENV_VARS,
+    ]),
+  ];
 }
 
-export function listKnownSecretEnvVarNames(): string[] {
-  return [...KNOWN_SECRET_ENV_VARS];
+export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
+  return [...new Set(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys))];
 }
 
 export function omitEnvKeysCaseInsensitive(

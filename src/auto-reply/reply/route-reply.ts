@@ -7,13 +7,16 @@
  * across multiple providers.
  */
 
-import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
-import { isSlackInteractiveRepliesEnabled } from "../../../extensions/slack/src/interactive-replies.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -80,6 +83,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: true };
   }
   const normalizedChannel = normalizeMessageChannel(channel);
+  const channelId =
+    normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
+  const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
+  const bundledPlugin = channelId ? getBundledChannelPlugin(channelId) : undefined;
+  const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
+  const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,
@@ -99,8 +108,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
-    enableSlackInteractiveReplies:
-      channel === "slack" ? isSlackInteractiveRepliesEnabled({ cfg, accountId }) : false,
+    transformReplyPayload: messaging?.transformReplyPayload
+      ? (nextPayload) =>
+          messaging.transformReplyPayload?.({
+            payload: nextPayload,
+            cfg,
+            accountId,
+          }) ?? nextPayload
+      : undefined,
   });
   if (!normalized) {
     return { ok: true };
@@ -117,25 +132,23 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? [externalPayload.mediaUrl]
       : [];
   const replyToId = externalPayload.replyToId;
-  let hasSlackBlocks = false;
-  if (
-    channel === "slack" &&
-    externalPayload.channelData?.slack &&
-    typeof externalPayload.channelData.slack === "object" &&
-    !Array.isArray(externalPayload.channelData.slack)
-  ) {
-    try {
-      hasSlackBlocks = Boolean(
-        parseSlackBlocksInput((externalPayload.channelData.slack as { blocks?: unknown }).blocks)
-          ?.length,
-      );
-    } catch {
-      hasSlackBlocks = false;
-    }
-  }
+  const hasChannelData = messaging?.hasStructuredReplyPayload?.({
+    payload: externalPayload,
+  });
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0 && !hasSlackBlocks) {
+  if (
+    !hasReplyPayloadContent(
+      {
+        ...externalPayload,
+        text,
+        mediaUrls,
+      },
+      {
+        hasChannelData,
+      },
+    )
+  ) {
     return { ok: true };
   }
 
@@ -146,7 +159,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     };
   }
 
-  const channelId = normalizeChannelId(channel) ?? null;
   if (!channelId) {
     return { ok: false, error: `Unknown channel: ${String(channel)}` };
   }
@@ -154,12 +166,18 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: false, error: "Reply routing aborted" };
   }
 
-  const resolvedReplyToId =
-    replyToId ??
-    ((channelId === "slack" || channelId === "mattermost") && threadId != null && threadId !== ""
-      ? String(threadId)
-      : undefined);
-  const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
+  const replyTransport =
+    threading?.resolveReplyTransport?.({
+      cfg,
+      accountId,
+      threadId,
+      replyToId,
+    }) ?? null;
+  const resolvedReplyToId = replyTransport?.replyToId ?? replyToId ?? undefined;
+  const resolvedThreadId =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
@@ -196,7 +214,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     const last = results.at(-1);
     return { ok: true, messageId: last?.messageId };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       error: `Failed to route reply to ${channel}: ${message}`,
@@ -216,5 +234,5 @@ export function isRoutableChannel(
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
     return false;
   }
-  return normalizeChannelId(channel) !== null;
+  return normalizeChatChannelId(channel) !== null || normalizeChannelId(channel) !== null;
 }

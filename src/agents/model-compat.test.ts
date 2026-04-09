@@ -1,9 +1,28 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
-import { isModernModelRef } from "./live-model-filter.js";
-import { normalizeModelCompat } from "./model-compat.js";
-import { resolveForwardCompatModel } from "./model-forward-compat.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  resolveProviderModernModelRef: vi.fn(),
+}));
+
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
+  };
+});
+
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import {
+  DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  isHighSignalLiveModelRef,
+  isModernModelRef,
+  resolveHighSignalLiveModelLimit,
+  selectHighSignalLiveItems,
+} from "./live-model-filter.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -32,43 +51,6 @@ function supportsStrictMode(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
-function createTemplateModel(provider: string, id: string): Model<Api> {
-  return {
-    id,
-    name: id,
-    provider,
-    api: "anthropic-messages",
-    input: ["text"],
-    reasoning: true,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8_192,
-  } as Model<Api>;
-}
-
-function createOpenAITemplateModel(id: string): Model<Api> {
-  return {
-    id,
-    name: id,
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    input: ["text", "image"],
-    reasoning: true,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 400_000,
-    maxTokens: 32_768,
-  } as Model<Api>;
-}
-
-function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
-  return {
-    find(provider: string, modelId: string) {
-      return models[`${provider}/${modelId}`] ?? null;
-    },
-  } as ModelRegistry;
-}
-
 function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -90,14 +72,10 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
-function expectResolvedForwardCompat(
-  model: Model<Api> | undefined,
-  expected: { provider: string; id: string },
-): void {
-  expect(model?.id).toBe(expected.id);
-  expect(model?.name).toBe(expected.id);
-  expect(model?.provider).toBe(expected.provider);
-}
+beforeEach(() => {
+  providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
+  providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+});
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
   const anthropicBase = (): Model<Api> =>
@@ -189,6 +167,45 @@ describe("normalizeModelCompat", () => {
       provider: "custom-qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     });
+  });
+
+  it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-kimi",
+      baseUrl: "https://api.moonshot.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
   });
 
   it("leaves native api.openai.com model untouched", () => {
@@ -373,93 +390,142 @@ describe("normalizeModelCompat", () => {
 });
 
 describe("isModernModelRef", () => {
-  it("includes OpenAI gpt-5.4 variants in modern selection", () => {
+  it("uses provider runtime hooks before fallback heuristics", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(false);
+
+    expect(isModernModelRef({ provider: "openrouter", id: "claude-opus-4-6" })).toBe(false);
+  });
+
+  it("includes plugin-advertised modern models", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "openai" &&
+      ["gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].includes(context.modelId)
+        ? true
+        : provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-mini"].includes(context.modelId)
+          ? true
+          : provider === "opencode" && ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
+            ? true
+            : provider === "opencode-go"
+              ? true
+              : undefined,
+    );
+
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
-  });
-
-  it("excludes opencode minimax variants from modern selection", () => {
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
-  });
-
-  it("keeps non-minimax opencode modern models", () => {
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
-  });
-
-  it("accepts all opencode-go models without zen exclusions", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
+  });
+
+  it("matches plugin-advertised modern models across canonical provider aliases", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "zai" && context.modelId === "glm-5" ? true : undefined,
+    );
+
+    expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(true);
+  });
+
+  it("excludes provider-declined modern models", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
+    );
+
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.7" })).toBe(false);
   });
 });
 
-describe("resolveForwardCompatModel", () => {
-  it("resolves openai gpt-5.4 via gpt-5.2 template", () => {
-    const registry = createRegistry({
-      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
-    });
-    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
-    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
-    expect(model?.api).toBe("openai-responses");
-    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
+describe("isHighSignalLiveModelRef", () => {
+  it("keeps modern higher-signal Claude families", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "anthropic" && ["claude-sonnet-4-6", "claude-opus-4-6"].includes(context.modelId)
+        ? true
+        : undefined,
+    );
+
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-sonnet-4-6" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-6" })).toBe(true);
   });
 
-  it("resolves openai gpt-5.4 without templates using normalized fallback defaults", () => {
-    const registry = createRegistry({});
+  it("drops low-signal or old Claude variants even when provider marks them modern", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
-
-    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
-    expect(model?.api).toBe("openai-responses");
-    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.reasoning).toBe(true);
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-5" })).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-haiku-4-5-20251001" }),
+    ).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
+    ).toBe(false);
   });
 
-  it("resolves openai gpt-5.4-pro via template fallback", () => {
-    const registry = createRegistry({
-      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
-    });
-    const model = resolveForwardCompatModel("openai", "gpt-5.4-pro", registry);
-    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4-pro" });
-    expect(model?.api).toBe("openai-responses");
-    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
+  it("drops Gemini families older than major version 3 from the default live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-  it("resolves anthropic opus 4.6 via 4.5 template", () => {
-    const registry = createRegistry({
-      "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
-    });
-    const model = resolveForwardCompatModel("anthropic", "claude-opus-4-6", registry);
-    expectResolvedForwardCompat(model, { provider: "anthropic", id: "claude-opus-4-6" });
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-2.5-flash-lite" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "google/gemini-2.5-pro" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-flash-preview" })).toBe(
+      true,
+    );
   });
+});
 
-  it("resolves anthropic sonnet 4.6 dot variant with suffix", () => {
-    const registry = createRegistry({
-      "anthropic/claude-sonnet-4.5-20260219": createTemplateModel(
-        "anthropic",
-        "claude-sonnet-4.5-20260219",
+describe("selectHighSignalLiveItems", () => {
+  it("prefers curated Google replacements before fallback provider spread", () => {
+    const items = [
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "opencode", id: "big-pickle" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        4,
+        (item) => item,
+        (item) => item.provider,
       ),
-    });
-    const model = resolveForwardCompatModel("anthropic", "claude-sonnet-4.6-20260219", registry);
-    expectResolvedForwardCompat(model, { provider: "anthropic", id: "claude-sonnet-4.6-20260219" });
+    ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "openai", id: "gpt-5.2" },
+    ]);
+  });
+});
+
+describe("resolveHighSignalLiveModelLimit", () => {
+  it("defaults modern live sweeps to the curated high-signal cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+      }),
+    ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
   });
 
-  it("does not resolve anthropic 4.6 fallback for other providers", () => {
-    const registry = createRegistry({
-      "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
-    });
-    const model = resolveForwardCompatModel("openai", "claude-opus-4-6", registry);
-    expect(model).toBeUndefined();
+  it("leaves explicit model lists uncapped unless a cap is provided", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: true,
+      }),
+    ).toBe(0);
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "3",
+        useExplicitModels: true,
+      }),
+    ).toBe(3);
   });
 });

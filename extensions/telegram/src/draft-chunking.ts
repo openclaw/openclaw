@@ -1,8 +1,9 @@
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { getChannelDock } from "../../../src/channels/dock.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+import { resolveChannelStreamingPreviewChunk } from "openclaw/plugin-sdk/channel-streaming";
+import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;
@@ -15,13 +16,14 @@ export function resolveTelegramDraftStreamingChunking(
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
-  const providerChunkLimit = getChannelDock("telegram")?.outbound?.textChunkLimit;
   const textLimit = resolveTextChunkLimit(cfg, "telegram", accountId, {
-    fallbackLimit: providerChunkLimit,
+    fallbackLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
   });
   const normalizedAccountId = normalizeAccountId(accountId);
   const accountCfg = resolveAccountEntry(cfg?.channels?.telegram?.accounts, normalizedAccountId);
-  const draftCfg = accountCfg?.draftChunk ?? cfg?.channels?.telegram?.draftChunk;
+  const draftCfg =
+    resolveChannelStreamingPreviewChunk(accountCfg) ??
+    resolveChannelStreamingPreviewChunk(cfg?.channels?.telegram);
 
   const maxRequested = Math.max(
     1,

@@ -9,22 +9,21 @@ import {
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
-import type { ChunkMode } from "../../../src/auto-reply/chunk.js";
-import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
-import type { RetryRunner } from "../../../src/infra/retry-policy.js";
-import { buildOutboundMediaLoadOptions } from "../../../src/media/load-options.js";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
   type PollInput,
-} from "../../../src/polls.js";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
-import { resolveDiscordAccount } from "./accounts.js";
+} from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
+import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest } from "./client.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
-import { parseDiscordTarget, resolveDiscordTarget } from "./targets.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
@@ -38,7 +37,6 @@ type DiscordRequest = RetryRunner;
 export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
-
 type DiscordRecipient =
   | {
       kind: "user";
@@ -59,63 +57,6 @@ function normalizeReactionEmoji(raw: string) {
     ? `${customMatch[1]}:${customMatch[2]}`
     : trimmed.replace(/[\uFE0E\uFE0F]/g, "");
   return encodeURIComponent(identifier);
-}
-
-function parseRecipient(raw: string): DiscordRecipient {
-  const target = parseDiscordTarget(raw, {
-    defaultKind: "channel",
-    ambiguousMessage: `Ambiguous Discord recipient "${raw.trim()}". Use "user:${raw.trim()}" for DMs or "channel:${raw.trim()}" for channel messages.`,
-  });
-  if (!target) {
-    throw new Error("Recipient is required for Discord sends");
-  }
-  return { kind: target.kind, id: target.id };
-}
-
-/**
- * Parse and resolve Discord recipient, including username lookup.
- * This enables sending DMs by username (e.g., "john.doe") by querying
- * the Discord directory to resolve usernames to user IDs.
- *
- * @param raw - The recipient string (username, ID, or known format)
- * @param accountId - Discord account ID to use for directory lookup
- * @returns Parsed DiscordRecipient with resolved user ID if applicable
- */
-export async function parseAndResolveRecipient(
-  raw: string,
-  accountId?: string,
-  cfg?: OpenClawConfig,
-): Promise<DiscordRecipient> {
-  const resolvedCfg = cfg ?? loadConfig();
-  const accountInfo = resolveDiscordAccount({ cfg: resolvedCfg, accountId });
-
-  // First try to resolve using directory lookup (handles usernames)
-  const trimmed = raw.trim();
-  const parseOptions = {
-    ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
-  };
-
-  const resolved = await resolveDiscordTarget(
-    raw,
-    {
-      cfg: resolvedCfg,
-      accountId: accountInfo.accountId,
-    },
-    parseOptions,
-  );
-
-  if (resolved) {
-    return { kind: resolved.kind, id: resolved.id };
-  }
-
-  // Fallback to standard parsing (for channels, etc.)
-  const parsed = parseDiscordTarget(raw, parseOptions);
-
-  if (!parsed) {
-    throw new Error("Recipient is required for Discord sends");
-  }
-
-  return { kind: parsed.kind, id: parsed.id };
 }
 
 function normalizeStickerIds(raw: string[]) {
@@ -276,10 +217,7 @@ export function buildDiscordTextChunks(
     maxLines: opts.maxLinesPerMessage,
     chunkMode: opts.chunkMode,
   });
-  if (!chunks.length && text) {
-    chunks.push(text);
-  }
-  return chunks;
+  return resolveTextChunksWithFallback(text, chunks);
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {
@@ -418,7 +356,9 @@ async function sendDiscordMedia(
   channelId: string,
   text: string,
   mediaUrl: string,
+  filename: string | undefined,
   mediaLocalRoots: readonly string[] | undefined,
+  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
   replyTo: string | undefined,
   request: DiscordRequest,
@@ -430,8 +370,14 @@ async function sendDiscordMedia(
 ) {
   const media = await loadWebMedia(
     mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots }),
+    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
   );
+  const requestedFileName = filename?.trim();
+  const resolvedFileName =
+    requestedFileName ||
+    media.fileName ||
+    (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
+    "upload";
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
@@ -451,7 +397,7 @@ async function sendDiscordMedia(
     files: [
       {
         data: fileData,
-        name: media.fileName ?? "upload",
+        name: resolvedFileName,
       },
     ],
   });
@@ -505,7 +451,6 @@ export {
   normalizeEmojiName,
   normalizeReactionEmoji,
   normalizeStickerIds,
-  parseRecipient,
   resolveChannelId,
   resolveDiscordRest,
   sendDiscordMedia,

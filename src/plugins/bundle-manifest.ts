@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import JSON5 from "json5";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
 import type { PluginBundleFormat } from "./types.js";
@@ -30,11 +35,6 @@ type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
-function normalizeString(value: unknown): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed || undefined;
-}
-
 function normalizePathList(value: unknown): string[] {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -43,14 +43,16 @@ function normalizePathList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
-function normalizeBundlePathList(value: unknown): string[] {
+export function normalizeBundlePathList(value: unknown): string[] {
   return Array.from(new Set(normalizePathList(value)));
 }
 
-function mergeBundlePathLists(...groups: string[][]): string[] {
+export function mergeBundlePathLists(...groups: string[][]): string[] {
   const merged: string[] = [];
   const seen = new Set<string>();
   for (const group of groups) {
@@ -80,7 +82,7 @@ function hasInlineCapabilityValue(value: unknown): boolean {
 
 function slugifyPluginId(raw: string | undefined, rootDir: string): string {
   const fallback = path.basename(rootDir);
-  const source = (raw?.trim() || fallback).toLowerCase();
+  const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
   const slug = source
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
@@ -102,20 +104,22 @@ function loadBundleManifestFile(params: {
     rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
-    if (opened.reason === "path") {
-      if (params.allowMissing) {
-        return { ok: true, raw: {}, manifestPath };
-      }
-      return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
-    }
-    return {
-      ok: false,
-      error: `unsafe plugin manifest path: ${manifestPath} (${opened.reason})`,
-      manifestPath,
-    };
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => {
+        if (params.allowMissing) {
+          return { ok: true, raw: {}, manifestPath };
+        }
+        return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+      },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unsafe plugin manifest path: ${manifestPath} (${failure.reason})`,
+        manifestPath,
+      }),
+    });
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
     if (!isRecord(raw)) {
       return { ok: false, error: "plugin manifest must be an object", manifestPath };
     }
@@ -216,6 +220,8 @@ function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): 
   return mergeBundlePathLists(
     resolveClaudeSkillsRootDirs(raw, rootDir),
     resolveClaudeCommandRootDirs(raw, rootDir),
+    resolveClaudeAgentDirs(raw, rootDir),
+    resolveClaudeOutputStylePaths(raw, rootDir),
   );
 }
 
@@ -343,12 +349,12 @@ export function loadBundleManifest(params: {
 
   const raw = loaded.raw;
   const interfaceRecord = isRecord(raw.interface) ? raw.interface : undefined;
-  const name = normalizeString(raw.name);
+  const name = normalizeOptionalString(raw.name);
   const description =
-    normalizeString(raw.description) ??
-    normalizeString(raw.shortDescription) ??
-    normalizeString(interfaceRecord?.shortDescription);
-  const version = normalizeString(raw.version);
+    normalizeOptionalString(raw.description) ??
+    normalizeOptionalString(raw.shortDescription) ??
+    normalizeOptionalString(interfaceRecord?.shortDescription);
+  const version = normalizeOptionalString(raw.version);
 
   if (params.bundleFormat === "codex") {
     const skills = resolveCodexSkillDirs(raw, params.rootDir);
@@ -397,7 +403,7 @@ export function loadBundleManifest(params: {
       version,
       skills: resolveClaudeSkillDirs(raw, params.rootDir),
       settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
-      hooks: [],
+      hooks: resolveClaudeHookPaths(raw, params.rootDir),
       bundleFormat: "claude",
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
     },

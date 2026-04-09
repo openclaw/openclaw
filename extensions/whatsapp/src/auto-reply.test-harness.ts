@@ -2,10 +2,10 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import * as ssrf from "../../../src/infra/net/ssrf.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
@@ -15,7 +15,6 @@ import {
 export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyExport = any;
 type MockWebListener = {
   close: () => Promise<void>;
@@ -26,16 +25,33 @@ type MockWebListener = {
   sendReaction: () => Promise<void>;
   sendComposingTo: () => Promise<void>;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type WebAutoReplyRuntime = {
+  log: UnknownMock;
+  error: UnknownMock;
+  exit: UnknownMock;
+};
+type WebAutoReplyMonitorHarness = {
+  runtime: WebAutoReplyRuntime;
+  controller: AbortController;
+  run: Promise<unknown>;
+};
 
 export const TEST_NET_IP = "203.0.113.10";
 
-vi.mock("../../../src/agents/pi-embedded.js", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  appendCronStyleCurrentTimeLine: (text: string) => text,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
+    cfg.messages?.responsePrefix,
+  resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
+    cfg.messages?.messagePrefix,
+  runEmbeddedPiAgent: vi.fn(),
 }));
 
 export async function rmDirWithRetries(
@@ -127,16 +143,17 @@ export async function makeSessionStore(
 export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   let resolvePinnedHostnameSpy: { mockRestore: () => unknown } | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
+      const ssrf = await import("../../../src/infra/net/ssrf.js");
       resolvePinnedHostnameSpy = vi
         .spyOn(ssrf, "resolvePinnedHostname")
         .mockImplementation(async (hostname) => {
           // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+          const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
           const addresses = [TEST_NET_IP];
           return {
             hostname: normalized,
@@ -183,12 +200,83 @@ export function createMockWebListener(): MockWebListener {
   };
 }
 
+export function createScriptedWebListenerFactory(): AnyExport {
+  const onMessages: Array<(msg: WebInboundMessage) => Promise<void>> = [];
+  const closeResolvers: Array<(reason: unknown) => void> = [];
+  const listeners: MockWebListener[] = [];
+
+  const listenerFactory = vi.fn(
+    async (opts: { onMessage: (msg: WebInboundMessage) => Promise<void> }) => {
+      onMessages.push(opts.onMessage);
+      let resolveClose: (reason: unknown) => void = () => {};
+      const onClose = new Promise<WebListenerCloseReason>((res) => {
+        resolveClose = res as (reason: unknown) => void;
+        closeResolvers.push(resolveClose);
+      });
+      const listener: MockWebListener = {
+        ...createMockWebListener(),
+        onClose,
+        signalClose: vi.fn((reason?: unknown) => resolveClose(reason)),
+      };
+      listeners.push(listener);
+      return listener;
+    },
+  );
+
+  return {
+    listenerFactory,
+    listeners,
+    getOnMessage: (index = onMessages.length - 1) => onMessages[index],
+    resolveClose: (index: number, reason?: unknown) => closeResolvers[index]?.(reason),
+    getListenerCount: () => listenerFactory.mock.calls.length,
+  };
+}
+
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
     sendMedia: vi.fn(),
     reply: vi.fn().mockResolvedValue(undefined),
     sendComposing: vi.fn(),
   };
+}
+
+export function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+export function startWebAutoReplyMonitor(params: {
+  monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
+  listenerFactory: unknown;
+  sleep: UnknownMock | AsyncUnknownMock;
+  signal?: AbortSignal;
+  heartbeatSeconds?: number;
+  messageTimeoutMs?: number;
+  watchdogCheckMs?: number;
+  reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+}): WebAutoReplyMonitorHarness {
+  const runtime = createWebAutoReplyRuntime();
+  const controller = new AbortController();
+  const run = params.monitorWebChannelFn(
+    false,
+    params.listenerFactory as never,
+    true,
+    async () => ({ text: "ok" }),
+    runtime as never,
+    params.signal ?? controller.signal,
+    {
+      heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      messageTimeoutMs: params.messageTimeoutMs,
+      watchdogCheckMs: params.watchdogCheckMs,
+      reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      sleep: params.sleep,
+    },
+  );
+
+  return { runtime, controller, run };
 }
 
 export async function sendWebGroupInboundMessage(params: {
@@ -234,6 +322,7 @@ export async function sendWebDirectInboundMessage(params: {
   to: string;
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
   accountId?: string;
+  timestamp?: number;
 }) {
   const accountId = params.accountId ?? "default";
   await params.onMessage({
@@ -243,7 +332,7 @@ export async function sendWebDirectInboundMessage(params: {
     conversationId: params.from,
     to: params.to,
     body: params.body,
-    timestamp: Date.now(),
+    timestamp: params.timestamp ?? Date.now(),
     chatType: "direct",
     chatId: `direct:${params.from}`,
     sendComposing: params.spies.sendComposing,

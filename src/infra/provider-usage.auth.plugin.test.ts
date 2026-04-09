@@ -1,16 +1,39 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolveProviderUsageAuthWithPluginMock = vi.fn();
-
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
-    resolveProviderUsageAuthWithPluginMock(...args),
+const resolveProviderUsageAuthWithPluginMock = vi.fn(
+  async (..._args: unknown[]): Promise<unknown> => null,
+);
+const ensureAuthProfileStoreMock = vi.fn(() => ({
+  profiles: {},
 }));
 
-import { resolveProviderAuths } from "./provider-usage.auth.js";
+vi.mock("../agents/auth-profiles.js", () => ({
+  dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
+  ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
+  listProfilesForProvider: () => [],
+  resolveApiKeyForProfile: async () => null,
+  resolveAuthProfileOrder: () => [],
+}));
 
-describe("resolveProviderAuths plugin seam", () => {
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+  };
+});
+
+let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+
+describe("resolveProviderAuths plugin boundary", () => {
+  beforeAll(async () => {
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+  });
+
   beforeEach(() => {
+    ensureAuthProfileStoreMock.mockClear();
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
@@ -30,5 +53,6 @@ describe("resolveProviderAuths plugin seam", () => {
         token: "plugin-zai-token",
       },
     ]);
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 });

@@ -1,64 +1,78 @@
-import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import {
+  createPluginSetupWizardConfigure,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+} from "../../../test/helpers/plugins/setup-wizard.js";
+import type { OpenClawConfig } from "../runtime-api.js";
+import "./zalo-js.test-mocks.js";
+import { zalouserSetupWizard } from "./setup-surface.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
-vi.mock("./zalo-js.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./zalo-js.js")>();
-  return {
-    ...actual,
-    checkZaloAuthenticated: vi.fn(async () => false),
-    logoutZaloProfile: vi.fn(async () => {}),
-    startZaloQrLogin: vi.fn(async () => ({
-      message: "qr pending",
-      qrDataUrl: undefined,
-    })),
-    waitForZaloQrLogin: vi.fn(async () => ({
-      connected: false,
-      message: "login pending",
-    })),
-    resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-    ),
-    resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-    ),
-  };
-});
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 
-import { zalouserPlugin } from "./channel.js";
-
-const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
-  const first = params.options[0];
-  if (!first) {
-    throw new Error("no options");
-  }
-  return first.value;
-};
-
-function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: selectFirstOption as WizardPrompter["select"],
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
+async function runSetup(params: {
+  cfg?: OpenClawConfig;
+  prompter: ReturnType<typeof createTestWizardPrompter>;
+  options?: Record<string, unknown>;
+  forceAllowFrom?: boolean;
+}) {
+  return await runSetupWizardConfigure({
+    configure: zalouserConfigure,
+    cfg: params.cfg,
+    prompter: params.prompter,
+    options: params.options,
+    forceAllowFrom: params.forceAllowFrom,
+  });
 }
 
-const zalouserConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
-  plugin: zalouserPlugin,
-  wizard: zalouserPlugin.setupWizard!,
-});
-
 describe("zalouser setup wizard", () => {
+  function createQuickstartPrompter(params?: {
+    note?: ReturnType<typeof createTestWizardPrompter>["note"];
+    seen?: string[];
+    dmPolicy?: "pairing" | "allowlist";
+    groupAccess?: boolean;
+    groupPolicy?: "allowlist";
+    textByMessage?: Record<string, string>;
+  }) {
+    const select = vi.fn(
+      async ({ message, options }: { message: string; options: Array<{ value: string }> }) => {
+        const first = options[0];
+        if (!first) {
+          throw new Error("no options");
+        }
+        params?.seen?.push(message);
+        if (message === "Zalo Personal DM policy" && params?.dmPolicy) {
+          return params.dmPolicy;
+        }
+        if (message === "Zalo groups access" && params?.groupPolicy) {
+          return params.groupPolicy;
+        }
+        return first.value;
+      },
+    ) as ReturnType<typeof createTestWizardPrompter>["select"];
+    const text = vi.fn(
+      async ({ message }: { message: string }) => params?.textByMessage?.[message] ?? "",
+    ) as ReturnType<typeof createTestWizardPrompter>["text"];
+    return createTestWizardPrompter({
+      ...(params?.note ? { note: params.note } : {}),
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        params?.seen?.push(message);
+        if (message === "Login via QR code now?") {
+          return false;
+        }
+        if (message === "Configure Zalo groups access?") {
+          return params?.groupAccess ?? false;
+        }
+        return false;
+      }),
+      select,
+      text,
+    });
+  }
+
   it("enables the account without forcing QR login", async () => {
-    const runtime = createRuntimeEnv();
-    const prompter = createPrompter({
+    const prompter = createTestWizardPrompter({
       confirm: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Login via QR code now?") {
           return false;
@@ -70,17 +84,278 @@ describe("zalouser setup wizard", () => {
       }),
     });
 
-    const result = await zalouserConfigureAdapter.configure({
-      cfg: {} as OpenClawConfig,
-      runtime,
+    const result = await runSetup({ prompter });
+
+    expect(result.accountId).toBe("default");
+    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+  });
+
+  it("prompts DM policy before group access in quickstart", async () => {
+    const seen: string[] = [];
+    const prompter = createQuickstartPrompter({ seen, dmPolicy: "pairing" });
+
+    const result = await runSetup({
       prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
+      options: { quickstartDefaults: true },
     });
 
     expect(result.accountId).toBe("default");
     expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("pairing");
+    expect(seen.indexOf("Zalo Personal DM policy")).toBeGreaterThanOrEqual(0);
+    expect(seen.indexOf("Configure Zalo groups access?")).toBeGreaterThanOrEqual(0);
+    expect(seen.indexOf("Zalo Personal DM policy")).toBeLessThan(
+      seen.indexOf("Configure Zalo groups access?"),
+    );
+  });
+
+  it("allows an empty quickstart DM allowlist with a warning", async () => {
+    const note = vi.fn(async (_message: string, _title?: string) => {});
+    const prompter = createQuickstartPrompter({
+      note,
+      dmPolicy: "allowlist",
+      textByMessage: {
+        "Zalouser allowFrom (name or user id)": "",
+      },
+    });
+
+    const result = await runSetup({
+      prompter,
+      options: { quickstartDefaults: true },
+    });
+
+    expect(result.accountId).toBe("default");
+    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
+    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No DM allowlist entries added yet."),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows an empty group allowlist with a warning", async () => {
+    const note = vi.fn(async (_message: string, _title?: string) => {});
+    const prompter = createQuickstartPrompter({
+      note,
+      groupAccess: true,
+      groupPolicy: "allowlist",
+      textByMessage: {
+        "Zalo groups allowlist (comma-separated)": "",
+      },
+    });
+
+    const result = await runSetup({ prompter });
+
+    expect(result.cfg.channels?.zalouser?.groupPolicy).toBe("allowlist");
+    expect(result.cfg.channels?.zalouser?.groups).toEqual({});
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No group allowlist entries added yet."),
+      ),
+    ).toBe(true);
+  });
+
+  it("writes canonical enabled entries for configured groups", async () => {
+    const prompter = createQuickstartPrompter({
+      groupAccess: true,
+      groupPolicy: "allowlist",
+      textByMessage: {
+        "Zalo groups allowlist (comma-separated)": "Family, Work",
+      },
+    });
+
+    const result = await runSetup({ prompter });
+
+    expect(result.cfg.channels?.zalouser?.groups).toEqual({
+      Family: { enabled: true, requireMention: true },
+      Work: { enabled: true, requireMention: true },
+    });
+  });
+
+  it("preserves non-quickstart forceAllowFrom behavior", async () => {
+    const note = vi.fn(async (_message: string, _title?: string) => {});
+    const seen: string[] = [];
+    const prompter = createTestWizardPrompter({
+      note,
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        seen.push(message);
+        if (message === "Login via QR code now?") {
+          return false;
+        }
+        if (message === "Configure Zalo groups access?") {
+          return false;
+        }
+        return false;
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        seen.push(message);
+        if (message === "Zalouser allowFrom (name or user id)") {
+          return "";
+        }
+        return "";
+      }) as ReturnType<typeof createTestWizardPrompter>["text"],
+    });
+
+    const result = await runSetup({ prompter, forceAllowFrom: true });
+
+    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
+    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(seen).not.toContain("Zalo Personal DM policy");
+    expect(seen).toContain("Zalouser allowFrom (name or user id)");
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No DM allowlist entries added yet."),
+      ),
+    ).toBe(true);
+  });
+
+  it("allowlists the plugin when a plugin allowlist already exists", async () => {
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Login via QR code now?") {
+          return false;
+        }
+        if (message === "Configure Zalo groups access?") {
+          return false;
+        }
+        return false;
+      }),
+    });
+
+    const result = await runSetup({
+      cfg: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      } as OpenClawConfig,
+      prompter,
+    });
+
+    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "zalouser"]);
+  });
+
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      zalouserSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            zalouser: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  profile: "work",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual(
+      {
+        policyKey: "channels.zalouser.accounts.work.dmPolicy",
+        allowFromKey: "channels.zalouser.accounts.work.allowFrom",
+      },
+    );
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg = {
+      channels: {
+        zalouser: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["123456789"],
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              profile: "work-profile",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(zalouserSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.zalouser.accounts.work.dmPolicy",
+      allowFromKey: "channels.zalouser.accounts.work.allowFrom",
+    });
+
+    const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = zalouserSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          zalouser: {
+            allowFrom: ["123456789"],
+            accounts: {
+              work: {
+                profile: "work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "work",
+    );
+
+    expect(next?.channels?.zalouser?.dmPolicy).toBeUndefined();
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
+  });
+
+  it("shows the account-scoped current DM policy in quickstart notes", async () => {
+    const note = vi.fn(async (_message: string, _title?: string) => {});
+    const prompter = createQuickstartPrompter({ note, dmPolicy: "pairing" });
+
+    await runSetupWizardConfigure({
+      configure: zalouserConfigure,
+      cfg: {
+        channels: {
+          zalouser: {
+            dmPolicy: "disabled",
+            accounts: {
+              work: {
+                profile: "work",
+                dmPolicy: "allowlist",
+                allowFrom: ["123456789"],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+      options: { quickstartDefaults: true },
+      accountOverrides: { zalouser: "work" },
+    });
+
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
+      ),
+    ).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { roleScopesAllow } from "./operator-scope-compat.js";
+import { resolveMissingRequestedScope, roleScopesAllow } from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
   it("allows empty requested scope lists regardless of granted scopes", () => {
@@ -80,26 +80,33 @@ describe("roleScopesAllow", () => {
     ).toBe(false);
   });
 
-  it("uses strict matching for non-operator roles", () => {
+  it("uses strict matching with role-prefix partitioning for non-operator roles", () => {
     expect(
       roleScopesAllow({
         role: "node",
-        requestedScopes: ["system.run"],
-        allowedScopes: ["operator.admin", "system.run"],
+        requestedScopes: ["node.exec"],
+        allowedScopes: ["operator.admin", "node.exec"],
       }),
     ).toBe(true);
     expect(
       roleScopesAllow({
         role: "node",
-        requestedScopes: ["system.run"],
+        requestedScopes: ["node.exec"],
         allowedScopes: ["operator.admin"],
       }),
     ).toBe(false);
     expect(
       roleScopesAllow({
+        role: "node",
+        requestedScopes: ["operator.read"],
+        allowedScopes: ["operator.read", "node.exec"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
         role: " node ",
-        requestedScopes: [" system.run ", "system.run", "  "],
-        allowedScopes: ["system.run", "operator.admin"],
+        requestedScopes: [" node.exec ", "node.exec", "  "],
+        allowedScopes: ["node.exec", "operator.admin"],
       }),
     ).toBe(true);
   });
@@ -129,5 +136,25 @@ describe("roleScopesAllow", () => {
         allowedScopes: ["   "],
       }),
     ).toBe(false);
+  });
+
+  it("returns the first missing requested scope with operator compatibility", () => {
+    expect(
+      resolveMissingRequestedScope({
+        role: "operator",
+        requestedScopes: ["operator.read", "operator.write", "operator.approvals"],
+        allowedScopes: ["operator.write"],
+      }),
+    ).toBe("operator.approvals");
+  });
+
+  it("returns null when all requested scopes are satisfied", () => {
+    expect(
+      resolveMissingRequestedScope({
+        role: "node",
+        requestedScopes: ["node.exec"],
+        allowedScopes: ["node.exec", "operator.admin"],
+      }),
+    ).toBeNull();
   });
 });

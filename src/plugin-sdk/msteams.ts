@@ -1,5 +1,7 @@
-// Narrow plugin-sdk surface for the bundled msteams plugin.
-// Keep this list additive and scoped to symbols used under extensions/msteams.
+// Private helper surface for the bundled msteams plugin.
+// Keep this list additive and scoped to the bundled Teams surface.
+
+import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 export type { ChunkMode } from "../auto-reply/chunk.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
@@ -17,7 +19,11 @@ export {
   resolveDualTextControlCommandGate,
 } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
-export { resolveMentionGating } from "../channels/mention-gating.js";
+export {
+  resolveInboundMentionDecision,
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+} from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export {
   formatAllowlistMatchMeta,
@@ -38,9 +44,11 @@ export {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
+export { resolveOutboundMediaUrls, resolveSendableOutboundReplyParts } from "./reply-payload.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
@@ -49,10 +57,10 @@ export type {
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { resolveChannelContextVisibilityMode } from "../config/context-visibility.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -94,16 +102,20 @@ export {
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
+export {
+  filterSupplementalContextItems,
+  shouldIncludeSupplementalContext,
+} from "../security/context-visibility.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
-export { loadWebMedia } from "../../extensions/whatsapp/src/media.js";
+export { loadWebMedia } from "./web-media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
+export { keepHttpServerTaskAlive } from "./channel-lifecycle.core.js";
 export { withFileLock } from "./file-lock.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -117,5 +129,13 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { normalizeStringEntries } from "../shared/string-normalization.js";
-export { msteamsSetupWizard } from "../../extensions/msteams/src/setup-surface.js";
-export { msteamsSetupAdapter } from "../../extensions/msteams/src/setup-core.js";
+
+const msteamsSetup = createOptionalChannelSetupSurface({
+  channel: "msteams",
+  label: "Microsoft Teams",
+  npmSpec: "@openclaw/msteams",
+  docsPath: "/channels/msteams",
+});
+
+export const msteamsSetupWizard = msteamsSetup.setupWizard;
+export const msteamsSetupAdapter = msteamsSetup.setupAdapter;

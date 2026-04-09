@@ -1,8 +1,21 @@
 # Generated Docs Artifacts
 
-These baseline artifacts are generated from the repo-owned OpenClaw config schema and bundled channel/plugin metadata.
+SHA-256 hash files are the tracked drift-detection artifacts. The full JSON
+baselines are generated locally (gitignored) for inspection only.
 
-- Do not edit `config-baseline.json` by hand.
-- Do not edit `config-baseline.jsonl` by hand.
-- Regenerate it with `pnpm config:docs:gen`.
-- Validate it in CI or locally with `pnpm config:docs:check`.
+**Tracked (committed to git):**
+
+- `config-baseline.sha256` — hashes of config baseline JSON artifacts.
+- `plugin-sdk-api-baseline.sha256` — hashes of Plugin SDK API baseline artifacts.
+
+**Local only (gitignored):**
+
+- `config-baseline.json`, `config-baseline.core.json`, `config-baseline.channel.json`, `config-baseline.plugin.json`
+- `plugin-sdk-api-baseline.json`, `plugin-sdk-api-baseline.jsonl`
+
+Do not edit any of these files by hand.
+
+- Regenerate config baseline: `pnpm config:docs:gen`
+- Validate config baseline: `pnpm config:docs:check`
+- Regenerate Plugin SDK API baseline: `pnpm plugin-sdk:api:gen`
+- Validate Plugin SDK API baseline: `pnpm plugin-sdk:api:check`

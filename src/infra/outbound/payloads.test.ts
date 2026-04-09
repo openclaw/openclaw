@@ -52,6 +52,31 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("drops JSON NO_REPLY action payloads without media", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: '{"action":"NO_REPLY"}' },
+        { text: '{\n  "action": "NO_REPLY"\n}' },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps JSON NO_REPLY objects that include extra fields", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([{ text: '{"action":"NO_REPLY","note":"example"}' }]),
+    ).toEqual([
+      {
+        text: '{"action":"NO_REPLY","note":"example"}',
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("keeps renderable channel-data payloads and reply-to-current markers", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
@@ -75,34 +100,58 @@ describe("normalizeReplyPayloadsForDelivery", () => {
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {
-  it("normalizes payloads for JSON output", () => {
-    const cases = typedCases<{
+  function cloneReplyPayloads(
+    input: Parameters<typeof normalizeOutboundPayloadsForJson>[0],
+  ): ReplyPayload[] {
+    return input.map((payload) =>
+      "mediaUrls" in payload
+        ? ({
+            ...payload,
+            mediaUrls: payload.mediaUrls ? [...payload.mediaUrls] : undefined,
+          } as ReplyPayload)
+        : ({ ...payload } as ReplyPayload),
+    );
+  }
+
+  it.each(
+    typedCases<{
+      name: string;
       input: Parameters<typeof normalizeOutboundPayloadsForJson>[0];
       expected: ReturnType<typeof normalizeOutboundPayloadsForJson>;
     }>([
       {
+        name: "text + media variants",
         input: [
           { text: "hi" },
-          { text: "photo", mediaUrl: "https://x.test/a.jpg" },
+          { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
           { text: "multi", mediaUrls: ["https://x.test/1.png"] },
         ],
         expected: [
-          { text: "hi", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+          {
+            text: "hi",
+            mediaUrl: null,
+            mediaUrls: undefined,
+            audioAsVoice: undefined,
+            channelData: undefined,
+          },
           {
             text: "photo",
             mediaUrl: "https://x.test/a.jpg",
             mediaUrls: ["https://x.test/a.jpg"],
+            audioAsVoice: true,
             channelData: undefined,
           },
           {
             text: "multi",
             mediaUrl: null,
             mediaUrls: ["https://x.test/1.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
       },
       {
+        name: "MEDIA directive extraction",
         input: [
           {
             text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
@@ -113,23 +162,14 @@ describe("normalizeOutboundPayloadsForJson", () => {
             text: "",
             mediaUrl: null,
             mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
       },
-    ]);
-
-    for (const testCase of cases) {
-      const input: ReplyPayload[] = testCase.input.map((payload) =>
-        "mediaUrls" in payload
-          ? ({
-              ...payload,
-              mediaUrls: payload.mediaUrls ? [...payload.mediaUrls] : undefined,
-            } as ReplyPayload)
-          : ({ ...payload } as ReplyPayload),
-      );
-      expect(normalizeOutboundPayloadsForJson(input)).toEqual(testCase.expected);
-    }
+    ]),
+  )("$name", ({ input, expected }) => {
+    expect(normalizeOutboundPayloadsForJson(cloneReplyPayloads(input))).toEqual(expected);
   });
 
   it("suppresses reasoning payloads", () => {
@@ -138,7 +178,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
         { text: "Reasoning:\n_step_", isReasoning: true },
         { text: "final answer" },
       ]),
-    ).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
+    ).toEqual([
+      { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
+    ]);
   });
 });
 
@@ -158,11 +200,22 @@ describe("normalizeOutboundPayloads", () => {
       ]),
     ).toEqual([{ text: "final answer", mediaUrls: [] }]);
   });
+
+  it("formats BTW replies prominently for external delivery", () => {
+    expect(
+      normalizeOutboundPayloads([
+        {
+          text: "323",
+          btw: { question: "what is 17 * 19?" },
+        },
+      ]),
+    ).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {
-  it("formats text+media and media-only logs", () => {
-    const cases = typedCases<{
+  it.each(
+    typedCases<{
       name: string;
       input: Parameters<typeof formatOutboundPayloadLog>[0];
       expected: string;
@@ -183,16 +236,13 @@ describe("formatOutboundPayloadLog", () => {
         },
         expected: "MEDIA:https://x.test/a.png",
       },
-    ]);
-
-    for (const testCase of cases) {
-      expect(
-        formatOutboundPayloadLog({
-          ...testCase.input,
-          mediaUrls: [...testCase.input.mediaUrls],
-        }),
-        testCase.name,
-      ).toBe(testCase.expected);
-    }
+    ]),
+  )("$name", ({ input, expected }) => {
+    expect(
+      formatOutboundPayloadLog({
+        ...input,
+        mediaUrls: [...input.mediaUrls],
+      }),
+    ).toBe(expected);
   });
 });

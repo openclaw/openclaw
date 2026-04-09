@@ -1,12 +1,12 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import type {
-  SandboxContext,
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
-} from "openclaw/plugin-sdk/core";
-import type { OpenShellSandboxBackend } from "./backend.js";
+} from "openclaw/plugin-sdk/sandbox";
+import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
@@ -16,15 +16,20 @@ type ResolvedMountPath = SandboxResolvedPath & {
 };
 
 export function createOpenShellFsBridge(params: {
-  sandbox: SandboxContext;
+  sandbox: OpenShellFsBridgeContext;
   backend: OpenShellSandboxBackend;
 }): SandboxFsBridge {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
 
 class OpenShellFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
-    private readonly sandbox: SandboxContext,
+    private readonly sandbox: OpenShellFsBridgeContext,
     private readonly backend: OpenShellSandboxBackend,
   ) {}
 
@@ -43,13 +48,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
     await assertLocalPathSafety({
       target,
       root: target.mountHostRoot,
       allowMissingLeaf: false,
       allowFinalSymlinkForUnlink: false,
     });
-    return await fsPromises.readFile(target.hostPath);
+    return await fsPromises.readFile(hostPath);
   }
 
   async writeFile(params: {
@@ -61,6 +67,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "write files");
     await assertLocalPathSafety({
       target,
@@ -71,21 +78,22 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const parentDir = path.dirname(target.hostPath);
+    const parentDir = path.dirname(hostPath);
     if (params.mkdir !== false) {
       await fsPromises.mkdir(parentDir, { recursive: true });
     }
     const tempPath = path.join(
       parentDir,
-      `.openclaw-openshell-write-${path.basename(target.hostPath)}-${process.pid}-${Date.now()}`,
+      `.openclaw-openshell-write-${path.basename(hostPath)}-${process.pid}-${Date.now()}`,
     );
     await fsPromises.writeFile(tempPath, buffer);
-    await fsPromises.rename(tempPath, target.hostPath);
-    await this.backend.syncLocalPathToRemote(target.hostPath, target.containerPath);
+    await fsPromises.rename(tempPath, hostPath);
+    await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "create directories");
     await assertLocalPathSafety({
       target,
@@ -93,7 +101,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await fsPromises.mkdir(target.hostPath, { recursive: true });
+    await fsPromises.mkdir(hostPath, { recursive: true });
     await this.backend.runRemoteShellScript({
       script: 'mkdir -p -- "$1"',
       args: [target.containerPath],
@@ -109,6 +117,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "remove files");
     await assertLocalPathSafety({
       target,
@@ -116,7 +125,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: params.force !== false,
       allowFinalSymlinkForUnlink: true,
     });
-    await fsPromises.rm(target.hostPath, {
+    await fsPromises.rm(hostPath, {
       recursive: params.recursive ?? false,
       force: params.force !== false,
     });
@@ -136,10 +145,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<void> {
-    const from = this.resolveTarget({ filePath: params.from, cwd: params.cwd });
-    const to = this.resolveTarget({ filePath: params.to, cwd: params.cwd });
-    this.ensureWritable(from, "rename files");
-    this.ensureWritable(to, "rename files");
+    const { from, to } = this.resolveRenameTargets(params);
+    const fromHostPath = this.requireHostPath(from);
+    const toHostPath = this.requireHostPath(to);
     await assertLocalPathSafety({
       target: from,
       root: from.mountHostRoot,
@@ -152,8 +160,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await fsPromises.mkdir(path.dirname(to.hostPath), { recursive: true });
-    await movePathWithCopyFallback({ from: from.hostPath, to: to.hostPath });
+    await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
+    await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
     await this.backend.runRemoteShellScript({
       script: 'mkdir -p -- "$(dirname -- "$2")" && mv -- "$1" "$2"',
       args: [from.containerPath, to.containerPath],
@@ -167,7 +175,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
-    const stats = await fsPromises.lstat(target.hostPath).catch(() => null);
+    const hostPath = this.requireHostPath(target);
+    const stats = await fsPromises.lstat(hostPath).catch(() => null);
     if (!stats) {
       return null;
     }
@@ -188,6 +197,15 @@ class OpenShellFsBridge implements SandboxFsBridge {
     if (this.sandbox.workspaceAccess !== "rw" || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
+  }
+
+  private requireHostPath(target: ResolvedMountPath): string {
+    if (!target.hostPath) {
+      throw new Error(
+        `OpenShell mirror bridge requires a local host path: ${target.containerPath}`,
+      );
+    }
+    return target.hostPath;
   }
 
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
@@ -282,6 +300,9 @@ async function assertLocalPathSafety(params: {
   allowMissingLeaf: boolean;
   allowFinalSymlinkForUnlink: boolean;
 }): Promise<void> {
+  if (!params.target.hostPath) {
+    throw new Error(`Missing local host path for ${params.target.containerPath}`);
+  }
   const canonicalRoot = await fsPromises
     .realpath(params.root)
     .catch(() => path.resolve(params.root));
@@ -299,7 +320,7 @@ async function assertLocalPathSafety(params: {
     .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
   let cursor = params.root;
   for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]!);
+    cursor = path.join(cursor, segments[index]);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {

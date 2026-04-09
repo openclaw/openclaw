@@ -1,9 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -14,8 +12,48 @@ import {
   installResolveOutboundTargetPluginRegistryHooks,
   runResolveOutboundTargetCoreTests,
 } from "./targets.shared-test.js";
+import {
+  createNoopOutboundChannelPlugin,
+  createTargetsTestRegistry,
+  createTelegramTestPlugin,
+  createWhatsAppTestPlugin,
+} from "./targets.test-helpers.js";
+
+const mocks = vi.hoisted(() => ({
+  normalizeDeliverableOutboundChannel: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
 
 runResolveOutboundTargetCoreTests();
+
+beforeEach(() => {
+  mocks.normalizeDeliverableOutboundChannel.mockReset();
+  mocks.normalizeDeliverableOutboundChannel.mockImplementation((value?: string | null) => {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
+    return ["discord", "imessage", "slack", "telegram", "whatsapp"].includes(String(normalized))
+      ? normalized
+      : undefined;
+  });
+  mocks.resolveOutboundChannelPlugin.mockReset();
+  mocks.resolveOutboundChannelPlugin.mockImplementation(
+    ({ channel }: { channel: string }) =>
+      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+  );
+  setActivePluginRegistry(
+    createTargetsTestRegistry([
+      createNoopOutboundChannelPlugin("discord"),
+      createNoopOutboundChannelPlugin("imessage"),
+      createNoopOutboundChannelPlugin("slack"),
+      createTelegramTestPlugin(),
+      createWhatsAppTestPlugin(),
+    ]),
+  );
+});
 
 describe("resolveOutboundTarget defaultTo config fallback", () => {
   installResolveOutboundTargetPluginRegistryHooks();
@@ -70,7 +108,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
   });
 
   it("falls back to the active registry when the cached channel map is stale", () => {
-    const registry = createTestRegistry([]);
+    const registry = createTargetsTestRegistry([]);
     setActivePluginRegistry(registry, "stale-registry-test");
 
     // Warm the cached channel map before mutating the registry in place.
@@ -80,7 +118,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
 
     registry.channels.push({
       pluginId: "telegram",
-      plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+      plugin: createTelegramTestPlugin(),
       source: "test",
     });
 
@@ -307,6 +345,24 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved.to).toBe("C12345:topic:999");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
+  it("keeps raw :topic: targets when the telegram plugin registry is unavailable", () => {
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-no-registry",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "63448508",
+      },
+      requestedChannel: "last",
+      explicitTo: "63448508:topic:1008013",
+    });
+
+    expect(resolved.to).toBe("63448508:topic:1008013");
     expect(resolved.threadId).toBeUndefined();
   });
 
@@ -550,6 +606,52 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("-10063448508");
     expect(resolved.threadId).toBe(1008013);
   });
+
+  it("prefers turn-scoped routing over mutable session routing for target=last", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-turn-source",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_WRONG",
+      },
+      heartbeat: {
+        target: "last",
+      },
+      turnSource: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-100123");
+    expect(resolved.threadId).toBe(42);
+  });
+
+  it("merges partial turn-scoped metadata with the stored session route for target=last", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-turn-source-partial",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100123",
+      },
+      heartbeat: {
+        target: "last",
+      },
+      turnSource: {
+        threadId: 42,
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-100123");
+    expect(resolved.threadId).toBe(42);
+  });
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
@@ -648,6 +750,123 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.lastTo).toBeUndefined();
     expect(resolved.lastAccountId).toBeUndefined();
     expect(resolved.lastThreadId).toBeUndefined();
+  });
+
+  it("falls back to session lastThreadId when turnSourceChannel matches session channel and no explicit turnSourceThreadId", () => {
+    // Regression: Telegram forum topic replies were landing in the root chat instead of the topic
+    // thread because turnSourceThreadId was undefined (not explicitly passed), causing lastThreadId
+    // to be undefined even though the session had the correct lastThreadId from the inbound message.
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-forum-topic",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("keeps Telegram topic thread routing when turnSourceTo uses the plugin-owned topic target", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-forum-topic-scoped",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "telegram:-1001234567890:topic:1122",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:-1001234567890:topic:1122",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("telegram:-1001234567890:topic:1122");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("matches bare stored Telegram routes against topic-scoped turn routes via plugin grammar", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-forum-topic-mixed-shape",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:-1001234567890:topic:1122",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("telegram:-1001234567890:topic:1122");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("does not fall back to session lastThreadId when turnSourceChannel differs from session channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-cross-channel-no-thread",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_SLACK",
+        lastThreadId: "1739142736.000100",
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
+  it("prefers explicit turnSourceThreadId over session lastThreadId on same channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-explicit-thread-override",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1001234567890",
+      turnSourceThreadId: 9999,
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+    expect(resolved.threadId).toBe(9999);
+  });
+
+  it("drops session threadId when turnSourceTo differs from session to (shared-session race)", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-shared-race",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1009999999999",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1009999999999");
+    expect(resolved.threadId).toBeUndefined();
   });
 
   it("uses explicitTo even when turnSourceTo is omitted", () => {

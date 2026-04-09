@@ -50,7 +50,6 @@ export default defineConfig(() => {
                 basePath: "/",
                 assistantName: "",
                 assistantAvatar: "",
-                assistantAgentId: "",
               }),
             );
           });

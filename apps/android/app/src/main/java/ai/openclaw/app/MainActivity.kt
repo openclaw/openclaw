@@ -18,14 +18,14 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
+  private var didAttachRuntimeUi = false
+  private var didStartNodeService = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    handleAssistantIntent(intent)
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
-    viewModel.camera.attachLifecycleOwner(this)
-    viewModel.camera.attachPermissionRequester(permissionRequester)
-    viewModel.sms.attachPermissionRequester(permissionRequester)
 
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -39,6 +39,20 @@ class MainActivity : ComponentActivity() {
       }
     }
 
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.runtimeInitialized.collect { ready ->
+          if (!ready || didAttachRuntimeUi) return@collect
+          viewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
+          didAttachRuntimeUi = true
+          if (!didStartNodeService) {
+            NodeForegroundService.start(this@MainActivity)
+            didStartNodeService = true
+          }
+        }
+      }
+    }
+
     setContent {
       OpenClawTheme {
         Surface(modifier = Modifier) {
@@ -46,9 +60,6 @@ class MainActivity : ComponentActivity() {
         }
       }
     }
-
-    // Keep startup path lean: start foreground service after first frame.
-    window.decorView.post { NodeForegroundService.start(this) }
   }
 
   override fun onStart() {
@@ -59,5 +70,16 @@ class MainActivity : ComponentActivity() {
   override fun onStop() {
     viewModel.setForeground(false)
     super.onStop()
+  }
+
+  override fun onNewIntent(intent: android.content.Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleAssistantIntent(intent)
+  }
+
+  private fun handleAssistantIntent(intent: android.content.Intent?) {
+    val request = parseAssistantLaunchIntent(intent) ?: return
+    viewModel.handleAssistantLaunch(request)
   }
 }

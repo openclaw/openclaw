@@ -1,16 +1,15 @@
-import { normalizeGroupActivation } from "../../../../../src/auto-reply/group-activation.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-} from "../../../../../src/config/group-policy.js";
-import {
   loadSessionStore,
   resolveGroupSessionKey,
   resolveStorePath,
-} from "../../../../../src/config/sessions.js";
+} from "../config.runtime.js";
+import { normalizeGroupActivation } from "./group-activation.runtime.js";
 
-export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conversationId: string) {
+type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
+
+export function resolveGroupPolicyFor(cfg: ReturnType<LoadConfigFn>, conversationId: string) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
     ChatType: "group",
@@ -31,7 +30,7 @@ export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conver
 }
 
 export function resolveGroupRequireMentionFor(
-  cfg: ReturnType<typeof loadConfig>,
+  cfg: ReturnType<LoadConfigFn>,
   conversationId: string,
 ) {
   const groupId = resolveGroupSessionKey({
@@ -47,7 +46,7 @@ export function resolveGroupRequireMentionFor(
 }
 
 export function resolveGroupActivationFor(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   agentId: string;
   sessionKey: string;
   conversationId: string;

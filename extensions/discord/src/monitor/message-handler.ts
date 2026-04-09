@@ -2,12 +2,17 @@ import type { Client } from "@buape/carbon";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
-} from "../../../../src/channels/inbound-debounce-policy.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../src/config/runtime-group-policy.js";
-import { danger } from "../../../../src/globals.js";
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { buildDiscordInboundJob } from "./inbound-job.js";
-import { createDiscordInboundWorker } from "./inbound-worker.js";
+import {
+  createDiscordInboundWorker,
+  type DiscordInboundWorkerTestingHooks,
+} from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
+import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
@@ -24,11 +29,37 @@ type DiscordMessageHandlerParams = Omit<
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   workerRunTimeoutMs?: number;
+  __testing?: DiscordMessageHandlerTestingHooks;
+};
+
+type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
+  preflightDiscordMessage?: typeof preflightDiscordMessage;
 };
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
+
+const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
+const RECENT_DISCORD_MESSAGE_MAX = 5000;
+
+function buildDiscordInboundDedupeKey(params: {
+  accountId: string;
+  data: DiscordMessageEvent;
+}): string | null {
+  const messageId = params.data.message?.id?.trim();
+  if (!messageId) {
+    return null;
+  }
+  const channelId = resolveDiscordMessageChannelId({
+    message: params.data.message,
+    eventChannelId: params.data.channel_id,
+  });
+  if (!channelId) {
+    return null;
+  }
+  return `${params.accountId}:${channelId}:${messageId}`;
+}
 
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
@@ -42,11 +73,18 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
+  const preflightDiscordMessageImpl =
+    params.__testing?.preflightDiscordMessage ?? preflightDiscordMessage;
   const inboundWorker = createDiscordInboundWorker({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     runTimeoutMs: params.workerRunTimeoutMs,
+    __testing: params.__testing,
+  });
+  const recentInboundMessages = createDedupeCache({
+    ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
+    maxSize: RECENT_DISCORD_MESSAGE_MAX,
   });
 
   const { debouncer } = createChannelInboundDebouncer<{
@@ -96,7 +134,7 @@ export function createDiscordMessageHandler(
         return;
       }
       if (entries.length === 1) {
-        const ctx = await preflightDiscordMessage({
+        const ctx = await preflightDiscordMessageImpl({
           ...params,
           ackReactionScope,
           groupPolicy,
@@ -107,6 +145,7 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
+        applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
         inboundWorker.enqueue(buildDiscordInboundJob(ctx));
         return;
       }
@@ -128,7 +167,7 @@ export function createDiscordMessageHandler(
         ...last.data,
         message: syntheticMessage,
       };
-      const ctx = await preflightDiscordMessage({
+      const ctx = await preflightDiscordMessageImpl({
         ...params,
         ackReactionScope,
         groupPolicy,
@@ -139,6 +178,7 @@ export function createDiscordMessageHandler(
       if (!ctx) {
         return;
       }
+      applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
       if (entries.length > 1) {
         const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
         if (ids.length > 0) {
@@ -171,6 +211,13 @@ export function createDiscordMessageHandler(
       // slowdown (see #15874).
       const msgAuthorId = data.message?.author?.id ?? data.author?.id;
       if (params.botUserId && msgAuthorId === params.botUserId) {
+        return;
+      }
+      const dedupeKey = buildDiscordInboundDedupeKey({
+        accountId: params.accountId,
+        data,
+      });
+      if (dedupeKey && recentInboundMessages.check(dedupeKey)) {
         return;
       }
 

@@ -1,33 +1,69 @@
 import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  addRoleDiscord,
-  banMemberDiscord,
-  createThreadDiscord,
-  listGuildEmojisDiscord,
-  listThreadsDiscord,
-  reactMessageDiscord,
-  removeRoleDiscord,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendStickerDiscord,
-  timeoutMemberDiscord,
-  uploadEmojiDiscord,
-  uploadStickerDiscord,
-} from "./send.js";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../../whatsapp/src/media.js", async () => {
+vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
 });
 
-describe("sendMessageDiscord", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+let addRoleDiscord: typeof import("./send.js").addRoleDiscord;
+let banMemberDiscord: typeof import("./send.js").banMemberDiscord;
+let createThreadDiscord: typeof import("./send.js").createThreadDiscord;
+let listGuildEmojisDiscord: typeof import("./send.js").listGuildEmojisDiscord;
+let listThreadsDiscord: typeof import("./send.js").listThreadsDiscord;
+let reactMessageDiscord: typeof import("./send.js").reactMessageDiscord;
+let removeRoleDiscord: typeof import("./send.js").removeRoleDiscord;
+let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
+let sendPollDiscord: typeof import("./send.js").sendPollDiscord;
+let sendStickerDiscord: typeof import("./send.js").sendStickerDiscord;
+let timeoutMemberDiscord: typeof import("./send.js").timeoutMemberDiscord;
+let uploadEmojiDiscord: typeof import("./send.js").uploadEmojiDiscord;
+let uploadStickerDiscord: typeof import("./send.js").uploadStickerDiscord;
 
+function createCompatRateLimitError(
+  response: Response,
+  body: { message: string; retry_after: number; global: boolean },
+  request?: Request,
+): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/channels/789/messages", {
+      method: "POST",
+    });
+  const RateLimitErrorCtor = RateLimitError as unknown as new (
+    response: Response,
+    body: { message: string; retry_after: number; global: boolean },
+    request?: Request,
+  ) => RateLimitError;
+  return new RateLimitErrorCtor(response, body, compatRequest);
+}
+
+beforeAll(async () => {
+  ({
+    addRoleDiscord,
+    banMemberDiscord,
+    createThreadDiscord,
+    listGuildEmojisDiscord,
+    listThreadsDiscord,
+    reactMessageDiscord,
+    removeRoleDiscord,
+    sendMessageDiscord,
+    sendPollDiscord,
+    sendStickerDiscord,
+    timeoutMemberDiscord,
+    uploadEmojiDiscord,
+    uploadStickerDiscord,
+  } = await import("./send.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("sendMessageDiscord", () => {
   it("creates a thread", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "t1" });
@@ -288,6 +324,7 @@ describe("uploadEmojiDiscord", () => {
         },
       }),
     );
+    expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", 256 * 1024);
   });
 });
 
@@ -325,6 +362,7 @@ describe("uploadStickerDiscord", () => {
         },
       }),
     );
+    expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", 512 * 1024);
   });
 });
 
@@ -392,6 +430,9 @@ describe("sendPollDiscord", () => {
 });
 
 function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
+  const request = new Request("https://discord.com/api/v10/channels/789/messages", {
+    method: "POST",
+  });
   const response = new Response(null, {
     status: 429,
     headers: {
@@ -399,11 +440,15 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
       "X-RateLimit-Bucket": "test-bucket",
     },
   });
-  return new RateLimitError(response, {
-    message: "You are being rate limited.",
-    retry_after: retryAfter,
-    global: false,
-  });
+  return createCompatRateLimitError(
+    response,
+    {
+      message: "You are being rate limited.",
+      retry_after: retryAfter,
+      global: false,
+    },
+    request,
+  );
 }
 
 describe("retry rate limits", () => {

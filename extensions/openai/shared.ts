@@ -1,57 +1,69 @@
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import type {
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
-} from "../../src/plugins/types.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  cloneFirstTemplateModel,
+  matchesExactOrPrefix,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
+type SyntheticOpenAIModelCatalogEntry = {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning?: boolean;
+  input?: ("text" | "image")[];
+  contextWindow?: number;
+  contextTokens?: number;
+};
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
+export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
+  return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
+}
+
 export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
+  const trimmed = normalizeOptionalString(baseUrl);
   if (!trimmed) {
     return false;
   }
   return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
 }
 
-export function cloneFirstTemplateModel(params: {
-  providerId: string;
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-  patch?: Partial<ProviderRuntimeModel>;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      params.providerId,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      ...params.patch,
-    } as ProviderRuntimeModel);
+export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
+  const trimmed = normalizeOptionalString(baseUrl);
+  if (!trimmed) {
+    return false;
   }
-  return undefined;
+  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
 }
 
-export function findCatalogTemplate(params: {
-  entries: ReadonlyArray<{ provider: string; id: string }>;
-  providerId: string;
-  templateIds: readonly string[];
-}) {
-  return params.templateIds
-    .map((templateId) =>
-      params.entries.find(
-        (entry) =>
-          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
-          entry.id.toLowerCase() === templateId.toLowerCase(),
-      ),
-    )
-    .find((entry) => entry !== undefined);
+export function buildOpenAISyntheticCatalogEntry(
+  template: ReturnType<typeof findCatalogTemplate>,
+  entry: {
+    id: string;
+    reasoning: boolean;
+    input: readonly ("text" | "image")[];
+    contextWindow: number;
+    contextTokens?: number;
+  },
+): SyntheticOpenAIModelCatalogEntry | undefined {
+  if (!template) {
+    return undefined;
+  }
+  return {
+    ...template,
+    id: entry.id,
+    name: entry.id,
+    reasoning: entry.reasoning,
+    input: [...entry.input],
+    contextWindow: entry.contextWindow,
+    ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
+  };
 }
+
+export { cloneFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };

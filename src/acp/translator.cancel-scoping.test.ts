@@ -69,7 +69,6 @@ function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }
   return {
     agent,
     requestSpy,
-    // eslint-disable-next-line @typescript-eslint/unbound-method
     sessionUpdateSpy: connection.sessionUpdate as unknown as ReturnType<typeof vi.fn>,
     sessionStore,
     sentRunIds,
@@ -192,6 +191,49 @@ describe("acp translator cancel and run scoping", () => {
       }),
     );
     await expect(pending.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("projects gateway thinking blocks into hidden ACP thought chunks", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
+    const pending = await startPendingPrompt(harness, "session-1");
+    harness.sessionUpdateSpy.mockClear();
+
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        runId: pending.runId,
+        sessionKey,
+        seq: 1,
+        state: "delta",
+        message: {
+          content: [
+            { type: "thinking", thinking: "Internal loop about NO_REPLY" },
+            { type: "text", text: "Final visible reply" },
+          ],
+        },
+      }),
+    );
+
+    expect(harness.sessionUpdateSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: "session-1",
+        update: expect.objectContaining({
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "Internal loop about NO_REPLY" },
+        }),
+      }),
+    );
+    expect(harness.sessionUpdateSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionId: "session-1",
+        update: expect.objectContaining({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Final visible reply" },
+        }),
+      }),
+    );
   });
 
   it("drops tool events when runId does not match the active prompt", async () => {

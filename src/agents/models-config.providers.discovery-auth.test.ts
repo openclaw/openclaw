@@ -1,116 +1,38 @@
-import { mkdtempSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-
-type AuthProfilesFile = {
-  version: 1;
-  profiles: Record<string, Record<string, unknown>>;
-};
+import { resolveApiKeyFromCredential } from "./models-config.providers.secrets.js";
 
 describe("provider discovery auth marker guardrails", () => {
-  let originalVitest: string | undefined;
-  let originalNodeEnv: string | undefined;
-  let originalFetch: typeof globalThis.fetch | undefined;
-
-  afterEach(() => {
-    if (originalVitest !== undefined) {
-      process.env.VITEST = originalVitest;
-    } else {
-      delete process.env.VITEST;
-    }
-    if (originalNodeEnv !== undefined) {
-      process.env.NODE_ENV = originalNodeEnv;
-    } else {
-      delete process.env.NODE_ENV;
-    }
-    if (originalFetch) {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  function enableDiscovery() {
-    originalVitest = process.env.VITEST;
-    originalNodeEnv = process.env.NODE_ENV;
-    originalFetch = globalThis.fetch;
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-  }
-
-  function installFetchMock(response?: unknown) {
-    const fetchMock =
-      response === undefined
-        ? vi.fn()
-        : vi.fn().mockResolvedValue({ ok: true, json: async () => response });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-    return fetchMock;
-  }
-
-  async function createAgentDirWithAuthProfiles(profiles: AuthProfilesFile["profiles"]) {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles } satisfies AuthProfilesFile, null, 2),
-      "utf8",
-    );
-    return agentDir;
-  }
-
-  it("does not send marker value as vLLM bearer token during discovery", async () => {
-    enableDiscovery();
-    const fetchMock = installFetchMock({ data: [] });
-    const agentDir = await createAgentDirWithAuthProfiles({
-      "vllm:default": {
-        type: "api_key",
-        provider: "vllm",
-        keyRef: { source: "file", provider: "vault", id: "/vllm/apiKey" },
-      },
+  it("suppresses discovery secrets for marker-backed vLLM credentials", () => {
+    const resolved = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "vllm",
+      keyRef: { source: "file", provider: "vault", id: "/vllm/apiKey" },
     });
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
-    expect(providers?.vllm?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-    const request = fetchMock.mock.calls[0]?.[1] as
-      | { headers?: Record<string, string> }
-      | undefined;
-    expect(request?.headers?.Authorization).toBeUndefined();
+    expect(resolved?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(resolved?.discoveryApiKey).toBeUndefined();
   });
 
-  it("does not call Hugging Face discovery with marker-backed credentials", async () => {
-    enableDiscovery();
-    const fetchMock = installFetchMock();
-    const agentDir = await createAgentDirWithAuthProfiles({
-      "huggingface:default": {
-        type: "api_key",
-        provider: "huggingface",
-        keyRef: { source: "exec", provider: "vault", id: "providers/hf/token" },
-      },
+  it("suppresses discovery secrets for marker-backed Hugging Face credentials", () => {
+    const resolved = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "huggingface",
+      keyRef: { source: "exec", provider: "vault", id: "providers/hf/token" },
     });
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
-    expect(providers?.huggingface?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-    const huggingfaceCalls = fetchMock.mock.calls.filter(([url]) =>
-      String(url).includes("router.huggingface.co"),
-    );
-    expect(huggingfaceCalls).toHaveLength(0);
+    expect(resolved?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(resolved?.discoveryApiKey).toBeUndefined();
   });
 
-  it("keeps all-caps plaintext API keys for authenticated discovery", async () => {
-    enableDiscovery();
-    const fetchMock = installFetchMock({ data: [{ id: "vllm/test-model" }] });
-    const agentDir = await createAgentDirWithAuthProfiles({
-      "vllm:default": {
-        type: "api_key",
-        provider: "vllm",
-        key: "ALLCAPS_SAMPLE",
-      },
+  it("keeps all-caps plaintext API keys for authenticated discovery", () => {
+    const resolved = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "vllm",
+      key: "ALLCAPS_SAMPLE",
     });
 
-    await resolveImplicitProvidersForTest({ agentDir, env: {} });
-    const vllmCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":8000"));
-    const request = vllmCall?.[1] as { headers?: Record<string, string> } | undefined;
-    expect(request?.headers?.Authorization).toBe("Bearer ALLCAPS_SAMPLE");
+    expect(resolved?.apiKey).toBe("ALLCAPS_SAMPLE");
+    expect(resolved?.discoveryApiKey).toBe("ALLCAPS_SAMPLE");
   });
 });

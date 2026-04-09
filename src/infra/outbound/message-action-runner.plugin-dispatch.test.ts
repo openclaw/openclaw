@@ -1,10 +1,57 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
+import { extractToolPayload } from "./tool-payload.js";
+
+type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
+
+const mocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn(),
+  executeSendAction: vi.fn(),
+  executePollAction: vi.fn(),
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
+
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: mocks.executeSendAction,
+  executePollAction: mocks.executePollAction,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: (id: string) =>
+    id === "feishu"
+      ? {
+          actions: {
+            messageActionTargetAliases: {
+              pin: { aliases: ["messageId"] },
+              unpin: { aliases: ["messageId"] },
+              "list-pins": { aliases: ["chatId"] },
+            },
+          },
+        }
+      : undefined,
+}));
+
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
@@ -14,63 +61,243 @@ function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = {
   };
 }
 
-describe("runMessageAction plugin dispatch", () => {
-  describe("media caption behavior", () => {
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-    });
+function createPollForwardingPlugin(params: {
+  pluginId: string;
+  label: string;
+  blurb: string;
+  handleAction: ChannelActionHandler;
+}): ChannelPlugin {
+  return {
+    id: params.pluginId,
+    meta: {
+      id: params.pluginId,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: `/channels/${params.pluginId}`,
+      blurb: params.blurb,
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: {
+      targetResolver: {
+        looksLikeId: () => true,
+      },
+    },
+    actions: {
+      describeMessageTool: () => ({ actions: ["poll"] }),
+      supportsAction: ({ action }) => action === "poll",
+      handleAction: params.handleAction,
+    },
+  };
+}
 
-    it("promotes caption to message for media sends when message is empty", async () => {
-      const sendMedia = vi.fn().mockResolvedValue({
-        channel: "testchat",
-        messageId: "m1",
-        chatId: "c1",
-      });
+async function executePluginAction(params: {
+  action: "send" | "poll";
+  ctx: Pick<
+    ChannelMessageActionContext,
+    "channel" | "cfg" | "params" | "mediaAccess" | "accountId" | "gateway" | "toolContext"
+  > & {
+    dryRun: boolean;
+    agentId?: string;
+  };
+}) {
+  const handled = await dispatchChannelMessageAction({
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    mediaAccess: params.ctx.mediaAccess,
+    mediaLocalRoots: params.ctx.mediaAccess?.localRoots ?? [],
+    mediaReadFile:
+      typeof params.ctx.mediaAccess?.readFile === "function"
+        ? params.ctx.mediaAccess.readFile
+        : undefined,
+    accountId: params.ctx.accountId ?? undefined,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.toolContext,
+    dryRun: params.ctx.dryRun,
+    agentId: params.ctx.agentId,
+  });
+  if (!handled) {
+    throw new Error(`expected plugin to handle ${params.action}`);
+  }
+  return {
+    handledBy: "plugin" as const,
+    payload: extractToolPayload(handled),
+    toolResult: handled,
+  };
+}
+
+describe("runMessageAction plugin dispatch", () => {
+  beforeEach(() => {
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+    );
+    mocks.executeSendAction.mockReset();
+    mocks.executeSendAction.mockImplementation(
+      async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
+        await executePluginAction({ action: "send", ctx }),
+    );
+    mocks.executePollAction.mockReset();
+    mocks.executePollAction.mockImplementation(
+      async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
+        await executePluginAction({ action: "poll", ctx }),
+    );
+  });
+
+  describe("alias-based plugin action dispatch", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        params,
+      }),
+    );
+
+    const feishuLikePlugin: ChannelPlugin = {
+      id: "feishu",
+      meta: {
+        id: "feishu",
+        label: "Feishu",
+        selectionLabel: "Feishu",
+        docsPath: "/channels/feishu",
+        blurb: "Feishu action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "channel"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
+        supportsAction: ({ action }) =>
+          action === "pin" || action === "list-pins" || action === "member-info",
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
       setActivePluginRegistry(
         createTestRegistry([
           {
-            pluginId: "testchat",
+            pluginId: "feishu",
             source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "testchat",
-              outbound: {
-                deliveryMode: "direct",
-                sendText: vi.fn().mockResolvedValue({
-                  channel: "testchat",
-                  messageId: "t1",
-                  chatId: "c1",
-                }),
-                sendMedia,
-              },
-            }),
+            plugin: feishuLikePlugin,
           },
         ]),
       );
-      const cfg = {
-        channels: {
-          testchat: {
-            enabled: true,
-          },
-        },
-      } as OpenClawConfig;
+      handleAction.mockClear();
+    });
 
-      const result = await runMessageAction({
-        cfg,
-        action: "send",
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it("dispatches messageId/chatId-based Feishu actions through the shared runner", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
         params: {
-          channel: "testchat",
-          target: "channel:abc",
-          media: "https://example.com/cat.png",
-          caption: "caption-only text",
+          channel: "feishu",
+          messageId: "om_123",
         },
         dryRun: false,
       });
 
-      expect(result.kind).toBe("send");
-      expect(sendMedia).toHaveBeenCalledWith(
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "list-pins",
+        params: {
+          channel: "feishu",
+          chatId: "oc_123",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
-          text: "caption-only text",
-          mediaUrl: "https://example.com/cat.png",
+          action: "pin",
+          params: expect.objectContaining({
+            messageId: "om_123",
+          }),
+        }),
+      );
+      expect(handleAction).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          action: "list-pins",
+          params: expect.objectContaining({
+            chatId: "oc_123",
+          }),
+        }),
+      );
+    });
+
+    it("routes execution context ids into plugin handleAction", async () => {
+      const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
+      const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "feishu",
+          messageId: "om_123",
+        },
+        defaultAccountId: "ops",
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        toolContext: {
+          currentChannelId: "oc_123",
+          currentChannelProvider: "feishu",
+          currentThreadTs: "thread-456",
+          currentMessageId: "msg-789",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          action: "pin",
+          accountId: "ops",
+          requesterSenderId: "trusted-user",
+          sessionKey: "agent:alpha:main",
+          sessionId: "session-123",
+          agentId: "alpha",
+          mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
+          toolContext: expect.objectContaining({
+            currentChannelId: "oc_123",
+            currentChannelProvider: "feishu",
+            currentThreadTs: "thread-456",
+            currentMessageId: "msg-789",
+          }),
         }),
       );
     });
@@ -97,7 +324,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -172,28 +399,12 @@ describe("runMessageAction plugin dispatch", () => {
       }),
     );
 
-    const telegramPollPlugin: ChannelPlugin = {
-      id: "telegram",
-      meta: {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "Telegram poll forwarding test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        listActions: () => ["poll"],
-        supportsAction: ({ action }) => action === "poll",
-        handleAction,
-      },
-    };
+    const telegramPollPlugin = createPollForwardingPlugin({
+      pluginId: "telegram",
+      label: "Telegram",
+      blurb: "Telegram poll forwarding test plugin.",
+      handleAction,
+    });
 
     beforeEach(() => {
       setActivePluginRegistry(
@@ -265,6 +476,84 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
+  describe("plugin-owned poll semantics", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        forwarded: {
+          to: params.to ?? null,
+          pollQuestion: params.pollQuestion ?? null,
+          pollOption: params.pollOption ?? null,
+          pollDurationSeconds: params.pollDurationSeconds ?? null,
+          pollPublic: params.pollPublic ?? null,
+        },
+      }),
+    );
+
+    const discordPollPlugin = createPollForwardingPlugin({
+      pluginId: "discord",
+      label: "Discord",
+      blurb: "Discord plugin-owned poll test plugin.",
+      handleAction,
+    });
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: discordPollPlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("lets non-telegram plugins own extra poll fields", async () => {
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            discord: {
+              token: "tok",
+            },
+          },
+        } as OpenClawConfig,
+        action: "poll",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+          pollDurationSeconds: 120,
+          pollPublic: true,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("poll");
+      expect(result.handledBy).toBe("plugin");
+      expect(handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "poll",
+          channel: "discord",
+          params: expect.objectContaining({
+            to: "channel:123",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+            pollDurationSeconds: 120,
+            pollPublic: true,
+          }),
+        }),
+      );
+    });
+  });
+
   describe("components parsing", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
@@ -285,7 +574,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig({}),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -367,7 +656,7 @@ describe("runMessageAction plugin dispatch", () => {
         resolveAccount: () => ({}),
       },
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         handleAction,
       },
     };

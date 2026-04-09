@@ -34,6 +34,22 @@ export {
 
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
+export {
+  buildExecRemoteCommand,
+  buildRemoteCommand,
+  buildSshSandboxArgv,
+  createSshSandboxSessionFromConfigText,
+  createSshSandboxSessionFromSettings,
+  disposeSshSandboxSession,
+  runSshSandboxCommand,
+  shellEscape,
+  uploadDirectoryToSshTarget,
+} from "./sandbox/ssh.js";
+export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
+export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
+export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
+export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
 
 export type {
   CreateSandboxBackendParams,
@@ -47,6 +63,12 @@ export type {
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
 } from "./sandbox/backend.js";
+export type { RemoteShellSandboxHandle } from "./sandbox/remote-fs-bridge.js";
+export type {
+  RunSshSandboxCommandParams,
+  SshSandboxSession,
+  SshSandboxSettings,
+} from "./sandbox/ssh.js";
 
 export type {
   SandboxBrowserConfig,
@@ -56,6 +78,7 @@ export type {
   SandboxDockerConfig,
   SandboxPruneConfig,
   SandboxScope,
+  SandboxSshConfig,
   SandboxToolPolicy,
   SandboxToolPolicyResolved,
   SandboxToolPolicySource,

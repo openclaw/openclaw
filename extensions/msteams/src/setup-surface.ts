@@ -1,72 +1,35 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
+  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy, MSTeamsTeamConfig } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+  splitSetupEntries,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type { MSTeamsTeamConfig } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { normalizeSecretInputString } from "./secret-input.js";
-import { msteamsSetupAdapter } from "./setup-core.js";
-import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
+import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
-
-function setMSTeamsDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  });
-}
-
-function setMSTeamsAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
-  return setTopLevelChannelAllowFrom({
-    cfg,
-    channel,
-    allowFrom,
-  });
-}
+const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
+  channel,
+});
+const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
+  channel,
+  enabled: true,
+});
 
 function looksLikeGuid(value: string): boolean {
   return /^[0-9a-fA-F-]{16,}$/.test(value);
-}
-
-async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
-  appId: string;
-  appPassword: string;
-  tenantId: string;
-}> {
-  const appId = String(
-    await prompter.text({
-      message: "Enter MS Teams App ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  const appPassword = String(
-    await prompter.text({
-      message: "Enter MS Teams App Password",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  const tenantId = String(
-    await prompter.text({
-      message: "Enter MS Teams Tenant ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  return { appId, appPassword, tenantId };
 }
 
 async function promptMSTeamsAllowFrom(params: {
@@ -93,7 +56,7 @@ async function promptMSTeamsAllowFrom(params: {
       initialValue: existing[0] ? String(existing[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
-    const parts = splitOnboardingEntries(String(entry));
+    const parts = splitSetupEntries(String(entry));
     if (parts.length === 0) {
       await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
       continue;
@@ -130,31 +93,6 @@ async function promptMSTeamsAllowFrom(params: {
     const unique = mergeAllowFromEntries(existing, ids);
     return setMSTeamsAllowFrom(params.cfg, unique);
   }
-}
-
-async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
-  await prompter.note(
-    [
-      "1) Azure Bot registration -> get App ID + Tenant ID",
-      "2) Add a client secret (App Password)",
-      "3) Set webhook URL + messaging endpoint",
-      "Tip: you can also set MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID.",
-      `Docs: ${formatDocsLink("/channels/msteams", "msteams")}`,
-    ].join("\n"),
-    "MS Teams credentials",
-  );
-}
-
-function setMSTeamsGroupPolicy(
-  cfg: OpenClawConfig,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return setTopLevelChannelGroupPolicy({
-    cfg,
-    channel,
-    groupPolicy,
-    enabled: true,
-  });
 }
 
 function setMSTeamsTeamsAllowlist(
@@ -260,7 +198,7 @@ async function resolveMSTeamsGroupAllowlist(params: {
     return resolvedEntries;
   } catch (err) {
     await params.prompter.note(
-      `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+      `Channel lookup failed; keeping entries as typed. ${formatUnknownError(err)}`,
       "MS Teams channels",
     );
     return resolvedEntries;
@@ -280,107 +218,21 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
     setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
 };
 
-const msteamsDmPolicy: ChannelOnboardingDmPolicy = {
+const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   label: "MS Teams",
   channel,
   policyKey: "channels.msteams.dmPolicy",
   allowFromKey: "channels.msteams.allowFrom",
   getCurrent: (cfg) => cfg.channels?.msteams?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setMSTeamsDmPolicy(cfg, policy),
   promptAllowFrom: promptMSTeamsAllowFrom,
-};
+});
 
 export { msteamsSetupAdapter } from "./setup-core.js";
 
+const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
+
 export const msteamsSetupWizard: ChannelSetupWizard = {
-  channel,
-  resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
-  resolveShouldPromptAccountIds: () => false,
-  status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs app credentials",
-    configuredHint: "configured",
-    unconfiguredHint: "needs app creds",
-    configuredScore: 2,
-    unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) => {
-      return (
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams)
-      );
-    },
-    resolveStatusLines: ({ cfg }) => {
-      const configured =
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
-      return [`MS Teams: ${configured ? "configured" : "needs app credentials"}`];
-    },
-  },
-  credentials: [],
-  finalize: async ({ cfg, prompter }) => {
-    const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);
-    const hasConfigCreds = hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
-    const canUseEnv = Boolean(
-      !hasConfigCreds &&
-      normalizeSecretInputString(process.env.MSTEAMS_APP_ID) &&
-      normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) &&
-      normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID),
-    );
-
-    let next = cfg;
-    let appId: string | null = null;
-    let appPassword: string | null = null;
-    let tenantId: string | null = null;
-
-    if (!resolved && !hasConfigCreds) {
-      await noteMSTeamsCredentialHelp(prompter);
-    }
-
-    if (canUseEnv) {
-      const keepEnv = await prompter.confirm({
-        message:
-          "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
-        initialValue: true,
-      });
-      if (keepEnv) {
-        next = msteamsSetupAdapter.applyAccountConfig({
-          cfg: next,
-          accountId: DEFAULT_ACCOUNT_ID,
-          input: {},
-        });
-      } else {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-      }
-    } else if (hasConfigCreds) {
-      const keep = await prompter.confirm({
-        message: "MS Teams credentials already configured. Keep them?",
-        initialValue: true,
-      });
-      if (!keep) {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-      }
-    } else {
-      ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-    }
-
-    if (appId && appPassword && tenantId) {
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          msteams: {
-            ...next.channels?.msteams,
-            enabled: true,
-            appId,
-            appPassword,
-            tenantId,
-          },
-        },
-      };
-    }
-
-    return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
-  },
+  ...msteamsSetupWizardBase,
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,
   disable: (cfg) => ({

@@ -73,8 +73,8 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	args := append([]string{}, command.Args...)
 	args = append(args,
 		"--mode", "rpc",
-		"--provider", "anthropic",
-		"--model", modelVersion,
+		"--provider", docsPiProvider(),
+		"--model", docsPiModel(),
 		"--thinking", options.Thinking,
 		"--no-session",
 	)

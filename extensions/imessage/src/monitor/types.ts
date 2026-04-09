@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 export type IMessageAttachment = {
   original_path?: string | null;
@@ -9,6 +9,7 @@ export type IMessageAttachment = {
 
 export type IMessagePayload = {
   id?: number | null;
+  guid?: string | null;
   chat_id?: number | null;
   sender?: string | null;
   is_from_me?: boolean | null;

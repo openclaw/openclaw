@@ -2,6 +2,7 @@ import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
   SandboxPruneSettings,
+  SandboxSshSettings,
 } from "./types.sandbox.js";
 
 export type AgentModelConfig =
@@ -27,11 +28,11 @@ export type AgentSandboxConfig = {
   sessionToolsVisibility?: "spawned" | "all";
   /** Container/workspace scope for sandbox isolation. */
   scope?: "session" | "agent" | "shared";
-  /** Legacy alias for scope ("session" when true, "shared" when false). */
-  perSession?: boolean;
   workspaceRoot?: string;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
+  /** SSH-specific sandbox settings. */
+  ssh?: SandboxSshSettings;
   /** Optional sandboxed browser settings. */
   browser?: SandboxBrowserSettings;
   /** Auto-prune sandbox settings. */

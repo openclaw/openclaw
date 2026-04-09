@@ -2,9 +2,10 @@ import {
   firstDefined,
   isSenderIdAllowed,
   mergeDmAllowFromSources,
-} from "../../../src/channels/allow-from.js";
-import type { AllowlistMatch } from "../../../src/channels/allowlist-match.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
+  type AllowlistMatch,
+} from "openclaw/plugin-sdk/allow-from";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -33,14 +34,16 @@ function warnInvalidAllowFromEntries(entries: string[]) {
         JSON.stringify(entry),
         "- allowFrom/groupAllowFrom authorization expects numeric Telegram sender user IDs only.",
         'To allow a Telegram group or supergroup, add its negative chat ID under "channels.telegram.groups" instead.',
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+        'If you had "@username" entries, re-run setup (it resolves @username to IDs) or replace them manually.',
       ].join(" "),
     );
   }
 }
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
-  const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
+  const entries = (list ?? [])
+    .map((value) => normalizeOptionalString(String(value)) ?? "")
+    .filter(Boolean);
   const hasWildcard = entries.includes("*");
   const normalized = entries
     .filter((value) => value !== "*")

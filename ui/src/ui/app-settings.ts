@@ -8,6 +8,7 @@ import {
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import type { OpenClawApp } from "./app.ts";
+import { loadAgentFiles } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
@@ -16,6 +17,7 @@ import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
 import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
+import { loadDreamDiary, loadDreamingStatus } from "./controllers/dreaming.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
@@ -32,6 +34,7 @@ import {
   type Tab,
 } from "./navigation.ts";
 import { saveSettings, type UiSettings } from "./storage.ts";
+import { normalizeOptionalString } from "./string-coerce.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
@@ -58,12 +61,23 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
+  dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
-    lastActiveSessionKey: next.lastActiveSessionKey?.trim() || next.sessionKey.trim() || "main",
+    lastActiveSessionKey:
+      normalizeOptionalString(next.lastActiveSessionKey) ??
+      normalizeOptionalString(next.sessionKey) ??
+      "main",
   };
   host.settings = normalized;
   saveSettings(normalized);
@@ -72,6 +86,7 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     host.themeMode = next.themeMode;
     applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
   }
+  applyBorderRadius(next.borderRadius);
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
 
@@ -86,6 +101,9 @@ export function setLastActiveSessionKey(host: SettingsHost, next: string) {
   applySettings(host, { ...host.settings, lastActiveSessionKey: trimmed });
 }
 
+/** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
+export let warnQueryToken = false;
+
 export function applySettingsFromUrl(host: SettingsHost) {
   if (!window.location.search && !window.location.hash) {
     return;
@@ -95,14 +113,19 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 
   const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
-  const nextGatewayUrl = gatewayUrlRaw?.trim() ?? "";
+  const nextGatewayUrl = normalizeOptionalString(gatewayUrlRaw) ?? "";
   const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== host.settings.gatewayUrl);
-  const tokenRaw = hashParams.get("token");
+  // Prefer fragment tokens over query tokens. Fragments avoid server-side request
+  // logs and referrer leakage; query-param tokens remain a one-time legacy fallback
+  // for compatibility with older deep links.
+  const queryToken = params.get("token");
+  const hashToken = hashParams.get("token");
+  const tokenRaw = hashToken ?? queryToken;
   const passwordRaw = params.get("password") ?? hashParams.get("password");
   const sessionRaw = params.get("session") ?? hashParams.get("session");
-  const shouldResetSessionForToken = Boolean(
-    tokenRaw?.trim() && !sessionRaw?.trim() && !gatewayUrlChanged,
-  );
+  const token = normalizeOptionalString(tokenRaw);
+  const session = normalizeOptionalString(sessionRaw);
+  const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
 
   if (params.has("token")) {
@@ -111,7 +134,12 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (tokenRaw != null) {
-    const token = tokenRaw.trim();
+    if (queryToken != null) {
+      warnQueryToken = true;
+      console.warn(
+        "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
+      );
+    }
     if (token && gatewayUrlChanged) {
       host.pendingGatewayToken = token;
     } else if (token && token !== host.settings.token) {
@@ -138,7 +166,6 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (sessionRaw != null) {
-    const session = sessionRaw.trim();
     if (session) {
       host.sessionKey = session;
       applySettings(host, {
@@ -152,7 +179,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (gatewayUrlRaw != null) {
     if (gatewayUrlChanged) {
       host.pendingGatewayUrl = nextGatewayUrl;
-      if (!tokenRaw?.trim()) {
+      if (!token) {
         host.pendingGatewayToken = null;
       }
     } else {
@@ -219,6 +246,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "instances") {
     await loadPresence(host as unknown as OpenClawApp);
   }
+  if (host.tab === "usage") {
+    await loadUsage(host as unknown as OpenClawApp);
+  }
   if (host.tab === "sessions") {
     await loadSessions(host as unknown as OpenClawApp);
   }
@@ -239,6 +269,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
     if (agentId) {
       void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
+      if (host.agentsPanel === "files") {
+        void loadAgentFiles(host as unknown as OpenClawApp, agentId);
+      }
       if (host.agentsPanel === "skills") {
         void loadAgentSkills(host as unknown as OpenClawApp, agentId);
       }
@@ -255,6 +288,13 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadDevices(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
     await loadExecApprovals(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "dreams") {
+    await loadConfig(host as unknown as OpenClawApp);
+    await Promise.all([
+      loadDreamingStatus(host as unknown as OpenClawApp),
+      loadDreamDiary(host as unknown as OpenClawApp),
+    ]);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
@@ -290,8 +330,9 @@ export function inferBasePath() {
     return "";
   }
   const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
-  if (typeof configured === "string" && configured.trim()) {
-    return normalizeBasePath(configured);
+  const normalizedConfigured = normalizeOptionalString(configured);
+  if (normalizedConfigured) {
+    return normalizeBasePath(normalizedConfigured);
   }
   return inferBasePathFromPathname(window.location.pathname);
 }
@@ -300,6 +341,7 @@ export function syncThemeWithSettings(host: SettingsHost) {
   host.theme = host.settings.theme ?? "claw";
   host.themeMode = host.settings.themeMode ?? "system";
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
+  applyBorderRadius(host.settings.borderRadius ?? 50);
   syncSystemThemeListener(host);
 }
 
@@ -310,6 +352,22 @@ export function attachThemeListener(host: SettingsHost) {
 export function detachThemeListener(host: SettingsHost) {
   host.systemThemeCleanup?.();
   host.systemThemeCleanup = null;
+}
+
+const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
+
+export function applyBorderRadius(value: number) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const scale = value / 50;
+  root.style.setProperty("--radius-sm", `${Math.round(BASE_RADII.sm * scale)}px`);
+  root.style.setProperty("--radius-md", `${Math.round(BASE_RADII.md * scale)}px`);
+  root.style.setProperty("--radius-lg", `${Math.round(BASE_RADII.lg * scale)}px`);
+  root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
+  root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
+  root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
@@ -378,7 +436,7 @@ export function onPopState(host: SettingsHost) {
   }
 
   const url = new URL(window.location.href);
-  const session = url.searchParams.get("session")?.trim();
+  const session = normalizeOptionalString(url.searchParams.get("session"));
   if (session) {
     host.sessionKey = session;
     applySettings(host, {

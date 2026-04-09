@@ -1,18 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
+import type { Agent } from "node:https";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
+import { danger, success } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import qrcode from "qrcode-terminal";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import { danger, success } from "../../../src/globals.js";
-import { getChildLogger, toPinoLikeLogger } from "../../../src/logging.js";
-import { ensureDir, resolveUserPath } from "../../../src/utils.js";
-import { VERSION } from "../../../src/version.js";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
@@ -20,6 +15,15 @@ import {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
 } from "./auth-store.js";
+import { formatError, getStatusCode } from "./session-errors.js";
+import {
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  makeWASocket,
+  useMultiFileAuthState,
+} from "./session.runtime.js";
+export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
   getWebAuthAgeMs,
@@ -30,6 +34,8 @@ export {
   WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./auth-store.js";
+
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
@@ -46,7 +52,9 @@ function enqueueSaveCreds(
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     })
     .finally(() => {
-      if (credsSaveQueues.get(authDir) === next) credsSaveQueues.delete(authDir);
+      if (credsSaveQueues.get(authDir) === next) {
+        credsSaveQueues.delete(authDir);
+      }
     });
   credsSaveQueues.set(authDir, next);
 }
@@ -112,6 +120,7 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
+  const agent = await resolveEnvProxyAgent(sessionLogger);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -123,6 +132,8 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    agent,
+    fetchAgent: agent,
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
@@ -140,7 +151,7 @@ export async function createWaSocket(
         }
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
-          if (status === DisconnectReason.loggedOut) {
+          if (status === LOGGED_OUT_STATUS) {
             console.error(
               danger(
                 `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
@@ -167,6 +178,22 @@ export async function createWaSocket(
   return sock;
 }
 
+async function resolveEnvProxyAgent(
+  logger: ReturnType<typeof getChildLogger>,
+): Promise<Agent | undefined> {
+  return resolveAmbientNodeProxyAgent<Agent>({
+    onError: (err) => {
+      logger.warn(
+        { error: String(err) },
+        "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
+      );
+    },
+    onUsingProxy: () => {
+      logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
+    },
+  });
+}
+
 export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
@@ -188,14 +215,6 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 
     sock.ev.on("connection.update", handler);
   });
-}
-
-export function getStatusCode(err: unknown) {
-  return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status ??
-    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode
-  );
 }
 
 /** Await pending credential saves — scoped to one authDir, or all if omitted. */
@@ -222,123 +241,6 @@ export async function waitForCredsSaveQueueWithTimeout(
       clearTimeout(flushTimeout);
     }
   });
-}
-
-function safeStringify(value: unknown, limit = 800): string {
-  try {
-    const seen = new WeakSet();
-    const raw = JSON.stringify(
-      value,
-      (_key, v) => {
-        if (typeof v === "bigint") {
-          return v.toString();
-        }
-        if (typeof v === "function") {
-          const maybeName = (v as { name?: unknown }).name;
-          const name =
-            typeof maybeName === "string" && maybeName.length > 0 ? maybeName : "anonymous";
-          return `[Function ${name}]`;
-        }
-        if (typeof v === "object" && v) {
-          if (seen.has(v)) {
-            return "[Circular]";
-          }
-          seen.add(v);
-        }
-        return v;
-      },
-      2,
-    );
-    if (!raw) {
-      return String(value);
-    }
-    return raw.length > limit ? `${raw.slice(0, limit)}…` : raw;
-  } catch {
-    return String(value);
-  }
-}
-
-function extractBoomDetails(err: unknown): {
-  statusCode?: number;
-  error?: string;
-  message?: string;
-} | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-  const output = (err as { output?: unknown })?.output as
-    | { statusCode?: unknown; payload?: unknown }
-    | undefined;
-  if (!output || typeof output !== "object") {
-    return null;
-  }
-  const payload = (output as { payload?: unknown }).payload as
-    | { error?: unknown; message?: unknown; statusCode?: unknown }
-    | undefined;
-  const statusCode =
-    typeof (output as { statusCode?: unknown }).statusCode === "number"
-      ? ((output as { statusCode?: unknown }).statusCode as number)
-      : typeof payload?.statusCode === "number"
-        ? payload.statusCode
-        : undefined;
-  const error = typeof payload?.error === "string" ? payload.error : undefined;
-  const message = typeof payload?.message === "string" ? payload.message : undefined;
-  if (!statusCode && !error && !message) {
-    return null;
-  }
-  return { statusCode, error, message };
-}
-
-export function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (!err || typeof err !== "object") {
-    return String(err);
-  }
-
-  // Baileys frequently wraps errors under `error` with a Boom-like shape.
-  const boom =
-    extractBoomDetails(err) ??
-    extractBoomDetails((err as { error?: unknown })?.error) ??
-    extractBoomDetails((err as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error);
-
-  const status = boom?.statusCode ?? getStatusCode(err);
-  const code = (err as { code?: unknown })?.code;
-  const codeText = typeof code === "string" || typeof code === "number" ? String(code) : undefined;
-
-  const messageCandidates = [
-    boom?.message,
-    typeof (err as { message?: unknown })?.message === "string"
-      ? ((err as { message?: unknown }).message as string)
-      : undefined,
-    typeof (err as { error?: { message?: unknown } })?.error?.message === "string"
-      ? ((err as { error?: { message?: unknown } }).error?.message as string)
-      : undefined,
-  ].filter((v): v is string => Boolean(v && v.trim().length > 0));
-  const message = messageCandidates[0];
-
-  const pieces: string[] = [];
-  if (typeof status === "number") {
-    pieces.push(`status=${status}`);
-  }
-  if (boom?.error) {
-    pieces.push(boom.error);
-  }
-  if (message) {
-    pieces.push(message);
-  }
-  if (codeText) {
-    pieces.push(`code=${codeText}`);
-  }
-
-  if (pieces.length > 0) {
-    return pieces.join(" ");
-  }
-  return safeStringify(err);
 }
 
 export function newConnectionId() {

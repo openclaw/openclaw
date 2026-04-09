@@ -1,11 +1,11 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
-import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
+import { loadModelCatalog, resolveModelWithRegistry } from "./list.runtime.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { isLocalBaseUrl, modelKey } from "./shared.js";
 
@@ -26,7 +26,7 @@ type RowBuilderContext = {
 };
 
 function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {
-  if (filter.provider && model.provider.toLowerCase() !== filter.provider) {
+  if (filter.provider && normalizeProviderId(model.provider) !== filter.provider) {
     return false;
   }
   if (filter.local && !isLocalBaseUrl(model.baseUrl ?? "")) {
@@ -80,7 +80,14 @@ export function appendDiscoveredRows(params: {
   });
 
   for (const model of sorted) {
-    if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     if (!matchesRowFilter(params.context.filter, model)) {
@@ -110,7 +117,7 @@ export async function appendCatalogSupplementRows(params: {
   for (const entry of catalog) {
     if (
       params.context.filter.provider &&
-      entry.provider.toLowerCase() !== params.context.filter.provider
+      normalizeProviderId(entry.provider) !== params.context.filter.provider
     ) {
       continue;
     }
@@ -125,6 +132,16 @@ export async function appendCatalogSupplementRows(params: {
       cfg: params.context.cfg,
     });
     if (!model || !matchesRowFilter(params.context.filter, model)) {
+      continue;
+    }
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     params.rows.push(
@@ -148,7 +165,7 @@ export function appendConfiguredRows(params: {
   for (const entry of params.entries) {
     if (
       params.context.filter.provider &&
-      entry.ref.provider.toLowerCase() !== params.context.filter.provider
+      normalizeProviderId(entry.ref.provider) !== params.context.filter.provider
     ) {
       continue;
     }
@@ -162,6 +179,17 @@ export function appendConfiguredRows(params: {
       continue;
     }
     if (params.context.filter.local && !model) {
+      continue;
+    }
+    if (
+      model &&
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     params.rows.push(

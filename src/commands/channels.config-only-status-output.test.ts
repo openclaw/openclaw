@@ -118,7 +118,7 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
       isEnabled: () => true,
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }
@@ -178,6 +178,7 @@ describe("config-only channels status output", () => {
 
     const joined = await formatLocalStatusSummary({ channels: {} });
     expect(joined).toContain("TokenOnly");
+    expect(joined).toContain("TokenOnly primary");
     expect(joined).toContain("configured, secret unavailable in this command path");
     expect(joined).toContain("token:config (unavailable)");
   });

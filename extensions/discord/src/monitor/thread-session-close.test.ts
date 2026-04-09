@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const updateSessionStore = vi.fn();
@@ -6,12 +6,18 @@ const hoisted = vi.hoisted(() => {
   return { updateSessionStore, resolveStorePath };
 });
 
-vi.mock("../../../../src/config/sessions.js", () => ({
-  updateSessionStore: hoisted.updateSessionStore,
-  resolveStorePath: hoisted.resolveStorePath,
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    updateSessionStore: hoisted.updateSessionStore,
+    resolveStorePath: hoisted.resolveStorePath,
+  };
+});
 
-const { closeDiscordThreadSessions } = await import("./thread-session-close.js");
+let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
 
 function setupStore(store: Record<string, { updatedAt: number }>) {
   hoisted.updateSessionStore.mockImplementation(
@@ -26,6 +32,10 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
+  beforeAll(async () => {
+    ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
+  });
+
   beforeEach(() => {
     hoisted.updateSessionStore.mockClear();
     hoisted.resolveStorePath.mockClear();

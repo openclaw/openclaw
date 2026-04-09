@@ -1,12 +1,14 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   listDeliverableMessageChannels,
   type DeliverableMessageChannel,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 export type MessageChannelId = DeliverableMessageChannel;
@@ -59,6 +61,25 @@ function isAccountEnabled(account: unknown): boolean {
   return enabled !== false;
 }
 
+const loggedChannelSelectionErrors = new Set<string>();
+
+function logChannelSelectionError(params: {
+  pluginId: string;
+  accountId: string;
+  operation: "resolveAccount" | "isConfigured";
+  error: unknown;
+}) {
+  const message = formatErrorMessage(params.error);
+  const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
+  if (loggedChannelSelectionErrors.has(key)) {
+    return;
+  }
+  loggedChannelSelectionErrors.add(key);
+  defaultRuntime.error?.(
+    `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
+  );
+}
+
 async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): Promise<boolean> {
   const accountIds = plugin.config.listAccountIds(cfg);
   if (accountIds.length === 0) {
@@ -66,7 +87,18 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
   }
 
   for (const accountId of accountIds) {
-    const account = plugin.config.resolveAccount(cfg, accountId);
+    let account: unknown;
+    try {
+      account = plugin.config.resolveAccount(cfg, accountId);
+    } catch (error) {
+      logChannelSelectionError({
+        pluginId: plugin.id,
+        accountId,
+        operation: "resolveAccount",
+        error,
+      });
+      continue;
+    }
     const enabled = plugin.config.isEnabled
       ? plugin.config.isEnabled(account, cfg)
       : isAccountEnabled(account);
@@ -76,7 +108,18 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
     if (!plugin.config.isConfigured) {
       return true;
     }
-    const configured = await plugin.config.isConfigured(account, cfg);
+    let configured = false;
+    try {
+      configured = await plugin.config.isConfigured(account, cfg);
+    } catch (error) {
+      logChannelSelectionError({
+        pluginId: plugin.id,
+        accountId,
+        operation: "isConfigured",
+        error,
+      });
+      continue;
+    }
     if (configured) {
       return true;
     }
@@ -123,7 +166,7 @@ export async function resolveMessageChannelSelection(params: {
       if (fallback) {
         return {
           channel: fallback,
-          configured: await listConfiguredMessageChannels(params.cfg),
+          configured: [],
           source: "tool-context-fallback",
         };
       }
@@ -134,7 +177,7 @@ export async function resolveMessageChannelSelection(params: {
     }
     return {
       channel: availableExplicit,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured: [],
       source: "explicit",
     };
   }
@@ -146,7 +189,7 @@ export async function resolveMessageChannelSelection(params: {
   if (fallback) {
     return {
       channel: fallback,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured: [],
       source: "tool-context-fallback",
     };
   }
@@ -162,3 +205,9 @@ export async function resolveMessageChannelSelection(params: {
     `Channel is required when multiple channels are configured: ${configured.join(", ")}`,
   );
 }
+
+export const __testing = {
+  resetLoggedChannelSelectionErrors() {
+    loggedChannelSelectionErrors.clear();
+  },
+};

@@ -42,10 +42,15 @@ async function emitMessageToolLifecycle(params: {
   });
 }
 
-function emitAssistantMessageEnd(emit: (evt: unknown) => void, text: string) {
+function emitAssistantMessageEnd(
+  emit: (evt: unknown) => void,
+  text: string,
+  overrides?: Partial<AssistantMessage>,
+) {
   const assistantMessage = {
     role: "assistant",
     content: [{ type: "text", text }],
+    ...overrides,
   } as AssistantMessage;
   emit({ type: "message_end", message: assistantMessage });
 }
@@ -68,6 +73,7 @@ describe("subscribeEmbeddedPiSession", () => {
       result: "ok",
     });
     emitAssistantMessageEnd(emit, messageText);
+    await Promise.resolve();
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
@@ -82,16 +88,44 @@ describe("subscribeEmbeddedPiSession", () => {
       result: { details: { status: "error" } },
     });
     emitAssistantMessageEnd(emit, messageText);
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
   });
-  it("clears block reply state on message_start", () => {
+
+  it("ignores delivery-mirror assistant messages", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    emitAssistantMessageEnd(emit, "Mirrored transcript text", {
+      provider: "openclaw",
+      model: "delivery-mirror",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("ignores gateway-injected assistant messages", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    emitAssistantMessageEnd(emit, "Injected transcript text", {
+      provider: "openclaw",
+      model: "gateway-injected",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("clears block reply state on message_start", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("text_end");
     emitAssistantTextEndBlock(emit, "OK");
+    await Promise.resolve();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
 
     // New assistant message with identical output should still emit.
     emitAssistantTextEndBlock(emit, "OK");
+    await Promise.resolve();
     expect(onBlockReply).toHaveBeenCalledTimes(2);
   });
 });

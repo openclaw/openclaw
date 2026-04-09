@@ -37,47 +37,6 @@ function createRemoteModeConfig() {
   };
 }
 
-function createUnresolvedLocalAuthConfig(params: {
-  mode: "token" | "password";
-  id: string;
-  remoteFallback: string;
-}) {
-  return cfg({
-    gateway: {
-      mode: "local",
-      auth: {
-        mode: params.mode,
-        [params.mode]: { source: "env", provider: "default", id: params.id },
-      },
-      remote: {
-        [params.mode]: params.remoteFallback,
-      },
-    },
-    secrets: {
-      providers: {
-        default: { source: "env" },
-      },
-    },
-  });
-}
-
-async function expectFailClosedOnUnresolvedLocalAuth(config: OpenClawConfig, path: string) {
-  await expect(
-    resolveGatewayConnectionAuth({
-      config,
-      env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
-    }),
-  ).rejects.toThrow(path);
-  expect(() =>
-    resolveGatewayConnectionAuthFromConfig({
-      cfg: config,
-      env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
-    }),
-  ).toThrow(path);
-}
-
 const DEFAULT_ENV = {
   OPENCLAW_GATEWAY_TOKEN: "env-token",
   OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
@@ -223,26 +182,6 @@ describe("resolveGatewayConnectionAuth", () => {
         password: "remote-password", // pragma: allowlist secret
       },
     },
-    {
-      name: "includeLegacyEnv controls CLAWDBOT fallback",
-      cfg: cfg({
-        gateway: {
-          mode: "local",
-          auth: {},
-        },
-      }),
-      env: {
-        CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
-        CLAWDBOT_GATEWAY_PASSWORD: "legacy-password", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
-      options: {
-        includeLegacyEnv: true,
-      },
-      expected: {
-        token: "legacy-token",
-        password: "legacy-password", // pragma: allowlist secret
-      },
-    },
   ];
 
   it.each(cases)("$name", async ({ cfg, env, options, expected }) => {
@@ -260,30 +199,7 @@ describe("resolveGatewayConnectionAuth", () => {
     expect(syncResolved).toEqual(expected);
   });
 
-  it("can disable legacy env fallback", async () => {
-    const config = cfg({
-      gateway: {
-        mode: "local",
-        auth: {},
-      },
-    });
-    const env = {
-      CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
-      CLAWDBOT_GATEWAY_PASSWORD: "legacy-password", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-
-    const resolved = await resolveGatewayConnectionAuth({
-      config,
-      env,
-      includeLegacyEnv: false,
-    });
-    expect(resolved).toEqual({
-      token: undefined,
-      password: undefined,
-    });
-  });
-
-  it("resolves local SecretRef token when legacy env is disabled", async () => {
+  it("resolves local SecretRef token when OPENCLAW env is absent", async () => {
     const config = cfg({
       gateway: {
         mode: "local",
@@ -298,14 +214,12 @@ describe("resolveGatewayConnectionAuth", () => {
       },
     });
     const env = {
-      CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
       LOCAL_SECRET_TOKEN: "resolved-from-secretref", // pragma: allowlist secret
     } as NodeJS.ProcessEnv;
 
     const resolved = await resolveGatewayConnectionAuth({
       config,
       env,
-      includeLegacyEnv: false,
     });
     expect(resolved).toEqual({
       token: "resolved-from-secretref",
@@ -335,7 +249,6 @@ describe("resolveGatewayConnectionAuth", () => {
     const resolved = await resolveGatewayConnectionAuth({
       config,
       env,
-      includeLegacyEnv: false,
       localTokenPrecedence: "config-first",
     });
     expect(resolved).toEqual({
@@ -367,7 +280,6 @@ describe("resolveGatewayConnectionAuth", () => {
     const resolved = await resolveGatewayConnectionAuth({
       config,
       env,
-      includeLegacyEnv: false,
       localPasswordPrecedence: "config-first", // pragma: allowlist secret
     });
     expect(resolved).toEqual({
@@ -398,7 +310,6 @@ describe("resolveGatewayConnectionAuth", () => {
       resolveGatewayConnectionAuth({
         config,
         env,
-        includeLegacyEnv: false,
         localTokenPrecedence: "config-first",
       }),
     ).rejects.toThrow("gateway.auth.token");
@@ -406,7 +317,6 @@ describe("resolveGatewayConnectionAuth", () => {
       resolveGatewayConnectionAuthFromConfig({
         cfg: config,
         env,
-        includeLegacyEnv: false,
         localTokenPrecedence: "config-first",
       }),
     ).toThrow("gateway.auth.token");
@@ -435,7 +345,6 @@ describe("resolveGatewayConnectionAuth", () => {
       resolveGatewayConnectionAuth({
         config,
         env,
-        includeLegacyEnv: false,
         localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).rejects.toThrow("gateway.auth.password");
@@ -443,31 +352,8 @@ describe("resolveGatewayConnectionAuth", () => {
       resolveGatewayConnectionAuthFromConfig({
         cfg: config,
         env,
-        includeLegacyEnv: false,
         localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).toThrow("gateway.auth.password");
-  });
-
-  it("fails closed when local token SecretRef is unresolved and remote token fallback exists", async () => {
-    await expectFailClosedOnUnresolvedLocalAuth(
-      createUnresolvedLocalAuthConfig({
-        mode: "token",
-        id: "MISSING_LOCAL_TOKEN",
-        remoteFallback: "remote-token",
-      }),
-      "gateway.auth.token",
-    );
-  });
-
-  it("fails closed when local password SecretRef is unresolved and remote password fallback exists", async () => {
-    await expectFailClosedOnUnresolvedLocalAuth(
-      createUnresolvedLocalAuthConfig({
-        mode: "password",
-        id: "MISSING_LOCAL_PASSWORD",
-        remoteFallback: "remote-password", // pragma: allowlist secret
-      }),
-      "gateway.auth.password",
-    );
   });
 });
