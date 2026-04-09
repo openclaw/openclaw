@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
+  buildCrossOsWorkspaceMigrationHint,
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -26,6 +27,63 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
     } as NodeJS.ProcessEnv);
 
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
+  });
+});
+
+describe("buildCrossOsWorkspaceMigrationHint (#63572)", () => {
+  it("flags a Linux home prefix on a macOS host", () => {
+    const hint = buildCrossOsWorkspaceMigrationHint(
+      "/home/alice/.openclaw/workspace",
+      "/Users/alice",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toContain("/home/alice");
+    expect(hint).toContain("macOS");
+    expect(hint).toContain("agents.defaults.workspace");
+  });
+
+  it("flags a macOS home prefix on a Linux host", () => {
+    const hint = buildCrossOsWorkspaceMigrationHint(
+      "/Users/bob/.openclaw/workspace",
+      "/home/bob",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toContain("/Users/bob");
+    expect(hint).toContain("Linux");
+    expect(hint).toContain("agents.defaults.workspace");
+  });
+
+  it("returns null when the workspace is already under the current home", () => {
+    expect(
+      buildCrossOsWorkspaceMigrationHint("/Users/alice/.openclaw/workspace", "/Users/alice"),
+    ).toBeNull();
+    expect(
+      buildCrossOsWorkspaceMigrationHint("/home/alice/.openclaw/workspace", "/home/alice"),
+    ).toBeNull();
+  });
+
+  it("returns null for paths that do not match a cross-OS home prefix", () => {
+    // Bespoke workspace location outside any home tree is not a cross-OS
+    // migration issue — the mkdir failure is probably a permissions bug.
+    expect(
+      buildCrossOsWorkspaceMigrationHint("/srv/shared/openclaw/workspace", "/Users/alice"),
+    ).toBeNull();
+    expect(
+      buildCrossOsWorkspaceMigrationHint("/opt/openclaw/workspace", "/home/alice"),
+    ).toBeNull();
+  });
+
+  it("returns null when either input is empty", () => {
+    expect(buildCrossOsWorkspaceMigrationHint("", "/Users/alice")).toBeNull();
+    expect(buildCrossOsWorkspaceMigrationHint("/home/alice/ws", "")).toBeNull();
+  });
+
+  it("does not false-positive on /home paths on a Linux host", () => {
+    // Same-OS but a different user — this could be an intentional shared
+    // workspace, not a migration artifact. Skip the hint so we don't mislead.
+    expect(
+      buildCrossOsWorkspaceMigrationHint("/home/shared/workspace", "/home/alice"),
+    ).toBeNull();
   });
 });
 

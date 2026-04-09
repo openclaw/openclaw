@@ -322,6 +322,53 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
   }
 }
 
+/**
+ * Detect absolute workspace paths that appear to have been authored on a
+ * different operating system (e.g. `/home/alice/...` on macOS, or
+ * `/Users/alice/...` on Linux) and return a helpful migration hint.
+ *
+ * Returns `null` when the path is same-OS, already rooted under the current
+ * user's home, or not recognisable as a cross-OS home prefix.
+ *
+ * Exported so #63572 regression tests can exercise the detection logic
+ * without touching the real filesystem.
+ */
+export function buildCrossOsWorkspaceMigrationHint(
+  dir: string,
+  currentHome: string,
+): string | null {
+  if (!dir || !currentHome) {
+    return null;
+  }
+  const normalizedDir = path.normalize(dir);
+  const normalizedHome = path.normalize(currentHome);
+  // Paths already anchored at the current home are not cross-OS stale.
+  if (normalizedDir === normalizedHome || normalizedDir.startsWith(`${normalizedHome}${path.sep}`)) {
+    return null;
+  }
+  // Linux/WSL home prefix used on macOS → `/home/<user>/…`.
+  const linuxMatch = /^\/home\/([^/]+)(?:\/|$)/.exec(normalizedDir);
+  if (linuxMatch && normalizedHome.startsWith("/Users/")) {
+    return (
+      `workspace path ${normalizedDir} references a Linux-style home prefix (/home/${linuxMatch[1]}), ` +
+      `but this host is macOS with home ${normalizedHome}. ` +
+      `Update agents.defaults.workspace (and any per-agent workspace fields) in openclaw.json ` +
+      `to use the current host's home, or re-run openclaw setup to reset it.`
+    );
+  }
+  // macOS home prefix used on Linux → `/Users/<user>/…`.
+  const macMatch = /^\/Users\/([^/]+)(?:\/|$)/.exec(normalizedDir);
+  if (macMatch && normalizedHome.startsWith("/home/")) {
+    return (
+      `workspace path ${normalizedDir} references a macOS-style home prefix (/Users/${macMatch[1]}), ` +
+      `but this host is Linux with home ${normalizedHome}. ` +
+      `Update agents.defaults.workspace (and any per-agent workspace fields) in openclaw.json ` +
+      `to use the current host's home, or re-run openclaw setup to reset it.`
+    );
+  }
+  return null;
+}
+
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
@@ -337,7 +384,23 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
-  await fs.mkdir(dir, { recursive: true });
+  try {
+    await fs.mkdir(dir, { recursive: true });
+  } catch (err) {
+    // Cross-OS migration (e.g. Linux/WSL state directory copied to macOS)
+    // leaves hardcoded absolute workspace paths like `/home/alice/.openclaw`
+    // in openclaw.json. On the new host, `fs.mkdir(/home/alice/...)` fails
+    // because `/home` is not writable. Surface a targeted hint so the user
+    // knows exactly which config key to update instead of chasing a raw
+    // ENOENT stack trace through the gateway logs.
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+      const hint = buildCrossOsWorkspaceMigrationHint(dir, os.homedir());
+      if (hint) {
+        throw new Error(hint, { cause: err });
+      }
+    }
+    throw err;
+  }
 
   if (!params?.ensureBootstrapFiles) {
     return { dir };
