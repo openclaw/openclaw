@@ -1157,7 +1157,9 @@ export async function handleOpenResponsesHttpRequest(
             usage,
           });
           closed = true;
+          stopWatchingDisconnect();
           unsubscribe();
+          rememberResponseSession();
           writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
           writeDone(res);
           res.end();
@@ -1192,6 +1194,7 @@ export async function handleOpenResponsesHttpRequest(
 
       if (!sseStarted && isClientToolNameConflictError(err)) {
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         sendJson(res, 400, {
           error: { message: "invalid tool configuration", type: "invalid_request_error" },
@@ -1211,6 +1214,7 @@ export async function handleOpenResponsesHttpRequest(
           usage: finalUsage,
         });
 
+        stopWatchingDisconnect();
         writeSseEvent(res, { type: "response.failed", response: errorResponse });
         emitAgentEvent({
           runId: responseId,

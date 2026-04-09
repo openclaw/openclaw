@@ -217,7 +217,15 @@ export function filterToolResultMediaUrls(
     // (attempt.ts) supply this set; omitting it preserves legacy behavior only.
     if (builtinToolNames !== undefined) {
       const registeredName = toolName?.trim();
-      if (!registeredName || !builtinToolNames.has(registeredName)) {
+      // Allow both core built-in tool names and bundled plugin media tools
+      // through the exact-name gate. Bundled plugin tools are shipped with
+      // the repo (declared in plugin registration contracts), so they are
+      // safe for local-path trust — unlike user-supplied MCP/client tools.
+      if (
+        !registeredName ||
+        (!builtinToolNames.has(registeredName) &&
+          !TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(registeredName))
+      ) {
         return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
       }
     }
