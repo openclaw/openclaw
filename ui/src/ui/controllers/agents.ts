@@ -44,6 +44,10 @@ export type AgentsState = {
 
 export type AgentsConfigSaveState = AgentsState & ConfigState;
 
+function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean {
+  return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
+}
+
 export async function loadAgents(state: AgentsState) {
   if (!state.client || !state.connected) {
     return;
@@ -80,6 +84,9 @@ export async function loadToolsCatalog(state: AgentsState, agentId: string) {
   if (!state.client || !state.connected || !resolvedAgentId) {
     return;
   }
+  const shouldIgnoreResponse = () =>
+    state.toolsCatalogLoadingAgentId !== resolvedAgentId ||
+    hasSelectedAgentMismatch(state, resolvedAgentId);
   if (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId) {
     return;
   }
@@ -92,18 +99,12 @@ export async function loadToolsCatalog(state: AgentsState, agentId: string) {
       agentId: resolvedAgentId,
       includePlugins: true,
     });
-    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
     state.toolsCatalogResult = res;
   } catch (err) {
-    if (state.toolsCatalogLoadingAgentId !== resolvedAgentId) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
     state.toolsCatalogResult = null;
@@ -131,6 +132,9 @@ export async function loadToolsEffective(
   if (!state.client || !state.connected || !resolvedAgentId || !resolvedSessionKey) {
     return;
   }
+  const shouldIgnoreResponse = () =>
+    state.toolsEffectiveLoadingKey !== requestKey ||
+    hasSelectedAgentMismatch(state, resolvedAgentId);
   if (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey) {
     return;
   }
@@ -144,19 +148,13 @@ export async function loadToolsEffective(
       agentId: resolvedAgentId,
       sessionKey: resolvedSessionKey,
     });
-    if (state.toolsEffectiveLoadingKey !== requestKey) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
     state.toolsEffectiveResultKey = requestKey;
     state.toolsEffectiveResult = res;
   } catch (err) {
-    if (state.toolsEffectiveLoadingKey !== requestKey) {
-      return;
-    }
-    if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
+    if (shouldIgnoreResponse()) {
       return;
     }
     state.toolsEffectiveResult = null;
