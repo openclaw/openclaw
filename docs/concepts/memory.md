@@ -40,6 +40,21 @@ The agent has two tools for working with memory:
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
 
+## Canonical memory vs derived layers
+
+OpenClaw's memory model works best when the source of truth stays obvious.
+
+- **Canonical sources**: user-authored memory files, durable notes, and opted-in session transcripts.
+- **Derived layers**: embeddings, search indexes, compaction summaries, wiki pages, dashboards, and other generated views.
+
+Derived layers exist to make recall faster and more navigable. They are not the
+primary record. If a derived view disagrees with the underlying file or
+transcript, treat the underlying source as authoritative and repair or rebuild
+the derived layer.
+
+This distinction matters because memory quality usually degrades when summaries
+or indexes silently replace original evidence instead of pointing back to it.
+
 ## Memory Wiki companion plugin
 
 If you want durable memory to behave more like a maintained knowledge base than
@@ -75,6 +90,16 @@ enabled automatically.
 
 For details on how search works, tuning options, and provider setup, see
 [Memory Search](/concepts/memory-search).
+
+## Bootstrap vs deep recall
+
+Keep the always-loaded memory surface small, then retrieve depth on demand.
+
+- Put durable identity, preferences, and evergreen decisions in files like `MEMORY.md`.
+- Let `memory_search` pull in detailed snippets only when they are relevant to the current task.
+- Use compiled layers like `memory-wiki` to improve navigation and synthesis, not to bloat default prompt context.
+
+This keeps startup context stable while still preserving access to the full raw record.
 
 ## Memory backends
 

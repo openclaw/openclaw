@@ -48,6 +48,7 @@ Canonical security policy and reporting:
 - [`SECURITY.md`](SECURITY.md)
 
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
+The consolidated project doctrine for evidence, execution, supervised autonomy, promotion criteria, and canonical-vs-derived state lives in [`OPERATING_MODEL.md`](OPERATING_MODEL.md).
 
 ## Plugins & Memory
 

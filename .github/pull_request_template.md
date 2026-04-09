@@ -82,7 +82,11 @@ After:
 - New/changed network calls? (`Yes/No`)
 - Command/tool execution surface changed? (`Yes/No`)
 - Data access scope changed? (`Yes/No`)
+- Autonomy / approval posture changed? (`Yes/No`)
+- Canonical source vs derived artifact behavior changed? (`Yes/No`)
 - If any `Yes`, explain risk + mitigation:
+- If autonomy / approval posture changed, list the new approval gates, observability, rollback path, and regression coverage:
+- If canonical source vs derived artifact behavior changed, explain the source of truth, rebuild/repair path, and verification coverage:
 
 ## Repro + Verification
 

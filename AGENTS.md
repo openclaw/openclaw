@@ -1,6 +1,9 @@
 # Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
+- Operating stance: see `OPERATING_MODEL.md` for the repo's evidence-first, supervised-autonomy doctrine.
+- Default to the governed change cycle: **Brief -> Implement -> Regress -> Admit**.
+- Prefer the smallest reversible diff that satisfies the brief; do not increase autonomy, side effects, or approval scope without updating policy controls, observability, rollback, and regression coverage in the same change.
 - In chat replies, file references must be repo-root relative only (example: `src/telegram/index.ts:80`); never absolute paths or `~/...`.
 - Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
 

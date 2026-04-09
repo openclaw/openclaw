@@ -67,6 +67,17 @@ flowchart LR
 
 If only one path is available (no embeddings or no FTS), the other runs alone.
 
+## Canonical recall and derived indexes
+
+`memory_search` should be understood as a recall accelerator, not the memory
+record itself.
+
+- The canonical record remains the underlying memory file or transcript chunk.
+- Embeddings, FTS rows, rerankers, and compiled knowledge layers are derived indexes over that record.
+- Good memory systems return you to primary evidence quickly instead of replacing it with opaque summaries.
+
+If search quality looks wrong, rebuild or retune the index first before assuming the source material is wrong.
+
 ## Improving search quality
 
 Two optional features help when you have a large note history:
@@ -124,6 +135,10 @@ You can optionally index session transcripts so `memory_search` can recall
 earlier conversations. This is opt-in via
 `memorySearch.experimental.sessionMemory`. See the
 [configuration reference](/reference/memory-config) for details.
+
+When enabled, transcript indexing should preserve the verbatim conversation as
+the canonical record. Search snippets, summaries, or wiki-style pages should
+help route you back to the original turn, not overwrite what was actually said.
 
 ## Troubleshooting
 
