@@ -107,7 +107,14 @@ function deriveSubagentInfo(sessionKey: string): { parentSessionId: string; task
 	return null;
 }
 
-function normalizeLiveStreamEvent(event: SseEvent): SseEvent {
+function normalizeLiveStreamEvent(event: SseEvent): SseEvent | null {
+	// `user-message` events are internal bookkeeping for the reconnection
+	// stream parser — they are not part of the AI SDK v6 wire format and
+	// will fail validation in DefaultChatTransport.  Filter them out.
+	if (event.type === "user-message") {
+		return null;
+	}
+
 	// AI SDK's UI stream schema does not define `tool-output-partial`.
 	// It expects repeated `tool-output-available` chunks with
 	// `preliminary: true` while the tool is still running.
@@ -309,8 +316,11 @@ export async function POST(req: Request) {
 						return;
 					}
 					try {
-						const json = JSON.stringify(normalizeLiveStreamEvent(event));
-						controller.enqueue(encoder.encode(`data: ${json}\n\n`));
+						const normalized = normalizeLiveStreamEvent(event);
+						if (normalized) {
+							const json = JSON.stringify(normalized);
+							controller.enqueue(encoder.encode(`data: ${json}\n\n`));
+						}
 					} catch { /* ignore */ }
 				},
 				{ replay: true },
