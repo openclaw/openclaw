@@ -45,6 +45,7 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "../commands/doctor-state-migrations.js";
+import { maybeRepairStaleWorkspacePaths } from "../commands/doctor-workspace-paths.js";
 import { noteWorkspaceStatus } from "../commands/doctor-workspace-status.js";
 import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "../commands/doctor-workspace.js";
 import { noteOpenAIOAuthTlsPrerequisites } from "../commands/oauth-tls-preflight.js";
@@ -399,6 +400,12 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
   noteWorkspaceStatus(ctx.cfg);
 }
 
+async function runStaleWorkspacePathsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  ctx.cfg = await maybeRepairStaleWorkspacePaths(ctx.cfg, ctx.prompter, {
+    nonInteractive: ctx.options.nonInteractive === true,
+  });
+}
+
 async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await noteBootstrapFileSize(ctx.cfg);
 }
@@ -586,6 +593,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:workspace-status",
       label: "Workspace status",
       run: runWorkspaceStatusHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:workspace-stale-paths",
+      label: "Workspace path portability",
+      run: runStaleWorkspacePathsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",

@@ -90,6 +90,10 @@ Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_D
     Ensure the state directory and workspace are owned by the user running the gateway.
   </Accordion>
 
+  <Accordion title="Cross-OS absolute workspace paths">
+    If your previous install baked an absolute workspace path into `openclaw.json` (for example `/home/<user>/.openclaw/workspace` from Linux or WSL), it will not resolve on a macOS or Windows host. `openclaw doctor` detects stale cross-OS paths in `agents.defaults.workspace` and per-agent `workspace` fields and offers to rewrite them to `~`-relative form so the config travels between machines.
+  </Accordion>
+
   <Accordion title="Remote mode">
     If your UI points at a **remote** gateway, the remote host owns sessions and workspace.
     Migrate the gateway host itself, not your local laptop. See [FAQ](/help/faq#where-things-live-on-disk).
