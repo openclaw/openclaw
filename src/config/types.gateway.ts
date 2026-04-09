@@ -380,6 +380,14 @@ export type GatewayWebchatConfig = {
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
+  /** Gateway connect challenge timeout in ms (default: 10000). */
+  connectChallengeTimeoutMs?: number;
+  /** Default gateway RPC timeout in ms for control-plane calls (default: 10000). */
+  timeoutMs?: number;
+  /** Default timeout in ms for accepted-then-final gateway calls (default: 90000). */
+  finalResponseTimeoutMs?: number;
+  /** Default settle timeout in ms for session/control-plane waits (default: 15000). */
+  sessionSettleTimeoutMs?: number;
   /**
    * Explicit gateway mode. When set to "remote", local gateway start is disabled.
    * When set to "local", the CLI may start the gateway locally.

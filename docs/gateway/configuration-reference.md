@@ -2327,7 +2327,12 @@ Notes:
         allowAgents: ["research"],
         model: "minimax/MiniMax-M2.7",
         maxConcurrent: 8,
+        startupWaitTimeoutMs: 10000,
+        controlTimeoutMs: 10000,
         runTimeoutSeconds: 900,
+        completionAnnounceTimeoutMs: 90000,
+        announceTimeoutMs: 90000,
+        cleanupTimeoutMs: 10000,
         archiveAfterMinutes: 60,
       },
     },
@@ -2337,7 +2342,12 @@ Notes:
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
 - `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
+- `startupWaitTimeoutMs`: default requester-side timeout in milliseconds for sub-agent startup/setup RPCs before launch is treated as failed. Default: `10000`.
+- `controlTimeoutMs`: default timeout in milliseconds for sub-agent control-plane calls such as steer and follow-up sends. If unset, it falls back to `startupWaitTimeoutMs`.
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
+- `completionAnnounceTimeoutMs`: canonical timeout in milliseconds for sub-agent completion announce delivery. Default: `90000`.
+- `announceTimeoutMs`: legacy alias for `completionAnnounceTimeoutMs`. If both are set, `completionAnnounceTimeoutMs` wins.
+- `cleanupTimeoutMs`: default timeout in milliseconds for best-effort sub-agent cleanup calls such as failed-start session deletion. If unset, it falls back to `controlTimeoutMs`.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
 ---
@@ -2837,6 +2847,10 @@ See [Plugins](/tools/plugin).
     mode: "local", // local | remote
     port: 18789,
     bind: "loopback",
+    connectChallengeTimeoutMs: 10000,
+    timeoutMs: 10000,
+    finalResponseTimeoutMs: 90000,
+    sessionSettleTimeoutMs: 15000,
     auth: {
       mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
@@ -2895,6 +2909,10 @@ See [Plugins](/tools/plugin).
 - `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
+- `connectChallengeTimeoutMs`: pre-auth/connect handshake timeout in milliseconds for gateway clients and server-side handshake enforcement. Default: `10000`.
+- `timeoutMs`: default timeout in milliseconds for ordinary gateway control-plane RPC calls when callers do not pass one. Default: `10000`.
+- `finalResponseTimeoutMs`: default timeout in milliseconds for accepted-then-final gateway calls when callers do not pass one. Default: `90000`.
+- `sessionSettleTimeoutMs`: default timeout in milliseconds added around settle/wait paths such as embedded-session shutdown and `agent.wait` transport cleanup. Default: `15000`.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.
 - **Auth**: required by default. Non-loopback binds require gateway auth. In practice that means a shared token/password or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`. Onboarding wizard generates a token by default.

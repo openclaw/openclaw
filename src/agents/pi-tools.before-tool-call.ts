@@ -1,4 +1,6 @@
+import { loadConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { resolveGatewayWaitCallTimeoutMs } from "../gateway/call-timeouts.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -233,15 +235,18 @@ export async function runBeforeToolCallHook(args: {
         }
       };
       try {
+        const approvalWaitTimeoutMs = approval.timeoutMs ?? 120_000;
+        const approvalGatewayTimeoutMs = resolveGatewayWaitCallTimeoutMs(
+          loadConfig(),
+          approvalWaitTimeoutMs,
+        );
         const requestResult = await callGatewayTool<{
           id?: string;
           status?: string;
           decision?: string | null;
         }>(
           "plugin.approval.request",
-          // Buffer beyond the approval timeout so the gateway can clean up
-          // and respond before the client-side RPC timeout fires.
-          { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+          { timeoutMs: approvalGatewayTimeoutMs },
           {
             pluginId: approval.pluginId,
             title: approval.title,
@@ -251,7 +256,7 @@ export async function runBeforeToolCallHook(args: {
             toolCallId: args.toolCallId,
             agentId: args.ctx?.agentId,
             sessionKey: args.ctx?.sessionKey,
-            timeoutMs: approval.timeoutMs ?? 120_000,
+            timeoutMs: approvalWaitTimeoutMs,
             twoPhase: true,
           },
           { expectFinal: false },
@@ -284,13 +289,7 @@ export async function runBeforeToolCallHook(args: {
           const waitPromise = callGatewayTool<{
             id?: string;
             decision?: string | null;
-          }>(
-            "plugin.approval.waitDecision",
-            // Buffer beyond the approval timeout so the gateway can clean up
-            // and respond before the client-side RPC timeout fires.
-            { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
-            { id },
-          );
+          }>("plugin.approval.waitDecision", { timeoutMs: approvalGatewayTimeoutMs }, { id });
           let waitResult: { id?: string; decision?: string | null } | undefined;
           if (args.signal) {
             let onAbort: (() => void) | undefined;

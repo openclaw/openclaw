@@ -38,6 +38,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { resolveGatewaySessionSettleTimeoutMs } from "../call-timeouts.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -416,7 +417,10 @@ async function interruptSessionRunIfActive(params: {
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
-    const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+    const ended = await waitForEmbeddedPiRunEnd(
+      params.sessionId,
+      resolveGatewaySessionSettleTimeoutMs(loadConfig()),
+    );
     if (!ended) {
       return {
         interrupted: true,

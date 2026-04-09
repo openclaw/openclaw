@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
 import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
+import { resolveGatewayRpcTimeoutMs } from "../gateway/call-timeouts.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -521,7 +522,7 @@ async function sweepSubagentRuns() {
           deleteTranscript: true,
           emitLifecycleHooks: false,
         },
-        timeoutMs: 10_000,
+        timeoutMs: resolveGatewayRpcTimeoutMs(loadConfig()),
       });
     } catch {
       // ignore

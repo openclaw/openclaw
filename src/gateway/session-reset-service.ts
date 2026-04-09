@@ -32,6 +32,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveGatewaySessionSettleTimeoutMs } from "./call-timeouts.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -262,7 +263,10 @@ async function ensureSessionRuntimeCleanup(params: {
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
-  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  const ended = await waitForEmbeddedPiRunEnd(
+    params.sessionId,
+    resolveGatewaySessionSettleTimeoutMs(params.cfg),
+  );
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
     await closeTrackedBrowserTabs();

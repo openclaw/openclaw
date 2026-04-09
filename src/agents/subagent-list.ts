@@ -1,7 +1,7 @@
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

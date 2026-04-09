@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveGatewayRpcTimeoutMs,
+  resolveGatewayWaitCallTimeoutMs,
+} from "../../gateway/call-timeouts.js";
 import { callGateway } from "../../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
-
-export { readLatestAssistantReply } from "../run-wait.js";
+import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -16,11 +19,38 @@ let agentStepDeps: {
   callGateway: GatewayCaller;
 } = defaultAgentStepDeps;
 
+export async function readLatestAssistantReply(params: {
+  sessionKey: string;
+  limit?: number;
+}): Promise<string | undefined> {
+  const history = await agentStepDeps.callGateway<{ messages: Array<unknown> }>({
+    method: "chat.history",
+    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+  });
+  const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
+  for (let i = filtered.length - 1; i >= 0; i -= 1) {
+    const candidate = filtered[i];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if ((candidate as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractAssistantText(candidate);
+    if (!text?.trim()) {
+      continue;
+    }
+    return text;
+  }
+  return undefined;
+}
+
 export async function runAgentStep(params: {
   sessionKey: string;
   message: string;
   extraSystemPrompt: string;
   timeoutMs: number;
+  config?: OpenClawConfig;
   channel?: string;
   lane?: string;
   sourceSessionKey?: string;
@@ -45,20 +75,24 @@ export async function runAgentStep(params: {
         sourceTool: params.sourceTool ?? "sessions_send",
       },
     },
-    timeoutMs: 10_000,
+    timeoutMs: resolveGatewayRpcTimeoutMs(params.config),
   });
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
-  const result = await waitForAgentRunAndReadUpdatedAssistantReply({
-    runId: resolvedRunId,
-    sessionKey: params.sessionKey,
-    timeoutMs: Math.min(params.timeoutMs, 60_000),
+  const stepWaitMs = Math.min(params.timeoutMs, 60_000);
+  const wait = await agentStepDeps.callGateway<{ status?: string }>({
+    method: "agent.wait",
+    params: {
+      runId: resolvedRunId,
+      timeoutMs: stepWaitMs,
+    },
+    timeoutMs: resolveGatewayWaitCallTimeoutMs(params.config, stepWaitMs),
   });
-  if (result.status !== "ok") {
+  if (wait?.status !== "ok") {
     return undefined;
   }
-  return result.replyText;
+  return await readLatestAssistantReply({ sessionKey: params.sessionKey });
 }
 
 export const __testing = {

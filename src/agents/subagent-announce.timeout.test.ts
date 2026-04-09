@@ -96,12 +96,30 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     targetRequesterSessionKey: string;
     triggerMessage: string;
     requesterIsSubagent?: boolean;
+    expectsCompletionMessage?: boolean;
     requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
     directIdempotencyKey?: string;
     internalEvents?: unknown;
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
+    directOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
   }) => {
+    const effectiveOrigin =
+      params.expectsCompletionMessage && params.completionDirectOrigin
+        ? params.completionDirectOrigin
+        : (params.directOrigin ?? params.requesterOrigin);
+
     const buildRequest = () => ({
       method: "agent",
       expectFinal: true,
@@ -109,16 +127,17 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       params: {
         sessionKey: params.targetRequesterSessionKey,
         message: params.triggerMessage,
-        deliver: !params.requesterIsSubagent,
+        deliver:
+          !params.requesterIsSubagent && Boolean(effectiveOrigin?.channel && effectiveOrigin?.to),
         bestEffortDeliver: params.bestEffortDeliver,
         internalEvents: params.internalEvents,
         ...(params.requesterIsSubagent
           ? {}
           : {
-              channel: params.requesterOrigin?.channel,
-              to: params.requesterOrigin?.to,
-              accountId: params.requesterOrigin?.accountId,
-              threadId: params.requesterOrigin?.threadId,
+              channel: effectiveOrigin?.channel,
+              to: effectiveOrigin?.to,
+              accountId: effectiveOrigin?.accountId,
+              threadId: effectiveOrigin?.threadId,
             }),
       },
     });
@@ -180,7 +199,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
 }));
-vi.mock("./subagent-announce.registry.runtime.js", () => ({
+vi.mock("./subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
   countPendingDescendantRunsExcludingRun: () => 0,
@@ -251,7 +270,7 @@ function setupParentSessionFallback(parentSessionKey: string): void {
   shouldIgnorePostCompletion = false;
   fallbackRequesterResolution = {
     requesterSessionKey: "agent:main:main",
-    requesterOrigin: { channel: "discord", to: "chan-main", accountId: "acct-main" },
+    requesterOrigin: { channel: "discord", accountId: "acct-main" },
   };
 }
 
@@ -417,9 +436,9 @@ describe("subagent announce timeout config", () => {
 
     const directAgentCall = findFinalDirectAgentCall();
     expect(directAgentCall?.params?.sessionKey).toBe("agent:main:main");
-    expect(directAgentCall?.params?.deliver).toBe(true);
+    expect(directAgentCall?.params?.deliver).toBe(false);
     expect(directAgentCall?.params?.channel).toBe("discord");
-    expect(directAgentCall?.params?.to).toBe("chan-main");
+    expect(directAgentCall?.params?.to).toBeUndefined();
     expect(directAgentCall?.params?.accountId).toBe("acct-main");
   });
 
