@@ -31,26 +31,30 @@ except ImportError:
     sys.exit(1)
 
 TFC_API = "https://app.terraform.io/api/v2"
-TFC_ORG_DEFAULT = "marsmovers"
 
 
 def get_token():
     token = os.environ.get("TFC_TOKEN")
     if not token:
-        zshrc = Path.home() / ".zshrc"
-        if zshrc.exists():
-            for line in zshrc.read_text().splitlines():
-                if line.startswith("export TFC_TOKEN="):
-                    token = line.split("=", 1)[1].strip().strip("'\"")
-                    break
+        credfile = Path.home() / ".terraform.d" / "credentials.tfrc.json"
+        if credfile.exists():
+            try:
+                data = json.loads(credfile.read_text())
+                token = data.get("credentials", {}).get("app.terraform.io", {}).get("token")
+            except Exception:
+                token = None
     if not token:
-        print("ERROR: TFC_TOKEN not found in env or ~/.zshrc")
+        print("ERROR: TFC_TOKEN not found in env or ~/.terraform.d/credentials.tfrc.json")
         sys.exit(1)
     return token
 
 
 def get_org():
-    return os.environ.get("TFC_ORG") or TFC_ORG_DEFAULT
+    org = os.environ.get("TFC_ORG")
+    if not org:
+        print("ERROR: TFC_ORG env var is required. Set it to your Terraform Cloud organization name.")
+        sys.exit(1)
+    return org
 
 
 def api_headers():
@@ -813,10 +817,10 @@ echo
         test_content += f"""
 # API Gateway test
 echo "\n--- API Gateway Test ---"
-ENDPOINT=$(terraform -chdir={outdir} output -raw api_endpoint 2>/dev/null || echo "")
-if [ -n "$ENDPOINT" ]; then
-  echo "GET $ENDPOINT"
-  curl -s "$ENDPOINT" | python3 -m json.tool
+endpoint=$(terraform -chdir={outdir} output -raw api_endpoint 2>/dev/null || echo "")
+if [ -n "$endpoint" ]; then
+  echo "GET $endpoint"
+  curl -s "$endpoint" | python3 -m json.tool
 else
   echo "Run 'terraform apply' first to get the API endpoint"
 fi
@@ -1365,7 +1369,7 @@ resource "aws_organizations_policy" "region_restrict" {{
 
 resource "aws_organizations_policy_attachment" "region_restrict" {{
   policy_id = aws_organizations_policy.region_restrict.id
-  target_id = aws_organizations_organizational_unit.workloads.id
+  target_id = {app_ou_ref}
 }}
 
 resource "aws_organizations_policy" "deny_s3_public" {{
@@ -3087,6 +3091,11 @@ resource "aws_subnet" "public_{i}" {{
   map_public_ip_on_launch = true
   tags = merge(local.tags, {{ Name = "{name}-public-{i}", Tier = "public" }})
 }}
+
+resource "aws_route_table_association" "public_{i}" {{
+  subnet_id      = aws_subnet.public_{i}.id
+  route_table_id = aws_route_table.public.id
+}}
 """
 
     priv_subnet_blocks = ""
@@ -3434,6 +3443,10 @@ def cmd_apply(args):
 
 
 def cmd_destroy(args):
+    if getattr(args, "confirm", None) != "DESTROY":
+        print("ERROR: Destroy requires explicit confirmation.")
+        print("Pass --confirm DESTROY to proceed.")
+        sys.exit(1)
     print("\nRunning terraform destroy...")
     rc = run_tf(["destroy", "-auto-approve"], cwd=args.dir)
     if rc != 0:
@@ -3522,6 +3535,7 @@ def main():
 
     p_destroy = sub.add_parser("destroy")
     p_destroy.add_argument("--dir", required=True)
+    p_destroy.add_argument("--confirm", default=None, help="Must be 'DESTROY' to confirm destructive action")
 
     p_state = sub.add_parser("state")
     p_state.add_argument("--workspace", required=True)
