@@ -19,6 +19,7 @@ minimumReleaseAgeExclude:
   - "@typescript/native-preview*"
   - "@oxlint/*"
   - "@oxfmt/*"
+  - "basic-ftp"
   - "sqlite-vec"
   - "sqlite-vec-*"
 

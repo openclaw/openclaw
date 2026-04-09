@@ -9,6 +9,7 @@ overrides:
   hono: 4.12.12
   '@hono/node-server': 1.19.13
   axios: 1.13.6
+  basic-ftp: 5.2.1
   defu: 6.1.5
   fast-xml-parser: 5.5.7
   request: npm:@cypress/request@3.0.10
