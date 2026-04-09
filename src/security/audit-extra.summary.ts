@@ -199,7 +199,7 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
   }
   // web_research/web_contents require an API key to be internet-capable.
   // The key can be a plain string or a SecretRef object.
-  const pluginConfig = youPlugin.config as { webSearch?: { apiKey?: unknown } } | undefined;
+  const pluginConfig = youPlugin?.config as { webSearch?: { apiKey?: unknown } } | undefined;
   const configValue = pluginConfig?.webSearch?.apiKey;
   if (configValue !== undefined && configValue !== null) {
     if (typeof configValue === "string") {
