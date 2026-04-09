@@ -1235,7 +1235,17 @@ Best practice:
         extra_sso = prompt("Add custom SSO groups? (comma-separated, or 'none')", default="none")
         sso_groups = ["Admins", "Developers", "ReadOnly", "SecurityAudit"]
         if extra_sso.lower() != "none":
-            sso_groups += [g.strip() for g in extra_sso.split(",") if g.strip()]
+            seen_safe = {g.lower().replace(" ", "_").replace("-", "_") for g in sso_groups}
+            for g in extra_sso.split(","):
+                g = g.strip()
+                if not g:
+                    continue
+                safe = g.lower().replace(" ", "_").replace("-", "_")
+                if safe in seen_safe:
+                    print(f"      ⚠️  Skipping duplicate SSO group: '{g}'")
+                    continue
+                seen_safe.add(safe)
+                sso_groups.append(g)
 
     # GuardDuty
     print("\n  Amazon GuardDuty:")
