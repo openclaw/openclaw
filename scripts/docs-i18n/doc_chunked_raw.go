@@ -222,19 +222,30 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 	if !strings.Contains(translated, bodyTagStart) && !strings.Contains(translated, frontmatterTagStart) {
 		return translated
 	}
-	for _, token := range docsProtocolTokens {
-		if strings.Contains(source, token) {
+	_, body, err := parseTaggedDocument(strings.TrimSpace(translated))
+	if err == nil {
+		if strings.TrimSpace(body) == "" {
 			return translated
 		}
+		return body
 	}
-	_, body, err := parseTaggedDocument(strings.TrimSpace(translated))
-	if err != nil {
-		return translated
-	}
-	if strings.TrimSpace(body) == "" {
+	body, ok := stripBodyOnlyWrapper(strings.TrimSpace(translated))
+	if !ok || strings.TrimSpace(body) == "" {
 		return translated
 	}
 	return body
+}
+
+func stripBodyOnlyWrapper(text string) (string, bool) {
+	if !strings.HasPrefix(text, bodyTagStart) || !strings.HasSuffix(text, bodyTagEnd) {
+		return "", false
+	}
+	body := strings.TrimPrefix(text, bodyTagStart)
+	body = strings.TrimSuffix(body, bodyTagEnd)
+	if strings.Contains(body, bodyTagStart) || strings.Contains(body, bodyTagEnd) {
+		return "", false
+	}
+	return trimTagNewlines(body), true
 }
 
 func maskDocComponentTags(text string) (string, []string) {

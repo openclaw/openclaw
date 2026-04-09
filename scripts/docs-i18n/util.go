@@ -106,6 +106,13 @@ func docsPiModelRef() string {
 	if strings.Contains(model, "/") {
 		return model
 	}
+	if docsPiOmitProvider() {
+		provider := docsPiProvider()
+		if provider == "" {
+			return model
+		}
+		return provider + "/" + model
+	}
 	if docsPiProviderArg() != "" {
 		return model
 	}

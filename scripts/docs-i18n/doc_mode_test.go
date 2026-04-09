@@ -345,6 +345,21 @@ func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
 	}
 }
 
+func TestSanitizeDocChunkProtocolWrappersStripsTopLevelWrapperEvenWhenSourceMentionsBodyTag(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `<body>` and `</body>` in examples, but keep the paragraph text plain.\n"
+	translated := "<body>\nTranslated paragraph.\n</body>\n"
+
+	got := sanitizeDocChunkProtocolWrappers(source, translated)
+	if strings.Contains(got, "<body>") || strings.Contains(got, "</body>") {
+		t.Fatalf("expected top-level wrapper to be stripped, got %q", got)
+	}
+	if strings.TrimSpace(got) != "Translated paragraph." {
+		t.Fatalf("unexpected sanitized body %q", got)
+	}
+}
+
 func TestTranslateDocBodyChunkedPreSplitsOversizedPromptBudget(t *testing.T) {
 	body := strings.Join([]string{
 		"First chunk with `json5` and { braces }",
