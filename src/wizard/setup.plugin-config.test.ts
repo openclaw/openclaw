@@ -87,6 +87,19 @@ describe("discoverConfigurablePlugins", () => {
     const result = discoverConfigurablePlugins({ manifestPlugins: plugins });
     expect(result.map((p) => p.id)).toEqual(["alpha", "zeta"]);
   });
+
+  it("keeps default onboarding focused on non-advanced token fields", () => {
+    const plugins = [
+      makeManifestPlugin("mrscraper", {
+        apiToken: { label: "MrScraper API Token", sensitive: true },
+        "webFetch.baseUrl": { label: "MrScraper Unblocker Base URL", advanced: true },
+        "platform.baseUrl": { label: "MrScraper Platform Base URL", advanced: true },
+      }),
+    ];
+    const result = discoverConfigurablePlugins({ manifestPlugins: plugins });
+    expect(result).toHaveLength(1);
+    expect(Object.keys(result[0].uiHints)).toEqual(["apiToken"]);
+  });
 });
 
 describe("discoverUnconfiguredPlugins", () => {
@@ -274,5 +287,147 @@ describe("setupPluginConfig", () => {
       },
     });
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
+  });
+
+  it("surfaces disabled configurable plugins during setup and enables them when selected", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("mrscraper", {
+            "webFetch.baseUrl": { label: "MrScraper Unblocker Base URL" },
+          }),
+          enabledByDefault: undefined,
+        },
+      ],
+    });
+
+    const multiselect = vi.fn(async () => [
+      "mrscraper",
+    ]) as unknown as WizardPrompter["multiselect"];
+    const text = vi.fn(
+      async () => "https://api.mrscraper.com",
+    ) as unknown as WizardPrompter["text"];
+
+    const result = await setupPluginConfig({
+      config: {},
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "__skip__") as unknown as WizardPrompter["select"],
+        multiselect,
+        text,
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: [
+          expect.objectContaining({
+            value: "mrscraper",
+            hint: expect.stringContaining("enables plugin"),
+          }),
+        ],
+      }),
+    );
+    expect(result.plugins?.entries?.mrscraper?.enabled).toBe(true);
+    expect(result.plugins?.entries?.mrscraper?.config).toEqual({
+      webFetch: {
+        baseUrl: "https://api.mrscraper.com",
+      },
+    });
+  });
+
+  it("prompts for sensitive plugin fields during setup and stores the value", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("mrscraper", {
+            apiToken: {
+              label: "MrScraper API Token",
+              help: "Token for the unblocker and scraper APIs",
+              sensitive: true,
+            },
+          }),
+          enabledByDefault: undefined,
+        },
+      ],
+    });
+
+    const note = vi.fn(async () => {});
+    const text = vi.fn(async () => "mrs_live_token") as unknown as WizardPrompter["text"];
+
+    const result = await setupPluginConfig({
+      config: {},
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note,
+        select: vi.fn(async () => "__skip__") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["mrscraper"]) as unknown as WizardPrompter["multiselect"],
+        text,
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("will be stored in your local OpenClaw config"),
+      "Sensitive field",
+    );
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("MrScraper API Token"),
+      }),
+    );
+    expect(result.plugins?.entries?.mrscraper?.enabled).toBe(true);
+    expect(result.plugins?.entries?.mrscraper?.config).toEqual({
+      apiToken: "mrs_live_token",
+    });
+  });
+});
+
+describe("configurePluginConfig", () => {
+  it("lists configurable plugins even when they are not enabled yet", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("mrscraper", {
+            apiToken: { label: "MrScraper API Token", sensitive: true },
+          }),
+          enabledByDefault: undefined,
+        },
+      ],
+    });
+
+    const { configurePluginConfig } = await import("./setup.plugin-config.js");
+    const select = vi.fn(async () => "__skip__") as unknown as WizardPrompter["select"];
+
+    await configurePluginConfig({
+      config: {},
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select,
+        multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "mrscraper",
+            hint: expect.stringContaining("disabled"),
+          }),
+        ]),
+      }),
+    );
   });
 });

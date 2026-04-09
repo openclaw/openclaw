@@ -14,9 +14,24 @@ import {
   resolveMrScraperUnblockerBaseUrl,
 } from "./config.js";
 
-const { runMrScraperFetchHtml, runMrScraperCreateAiScraper } = vi.hoisted(() => ({
+const {
+  runMrScraperBulkRerunAiScraper,
+  runMrScraperBulkRerunManualScraper,
+  runMrScraperCreateAiScraper,
+  runMrScraperFetchHtml,
+  runMrScraperGetAllResults,
+  runMrScraperGetResultById,
+  runMrScraperRerunAiScraper,
+  runMrScraperRerunManualScraper,
+} = vi.hoisted(() => ({
+  runMrScraperBulkRerunAiScraper: vi.fn(async (params: Record<string, unknown>) => params),
+  runMrScraperBulkRerunManualScraper: vi.fn(async (params: Record<string, unknown>) => params),
   runMrScraperFetchHtml: vi.fn(async (params: Record<string, unknown>) => params),
   runMrScraperCreateAiScraper: vi.fn(async (params: Record<string, unknown>) => params),
+  runMrScraperGetAllResults: vi.fn(async (params: Record<string, unknown>) => params),
+  runMrScraperGetResultById: vi.fn(async (params: Record<string, unknown>) => params),
+  runMrScraperRerunAiScraper: vi.fn(async (params: Record<string, unknown>) => params),
+  runMrScraperRerunManualScraper: vi.fn(async (params: Record<string, unknown>) => params),
 }));
 
 vi.mock("./mrscraper-client.js", async () => {
@@ -24,30 +39,71 @@ vi.mock("./mrscraper-client.js", async () => {
     await vi.importActual<typeof import("./mrscraper-client.js")>("./mrscraper-client.js");
   return {
     ...actual,
+    runMrScraperBulkRerunAiScraper,
+    runMrScraperBulkRerunManualScraper,
     runMrScraperFetchHtml,
     runMrScraperCreateAiScraper,
+    runMrScraperGetAllResults,
+    runMrScraperGetResultById,
+    runMrScraperRerunAiScraper,
+    runMrScraperRerunManualScraper,
   };
 });
 
 describe("mrscraper tools", () => {
   let createMrScraperWebFetchProvider: typeof import("./mrscraper-fetch-provider.js").createMrScraperWebFetchProvider;
+  let createMrScraperBulkRerunAiScraperTool: typeof import("./mrscraper-bulk-rerun-ai-scraper-tool.js").createMrScraperBulkRerunAiScraperTool;
+  let createMrScraperBulkRerunManualScraperTool: typeof import("./mrscraper-bulk-rerun-manual-scraper-tool.js").createMrScraperBulkRerunManualScraperTool;
   let createMrScraperFetchHtmlTool: typeof import("./mrscraper-fetch-tool.js").createMrScraperFetchHtmlTool;
+  let createMrScraperGetAllResultsTool: typeof import("./mrscraper-get-all-results-tool.js").createMrScraperGetAllResultsTool;
+  let createMrScraperGetResultByIdTool: typeof import("./mrscraper-get-result-by-id-tool.js").createMrScraperGetResultByIdTool;
+  let createMrScraperRerunAiScraperTool: typeof import("./mrscraper-rerun-ai-scraper-tool.js").createMrScraperRerunAiScraperTool;
+  let createMrScraperRerunManualScraperTool: typeof import("./mrscraper-rerun-manual-scraper-tool.js").createMrScraperRerunManualScraperTool;
   let createMrScraperScrapeTool: typeof import("./mrscraper-scrape-tool.js").createMrScraperScrapeTool;
   let mrscraperClientTesting: typeof import("./mrscraper-client.js").__testing;
 
   beforeAll(async () => {
+    ({ createMrScraperBulkRerunAiScraperTool } =
+      await import("./mrscraper-bulk-rerun-ai-scraper-tool.js"));
+    ({ createMrScraperBulkRerunManualScraperTool } =
+      await import("./mrscraper-bulk-rerun-manual-scraper-tool.js"));
     ({ createMrScraperWebFetchProvider } = await import("./mrscraper-fetch-provider.js"));
     ({ createMrScraperFetchHtmlTool } = await import("./mrscraper-fetch-tool.js"));
+    ({ createMrScraperGetAllResultsTool } = await import("./mrscraper-get-all-results-tool.js"));
+    ({ createMrScraperGetResultByIdTool } = await import("./mrscraper-get-result-by-id-tool.js"));
+    ({ createMrScraperRerunAiScraperTool } = await import("./mrscraper-rerun-ai-scraper-tool.js"));
+    ({ createMrScraperRerunManualScraperTool } =
+      await import("./mrscraper-rerun-manual-scraper-tool.js"));
     ({ createMrScraperScrapeTool } = await import("./mrscraper-scrape-tool.js"));
     ({ __testing: mrscraperClientTesting } =
       await vi.importActual<typeof import("./mrscraper-client.js")>("./mrscraper-client.js"));
   });
 
   beforeEach(() => {
+    runMrScraperBulkRerunAiScraper.mockReset();
+    runMrScraperBulkRerunAiScraper.mockImplementation(
+      async (params: Record<string, unknown>) => params,
+    );
+    runMrScraperBulkRerunManualScraper.mockReset();
+    runMrScraperBulkRerunManualScraper.mockImplementation(
+      async (params: Record<string, unknown>) => params,
+    );
     runMrScraperFetchHtml.mockReset();
     runMrScraperFetchHtml.mockImplementation(async (params: Record<string, unknown>) => params);
     runMrScraperCreateAiScraper.mockReset();
     runMrScraperCreateAiScraper.mockImplementation(
+      async (params: Record<string, unknown>) => params,
+    );
+    runMrScraperGetAllResults.mockReset();
+    runMrScraperGetAllResults.mockImplementation(async (params: Record<string, unknown>) => params);
+    runMrScraperGetResultById.mockReset();
+    runMrScraperGetResultById.mockImplementation(async (params: Record<string, unknown>) => params);
+    runMrScraperRerunAiScraper.mockReset();
+    runMrScraperRerunAiScraper.mockImplementation(
+      async (params: Record<string, unknown>) => params,
+    );
+    runMrScraperRerunManualScraper.mockReset();
+    runMrScraperRerunManualScraper.mockImplementation(
       async (params: Record<string, unknown>) => params,
     );
     vi.unstubAllEnvs();
@@ -157,6 +213,140 @@ describe("mrscraper tools", () => {
     expect(result.details).toMatchObject({
       cfg: { env: "test" },
       agent: "map",
+    });
+  });
+
+  it("normalizes explicit AI rerun parameters", async () => {
+    const tool = createMrScraperRerunAiScraperTool({
+      config: { env: "test" },
+    } as never);
+
+    await tool.execute("call-3", {
+      scraperId: "scraper-123",
+      url: "https://example.com/catalog/next",
+      maxDepth: 3,
+      maxPages: 20,
+      limit: 100,
+      includePatterns: ".*/products/.*",
+      excludePatterns: ".*/cart/.*",
+      timeoutSeconds: 95,
+    });
+
+    expect(runMrScraperRerunAiScraper).toHaveBeenCalledWith({
+      cfg: { env: "test" },
+      scraperId: "scraper-123",
+      url: "https://example.com/catalog/next",
+      maxDepth: 3,
+      maxPages: 20,
+      limit: 100,
+      includePatterns: ".*/products/.*",
+      excludePatterns: ".*/cart/.*",
+      timeoutSeconds: 95,
+    });
+  });
+
+  it("normalizes explicit AI bulk rerun parameters", async () => {
+    const tool = createMrScraperBulkRerunAiScraperTool({
+      config: { env: "test" },
+    } as never);
+
+    await tool.execute("call-4", {
+      scraperId: "scraper-123",
+      urls: ["https://example.com/a", "https://example.com/b"],
+      timeoutSeconds: 90,
+    });
+
+    expect(runMrScraperBulkRerunAiScraper).toHaveBeenCalledWith({
+      cfg: { env: "test" },
+      scraperId: "scraper-123",
+      urls: ["https://example.com/a", "https://example.com/b"],
+      timeoutSeconds: 90,
+    });
+  });
+
+  it("normalizes explicit manual rerun parameters", async () => {
+    const tool = createMrScraperRerunManualScraperTool({
+      config: { env: "test" },
+    } as never);
+
+    await tool.execute("call-5", {
+      scraperId: "manual-123",
+      url: "https://example.com/manual",
+      timeoutSeconds: 80,
+    });
+
+    expect(runMrScraperRerunManualScraper).toHaveBeenCalledWith({
+      cfg: { env: "test" },
+      scraperId: "manual-123",
+      url: "https://example.com/manual",
+      timeoutSeconds: 80,
+    });
+  });
+
+  it("normalizes explicit manual bulk rerun parameters", async () => {
+    const tool = createMrScraperBulkRerunManualScraperTool({
+      config: { env: "test" },
+    } as never);
+
+    await tool.execute("call-6", {
+      scraperId: "manual-123",
+      urls: ["https://example.com/a", "https://example.com/b"],
+      timeoutSeconds: 70,
+    });
+
+    expect(runMrScraperBulkRerunManualScraper).toHaveBeenCalledWith({
+      cfg: { env: "test" },
+      scraperId: "manual-123",
+      urls: ["https://example.com/a", "https://example.com/b"],
+      timeoutSeconds: 70,
+    });
+  });
+
+  it("normalizes results list parameters", async () => {
+    const tool = createMrScraperGetAllResultsTool({
+      config: { env: "test" },
+    } as never);
+
+    await tool.execute("call-7", {
+      sortField: "createdAt",
+      sortOrder: "ASC",
+      pageSize: 25,
+      page: 2,
+      search: "laptop",
+      dateRangeColumn: "updatedAt",
+      startAt: "2026-01-01",
+      endAt: "2026-01-31",
+      timeoutSeconds: 60,
+    });
+
+    expect(runMrScraperGetAllResults).toHaveBeenCalledWith({
+      cfg: { env: "test" },
+      sortField: "createdAt",
+      sortOrder: "ASC",
+      pageSize: 25,
+      page: 2,
+      search: "laptop",
+      dateRangeColumn: "updatedAt",
+      startAt: "2026-01-01",
+      endAt: "2026-01-31",
+      timeoutSeconds: 60,
+    });
+  });
+
+  it("normalizes result-by-id parameters", async () => {
+    const tool = createMrScraperGetResultByIdTool({
+      config: { env: "test" },
+    } as never);
+
+    await tool.execute("call-8", {
+      resultId: "result-123",
+      timeoutSeconds: 45,
+    });
+
+    expect(runMrScraperGetResultById).toHaveBeenCalledWith({
+      cfg: { env: "test" },
+      resultId: "result-123",
+      timeoutSeconds: 45,
     });
   });
 

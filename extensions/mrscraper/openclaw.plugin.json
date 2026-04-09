@@ -13,16 +13,27 @@
     },
     "webFetch.baseUrl": {
       "label": "MrScraper Unblocker Base URL",
-      "help": "MrScraper unblocker base URL override."
+      "help": "MrScraper unblocker base URL override.",
+      "advanced": true
     },
     "platform.baseUrl": {
       "label": "MrScraper Platform Base URL",
-      "help": "MrScraper platform API base URL override."
+      "help": "MrScraper platform API base URL override.",
+      "advanced": true
     }
   },
   "contracts": {
     "webFetchProviders": ["mrscraper"],
-    "tools": ["mrscraper_fetch_html", "mrscraper_scrape"]
+    "tools": [
+      "mrscraper_bulk_rerun_ai_scraper",
+      "mrscraper_bulk_rerun_manual_scraper",
+      "mrscraper_fetch_html",
+      "mrscraper_get_all_results",
+      "mrscraper_get_result_by_id",
+      "mrscraper_rerun_ai_scraper",
+      "mrscraper_rerun_manual_scraper",
+      "mrscraper_scrape"
+    ]
   },
   "configSchema": {
     "type": "object",

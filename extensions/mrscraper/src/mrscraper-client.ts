@@ -46,6 +46,67 @@ export type MrScraperCreateAiScraperParams = {
   timeoutSeconds?: number;
 };
 
+export type MrScraperRerunAiScraperParams = {
+  cfg?: OpenClawConfig;
+  scraperId: string;
+  url: string;
+  maxDepth?: number;
+  maxPages?: number;
+  limit?: number;
+  includePatterns?: string;
+  excludePatterns?: string;
+  timeoutSeconds?: number;
+};
+
+export type MrScraperBulkRerunAiScraperParams = {
+  cfg?: OpenClawConfig;
+  scraperId: string;
+  urls: string[];
+  timeoutSeconds?: number;
+};
+
+export type MrScraperRerunManualScraperParams = {
+  cfg?: OpenClawConfig;
+  scraperId: string;
+  url: string;
+  timeoutSeconds?: number;
+};
+
+export type MrScraperBulkRerunManualScraperParams = {
+  cfg?: OpenClawConfig;
+  scraperId: string;
+  urls: string[];
+  timeoutSeconds?: number;
+};
+
+export type MrScraperGetAllResultsParams = {
+  cfg?: OpenClawConfig;
+  sortField?:
+    | "createdAt"
+    | "updatedAt"
+    | "id"
+    | "type"
+    | "url"
+    | "status"
+    | "error"
+    | "tokenUsage"
+    | "runtime";
+  sortOrder?: "ASC" | "DESC";
+  pageSize?: number;
+  page?: number;
+  search?: string;
+  dateRangeColumn?: string;
+  startAt?: string;
+  endAt?: string;
+  timeoutSeconds?: number;
+};
+
+export type MrScraperGetResultByIdParams = {
+  cfg?: OpenClawConfig;
+  resultId: string;
+  timeoutSeconds?: number;
+};
+
 function resolveEndpoint(params: {
   baseUrl: string;
   defaultBaseUrl: string;
@@ -107,6 +168,62 @@ async function throwHttpError(response: Response, label: string): Promise<never>
   );
 }
 
+function buildPlatformHeaders(apiToken: string): Record<string, string> {
+  return {
+    accept: "application/json",
+    "content-type": "application/json",
+    "x-api-token": normalizeSecretInput(apiToken),
+  };
+}
+
+function resolvePlatformEndpoint(pathname: string, cfg?: OpenClawConfig): string {
+  return resolveEndpoint({
+    baseUrl: resolveMrScraperPlatformBaseUrl(cfg),
+    defaultBaseUrl: "https://api.app.mrscraper.com",
+    pathname,
+    allowedHosts: ALLOWED_PLATFORM_HOSTS,
+    product: "MrScraper platform",
+  });
+}
+
+function resolvePlatformTimeoutSeconds(cfg?: OpenClawConfig, override?: number): number {
+  return resolveTimeoutSeconds(override, resolveMrScraperScrapeTimeoutSeconds(cfg));
+}
+
+async function runPlatformJsonRequest(params: {
+  cfg?: OpenClawConfig;
+  apiToken: string;
+  endpoint: string;
+  timeoutSeconds?: number;
+  init?: RequestInit;
+  label: string;
+}): Promise<Record<string, unknown>> {
+  const timeoutSeconds = resolvePlatformTimeoutSeconds(params.cfg, params.timeoutSeconds);
+  return await withStrictWebToolsEndpoint(
+    {
+      url: params.endpoint,
+      timeoutSeconds,
+      init: params.init,
+    },
+    async ({ response }) => {
+      if (!response.ok) {
+        await throwHttpError(response, params.label);
+      }
+      return (await response.json()) as Record<string, unknown>;
+    },
+  );
+}
+
+function requireMrScraperApiToken(cfg: OpenClawConfig | undefined, consumer: string): string {
+  const apiToken = resolveMrScraperApiToken(cfg);
+  if (!apiToken) {
+    throw new Error(
+      `${consumer} needs a MrScraper API token. Set MRSCRAPER_API_TOKEN in the Gateway environment, or configure plugins.entries.mrscraper.config.apiToken.`,
+    );
+  }
+  return apiToken;
+}
+
 function extractTitle(html: string): string | undefined {
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (!match?.[1]) {
@@ -162,12 +279,7 @@ function truncate(value: string, maxChars: number): { text: string; truncated: b
 export async function runMrScraperFetchHtml(
   params: MrScraperFetchHtmlParams,
 ): Promise<Record<string, unknown>> {
-  const apiToken = resolveMrScraperApiToken(params.cfg);
-  if (!apiToken) {
-    throw new Error(
-      "web_fetch (mrscraper) needs a MrScraper API token. Set MRSCRAPER_API_TOKEN in the Gateway environment, or configure plugins.entries.mrscraper.config.apiToken.",
-    );
-  }
+  const apiToken = requireMrScraperApiToken(params.cfg, "web_fetch (mrscraper)");
 
   const baseUrl = resolveEndpoint({
     baseUrl: resolveMrScraperUnblockerBaseUrl(params.cfg),
@@ -241,24 +353,9 @@ export async function runMrScraperFetchHtml(
 export async function runMrScraperCreateAiScraper(
   params: MrScraperCreateAiScraperParams,
 ): Promise<Record<string, unknown>> {
-  const apiToken = resolveMrScraperApiToken(params.cfg);
-  if (!apiToken) {
-    throw new Error(
-      "mrscraper_scrape needs a MrScraper API token. Set MRSCRAPER_API_TOKEN in the Gateway environment, or configure plugins.entries.mrscraper.config.apiToken.",
-    );
-  }
-
-  const endpoint = resolveEndpoint({
-    baseUrl: resolveMrScraperPlatformBaseUrl(params.cfg),
-    defaultBaseUrl: "https://api.app.mrscraper.com",
-    pathname: "/api/v1/scrapers-ai",
-    allowedHosts: ALLOWED_PLATFORM_HOSTS,
-    product: "MrScraper platform",
-  });
-  const timeoutSeconds = resolveTimeoutSeconds(
-    params.timeoutSeconds,
-    resolveMrScraperScrapeTimeoutSeconds(params.cfg),
-  );
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_scrape");
+  const endpoint = resolvePlatformEndpoint("/api/v1/scrapers-ai", params.cfg);
+  const timeoutSeconds = resolvePlatformTimeoutSeconds(params.cfg, params.timeoutSeconds);
 
   const body: Record<string, unknown> = {
     url: params.url,
@@ -278,31 +375,213 @@ export async function runMrScraperCreateAiScraper(
   }
 
   const start = Date.now();
-  const payload = await withStrictWebToolsEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds,
-      init: {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "x-api-token": normalizeSecretInput(apiToken),
-        },
-        body: JSON.stringify(body),
-      },
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint,
+    timeoutSeconds,
+    label: "MrScraper AI scraper",
+    init: {
+      method: "POST",
+      headers: buildPlatformHeaders(apiToken),
+      body: JSON.stringify(body),
     },
-    async ({ response }) => {
-      if (!response.ok) {
-        await throwHttpError(response, "MrScraper AI scraper");
-      }
-      return (await response.json()) as Record<string, unknown>;
-    },
-  );
+  });
 
   return {
     provider: "mrscraper",
     operation: "create_ai_scraper",
+    tookMs: Date.now() - start,
+    ...payload,
+  };
+}
+
+export async function runMrScraperRerunAiScraper(
+  params: MrScraperRerunAiScraperParams,
+): Promise<Record<string, unknown>> {
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_rerun_ai_scraper");
+  const endpoint = resolvePlatformEndpoint("/api/v1/scrapers-ai-rerun", params.cfg);
+  const body: Record<string, unknown> = {
+    scraperId: params.scraperId,
+    url: params.url,
+  };
+  if (typeof params.maxDepth === "number") body.maxDepth = Math.floor(params.maxDepth);
+  if (typeof params.maxPages === "number") body.maxPages = Math.floor(params.maxPages);
+  if (typeof params.limit === "number") body.limit = Math.floor(params.limit);
+  if (params.includePatterns) body.includePatterns = params.includePatterns;
+  if (params.excludePatterns) body.excludePatterns = params.excludePatterns;
+
+  const start = Date.now();
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    label: "MrScraper AI rerun",
+    init: {
+      method: "POST",
+      headers: buildPlatformHeaders(apiToken),
+      body: JSON.stringify(body),
+    },
+  });
+
+  return {
+    provider: "mrscraper",
+    operation: "rerun_ai_scraper",
+    tookMs: Date.now() - start,
+    ...payload,
+  };
+}
+
+export async function runMrScraperBulkRerunAiScraper(
+  params: MrScraperBulkRerunAiScraperParams,
+): Promise<Record<string, unknown>> {
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_bulk_rerun_ai_scraper");
+  const endpoint = resolvePlatformEndpoint("/api/v1/scrapers-ai-rerun/bulk", params.cfg);
+  const start = Date.now();
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    label: "MrScraper AI bulk rerun",
+    init: {
+      method: "POST",
+      headers: buildPlatformHeaders(apiToken),
+      body: JSON.stringify({
+        scraperId: params.scraperId,
+        urls: params.urls,
+      }),
+    },
+  });
+
+  return {
+    provider: "mrscraper",
+    operation: "bulk_rerun_ai_scraper",
+    tookMs: Date.now() - start,
+    ...payload,
+  };
+}
+
+export async function runMrScraperRerunManualScraper(
+  params: MrScraperRerunManualScraperParams,
+): Promise<Record<string, unknown>> {
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_rerun_manual_scraper");
+  const endpoint = resolvePlatformEndpoint("/api/v1/scrapers-manual-rerun", params.cfg);
+  const start = Date.now();
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    label: "MrScraper manual rerun",
+    init: {
+      method: "POST",
+      headers: buildPlatformHeaders(apiToken),
+      body: JSON.stringify({
+        scraperId: params.scraperId,
+        url: params.url,
+      }),
+    },
+  });
+
+  return {
+    provider: "mrscraper",
+    operation: "rerun_manual_scraper",
+    tookMs: Date.now() - start,
+    ...payload,
+  };
+}
+
+export async function runMrScraperBulkRerunManualScraper(
+  params: MrScraperBulkRerunManualScraperParams,
+): Promise<Record<string, unknown>> {
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_bulk_rerun_manual_scraper");
+  const endpoint = resolvePlatformEndpoint("/api/v1/scrapers-manual-rerun/bulk", params.cfg);
+  const start = Date.now();
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    label: "MrScraper manual bulk rerun",
+    init: {
+      method: "POST",
+      headers: buildPlatformHeaders(apiToken),
+      body: JSON.stringify({
+        scraperId: params.scraperId,
+        urls: params.urls,
+      }),
+    },
+  });
+
+  return {
+    provider: "mrscraper",
+    operation: "bulk_rerun_manual_scraper",
+    tookMs: Date.now() - start,
+    ...payload,
+  };
+}
+
+export async function runMrScraperGetAllResults(
+  params: MrScraperGetAllResultsParams,
+): Promise<Record<string, unknown>> {
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_get_all_results");
+  const endpoint = new URL(resolvePlatformEndpoint("/api/v1/results", params.cfg));
+  endpoint.searchParams.set("sortField", params.sortField ?? "updatedAt");
+  endpoint.searchParams.set("sortOrder", params.sortOrder ?? "DESC");
+  endpoint.searchParams.set("pageSize", String(params.pageSize ?? 10));
+  endpoint.searchParams.set("page", String(params.page ?? 1));
+  if (params.search) endpoint.searchParams.set("search", params.search);
+  if (params.dateRangeColumn) endpoint.searchParams.set("dateRangeColumn", params.dateRangeColumn);
+  if (params.startAt) endpoint.searchParams.set("startAt", params.startAt);
+  if (params.endAt) endpoint.searchParams.set("endAt", params.endAt);
+
+  const start = Date.now();
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint: endpoint.toString(),
+    timeoutSeconds: params.timeoutSeconds,
+    label: "MrScraper results list",
+    init: {
+      method: "GET",
+      headers: buildPlatformHeaders(apiToken),
+    },
+  });
+
+  return {
+    provider: "mrscraper",
+    operation: "get_all_results",
+    tookMs: Date.now() - start,
+    ...payload,
+  };
+}
+
+export async function runMrScraperGetResultById(
+  params: MrScraperGetResultByIdParams,
+): Promise<Record<string, unknown>> {
+  const apiToken = requireMrScraperApiToken(params.cfg, "mrscraper_get_result_by_id");
+  const endpoint = resolvePlatformEndpoint(
+    `/api/v1/results/${encodeURIComponent(params.resultId)}`,
+    params.cfg,
+  );
+  const start = Date.now();
+  const payload = await runPlatformJsonRequest({
+    cfg: params.cfg,
+    apiToken,
+    endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    label: "MrScraper result lookup",
+    init: {
+      method: "GET",
+      headers: buildPlatformHeaders(apiToken),
+    },
+  });
+
+  return {
+    provider: "mrscraper",
+    operation: "get_result_by_id",
     tookMs: Date.now() - start,
     ...payload,
   };

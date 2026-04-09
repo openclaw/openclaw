@@ -49,6 +49,10 @@ function getExistingPluginConfig(
   return (config.plugins?.entries?.[pluginId]?.config as Record<string, unknown>) ?? {};
 }
 
+function isPluginEnabled(config: OpenClawConfig, pluginId: string): boolean {
+  return config.plugins?.entries?.[pluginId]?.enabled === true;
+}
+
 function toPathSegments(fieldKey: string): string[] {
   return fieldKey.split(".").filter(Boolean);
 }
@@ -161,13 +165,22 @@ async function promptPluginFields(params: {
     const label = hint.label ?? key;
     const helpSuffix = hint.help ? ` — ${hint.help}` : "";
 
-    // Skip sensitive fields — WizardPrompter has no masked input;
-    // direct users to openclaw config set or the Web UI instead.
     if (hint.sensitive) {
+      const currentStr = formatCurrentValue(currentValue);
       await prompter.note(
-        `"${label}" is sensitive. Set it via:\n  openclaw config set plugins.entries.${plugin.id}.config.${key} <value>\nor use the Web UI Settings page.`,
+        `"${label}" will be stored in your local OpenClaw config. Keep this machine private and prefer env vars when sharing config files.`,
         "Sensitive field",
       );
+      const input = await prompter.text({
+        message: `${label}${helpSuffix}`,
+        initialValue: currentStr,
+        placeholder: hint.placeholder,
+      });
+      const trimmed = input.trim();
+      if (trimmed !== currentStr) {
+        setPathCreateStrict(updatedConfig, pathSegments, trimmed || undefined);
+        changed = true;
+      }
       continue;
     }
 
@@ -273,6 +286,7 @@ async function promptPluginFields(params: {
         ...config.plugins?.entries,
         [plugin.id]: {
           ...config.plugins?.entries?.[plugin.id],
+          enabled: true,
           config: updatedConfig,
         },
       },
@@ -296,12 +310,7 @@ export async function setupPluginConfig(params: {
   });
 
   const unconfigured = discoverUnconfiguredPlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      // Only show enabled plugins
-      const entry = params.config.plugins?.entries?.[p.id];
-      // Plugin is discoverable if it's enabled or enabledByDefault and not denied
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins: registry.plugins,
     config: params.config,
   });
 
@@ -314,7 +323,7 @@ export async function setupPluginConfig(params: {
     options: unconfigured.map((p) => ({
       value: p.id,
       label: p.name,
-      hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
+      hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}${isPluginEnabled(params.config, p.id) ? "" : " · enables plugin"}`,
     })),
   });
 
@@ -351,10 +360,7 @@ export async function configurePluginConfig(params: {
   });
 
   const configurable = discoverConfigurablePlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      const entry = params.config.plugins?.entries?.[p.id];
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins: registry.plugins,
   });
 
   if (configurable.length === 0) {
@@ -375,7 +381,7 @@ export async function configurePluginConfig(params: {
         return {
           value: p.id,
           label: p.name,
-          hint: `${configuredCount}/${totalCount} configured`,
+          hint: `${configuredCount}/${totalCount} configured${isPluginEnabled(params.config, p.id) ? "" : " · disabled"}`,
         };
       }),
       { value: "__skip__", label: "Back", hint: "Return to section menu" },
