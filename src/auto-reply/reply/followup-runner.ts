@@ -314,7 +314,7 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(fallbackProvider ?? run.provider, runtimeConfig),
+          usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),
           logLabel: "followup",
         });
       }
