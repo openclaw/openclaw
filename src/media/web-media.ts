@@ -81,6 +81,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
 ]);
 const MB = 1024 * 1024;
 
@@ -389,7 +390,7 @@ async function loadWebMediaInternal(
   }
   if (hostReadCapability) {
     assertHostReadMediaAllowed({
-      contentType: verifiedMime,
+      contentType: verifiedMime ?? detectedMime,
       kind: kindFromMime(detectedMime ?? verifiedMime),
     });
   }

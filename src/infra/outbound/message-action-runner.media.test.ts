@@ -377,6 +377,39 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
+    it("allows host-local CSV attachments when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-csv-"));
+      try {
+        const outsidePath = path.join(tempDir, "data.csv");
+        await fs.writeFile(outsidePath, "a,b\n1,2\n", "utf8");
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "bluebubbles",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        expect(result.kind).toBe("action");
+        expect(result.payload).toMatchObject({
+          ok: true,
+          filename: "data.csv",
+          contentType: "text/csv",
+        });
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("rejects host-local text attachments even when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
 
