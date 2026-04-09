@@ -330,6 +330,12 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    ssrfPolicy: z
+      .object({
+        allowRfc2544BenchmarkRange: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
     // start and then migrate cleanly through doctor.
     firecrawl: z

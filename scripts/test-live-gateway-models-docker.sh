@@ -122,6 +122,7 @@ docker run --rm -t \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
   -e OPENCLAW_SKIP_CHANNELS=1 \
+  -e OPENCLAW_SUPPRESS_NOTES=1 \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_LIVE_TEST=1 \

@@ -5,6 +5,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   getModelRefStatus,
+  isCliProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
@@ -48,6 +49,9 @@ async function prewarmConfiguredPrimaryModel(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  if (isCliProvider(provider, params.cfg)) {
+    return;
+  }
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);

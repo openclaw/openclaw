@@ -4,12 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
-import { note } from "../terminal/note.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
-vi.mock("../terminal/note.js", () => ({
-  note: vi.fn(),
-}));
+const noteMock = vi.fn();
 
 type EnvSnapshot = {
   HOME?: string;
@@ -47,9 +44,8 @@ function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir:
 }
 
 function stateIntegrityText(): string {
-  return vi
-    .mocked(note)
-    .mock.calls.filter((call) => call[1] === "State integrity")
+  return noteMock.mock.calls
+    .filter((call) => call[1] === "State integrity")
     .map((call) => String(call[0]))
     .join("\n");
 }
@@ -61,7 +57,7 @@ const OAUTH_PROMPT_MATCHER = expect.objectContaining({
 async function runStateIntegrity(cfg: OpenClawConfig) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
   const confirmRuntimeRepair = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
   return confirmRuntimeRepair;
 }
 
@@ -75,7 +71,7 @@ function writeSessionStore(
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false) });
+  await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
   return stateIntegrityText();
 }
 
@@ -91,7 +87,7 @@ describe("doctor state integrity oauth dir checks", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
     delete process.env.OPENCLAW_OAUTH_DIR;
     fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
-    vi.mocked(note).mockClear();
+    noteMock.mockClear();
   });
 
   afterEach(() => {
@@ -148,7 +144,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
       params.message.includes("This only renames them to *.deleted.<timestamp>."),
     );
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
     expect(stateIntegrityText()).toContain(
       "These .jsonl files are no longer referenced by sessions.json",
     );
@@ -176,7 +172,7 @@ describe("doctor state integrity oauth dir checks", () => {
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
 
     const confirmRuntimeRepair = vi.fn(async () => false);
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     expect(stateIntegrityText()).not.toContain(
       "These .jsonl files are no longer referenced by sessions.json",
@@ -198,7 +194,7 @@ describe("doctor state integrity oauth dir checks", () => {
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
 
     const confirmRuntimeRepair = vi.fn(async () => false);
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     expect(stateIntegrityText()).toContain(
       "These .jsonl files are no longer referenced by sessions.json",

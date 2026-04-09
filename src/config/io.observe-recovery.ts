@@ -94,6 +94,19 @@ type ConfigHealthFingerprint = {
   observedAt: string;
 };
 
+type ConfigStatMetadataSource =
+  | ({
+      mtimeMs?: number;
+      ctimeMs?: number;
+      dev?: number | bigint;
+      ino?: number | bigint;
+      mode?: number;
+      nlink?: number;
+      uid?: number;
+      gid?: number;
+    } & Record<string, unknown>)
+  | null;
+
 type ConfigHealthEntry = {
   lastKnownGood?: ConfigHealthFingerprint;
   lastObservedSuspiciousSignature?: string | null;
@@ -222,18 +235,7 @@ function resolveGatewayMode(value: unknown): string | null {
   return typeof value.gateway.mode === "string" ? value.gateway.mode : null;
 }
 
-function resolveConfigStatMetadata(
-  stat:
-    | ({
-        dev?: number | bigint;
-        ino?: number | bigint;
-        mode?: number;
-        nlink?: number;
-        uid?: number;
-        gid?: number;
-      } & Record<string, unknown>)
-    | null,
-): {
+function resolveConfigStatMetadata(stat: ConfigStatMetadataSource): {
   dev: string | null;
   ino: string | null;
   mode: number | null;
@@ -258,6 +260,26 @@ function resolveConfigStatMetadata(
     nlink: typeof stat.nlink === "number" ? stat.nlink : null,
     uid: typeof stat.uid === "number" ? stat.uid : null,
     gid: typeof stat.gid === "number" ? stat.gid : null,
+  };
+}
+
+function createConfigHealthFingerprint(params: {
+  hash: string;
+  raw: string;
+  parsed: unknown;
+  gatewaySource: unknown;
+  stat: ConfigStatMetadataSource;
+  observedAt: string;
+}): ConfigHealthFingerprint {
+  return {
+    hash: params.hash,
+    bytes: Buffer.byteLength(params.raw, "utf-8"),
+    mtimeMs: params.stat?.mtimeMs ?? null,
+    ctimeMs: params.stat?.ctimeMs ?? null,
+    ...resolveConfigStatMetadata(params.stat),
+    hasMeta: hasConfigMeta(params.parsed),
+    gatewayMode: resolveGatewayMode(params.gatewaySource),
+    observedAt: params.observedAt,
   };
 }
 
@@ -481,16 +503,14 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
 }): Promise<{ raw: string; parsed: unknown }> {
   const stat = await params.deps.fs.promises.stat(params.configPath).catch(() => null);
   const now = new Date().toISOString();
-  const current: ConfigHealthFingerprint = {
+  const current = createConfigHealthFingerprint({
     hash: hashConfigRaw(params.raw),
-    bytes: Buffer.byteLength(params.raw, "utf-8"),
-    mtimeMs: stat?.mtimeMs ?? null,
-    ctimeMs: stat?.ctimeMs ?? null,
-    ...resolveConfigStatMetadata(stat as Record<string, unknown> | null),
-    hasMeta: hasConfigMeta(params.parsed),
-    gatewayMode: resolveGatewayMode(params.parsed),
+    raw: params.raw,
+    parsed: params.parsed,
+    gatewaySource: params.parsed,
+    stat: stat as ConfigStatMetadataSource,
     observedAt: now,
-  };
+  });
 
   let healthState = await readConfigHealthState(params.deps);
   const entry = getConfigHealthEntry(healthState, params.configPath);
@@ -577,16 +597,14 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
 }): { raw: string; parsed: unknown } {
   const stat = params.deps.fs.statSync(params.configPath, { throwIfNoEntry: false }) ?? null;
   const now = new Date().toISOString();
-  const current: ConfigHealthFingerprint = {
+  const current = createConfigHealthFingerprint({
     hash: hashConfigRaw(params.raw),
-    bytes: Buffer.byteLength(params.raw, "utf-8"),
-    mtimeMs: stat?.mtimeMs ?? null,
-    ctimeMs: stat?.ctimeMs ?? null,
-    ...resolveConfigStatMetadata(stat),
-    hasMeta: hasConfigMeta(params.parsed),
-    gatewayMode: resolveGatewayMode(params.parsed),
+    raw: params.raw,
+    parsed: params.parsed,
+    gatewaySource: params.parsed,
+    stat,
     observedAt: now,
-  };
+  });
 
   let healthState = readConfigHealthStateSync(params.deps);
   const entry = getConfigHealthEntry(healthState, params.configPath);
@@ -675,16 +693,14 @@ export async function observeConfigSnapshot(
 
   const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
   const now = new Date().toISOString();
-  const current: ConfigHealthFingerprint = {
+  const current = createConfigHealthFingerprint({
     hash: resolveConfigSnapshotHash(snapshot) ?? hashConfigRaw(snapshot.raw),
-    bytes: Buffer.byteLength(snapshot.raw, "utf-8"),
-    mtimeMs: stat?.mtimeMs ?? null,
-    ctimeMs: stat?.ctimeMs ?? null,
-    ...resolveConfigStatMetadata(stat as Record<string, unknown> | null),
-    hasMeta: hasConfigMeta(snapshot.parsed),
-    gatewayMode: resolveGatewayMode(snapshot.resolved),
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    gatewaySource: snapshot.resolved,
+    stat: stat as ConfigStatMetadataSource,
     observedAt: now,
-  };
+  });
 
   let healthState = await readConfigHealthState(deps);
   const entry = getConfigHealthEntry(healthState, snapshot.path);
@@ -776,16 +792,14 @@ export function observeConfigSnapshotSync(
 
   const stat = deps.fs.statSync(snapshot.path, { throwIfNoEntry: false }) ?? null;
   const now = new Date().toISOString();
-  const current: ConfigHealthFingerprint = {
+  const current = createConfigHealthFingerprint({
     hash: resolveConfigSnapshotHash(snapshot) ?? hashConfigRaw(snapshot.raw),
-    bytes: Buffer.byteLength(snapshot.raw, "utf-8"),
-    mtimeMs: stat?.mtimeMs ?? null,
-    ctimeMs: stat?.ctimeMs ?? null,
-    ...resolveConfigStatMetadata(stat),
-    hasMeta: hasConfigMeta(snapshot.parsed),
-    gatewayMode: resolveGatewayMode(snapshot.resolved),
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    gatewaySource: snapshot.resolved,
+    stat,
     observedAt: now,
-  };
+  });
 
   let healthState = readConfigHealthStateSync(deps);
   const entry = getConfigHealthEntry(healthState, snapshot.path);
