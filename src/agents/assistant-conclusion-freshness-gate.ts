@@ -96,6 +96,22 @@ function parseFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function parseJsonObjectString(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return value;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
 function getMessageTimestamp(message: AgentMessage): number | undefined {
   return parseFiniteTimestamp((message as { timestamp?: unknown }).timestamp);
 }
@@ -172,7 +188,7 @@ function inferDiagnosticTypeFromHistoricalToolCall(params: {
       }
       const inferred = detectToolResultReplayPolicyMeta({
         toolName: normalized.name ?? toolName,
-        args: normalized.args,
+        args: parseJsonObjectString(normalized.args),
         taggedAt: getMessageTimestamp(params.toolResult) ?? Date.now(),
       });
       if (!inferred?.diagnosticType) {

@@ -480,6 +480,44 @@ describe("resolveAssistantConclusionFreshnessGate", () => {
     expect(result.prependSystemContext).toBeUndefined();
   });
 
+  it("treats stringified toolCall arguments as fresh evidence via fallback inference", () => {
+    const now = 5_100_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot 现在在 plugins.entries 里还是 enabled 吗？",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_plugins_entries_string_args_1",
+              name: "gateway",
+              arguments: JSON.stringify({
+                action: "config.get",
+                path: "plugins.entries",
+              }),
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_plugins_entries_string_args_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          timestamp: now - 8_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
   it("ignores replay-omitted evidence when evaluating freshness", () => {
     const now = 3_000_000;
     const result = resolveAssistantConclusionFreshnessGate({
