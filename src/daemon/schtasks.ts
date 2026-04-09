@@ -6,6 +6,7 @@ import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-proc
 import { inspectPortUsage } from "../infra/ports.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
@@ -121,7 +122,7 @@ export async function readScheduledTaskCommand(
       if (!line) {
         continue;
       }
-      const lower = line.toLowerCase();
+      const lower = normalizeLowercaseStringOrEmpty(line);
       if (line.startsWith("@echo")) {
         continue;
       }
@@ -192,7 +193,7 @@ function normalizeTaskResultCode(value?: string): string | null {
   if (!value) {
     return null;
   }
-  const raw = value.trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(value);
   if (!raw) {
     return null;
   }
@@ -542,7 +543,6 @@ async function restartStartupEntry(
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
   launchFallbackTaskScript(resolveTaskScriptPath(env));
-  stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
 
@@ -581,6 +581,45 @@ export async function stageScheduledTask({
   return { scriptPath };
 }
 
+async function updateExistingScheduledTask(params: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+  taskName: string;
+  quotedScript: string;
+  scriptPath: string;
+}): Promise<boolean> {
+  if (!(await isRegisteredScheduledTask(params.env))) {
+    return false;
+  }
+  const change = await execSchtasks([
+    "/Change",
+    "/TN",
+    params.taskName,
+    "/TR",
+    params.quotedScript,
+  ]);
+  if (change.code !== 0) {
+    return false;
+  }
+  await runScheduledTaskOrThrow(params.taskName);
+  writeFormattedLines(
+    params.stdout,
+    [
+      { label: "Updated Scheduled Task", value: params.taskName },
+      { label: "Task script", value: params.scriptPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return true;
+}
+
+async function runScheduledTaskOrThrow(taskName: string): Promise<void> {
+  const run = await execSchtasks(["/Run", "/TN", taskName]);
+  if (run.code !== 0) {
+    throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
+  }
+}
+
 async function activateScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
@@ -591,6 +630,11 @@ async function activateScheduledTask(params: {
 
   const taskName = resolveTaskName(params.env);
   const quotedScript = quoteSchtasksArg(params.scriptPath);
+
+  if (await updateExistingScheduledTask({ ...params, taskName, quotedScript })) {
+    return;
+  }
+
   const baseArgs = [
     "/Create",
     "/F",
@@ -634,7 +678,7 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await execSchtasks(["/Run", "/TN", taskName]);
+  await runScheduledTaskOrThrow(taskName);
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
@@ -686,7 +730,7 @@ export async function uninstallScheduledTask({
 }
 
 function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
-  const detail = (res.stderr || res.stdout).toLowerCase();
+  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return detail.includes("not running");
 }
 
@@ -761,11 +805,7 @@ export async function restartScheduledTask({
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
-  }
-  stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
+  await runScheduledTaskOrThrow(taskName);
   return { outcome: "completed" };
 }
 
@@ -798,7 +838,7 @@ export async function readScheduledTaskRuntime(
       return await resolveFallbackRuntime(env);
     }
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("cannot find the file");
+    const missing = normalizeLowercaseStringOrEmpty(detail).includes("cannot find the file");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
