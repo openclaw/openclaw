@@ -1,8 +1,11 @@
+import { logDebug } from "../logger.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+
+const TUI_LOG_PREFIX = "tui-events:";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -32,6 +35,7 @@ type EventHandlerContext = {
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  touchBusyActivity?: () => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
   noteLocalRunId?: (runId: string) => void;
@@ -43,6 +47,35 @@ type EventHandlerContext = {
   clearLocalBtwRunIds?: () => void;
 };
 
+/**
+ * Extract a short, human-readable error summary for the status line.
+ * Keeps the status bar concise (under ~80 chars) while being informative.
+ */
+const summarizeError = (raw?: string): string => {
+  if (!raw) {
+    return "unknown error";
+  }
+  // Collapse newlines and whitespace to keep status bar single-line
+  let stripped = raw
+    .replace(/\s+/g, " ")
+    .replace(/^⚠️\s*/, "")
+    .replace(/^Embedded agent failed before reply:\s*/i, "")
+    .trim();
+  let prev: string;
+  do {
+    prev = stripped;
+    stripped = stripped
+      .replace(/^FailoverError:\s*/i, "")
+      .replace(/^Error:\s*/i, "")
+      .trim();
+  } while (stripped !== prev);
+  // Truncate to keep status line readable
+  if (stripped.length > 80) {
+    return `${stripped.slice(0, 77)}...`;
+  }
+  return stripped || "unknown error";
+};
+
 export function createEventHandlers(context: EventHandlerContext) {
   const {
     chatLog,
@@ -50,6 +83,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui,
     state,
     setActivityStatus,
+    touchBusyActivity,
     refreshSessionInfo,
     loadHistory,
     noteLocalRunId,
@@ -134,12 +168,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    errorDetail?: string;
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
-      setActivityStatus(params.status);
+      if (params.errorDetail && params.status === "error") {
+        setActivityStatus(`error: ${params.errorDetail}`);
+      } else {
+        setActivityStatus(params.status);
+      }
     }
     void refreshSessionInfo?.();
   };
@@ -148,13 +187,18 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "aborted" | "error";
+    errorDetail?: string;
   }) => {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
-      setActivityStatus(params.status);
+      if (params.errorDetail && params.status === "error") {
+        setActivityStatus(`error: ${params.errorDetail}`);
+      } else {
+        setActivityStatus(params.status);
+      }
     }
     void refreshSessionInfo?.();
   };
@@ -222,13 +266,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as ChatEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      logDebug(
+        `${TUI_LOG_PREFIX} chat event skipped — session mismatch (evt=${evt.sessionKey}, current=${state.currentSessionKey})`,
+      );
       return;
+    }
+    if (evt.state !== "delta") {
+      logDebug(
+        `${TUI_LOG_PREFIX} chat event: runId=${evt.runId} state=${evt.state} activeChatRunId=${state.activeChatRunId ?? "null"}`,
+      );
     }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
       }
       if (evt.state === "final") {
+        logDebug(`${TUI_LOG_PREFIX} chat final for already-finalized run=${evt.runId} (duplicate)`);
         return;
       }
     }
@@ -240,15 +293,27 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.pendingOptimisticUserMessage = false;
       }
     }
+    // Refresh stale-busy timer only from the active run's events,
+    // so stale-run detection is not suppressed by unrelated run activity.
+    if (state.activeChatRunId === evt.runId) {
+      touchBusyActivity?.();
+    }
     if (evt.state === "delta") {
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
       if (!displayText) {
         return;
       }
       chatLog.updateAssistant(displayText, evt.runId);
-      setActivityStatus("streaming");
+      // Only update activity status for the active run so that stale-run
+      // detection is not suppressed by background/same-session runs.
+      if (state.activeChatRunId === evt.runId) {
+        setActivityStatus("streaming");
+      }
     }
     if (evt.state === "final") {
+      logDebug(
+        `${TUI_LOG_PREFIX} chat final: runId=${evt.runId} hasMessage=${!!evt.message} activeRun=${state.activeChatRunId === evt.runId}`,
+      );
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message && isLocalBtwRun) {
@@ -297,13 +362,16 @@ export function createEventHandlers(context: EventHandlerContext) {
       } else {
         chatLog.finalizeAssistant(finalText, evt.runId);
       }
+      const errorDetail = stopReason === "error" ? summarizeError(evt.errorMessage) : undefined;
       finalizeRun({
         runId: evt.runId,
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
+        errorDetail,
       });
     }
     if (evt.state === "aborted") {
+      logDebug(`${TUI_LOG_PREFIX} chat aborted: runId=${evt.runId}`);
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
@@ -311,10 +379,18 @@ export function createEventHandlers(context: EventHandlerContext) {
       maybeRefreshHistoryForRun(evt.runId);
     }
     if (evt.state === "error") {
+      logDebug(
+        `${TUI_LOG_PREFIX} chat error: runId=${evt.runId} error=${evt.errorMessage ?? "unknown"}`,
+      );
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
+      terminateRun({
+        runId: evt.runId,
+        wasActiveRun,
+        status: "error",
+        errorDetail: summarizeError(evt.errorMessage),
+      });
       maybeRefreshHistoryForRun(evt.runId);
     }
     tui.requestRender();
@@ -333,6 +409,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
       return;
+    }
+    // Refresh stale-busy timer on any event for an active or known run.
+    if (isActiveRun) {
+      touchBusyActivity?.();
     }
     if (evt.stream === "tool") {
       const verbose = state.sessionInfo.verboseLevel ?? "off";
@@ -374,6 +454,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      logDebug(`${TUI_LOG_PREFIX} agent lifecycle: runId=${evt.runId} phase=${phase}`);
       if (phase === "start") {
         setActivityStatus("running");
       }
@@ -381,7 +462,8 @@ export function createEventHandlers(context: EventHandlerContext) {
         setActivityStatus("idle");
       }
       if (phase === "error") {
-        setActivityStatus("error");
+        const lifecycleError = typeof evt.data?.error === "string" ? evt.data.error : undefined;
+        setActivityStatus(lifecycleError ? `error: ${summarizeError(lifecycleError)}` : "error");
       }
       tui.requestRender();
     }

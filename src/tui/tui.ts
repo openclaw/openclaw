@@ -10,6 +10,7 @@ import {
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { logDebug, logInfo } from "../logger.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -242,6 +243,7 @@ export async function runTui(opts: TuiOptions) {
   let connectionStatus = "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
   let statusTimer: NodeJS.Timeout | null = null;
+  let errorElapsed: string | null = null;
   let statusStartedAt: number | null = null;
   let lastActivityStatus = activityStatus;
 
@@ -492,6 +494,9 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
+  const STALE_BUSY_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes (reduced from 5 min)
+  let lastBusyEventAt: number | null = null;
+  let gapRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -500,8 +505,12 @@ export async function runTui(opts: TuiOptions) {
     if (totalSeconds < 60) {
       return `${totalSeconds}s`;
     }
-    const minutes = Math.floor(totalSeconds / 60);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
     return `${minutes}m ${seconds}s`;
   };
 
@@ -558,12 +567,38 @@ export async function runTui(opts: TuiOptions) {
     statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
   };
 
+  const checkStaleBusy = () => {
+    if (!lastBusyEventAt || !busyStates.has(activityStatus)) {
+      return false;
+    }
+    if (Date.now() - lastBusyEventAt > STALE_BUSY_TIMEOUT_MS) {
+      logInfo(
+        `tui: stale busy timeout — forcing idle (was ${activityStatus}, last event ${Math.round((Date.now() - lastBusyEventAt) / 1000)}s ago, activeChatRunId=${state.activeChatRunId ?? "null"})`,
+      );
+      statusStartedAt = null;
+      lastBusyEventAt = null;
+      activityStatus = "idle";
+      state.activeChatRunId = null;
+      state.pendingOptimisticUserMessage = false;
+      stopStatusTimer();
+      stopWaitingTimer();
+      ensureStatusText();
+      statusText?.setText(theme.dim(`${connectionStatus} | idle (stale run timed out)`));
+      tui.requestRender();
+      return true;
+    }
+    return false;
+  };
+
   const startStatusTimer = () => {
     if (statusTimer) {
       return;
     }
     statusTimer = setInterval(() => {
       if (!busyStates.has(activityStatus)) {
+        return;
+      }
+      if (checkStaleBusy()) {
         return;
       }
       updateBusyStatusMessage();
@@ -595,8 +630,11 @@ export async function runTui(opts: TuiOptions) {
       if (activityStatus !== "waiting") {
         return;
       }
+      if (checkStaleBusy()) {
+        return;
+      }
       updateBusyStatusMessage();
-    }, 120);
+    }, 1000);
   };
 
   const stopWaitingTimer = () => {
@@ -610,7 +648,9 @@ export async function runTui(opts: TuiOptions) {
 
   const renderStatus = () => {
     const isBusy = busyStates.has(activityStatus);
+    const isError = activityStatus === "error" || activityStatus.startsWith("error:");
     if (isBusy) {
+      errorElapsed = null;
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
       }
@@ -623,7 +663,29 @@ export async function runTui(opts: TuiOptions) {
         startStatusTimer();
       }
       updateBusyStatusMessage();
+    } else if (isError) {
+      // Keep elapsed visible across re-renders while in error state.
+      // Capture on first entry, then preserve until state transitions away.
+      stopWaitingTimer();
+      statusLoader?.stop();
+      statusLoader = null;
+      ensureStatusText();
+      if (statusStartedAt) {
+        errorElapsed = formatElapsed(statusStartedAt);
+        statusStartedAt = null;
+      } else if (lastActivityStatus && !lastActivityStatus.startsWith("error:")) {
+        // Previous state was not an error — clear stale elapsed from a prior run.
+        errorElapsed = null;
+      }
+      const elapsed = errorElapsed ?? "";
+      const errorLabel = activityStatus;
+      const text = elapsed
+        ? `${connectionStatus} | ${errorLabel} (${elapsed})`
+        : `${connectionStatus} | ${errorLabel}`;
+      statusText?.setText(theme.dim(text));
+      stopStatusTimer();
     } else {
+      errorElapsed = null;
       statusStartedAt = null;
       stopStatusTimer();
       stopWaitingTimer();
@@ -650,8 +712,19 @@ export async function runTui(opts: TuiOptions) {
     }
   };
 
+  const touchBusyActivity = () => {
+    lastBusyEventAt = Date.now();
+  };
+
   const setActivityStatus = (text: string) => {
+    const prev = activityStatus;
     activityStatus = text;
+    if (busyStates.has(text)) {
+      lastBusyEventAt = Date.now();
+    }
+    if (prev !== text) {
+      logDebug(`tui-status: ${prev} → ${text}`);
+    }
     renderStatus();
   };
 
@@ -736,6 +809,7 @@ export async function runTui(opts: TuiOptions) {
     tui,
     state,
     setActivityStatus,
+    touchBusyActivity,
     refreshSessionInfo,
     loadHistory,
     noteLocalRunId,
@@ -920,7 +994,64 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onGap = (info) => {
+    logInfo(
+      `tui: event gap detected — expected seq ${info.expected}, got ${info.received} (activityStatus=${activityStatus}, activeChatRunId=${state.activeChatRunId ?? "null"})`,
+    );
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    // Don't force idle here — a gap only means some events were missed, not that
+    // the run finished. Long-running tool execution can have gaps without the run
+    // being done. But schedule a deferred check: if no new events arrive within
+    // 10s, check session state to detect whether the run completed during the gap.
+    if (busyStates.has(activityStatus) && state.activeChatRunId) {
+      // Cancel any prior pending recovery timer for this run to avoid duplicates.
+      if (gapRecoveryTimer !== null) {
+        clearTimeout(gapRecoveryTimer);
+        gapRecoveryTimer = null;
+      }
+      const runId = state.activeChatRunId;
+      gapRecoveryTimer = setTimeout(() => {
+        gapRecoveryTimer = null;
+        // Only act if we're still stuck on the same run
+        if (state.activeChatRunId !== runId) {
+          logDebug(
+            `tui: gap recovery cancelled — runId changed (${state.activeChatRunId ?? "null"})`,
+          );
+          return;
+        }
+        // If events resumed after the gap, don't wipe the chat log.
+        if (lastBusyEventAt && Date.now() - lastBusyEventAt < 15_000) {
+          logDebug(
+            `tui: gap recovery cancelled — recent activity (${Math.round((Date.now() - lastBusyEventAt) / 1000)}s ago)`,
+          );
+          return;
+        }
+        // Refresh session info first to check if the run completed during the gap.
+        // Only reload full history if session info confirms the run is no longer active,
+        // avoiding mid-stream chat log resets for genuinely long-running turns.
+        logInfo(`tui: gap recovery — checking session state for stuck run ${runId}`);
+        const preRefreshUpdatedAt = state.sessionInfo.updatedAt;
+        void refreshSessionInfo().then(() => {
+          if (state.activeChatRunId !== runId) {
+            logDebug(`tui: gap recovery — session info resolved run ${runId}`);
+            return;
+          }
+          // If the session info probe didn't return new data (e.g. transient
+          // gateway / session-list error swallowed by refreshSessionInfo),
+          // skip the history reload to avoid unnecessary transcript resets.
+          if (preRefreshUpdatedAt !== null && state.sessionInfo.updatedAt === preRefreshUpdatedAt) {
+            logDebug(
+              `tui: gap recovery — session info unchanged (transient error?), skipping history reload`,
+            );
+            return;
+          }
+          logInfo(
+            `tui: gap recovery — run ${runId} still active after session refresh, reloading history`,
+          );
+          void loadHistory();
+        });
+      }, 10_000);
+      gapRecoveryTimer.unref();
+    }
     tui.requestRender();
   };
 
