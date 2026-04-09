@@ -11,6 +11,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
+  compactEmbeddedPiSessionMock,
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
@@ -205,6 +206,8 @@ export function installDirectiveBehaviorE2EHooks() {
     resetSystemEventsForTest();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createDirectiveBehaviorProviderRegistry());
+    compactEmbeddedPiSessionMock.mockReset();
+    compactEmbeddedPiSessionMock.mockResolvedValue({ payloads: [], meta: {} });
     runEmbeddedPiAgentMock.mockReset();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
@@ -226,6 +229,7 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
 }) {
   vi.doMock("../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),
     runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
@@ -234,6 +238,7 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
   }));
   vi.doMock("../agents/pi-embedded.runtime.js", () => ({
     abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),
     runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
