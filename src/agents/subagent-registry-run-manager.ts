@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
@@ -316,6 +317,28 @@ export function createSubagentRunManager(params: {
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
+    try {
+      createRunningTaskRun({
+        runtime: "subagent",
+        sourceId: registerParams.runId,
+        ownerKey: registerParams.requesterSessionKey,
+        scopeKind: "session",
+        requesterOrigin,
+        childSessionKey: registerParams.childSessionKey,
+        runId: registerParams.runId,
+        label: registerParams.label,
+        task: registerParams.task,
+        deliveryStatus:
+          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+        startedAt: now,
+        lastEventAt: now,
+      });
+    } catch (error) {
+      log.warn("Failed to create background task for subagent run", {
+        runId: registerParams.runId,
+        error,
+      });
+    }
     params.ensureListener();
     params.persist();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
