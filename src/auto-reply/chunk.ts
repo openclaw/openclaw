@@ -337,7 +337,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
   const chunks: string[] = [];
   const spans = parseFenceSpans(text);
-  const tableSpans = parseTableSpans(text);
+  const tableSpans = parseTableSpans(text, spans);
   const blockquoteSpans = parseBlockquoteSpans(text);
   let start = 0;
   let reopenFence: ReturnType<typeof findFenceSpanAt> | undefined;
@@ -422,8 +422,10 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
     // Check if we're breaking inside a table
     const tableAtBreak = findTableSpanAt(tableSpans, breakIdx);
-    if (tableAtBreak && breakIdx > tableAtBreak.start) {
-      // Try to break before the table
+    if (tableAtBreak) {
+      // Try to break before the table so it stays atomic.
+      // If the table starts too close to `start`, fall through and let
+      // the continuation-header logic (below) handle the split.
       const beforeTable = text.lastIndexOf("\n", tableAtBreak.start);
       if (beforeTable > start) {
         breakIdx = beforeTable;

@@ -1,3 +1,5 @@
+import type { FenceSpan } from "./fences.js";
+
 /**
  * Parse contiguous markdown table blocks in a buffer.
  *
@@ -24,7 +26,8 @@ export type TableSpan = {
 const SEPARATOR_RE = /^\|?[\s-:|]+\|[\s-:|]*$/;
 
 function isTableRow(line: string): boolean {
-  return line.includes("|");
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|");
 }
 
 function isSeparatorRow(line: string): boolean {
@@ -34,7 +37,7 @@ function isSeparatorRow(line: string): boolean {
   return SEPARATOR_RE.test(line.trim());
 }
 
-export function parseTableSpans(buffer: string): TableSpan[] {
+export function parseTableSpans(buffer: string, fenceSpans?: FenceSpan[]): TableSpan[] {
   const spans: TableSpan[] = [];
   const lines: { text: string; start: number; end: number }[] = [];
 
@@ -49,12 +52,19 @@ export function parseTableSpans(buffer: string): TableSpan[] {
     offset = nextNewline + 1;
   }
 
+  const isInsideFence = (start: number): boolean =>
+    fenceSpans?.some((f) => start >= f.start && start < f.end) ?? false;
+
   let i = 0;
   while (i < lines.length - 1) {
     const headerLine = lines[i];
     const sepLine = lines[i + 1];
 
-    if (!isTableRow(headerLine.text) || !isSeparatorRow(sepLine.text)) {
+    if (
+      !isTableRow(headerLine.text) ||
+      !isSeparatorRow(sepLine.text) ||
+      isInsideFence(headerLine.start)
+    ) {
       i++;
       continue;
     }

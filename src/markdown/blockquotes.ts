@@ -29,8 +29,10 @@ export function parseBlockquoteSpans(buffer: string): BlockquoteSpan[] {
       const prefix = match[1];
       if (!current) {
         current = { start: offset, prefix };
+      } else {
+        // Update prefix to latest (handles varying depth, keeps the most recent)
+        current.prefix = prefix;
       }
-      // Update prefix to latest (handles varying depth, keeps the most recent)
     } else {
       if (current) {
         spans.push({
