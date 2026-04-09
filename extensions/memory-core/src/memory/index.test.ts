@@ -6,6 +6,7 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
+  listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "../../../../src/plugins/memory-embedding-providers.js";
 import "./test-runtime-mocks.js";
@@ -346,6 +347,11 @@ describe("memory index", () => {
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("registers the bundled bedrock memory embedding adapter", () => {
+    const adapters = listMemoryEmbeddingProviders();
+    expect(adapters.some((adapter) => adapter.id === "bedrock")).toBe(true);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
