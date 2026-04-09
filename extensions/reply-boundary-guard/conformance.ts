@@ -8,7 +8,7 @@ import {
   rewriteReplyBoundaryText,
   runReplyBoundaryConformanceSuite,
   suggestReplyBoundaryRewrite,
-} from "../../../moonlight/src/pinocchio/reply-boundary/index.ts";
+} from "@luna/moonlight/pinocchio/reply-boundary";
 
 export const REPLY_BOUNDARY_GUARD_CONSUMER = "reply-boundary-guard";
 

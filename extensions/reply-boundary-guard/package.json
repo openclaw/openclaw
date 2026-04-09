@@ -7,6 +7,9 @@
   "peerDependencies": {
     "openclaw": "*"
   },
+  "dependencies": {
+    "@luna/moonlight": "file:../../../moonlight"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

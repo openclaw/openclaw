@@ -2,7 +2,7 @@ import {
   buildReplyBoundaryEnforcementDecision,
   classifyReplyBoundaryClaimFamilies,
   type ReplyBoundaryPolicyInput,
-} from "../../../moonlight/src/pinocchio/reply-boundary/index.ts";
+} from "@luna/moonlight/pinocchio/reply-boundary";
 
 const REPORT_BACK_PATTERNS = [
   /\b(i['’]?ll|i will)\s*(report back|let you know|follow up|circle back)\b/i,
