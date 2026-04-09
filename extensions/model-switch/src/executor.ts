@@ -57,6 +57,9 @@ export async function executeSwitch(
   const target = config.models[params.targetModelId];
   if (!target) {
     logger.error(`[model-switch] Unknown target model: ${params.targetModelId}`);
+    // Clear switching state so the gate releases — prevent deadlock
+    state.switching = false;
+    deps.onSwitchComplete();
     return false;
   }
 
@@ -64,19 +67,18 @@ export async function executeSwitch(
   const source = sourceModelId ? config.models[sourceModelId] : null;
   const startTime = Date.now();
 
-  // Write switch marker for crash recovery
-  const marker: SwitchMarker = {
-    sessionKey: params.sessionKey,
-    sourceModel: sourceModelId ?? "unknown",
-    targetModel: params.targetModelId,
-    reason: params.reason,
-    continuationPrompt: params.continuationPrompt,
-    requestedAt: new Date().toISOString(),
-    attemptCount: 0,
-  };
-  writeMarker(stateDir, marker);
-
   try {
+    // Write switch marker for crash recovery (inside try so fs errors release gate)
+    const marker: SwitchMarker = {
+      sessionKey: params.sessionKey,
+      sourceModel: sourceModelId ?? "unknown",
+      targetModel: params.targetModelId,
+      reason: params.reason,
+      continuationPrompt: params.continuationPrompt,
+      requestedAt: new Date().toISOString(),
+      attemptCount: 0,
+    };
+    writeMarker(stateDir, marker);
     // Step 1: Stop current model (synchronous — blocks until process exits)
     if (source) {
       logger.info(`[model-switch] Stopping ${sourceModelId}: ${source.stopCommand}`);
@@ -239,6 +241,13 @@ export async function recoverFromMarker(state: SwitchState, deps: ExecutorDeps):
   incrementMarkerAttempt(stateDir, marker);
 
   state.switching = true;
+  state.switchPromise = new Promise<boolean>((resolve) => {
+    const origComplete = deps.onSwitchComplete;
+    deps.onSwitchComplete = () => {
+      resolve(true);
+      origComplete();
+    };
+  });
   await executeSwitch(
     {
       sessionKey: marker.sessionKey,
