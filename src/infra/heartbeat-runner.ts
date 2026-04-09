@@ -332,10 +332,17 @@ function resolveIsolatedHeartbeatSessionKey(params: {
     }
   }
 
+  // Collapse repeated `:heartbeat` suffixes introduced by wake-triggered re-entry.
+  // The guard on configuredSessionKey ensures we do not strip a legitimate single
+  // `:heartbeat` suffix that is part of the user-configured base key itself
+  // (e.g. heartbeat.session: "alerts:heartbeat"). When the configured key already
+  // ends with `:heartbeat`, a forced wake passes `configuredKey:heartbeat` which
+  // must be treated as a new base rather than an existing isolated key.
   const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
   if (
     params.sessionKey.startsWith(params.configuredSessionKey) &&
-    /^(:heartbeat){2,}$/.test(configuredSuffix)
+    /^(:heartbeat)+$/.test(configuredSuffix) &&
+    !params.configuredSessionKey.endsWith(":heartbeat")
   ) {
     return {
       isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,

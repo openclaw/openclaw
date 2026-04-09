@@ -337,4 +337,47 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       expect(store[isolatedSessionKey]).toBeUndefined();
     });
   });
+
+  it("converges a legacy isolated key that lacks the stored marker (single :heartbeat suffix)", async () => {
+    // Regression for: when an isolated session was created before
+    // heartbeatIsolatedBaseSessionKey was introduced, sessionKey already equals
+    // "<base>:heartbeat" but the stored entry has no marker. The fallback used to
+    // treat "<base>:heartbeat" as the new base and persist it as the marker, so
+    // the next wake re-entry would stabilise at "<base>:heartbeat:heartbeat"
+    // instead of converging back to "<base>:heartbeat".
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const legacyIsolatedKey = `${baseSessionKey}:heartbeat`;
+
+      // Legacy entry: has :heartbeat suffix but no heartbeatIsolatedBaseSessionKey marker.
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [legacyIsolatedKey]: {
+            sessionId: "sid",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+          },
+        }),
+        "utf-8",
+      );
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: legacyIsolatedKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      // Must converge to the same canonical isolated key, not produce :heartbeat:heartbeat.
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(legacyIsolatedKey);
+    });
+  });
 });
