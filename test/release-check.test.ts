@@ -172,7 +172,7 @@ describe("collectForbiddenPackPaths", () => {
 describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
+      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.4.7.tgz", 120_354_302)]),
     ).toEqual([]);
   });
 
@@ -187,7 +187,7 @@ describe("collectPackUnpackedSizeErrors", () => {
   it("fails closed when npm pack output omits unpackedSize for every result", () => {
     expect(
       collectPackUnpackedSizeErrors([
-        { filename: "openclaw-2026.3.14.tgz" },
+        { filename: "openclaw-2026.4.7.tgz" },
         { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
       ]),
     ).toEqual([
