@@ -824,6 +824,14 @@ export const AgentEntrySchema = z
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    env: z
+      .object({
+        scope: z.union([z.literal("all"), z.literal("own"), z.literal("none")]).optional(),
+        vars: z.record(z.string(), z.string()).optional(),
+        allow: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

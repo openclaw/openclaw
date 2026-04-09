@@ -1564,7 +1564,22 @@ export function createExecTool(
       }
       rejectExecApprovalShellCommand(params.command);
 
-      const inheritedBaseEnv = coerceEnv(process.env);
+      // When agentEnvVars is set, use it as the base instead of process.env
+      // to enforce per-agent env isolation (external collaborators won't
+      // inherit owner's global API keys).
+      const inheritedBaseEnv = defaults?.agentEnvVars
+        ? {
+            ...defaults.agentEnvVars,
+            ...coerceEnv({
+              PATH: process.env.PATH,
+              HOME: process.env.HOME,
+              SHELL: process.env.SHELL,
+              USER: process.env.USER,
+              LANG: process.env.LANG,
+              TERM: process.env.TERM,
+            }),
+          }
+        : coerceEnv(process.env);
       const hostEnvResult =
         host === "sandbox"
           ? null

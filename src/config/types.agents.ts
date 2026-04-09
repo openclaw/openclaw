@@ -99,6 +99,23 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /**
+   * Per-agent environment variable scoping.
+   * Controls which global env vars this agent can access.
+   */
+  env?: {
+    /**
+     * Scope mode:
+     * - "all": inherit all global env vars (default for owner agents)
+     * - "own": only use vars explicitly listed in this agent's `vars` + `allow`
+     * - "none": no global env vars at all, only agent-specific `vars`
+     */
+    scope?: "all" | "own" | "none";
+    /** Agent-specific env vars (always included regardless of scope). */
+    vars?: Record<string, string>;
+    /** Allowlist of global env var keys this agent may access (when scope="own"). */
+    allow?: string[];
+  };
 };
 
 export type AgentsConfig = {
