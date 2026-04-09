@@ -587,12 +587,16 @@ describe("buildGatewayConnectionDetails", () => {
   });
 
   it("falls back to the default config loader when test deps drift", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
-    resolveGatewayPort.mockReturnValue(18800);
-    __testing.setDepsForTests({
-      loadConfig: {} as never,
-      resolveGatewayPort: {} as never,
-    });
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+    try {
+      loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+      resolveGatewayPort.mockReturnValue(18800);
+      __testing.setDepsForTests({
+        loadConfig: {} as never,
+        resolveGatewayPort: () => 18789,
+      });
 
       const details = buildGatewayConnectionDetails();
 
