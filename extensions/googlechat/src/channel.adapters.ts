@@ -142,6 +142,32 @@ export const googlechatPairingTextAdapter = {
   },
 };
 
+/**
+ * Sanitize a Google Chat thread identifier before passing it to the API.
+ *
+ * The Chat API requires thread resource names in the format
+ * `spaces/{space}/threads/{thread}`. Several upstream paths (replyToId,
+ * threadId, message.thread.name) may carry message resource names
+ * (`spaces/X/messages/Y`) or bare IDs. This helper:
+ * - Drops any value that contains `/messages/` (message resource name)
+ * - Prepends `{space}/threads/` to bare IDs that lack a `/` separator
+ */
+function sanitizeGoogleChatThread(
+  thread: string | undefined,
+  space: string,
+): string | undefined {
+  if (!thread) {
+    return undefined;
+  }
+  if (thread.includes("/messages/")) {
+    return undefined;
+  }
+  if (!thread.includes("/")) {
+    return `${space}/threads/${thread}`;
+  }
+  return thread;
+}
+
 export const googlechatOutboundAdapter = {
   base: {
     deliveryMode: "direct" as const,
@@ -191,8 +217,11 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
+      const rawThread =
+        typeof threadId === "number"
+          ? String(threadId)
+          : ((threadId ?? replyToId ?? undefined) as string | undefined);
+      const thread = sanitizeGoogleChatThread(rawThread, space);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
@@ -236,8 +265,11 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
+      const rawThread =
+        typeof threadId === "number"
+          ? String(threadId)
+          : ((threadId ?? replyToId ?? undefined) as string | undefined);
+      const thread = sanitizeGoogleChatThread(rawThread, space);
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>

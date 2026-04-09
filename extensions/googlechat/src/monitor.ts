@@ -255,8 +255,8 @@ async function processMessageWithPipeline(params: {
     Surface: "googlechat",
     MessageSid: message.name,
     MessageSidFull: message.name,
-    ReplyToId: message.thread?.name,
-    ReplyToIdFull: message.thread?.name,
+    ReplyToId: message.thread?.name?.includes("/messages/") ? undefined : message.thread?.name,
+    ReplyToIdFull: message.thread?.name?.includes("/messages/") ? undefined : message.thread?.name,
     MediaPath: mediaPath,
     MediaType: mediaType,
     MediaUrl: mediaPath,
@@ -380,6 +380,14 @@ async function deliverGoogleChatReply(params: {
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
+  let safeThreadId = payload.replyToId;
+  if (safeThreadId) {
+    if (safeThreadId.includes("/messages/")) {
+      safeThreadId = undefined;
+    } else if (!safeThreadId.includes("/")) {
+      safeThreadId = `${spaceId}/threads/${safeThreadId}`;
+    }
+  }
   const reply = resolveSendableOutboundReplyParts(payload);
   const mediaCount = reply.mediaCount;
   const hasMedia = reply.hasMedia;
@@ -434,7 +442,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: safeThreadId,
           });
         }
         firstTextChunk = false;
@@ -463,7 +471,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: safeThreadId,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
