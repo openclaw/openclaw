@@ -323,6 +323,7 @@ describe("mergeAccountConfig", () => {
     enabled?: boolean;
     defaultAccount?: string;
     name?: string;
+    dmPolicy?: string;
     accounts?: Record<string, { name: string }>;
     commands?: {
       native?: boolean;
@@ -378,6 +379,48 @@ describe("mergeAccountConfig", () => {
         },
         accountConfig: {
           commands: {
+            callbackPath: "/work",
+          },
+        },
+        nestedObjectKeys: ["commands"],
+      },
+      expected: {
+        commands: {
+          native: true,
+          callbackPath: "/work",
+        },
+      },
+    },
+    {
+      name: "does not let account undefined values override channel fields",
+      input: {
+        channelConfig: {
+          enabled: true,
+          dmPolicy: "allowlist",
+        },
+        accountConfig: {
+          name: "Work",
+          dmPolicy: undefined,
+        },
+      },
+      expected: {
+        enabled: true,
+        dmPolicy: "allowlist",
+        name: "Work",
+      },
+    },
+    {
+      name: "deep-merge omits undefined keys inside nested overlay objects",
+      input: {
+        channelConfig: {
+          commands: {
+            native: true,
+            callbackPath: "/base",
+          },
+        },
+        accountConfig: {
+          commands: {
+            native: undefined,
             callbackPath: "/work",
           },
         },

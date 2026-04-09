@@ -121,6 +121,17 @@ export function resolveListedDefaultAccountId(params: {
   return params.accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
+/**
+ * Drop keys whose values are `undefined` so programmatic account overlays do not clobber channel
+ * defaults (`{ ...base, ...{ dmPolicy: undefined } }` would otherwise leave `dmPolicy` undefined).
+ */
+function omitUndefinedFields(record: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!record) {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+}
+
 export function mergeAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accountConfig: Partial<TConfig> | undefined;
@@ -133,9 +144,12 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
       ([key]) => !omitKeys.has(key),
     ),
   ) as TConfig;
+  const accountOverlay = omitUndefinedFields(
+    params.accountConfig as Record<string, unknown> | undefined,
+  ) as Partial<TConfig>;
   const merged = {
     ...base,
-    ...params.accountConfig,
+    ...accountOverlay,
   };
   for (const key of params.nestedObjectKeys ?? []) {
     const baseValue = base[key as keyof TConfig];
@@ -150,7 +164,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
     ) {
       (merged as Record<string, unknown>)[key] = {
         ...(baseValue as Record<string, unknown>),
-        ...(accountValue as Record<string, unknown>),
+        ...omitUndefinedFields(accountValue as Record<string, unknown>),
       };
     }
   }

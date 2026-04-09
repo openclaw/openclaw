@@ -40,4 +40,24 @@ describe("WhatsApp account schema dmPolicy inheritance", () => {
     }
     expect(res.config.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("pairing");
   });
+
+  it("does not inject default groupPolicy into account blocks that omit it", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          accounts: {
+            work: { allowFrom: ["+15550001111"] },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.channels?.whatsapp?.accounts?.work?.groupPolicy).toBeUndefined();
+  });
 });

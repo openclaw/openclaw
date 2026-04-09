@@ -118,6 +118,8 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   // applied to parsed `accounts.*` objects: `resolveMergedAccountConfig` shallow-merges account
   // fields over the channel, so an injected default would override channel `dmPolicy=allowlist`.
   dmPolicy: DmPolicySchema.optional(),
+  // Same pattern as `dmPolicy`: avoid injecting channel `groupPolicy` default into account blocks.
+  groupPolicy: GroupPolicySchema.optional(),
 }).strict();
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
