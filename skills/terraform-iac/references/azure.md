@@ -169,7 +169,8 @@ resource "azurerm_linux_function_app" "this" {
   resource_group_name        = azurerm_resource_group.this.name
   location                   = azurerm_resource_group.this.location
   storage_account_name       = azurerm_storage_account.this.name
-  storage_account_access_key = azurerm_storage_account.this.primary_access_key
+  storage_account_access_key = azurerm_storage_account.this.primary_access_key  # SECURITY: Consider using managed identity instead of access keys
+
   service_plan_id            = azurerm_service_plan.this.id
 
   site_config {
