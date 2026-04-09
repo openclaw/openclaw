@@ -15,7 +15,14 @@ import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js"
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
-let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
+let providerCalls: Array<{
+  provider?: string;
+  model?: string;
+  outputDimensionality?: number;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
+}> = [];
 let forceNoProvider = false;
 
 vi.mock("./embeddings.js", () => {
@@ -32,11 +39,17 @@ vi.mock("./embeddings.js", () => {
       provider?: string;
       model?: string;
       outputDimensionality?: number;
+      inputType?: string;
+      queryInputType?: string;
+      documentInputType?: string;
     }) => {
       providerCalls.push({
         provider: options.provider,
         model: options.model,
         outputDimensionality: options.outputDimensionality,
+        inputType: options.inputType,
+        queryInputType: options.queryInputType,
+        documentInputType: options.documentInputType,
       });
       if (forceNoProvider) {
         return {
@@ -187,6 +200,9 @@ describe("memory index", () => {
     sessionMemory?: boolean;
     provider?: "openai" | "gemini";
     model?: string;
+    inputType?: string;
+    queryInputType?: string;
+    documentInputType?: string;
     outputDimensionality?: number;
     multimodal?: {
       enabled?: boolean;
@@ -206,6 +222,9 @@ describe("memory index", () => {
           memorySearch: {
             provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
+            inputType: params.inputType,
+            queryInputType: params.queryInputType,
+            documentInputType: params.documentInputType,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
@@ -496,5 +515,31 @@ describe("memory index", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("passes memorySearch input_type config into the provider", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      inputType: "passage",
+      queryInputType: "query",
+      documentInputType: "document",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    await manager.probeEmbeddingAvailability();
+
+    expect(
+      providerCalls.some(
+        (call) =>
+          call.provider === "openai" &&
+          call.inputType === "passage" &&
+          call.queryInputType === "query" &&
+          call.documentInputType === "document",
+      ),
+    ).toBe(true);
+    await manager.close?.();
   });
 });

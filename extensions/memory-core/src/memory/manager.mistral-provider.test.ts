@@ -130,4 +130,19 @@ describe("memory manager mistral provider wiring", () => {
     expect(request.model).toBe("gemini-embedding-2-preview");
     expect(request.outputDimensionality).toBe(1536);
   });
+
+  it("includes memory input_type fields in the primary provider request", () => {
+    const request = resolveMemoryPrimaryProviderRequest({
+      settings: {
+        ...createSettings({ provider: "openai" }),
+        inputType: "passage",
+        queryInputType: "query",
+        documentInputType: "document",
+      } as ResolvedMemorySearchConfig,
+    });
+
+    expect(request.inputType).toBe("passage");
+    expect(request.queryInputType).toBe("query");
+    expect(request.documentInputType).toBe("document");
+  });
 });
