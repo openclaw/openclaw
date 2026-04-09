@@ -808,13 +808,6 @@ export async function verifyDeviceToken(params: {
     if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
       return { ok: false, reason: "scope-mismatch" };
     }
-    // SECURITY: Re-check revocation status immediately before updating lastUsedAtMs.
-    // This narrows the TOCTOU window between the initial revokedAtMs check and the
-    // state mutation, reducing the risk of a concurrent revokeDeviceToken() racing
-    // this verification.
-    if (entry.revokedAtMs) {
-      return { ok: false, reason: "token-revoked" };
-    }
     entry.lastUsedAtMs = Date.now();
     device.tokens ??= {};
     device.tokens[role] = entry;

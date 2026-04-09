@@ -71,13 +71,16 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       policy: { allowPrivateNetwork: true },
       mode: "trusted_env_proxy",
     });
-    if (!response.ok) {
+    let data: OpenAICompatModelsResponse;
+    try {
+      if (!response.ok) {
+        log.warn(`Failed to discover ${params.label} models: ${response.status}`);
+        return [];
+      }
+      data = (await response.json()) as OpenAICompatModelsResponse;
+    } finally {
       await release();
-      log.warn(`Failed to discover ${params.label} models: ${response.status}`);
-      return [];
     }
-    const data = (await response.json()) as OpenAICompatModelsResponse;
-    await release();
     const models = data.data ?? [];
     if (models.length === 0) {
       log.warn(`No ${params.label} models found on local instance`);

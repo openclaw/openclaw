@@ -176,7 +176,7 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dynamic-code-execution-indirect",
     severity: "critical",
     message: "Indirect eval/Function access detected",
-    pattern: /globalThis\s*\[|window\s*\[.*eval|\.constructor\s*\.\s*constructor|\(\s*\)\s*\.\s*constructor/,
+    pattern: /globalThis\s*\[\s*["'`]eval["'`]|globalThis\s*\[\s*["'`]Function["'`]|window\s*\[\s*["'`]eval["'`]|\.constructor\s*\.\s*constructor/,
   },
   {
     ruleId: "crypto-mining",

@@ -957,7 +957,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // Bundled plugins may use priorities up to 1000; external plugins are capped at 100.
     const MAX_BUNDLED_HOOK_PRIORITY = 1000;
     const MAX_EXTERNAL_HOOK_PRIORITY = 100;
-    const isBundled = record.source === "bundled";
+    const isBundled = record.origin === "bundled";
     const maxPriority = isBundled ? MAX_BUNDLED_HOOK_PRIORITY : MAX_EXTERNAL_HOOK_PRIORITY;
     const rawPriority = opts?.priority ?? 0;
     const clampedPriority = Math.min(Math.max(rawPriority, 0), maxPriority);
