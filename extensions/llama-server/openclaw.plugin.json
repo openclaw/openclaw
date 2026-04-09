@@ -1,0 +1,39 @@
+{
+  "id": "llama-server",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "autoDetect": {
+        "type": "boolean",
+        "default": true,
+        "description": "Auto-detect llama-server endpoints and apply compat fixes"
+      },
+      "toolSchemaSimplification": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "maxDepth": {
+            "type": "integer",
+            "default": 2,
+            "description": "Maximum schema nesting depth before flattening"
+          },
+          "maxPropertiesPerLevel": {
+            "type": "integer",
+            "default": 12,
+            "description": "Maximum properties per object level"
+          }
+        }
+      },
+      "healthCheck": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "intervalMs": { "type": "integer", "default": 10000 },
+          "timeoutMs": { "type": "integer", "default": 3000 }
+        }
+      }
+    }
+  }
+}

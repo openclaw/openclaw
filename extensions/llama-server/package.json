@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/llama-server-plugin",
+  "version": "2026.4.9-beta.1",
+  "private": true,
+  "description": "Native llama-server integration for OpenClaw with tool schema simplification and auto-compat",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/llama-server-plugin"
+    }
+  }
+}
