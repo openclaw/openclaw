@@ -50,6 +50,17 @@ export type SafeLocalReadResult = {
   stat: Stats;
 };
 
+export type FsSafeTestHooks = {
+  afterPreOpenLstat?: (filePath: string) => Promise<void> | void;
+  beforeOpen?: (filePath: string, flags: number) => Promise<void> | void;
+};
+
+let fsSafeTestHooks: FsSafeTestHooks | undefined;
+
+export function __setFsSafeTestHooksForTest(hooks?: FsSafeTestHooks): void {
+  fsSafeTestHooks = hooks;
+}
+
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
 const NONBLOCK_OPEN_FLAG = "O_NONBLOCK" in fsConstants ? fsConstants.O_NONBLOCK : 0;
 const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
@@ -99,6 +110,7 @@ async function openVerifiedLocalFile(
     if (preStat.isDirectory()) {
       throw new SafeOpenError("not-file", "not a file");
     }
+    await fsSafeTestHooks?.afterPreOpenLstat?.(filePath);
   } catch (err) {
     if (err instanceof SafeOpenError) {
       throw err;
@@ -115,6 +127,7 @@ async function openVerifiedLocalFile(
       : options?.nonBlockingRead
         ? OPEN_READ_NONBLOCK_FLAGS
         : OPEN_READ_FLAGS;
+    await fsSafeTestHooks?.beforeOpen?.(filePath, openFlags);
     handle = await fs.open(filePath, openFlags);
   } catch (err) {
     if (isNotFoundPathError(err)) {

@@ -1,7 +1,8 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { __setFsSafeTestHooksForTest } from "../infra/fs-safe.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec.js";
 
@@ -9,6 +10,10 @@ const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
+
+afterEach(() => {
+  __setFsSafeTestHooksForTest();
+});
 
 describeNonWin("exec script preflight", () => {
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
@@ -325,33 +330,28 @@ describeNonWin("exec script preflight", () => {
       await fs.mkdir(workdir, { recursive: true });
       await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
       await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+      const scriptRealPath = await fs.realpath(scriptPath);
 
-      const originalStat = fs.stat.bind(fs);
       let swapped = false;
-      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-        const target = args[0];
-        if (!swapped && typeof target === "string" && path.resolve(target) === scriptPath) {
-          const original = await originalStat(target);
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (target) => {
+          if (swapped || path.resolve(target) !== scriptRealPath) {
+            return;
+          }
           await fs.rm(scriptPath, { force: true });
           await fs.symlink(outsidePath, scriptPath);
           swapped = true;
-          return original;
-        }
-        return await originalStat(...args);
+        },
       });
 
-      try {
-        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-        const result = await tool.execute("call-swapped-pathname", {
-          command: "node script.js",
-          workdir,
-        });
-        const text = result.content.find((block) => block.type === "text")?.text ?? "";
-        expect(swapped).toBe(true);
-        expect(text).not.toMatch(/exec preflight:/);
-      } finally {
-        statSpy.mockRestore();
-      }
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-swapped-pathname", {
+        command: "node script.js",
+        workdir,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(swapped).toBe(true);
+      expect(text).not.toMatch(/exec preflight:/);
     });
   });
 
@@ -363,31 +363,28 @@ describeNonWin("exec script preflight", () => {
       await fs.mkdir(workdir, { recursive: true });
       await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
       await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+      const scriptRealPath = await fs.realpath(scriptPath);
 
-      const originalOpen = fs.open.bind(fs);
       let swapped = false;
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const target = args[0];
-        if (!swapped && typeof target === "string" && path.resolve(target) === scriptPath) {
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (target) => {
+          if (swapped || path.resolve(target) !== scriptRealPath) {
+            return;
+          }
           await fs.rm(scriptPath, { force: true });
           await fs.symlink(outsidePath, scriptPath);
           swapped = true;
-        }
-        return await originalOpen(...args);
+        },
       });
 
-      try {
-        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-        const result = await tool.execute("call-pre-open-swapped-pathname", {
-          command: "node script.js",
-          workdir,
-        });
-        const text = result.content.find((block) => block.type === "text")?.text ?? "";
-        expect(swapped).toBe(true);
-        expect(text).not.toMatch(/exec preflight:/);
-      } finally {
-        openSpy.mockRestore();
-      }
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-pre-open-swapped-pathname", {
+        command: "node script.js",
+        workdir,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(swapped).toBe(true);
+      expect(text).not.toMatch(/exec preflight:/);
     });
   });
 
@@ -395,34 +392,26 @@ describeNonWin("exec script preflight", () => {
     await withTempDir("openclaw-exec-preflight-nonblock-", async (tmp) => {
       const scriptPath = path.join(tmp, "script.js");
       await fs.writeFile(scriptPath, 'console.log("ok")', "utf-8");
+      const scriptRealPath = await fs.realpath(scriptPath);
 
-      const originalOpen = fs.open.bind(fs);
       const scriptOpenFlags: number[] = [];
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const [target, flags] = args;
-        if (
-          typeof target === "string" &&
-          path.resolve(target) === scriptPath &&
-          typeof flags === "number"
-        ) {
-          scriptOpenFlags.push(flags);
-        }
-        return await originalOpen(...args);
+      __setFsSafeTestHooksForTest({
+        beforeOpen: (target, flags) => {
+          if (path.resolve(target) === scriptRealPath) {
+            scriptOpenFlags.push(flags);
+          }
+        },
       });
 
-      try {
-        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-        const result = await tool.execute("call-nonblocking-preflight-open", {
-          command: "node script.js",
-          workdir: tmp,
-        });
-        const text = result.content.find((block) => block.type === "text")?.text ?? "";
-        expect(scriptOpenFlags.length).toBeGreaterThan(0);
-        expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
-        expect(text).not.toMatch(/exec preflight:/);
-      } finally {
-        openSpy.mockRestore();
-      }
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-nonblocking-preflight-open", {
+        command: "node script.js",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(scriptOpenFlags.length).toBeGreaterThan(0);
+      expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+      expect(text).not.toMatch(/exec preflight:/);
     });
   });
 
