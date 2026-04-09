@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -7,6 +7,7 @@ import {
   registerAgentRunContext,
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
+  sweepStaleRunContexts,
 } from "./agent-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
@@ -107,7 +108,7 @@ describe("agent-events sequencing", () => {
       isHeartbeat: true,
     });
 
-    expect(getAgentRunContext("run-ctx")).toEqual({
+    expect(getAgentRunContext("run-ctx")).toMatchObject({
       sessionKey: "session-main",
       verboseLevel: "full",
       isHeartbeat: true,
@@ -186,12 +187,48 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")).toEqual({ sessionKey: "session-dup" });
+    expect(second.getAgentRunContext("run-dup")).toMatchObject({ sessionKey: "session-dup" });
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
     ]);
 
     first.resetAgentEventsForTest();
+  });
+
+  test("sweeps stale run contexts and clears their sequence state", async () => {
+    const stop = vi.spyOn(Date, "now");
+    stop.mockReturnValue(100);
+    registerAgentRunContext("run-stale", { sessionKey: "session-stale", registeredAt: 100 });
+    registerAgentRunContext("run-active", { sessionKey: "session-active", registeredAt: 100 });
+
+    stop.mockReturnValue(200);
+    emitAgentEvent({ runId: "run-stale", stream: "assistant", data: { text: "stale" } });
+
+    stop.mockReturnValue(900);
+    emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "active" } });
+
+    stop.mockReturnValue(1_000);
+    expect(sweepStaleRunContexts(500)).toBe(1);
+    expect(getAgentRunContext("run-stale")).toBeUndefined();
+    expect(getAgentRunContext("run-active")).toMatchObject({ sessionKey: "session-active" });
+
+    const seen: Array<{ runId: string; seq: number }> = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId === "run-stale" || evt.runId === "run-active") {
+        seen.push({ runId: evt.runId, seq: evt.seq });
+      }
+    });
+
+    emitAgentEvent({ runId: "run-stale", stream: "assistant", data: { text: "restarted" } });
+    emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "continued" } });
+
+    unsubscribe();
+    stop.mockRestore();
+
+    expect(seen).toEqual([
+      { runId: "run-stale", seq: 1 },
+      { runId: "run-active", seq: 2 },
+    ]);
   });
 });

@@ -231,14 +231,21 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 			return body
 		}
 	}
-	body, ok := stripBodyOnlyWrapper(trimmedTranslated)
+	body, ok := stripBodyOnlyWrapper(source, trimmedTranslated)
 	if !ok || strings.TrimSpace(body) == "" {
 		return translated
 	}
 	return body
 }
 
-func stripBodyOnlyWrapper(text string) (string, bool) {
+func stripBodyOnlyWrapper(source, text string) (string, bool) {
+	sourceLower := strings.ToLower(source)
+	// When the source itself documents <body> tokens, a bare body-only payload is
+	// ambiguous: the trailing </body> can be literal translated content instead of
+	// a real wrapper close. Keep it for validation/retry instead of truncating.
+	if strings.Contains(sourceLower, strings.ToLower(bodyTagStart)) || strings.Contains(sourceLower, strings.ToLower(bodyTagEnd)) {
+		return "", false
+	}
 	lower := strings.ToLower(text)
 	bodyStartLower := strings.ToLower(bodyTagStart)
 	bodyEndLower := strings.ToLower(bodyTagEnd)
