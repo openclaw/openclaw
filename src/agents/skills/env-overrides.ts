@@ -6,6 +6,13 @@ import {
 } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
+import {
+  deleteActiveSkillEnvEntry,
+  getActiveSkillEnvEntry,
+  getActiveSkillEnvKeys,
+  hasActiveSkillEnvEntry,
+  setActiveSkillEnvEntry,
+} from "./active-skill-env-state.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillRuntimeConfig } from "./runtime-config.js";
@@ -15,27 +22,11 @@ const log = createSubsystemLogger("env-overrides");
 
 type EnvUpdate = { key: string };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
-type ActiveSkillEnvEntry = {
-  baseline: string | undefined;
-  value: string;
-  count: number;
-};
 
-/**
- * Tracks env var keys that are currently injected by skill overrides.
- * Used by ACP harness spawn to strip skill-injected keys so they don't
- * leak to child processes (e.g., OPENAI_API_KEY leaking to Codex CLI).
- * @see https://github.com/openclaw/openclaw/issues/36280
- */
-const activeSkillEnvEntries = new Map<string, ActiveSkillEnvEntry>();
-
-/** Returns a snapshot of env var keys currently injected by skill overrides. */
-export function getActiveSkillEnvKeys(): ReadonlySet<string> {
-  return new Set(activeSkillEnvEntries.keys());
-}
+export { getActiveSkillEnvKeys };
 
 function acquireActiveSkillEnvKey(key: string, value: string): boolean {
-  const active = activeSkillEnvEntries.get(key);
+  const active = getActiveSkillEnvEntry(key);
   if (active) {
     active.count += 1;
     if (process.env[key] === undefined) {
@@ -46,7 +37,7 @@ function acquireActiveSkillEnvKey(key: string, value: string): boolean {
   if (process.env[key] !== undefined) {
     return false;
   }
-  activeSkillEnvEntries.set(key, {
+  setActiveSkillEnvEntry(key, {
     baseline: process.env[key],
     value,
     count: 1,
@@ -55,7 +46,7 @@ function acquireActiveSkillEnvKey(key: string, value: string): boolean {
 }
 
 function releaseActiveSkillEnvKey(key: string) {
-  const active = activeSkillEnvEntries.get(key);
+  const active = getActiveSkillEnvEntry(key);
   if (!active) {
     return;
   }
@@ -66,7 +57,7 @@ function releaseActiveSkillEnvKey(key: string) {
     }
     return;
   }
-  activeSkillEnvEntries.delete(key);
+  deleteActiveSkillEnvEntry(key);
   if (active.baseline === undefined) {
     delete process.env[key];
   } else {
@@ -164,12 +155,18 @@ function applySkillConfigEnvOverrides(params: {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
       const envKey = rawKey.trim();
       const hasExternallyManagedValue =
-        process.env[envKey] !== undefined && !activeSkillEnvEntries.has(envKey);
+        process.env[envKey] !== undefined && !hasActiveSkillEnvEntry(envKey);
       if (!envKey || !envValue || hasExternallyManagedValue) {
         continue;
       }
       pendingOverrides[envKey] = envValue;
     }
+  }
+
+  // Allow all keys explicitly configured in skills.entries.*.env to pass sensitive-key checks.
+  // The user intentionally set these; only always-blocked patterns (host-dangerous vars) remain hard-blocked.
+  for (const envKey of Object.keys(pendingOverrides)) {
+    allowedSensitiveKeys.add(envKey);
   }
 
   const resolvedApiKey =
@@ -180,7 +177,7 @@ function applySkillConfigEnvOverrides(params: {
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
     (process.env[normalizedPrimaryEnv] === undefined ||
-      activeSkillEnvEntries.has(normalizedPrimaryEnv));
+      hasActiveSkillEnvEntry(normalizedPrimaryEnv));
   if (canInjectPrimaryEnv && resolvedApiKey) {
     if (!pendingOverrides[normalizedPrimaryEnv]) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
@@ -204,7 +201,7 @@ function applySkillConfigEnvOverrides(params: {
       continue;
     }
     updates.push({ key: envKey });
-    process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
+    process.env[envKey] = getActiveSkillEnvEntry(envKey)?.value ?? envValue;
   }
 }
 

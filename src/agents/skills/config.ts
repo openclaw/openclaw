@@ -7,6 +7,7 @@ import {
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { getActiveSkillEnvKeys } from "./active-skill-env-state.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
@@ -85,6 +86,8 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  // Snapshot once so the hasEnv callback doesn't recreate the Set per env var.
+  const skillInjectedKeys = getActiveSkillEnvKeys();
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
     remotePlatforms: eligibility?.remote?.platforms,
@@ -93,12 +96,19 @@ export function shouldIncludeSkill(params: {
     hasBin: hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
-    hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
+    hasEnv: (envName) => {
+      // Check if this skill explicitly configures the env var
+      const isConfiguredForThisSkill =
+        Boolean(skillConfig?.env?.[envName]) ||
+        Boolean(skillConfig?.apiKey && entry.metadata?.primaryEnv === envName);
+      if (isConfiguredForThisSkill) {
+        return true;
+      }
+      // Only count process.env if the value wasn't injected by another skill's overrides.
+      // This prevents configuring OPENAI_API_KEY on skill A from making unrelated
+      // skill B (which requires OPENAI_API_KEY) eligible.
+      return Boolean(process.env[envName]) && !skillInjectedKeys.has(envName);
+    },
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
   });
 }

@@ -17,6 +17,7 @@ import {
   buildWorkspaceSkillSnapshot,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
+import { shouldIncludeSkill } from "./skills/config.js";
 import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
@@ -511,6 +512,45 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("allows sensitive-pattern env vars explicitly configured in skills.entries.*.env", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "custom-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "custom-env-skill",
+      description: "Needs custom env",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["GOG_KEYRING_PASSWORD", "CUSTOM_SERVICE_TOKEN"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "custom-env-skill": {
+                env: {
+                  GOG_KEYRING_PASSWORD: "hunter2",
+                  CUSTOM_SERVICE_TOKEN: "tok-abc123",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.GOG_KEYRING_PASSWORD).toBe("hunter2");
+        expect(process.env.CUSTOM_SERVICE_TOKEN).toBe("tok-abc123");
+      } finally {
+        restore();
+        expect(process.env.GOG_KEYRING_PASSWORD).toBeUndefined();
+        expect(process.env.CUSTOM_SERVICE_TOKEN).toBeUndefined();
+      }
+    });
+  });
+
   it("blocks dangerous host env overrides even when declared", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "dangerous-env-skill");
@@ -632,6 +672,64 @@ describe("applySkillEnvOverrides", () => {
       } finally {
         restore();
         expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("does not leak skill-injected env vars to unrelated skills for eligibility", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    // Skill A: configured with OPENAI_API_KEY in its env
+    const skillADir = path.join(workspaceDir, "skills", "custom-skill-a");
+    await writeSkill({
+      dir: skillADir,
+      name: "custom-skill-a",
+      description: "Custom skill with API key",
+      metadata:
+        '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]},"primaryEnv":"OPENAI_API_KEY"}}',
+    });
+
+    // Skill B: requires OPENAI_API_KEY but has NO config for it
+    const skillBDir = path.join(workspaceDir, "skills", "unrelated-skill-b");
+    await writeSkill({
+      dir: skillBDir,
+      name: "unrelated-skill-b",
+      description: "Unrelated skill needing same env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]},"primaryEnv":"OPENAI_API_KEY"}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const entryA = entries.find((e) => e.skill.name === "custom-skill-a")!;
+    const entryB = entries.find((e) => e.skill.name === "unrelated-skill-b")!;
+
+    const config = {
+      skills: {
+        entries: {
+          "custom-skill-a": {
+            env: {
+              OPENAI_API_KEY: "sk-from-a", // pragma: allowlist secret
+            },
+          },
+          // Note: no config for unrelated-skill-b
+        },
+      },
+    };
+
+    withClearedEnv(["OPENAI_API_KEY"], () => {
+      const restore = applySkillEnvOverrides({ skills: entries, config });
+
+      try {
+        // Skill A's key is injected into process.env
+        expect(process.env.OPENAI_API_KEY).toBe("sk-from-a");
+
+        // Skill A should be eligible (it configured the key)
+        expect(shouldIncludeSkill({ entry: entryA, config })).toBe(true);
+
+        // Skill B should NOT be eligible (env var was injected by skill A, not host env)
+        expect(shouldIncludeSkill({ entry: entryB, config })).toBe(false);
+      } finally {
+        restore();
       }
     });
   });
