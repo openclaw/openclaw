@@ -19,6 +19,7 @@ type ExpectedSharedFamilyContract = {
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
+const EXTENSIONS_ROOT = resolve(REPO_ROOT, "extensions");
 const SHARED_FAMILY_HOOK_PATTERNS: ReadonlyArray<{
   kind: SharedFamilyHookKind;
   regex: RegExp;
@@ -68,12 +69,27 @@ function listFiles(dir: string): string[] {
 }
 
 function listBundledPluginRoots() {
-  return loadPluginManifestRegistry({})
-    .plugins.filter((plugin) => plugin.origin === "bundled")
-    .map((plugin) => ({
-      pluginId: plugin.id,
-      rootDir: plugin.workspaceDir ?? plugin.rootDir,
-    }))
+  const roots = new Map<string, string>();
+
+  for (const plugin of loadPluginManifestRegistry({}).plugins) {
+    if (plugin.origin !== "bundled") {
+      continue;
+    }
+    const rootDir = plugin.workspaceDir ?? plugin.rootDir;
+    if (rootDir) {
+      roots.set(plugin.id, rootDir);
+    }
+  }
+
+  for (const entry of readdirSync(EXTENSIONS_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    roots.set(entry.name, resolve(EXTENSIONS_ROOT, entry.name));
+  }
+
+  return [...roots.entries()]
+    .map(([pluginId, rootDir]) => ({ pluginId, rootDir }))
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 

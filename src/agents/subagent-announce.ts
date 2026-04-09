@@ -202,7 +202,7 @@ function hasUsableSessionEntry(entry: unknown): boolean {
     return false;
   }
   const sessionId = (entry as { sessionId?: unknown }).sessionId;
-  return typeof sessionId === "string" && sessionId.trim() !== "";
+  return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
 type ResolvedAnnounceTarget =
