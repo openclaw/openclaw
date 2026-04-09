@@ -318,6 +318,40 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves prepared user prompt metadata from transcript entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            timestamp: Date.now(),
+            content: '<context>\n<task id="t1">Fix scroll</task>\n</context>\n\nShip the fix',
+            __openclaw: {
+              authoredContent: "Ship the fix",
+              modelInput: "System: [2026-04-09 10:00 UTC]\n\nShip the fix",
+            },
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: '<context>\n<task id="t1">Fix scroll</task>\n</context>\n\nShip the fix',
+        __openclaw: {
+          authoredContent: "Ship the fix",
+          modelInput: "System: [2026-04-09 10:00 UTC]\n\nShip the fix",
+        },
+      });
+    });
+  });
+
   test("chat.history strips inline directives from displayed message text", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

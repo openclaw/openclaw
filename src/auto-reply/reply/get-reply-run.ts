@@ -576,6 +576,13 @@ export async function runPreparedReply(
     },
   };
 
+  const preparedModelInput = prefixedCommandBody.trim();
+  if (preparedModelInput) {
+    opts?.onUserPromptPrepared?.({
+      modelInput: preparedModelInput,
+    });
+  }
+
   const { runReplyAgent } = await loadAgentRunnerRuntime();
   return runReplyAgent({
     commandBody: prefixedCommandBody,

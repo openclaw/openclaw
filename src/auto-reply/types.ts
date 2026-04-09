@@ -14,6 +14,11 @@ export type ModelSelectedContext = {
   thinkLevel: string | undefined;
 };
 
+/** Context passed when the final user turn has been prepared for the model. */
+export type PreparedUserPromptContext = {
+  modelInput: string;
+};
+
 export type TypingPolicy =
   | "auto"
   | "user_message"
@@ -30,6 +35,8 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
+  /** Called once the final model-bound user turn has been prepared. */
+  onUserPromptPrepared?: (ctx: PreparedUserPromptContext) => void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;

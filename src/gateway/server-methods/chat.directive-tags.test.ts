@@ -20,6 +20,7 @@ const mockState = vi.hoisted(() => ({
   finalText: "[[reply_to_current]]",
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
+  preparedModelInput: undefined as string | undefined,
   sessionEntry: {} as Record<string, unknown>,
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
@@ -77,11 +78,17 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       };
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
+        onUserPromptPrepared?: (ctx: { modelInput: string }) => void;
         images?: Array<{ mimeType: string; data: string }>;
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
+      if (mockState.preparedModelInput) {
+        params.replyOptions?.onUserPromptPrepared?.({
+          modelInput: mockState.preparedModelInput,
+        });
+      }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
@@ -323,6 +330,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
+    mockState.preparedModelInput = undefined;
     mockState.sessionEntry = {};
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
@@ -1126,6 +1134,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     createTranscriptFixture("openclaw-chat-send-user-transcript-agent-run-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
+    mockState.preparedModelInput = "System: [2026-04-09 10:00 UTC]\n\nhello from dashboard";
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1134,6 +1143,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-user-transcript-agent-run",
       message: "hello from dashboard",
+      requestParams: {
+        authoredContent: "hello from dashboard",
+      },
       expectBroadcast: false,
     });
 
@@ -1150,6 +1162,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         role: "user",
         content: "hello from dashboard",
         timestamp: expect.any(Number),
+        __openclaw: {
+          modelInput: "System: [2026-04-09 10:00 UTC]\n\nhello from dashboard",
+        },
       },
     });
   });

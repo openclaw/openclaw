@@ -279,6 +279,23 @@ function normalizeOptionalChatSystemReceipt(
   return { ok: true, receipt: receipt || undefined };
 }
 
+function normalizeOptionalChatAuthoredContent(
+  value: unknown,
+): { ok: true; authoredContent?: string } | { ok: false; error: string } {
+  if (value == null) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: "authoredContent must be a string" };
+  }
+  const sanitized = sanitizeChatSendMessageInput(value);
+  if (!sanitized.ok) {
+    return { ok: false, error: sanitized.error };
+  }
+  const authoredContent = sanitized.message.trim();
+  return { ok: true, authoredContent: authoredContent || undefined };
+}
+
 function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const info = client?.connect?.client;
   return (
@@ -314,14 +331,38 @@ function buildChatSendTranscriptMessage(params: {
   message: string;
   savedImages: SavedMedia[];
   timestamp: number;
+  authoredContent?: string;
+  modelInput?: string;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  const openClawMeta = buildChatSendPromptMeta(params);
   return {
     role: "user" as const,
     content: params.message,
     timestamp: params.timestamp,
     ...mediaFields,
+    ...(openClawMeta ? { __openclaw: openClawMeta } : {}),
   };
+}
+
+function buildChatSendPromptMeta(params: {
+  message: string;
+  authoredContent?: string;
+  modelInput?: string;
+}): Record<string, string> | undefined {
+  const meta: Record<string, string> = {};
+  const messageContent = params.message.trim();
+  const authoredContent = params.authoredContent?.trim();
+  const modelInput = params.modelInput?.trim();
+
+  if (authoredContent && authoredContent !== messageContent) {
+    meta.authoredContent = authoredContent;
+  }
+  if (modelInput && modelInput !== messageContent) {
+    meta.modelInput = modelInput;
+  }
+
+  return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
 function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
@@ -581,6 +622,30 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
     const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
     changed ||= stripped.changed || res.truncated;
+  }
+
+  const openClawMeta =
+    entry.__openclaw && typeof entry.__openclaw === "object" && !Array.isArray(entry.__openclaw)
+      ? { ...(entry.__openclaw as Record<string, unknown>) }
+      : null;
+  if (openClawMeta) {
+    let metaChanged = false;
+
+    if (typeof openClawMeta.authoredContent === "string") {
+      const res = truncateChatHistoryText(openClawMeta.authoredContent);
+      openClawMeta.authoredContent = res.text;
+      metaChanged ||= res.truncated;
+    }
+    if (typeof openClawMeta.modelInput === "string") {
+      const res = truncateChatHistoryText(openClawMeta.modelInput);
+      openClawMeta.modelInput = res.text;
+      metaChanged ||= res.truncated;
+    }
+
+    if (metaChanged) {
+      entry.__openclaw = openClawMeta;
+      changed = true;
+    }
   }
 
   return { message: changed ? entry : message, changed };
@@ -1237,6 +1302,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const p = params as {
       sessionKey: string;
       message: string;
+      authoredContent?: string;
       thinking?: string;
       deliver?: boolean;
       attachments?: Array<{
@@ -1275,9 +1341,19 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
       return;
     }
+    const authoredContentResult = normalizeOptionalChatAuthoredContent(p.authoredContent);
+    if (!authoredContentResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, authoredContentResult.error),
+      );
+      return;
+    }
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
+    const authoredContent = authoredContentResult.authoredContent;
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
@@ -1447,6 +1523,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
+      let preparedModelInput: string | undefined;
       let userTranscriptUpdateEmitted = false;
       const emitUserTranscriptUpdate = async () => {
         if (userTranscriptUpdateEmitted) {
@@ -1475,6 +1552,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             message: parsedMessage,
             savedImages: persistedImages,
             timestamp: now,
+            authoredContent,
+            modelInput: preparedModelInput,
           }),
         });
       };
@@ -1527,6 +1606,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId: clientRunId,
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
+          onUserPromptPrepared: (prepared) => {
+            const trimmed = prepared.modelInput.trim();
+            preparedModelInput = trimmed || undefined;
+          },
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
