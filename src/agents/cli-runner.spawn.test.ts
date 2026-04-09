@@ -39,6 +39,8 @@ function buildPreparedCliRunContext(params: {
           output: "jsonl" as const,
           input: "stdin" as const,
           modelArg: "--model",
+          sessionArg: "--session-id",
+          sessionMode: "always" as const,
           systemPromptArg: "--append-system-prompt",
           systemPromptWhen: "first" as const,
           serialize: true,
@@ -51,6 +53,9 @@ function buildPreparedCliRunContext(params: {
           input: "arg" as const,
           modelArg: "--model",
           sessionMode: "existing" as const,
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+          systemPromptWhen: "first" as const,
           serialize: true,
         };
   const backend = { ...baseBackend, ...params.backend };
@@ -107,6 +112,7 @@ describe("runCliAgent spawn path", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
+      sessionArg: "--session-id",
       systemPromptArg: "--append-system-prompt",
       systemPromptWhen: "first" as const,
       serialize: true,
@@ -181,6 +187,31 @@ describe("runCliAgent spawn path", () => {
     expect(input.argv).not.toContain("Explain this diff");
   });
 
+  it("passes --session-id for new Claude sessions", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-session-id",
+      }),
+    );
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      input?: string;
+      mode?: string;
+    };
+    expect(input.mode).toBe("child");
+    expect(input.argv).toContain("claude");
+    const sessionArgIndex = input.argv?.indexOf("--session-id") ?? -1;
+    expect(sessionArgIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
+    expect(input.input).toContain("hi");
+    expect(input.argv).not.toContain("hi");
+  });
+
   it("runs CLI through supervisor and returns payload", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -219,6 +250,39 @@ describe("runCliAgent spawn path", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("passes Codex system prompts through model_instructions_file", async () => {
+    let promptFileText = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const configArgIndex = input.argv?.indexOf("-c") ?? -1;
+      expect(configArgIndex).toBeGreaterThanOrEqual(0);
+      const configArg = input.argv?.[configArgIndex + 1] ?? "";
+      const match = /^model_instructions_file="(.+)"$/.exec(configArg);
+      expect(match?.[1]).toBeTruthy();
+      promptFileText = await fs.readFile(match?.[1] ?? "", "utf-8");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-codex-system-prompt-file",
+      }),
+    );
+
+    expect(promptFileText).toBe("You are a helpful assistant.");
   });
 
   it("cancels the managed CLI run when the abort signal fires", async () => {

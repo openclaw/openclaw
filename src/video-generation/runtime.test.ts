@@ -1,67 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetGenerationRuntimeMocks } from "../../test/helpers/media-generation/runtime-test-mocks.js";
+import {
+  getMediaGenerationRuntimeMocks,
+  resetVideoGenerationRuntimeMocks,
+} from "../../test/helpers/media-generation/runtime-module-mocks.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "./runtime.js";
 import type { VideoGenerationProvider } from "./types.js";
 
-const mocks = vi.hoisted(() => {
-  const debug = vi.fn();
-  return {
-    createSubsystemLogger: vi.fn(() => ({ debug })),
-    describeFailoverError: vi.fn(),
-    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
-    resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
-    getVideoGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => VideoGenerationProvider | undefined
-    >(() => undefined),
-    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listVideoGenerationProviders: vi.fn<(config?: OpenClawConfig) => VideoGenerationProvider[]>(
-      () => [],
-    ),
-    parseVideoGenerationModelRef: vi.fn<
-      (raw?: string) => { provider: string; model: string } | undefined
-    >((raw?: string) => {
-      const trimmed = raw?.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      const slash = trimmed.indexOf("/");
-      if (slash <= 0 || slash === trimmed.length - 1) {
-        return undefined;
-      }
-      return {
-        provider: trimmed.slice(0, slash),
-        model: trimmed.slice(slash + 1),
-      };
-    }),
-    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
-    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
-    debug,
-  };
-});
+const mocks = getMediaGenerationRuntimeMocks();
 
-vi.mock("../agents/failover-error.js", () => ({
-  describeFailoverError: mocks.describeFailoverError,
-  isFailoverError: mocks.isFailoverError,
-}));
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
-}));
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: mocks.createSubsystemLogger,
-}));
-vi.mock("../secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
 vi.mock("./model-ref.js", () => ({
   parseVideoGenerationModelRef: mocks.parseVideoGenerationModelRef,
 }));
+
 vi.mock("./provider-registry.js", () => ({
   getVideoGenerationProvider: mocks.getVideoGenerationProvider,
   listVideoGenerationProviders: mocks.listVideoGenerationProviders,
@@ -69,12 +20,7 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("video-generation runtime", () => {
   beforeEach(() => {
-    resetGenerationRuntimeMocks({
-      ...mocks,
-      getProvider: mocks.getVideoGenerationProvider,
-      listProviders: mocks.listVideoGenerationProviders,
-      parseModelRef: mocks.parseVideoGenerationModelRef,
-    });
+    resetVideoGenerationRuntimeMocks();
   });
 
   it("generates videos through the active video-generation provider", async () => {

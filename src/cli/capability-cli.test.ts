@@ -189,11 +189,11 @@ vi.mock("../plugins/memory-embedding-providers.js", () => ({
     mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
 }));
 
-vi.mock("../../extensions/memory-core/runtime-api.js", () => ({
+vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   createEmbeddingProvider:
-    mocks.createEmbeddingProvider as unknown as typeof import("../../extensions/memory-core/runtime-api.js").createEmbeddingProvider,
+    mocks.createEmbeddingProvider as unknown as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").createEmbeddingProvider,
   registerBuiltInMemoryEmbeddingProviders:
-    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../../extensions/memory-core/runtime-api.js").registerBuiltInMemoryEmbeddingProviders,
+    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").registerBuiltInMemoryEmbeddingProviders,
 }));
 
 vi.mock("../image-generation/runtime.js", () => ({

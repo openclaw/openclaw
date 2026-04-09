@@ -36,6 +36,15 @@ export type StoredConversationReference = {
   graphChatId?: string;
   /** IANA timezone from Teams clientInfo entity (e.g. "America/New_York") */
   timezone?: string;
+  /**
+   * Thread root message ID for channel thread messages.
+   * When a message arrives inside a Teams channel thread, the Bot Framework
+   * sets `conversation.id` to `19:xxx@thread.tacv2;messageid=<rootId>` and/or
+   * `replyToId` to the thread root activity ID. This field caches that root ID
+   * so outbound replies can target the correct thread instead of landing as
+   * top-level channel posts.
+   */
+  threadId?: string;
 };
 
 export type MSTeamsConversationStoreEntry = {

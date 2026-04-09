@@ -1,13 +1,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   calculateAuthProfileCooldownMs,
   ensureAuthProfileStore,
   markAuthProfileFailure,
-  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
@@ -68,12 +77,16 @@ describe("markAuthProfileFailure", () => {
         }),
       );
 
-      replaceRuntimeAuthProfileStoreSnapshots([
-        {
-          agentDir,
-          store: ensureAuthProfileStore(agentDir),
+      const staleRuntimeStore: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-expired-old",
+          },
         },
-      ]);
+      };
 
       fs.writeFileSync(
         authPath,
@@ -89,7 +102,6 @@ describe("markAuthProfileFailure", () => {
         }),
       );
 
-      const staleRuntimeStore = ensureAuthProfileStore(agentDir);
       const staleCredential = staleRuntimeStore.profiles["openai:default"];
       expect(staleCredential?.type).toBe("api_key");
       expect(staleCredential && "key" in staleCredential ? staleCredential.key : undefined).toBe(

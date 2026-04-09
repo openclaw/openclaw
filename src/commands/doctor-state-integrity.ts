@@ -27,6 +27,7 @@ import { shortenHomePath } from "../utils.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  note?: typeof note;
 };
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -494,6 +495,7 @@ export async function noteStateIntegrity(
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
+  const noteFn = prompter.note ?? note;
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -829,10 +831,10 @@ export async function noteStateIntegrity(
   }
 
   if (warnings.length > 0) {
-    note(warnings.join("\n"), "State integrity");
+    noteFn(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
+    noteFn(changes.join("\n"), "Doctor changes");
   }
 }
 

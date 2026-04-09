@@ -12,6 +12,7 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { setCliAuthEpochTestDeps } from "./cli-auth-epoch.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -135,6 +136,9 @@ function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
       modelArg: "--model",
       sessionIdFields: ["thread_id"],
       sessionMode: "existing",
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first",
       imageArg: "--image",
       imageMode: "repeat",
       reliability: {
@@ -333,6 +337,11 @@ export async function setupCliRunnerTestModule() {
 }
 
 export function setupCliRunnerTestRegistry() {
+  setCliAuthEpochTestDeps({
+    readClaudeCliCredentialsCached: () => null,
+    readCodexCliCredentialsCached: () => null,
+    loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  });
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     {
@@ -359,15 +368,6 @@ export function setupCliRunnerTestRegistry() {
     bootstrapFiles: [],
     contextFiles: [],
   });
-}
-
-export async function setupClaudeCliRunnerTestModule() {
-  const runCliAgent = await setupCliRunnerTestModule();
-  return (params: Parameters<typeof import("./claude-cli-runner.js").runClaudeCliAgent>[0]) =>
-    runCliAgent({
-      ...params,
-      provider: params.provider ?? "claude-cli",
-    });
 }
 
 export function stubBootstrapContext(params: {
